@@ -1,4 +1,5 @@
 //! One volatile setup slot around canonical invitation and authentication owners.
+use super::owner_admission::{OwnerAdmission, OwnerLease};
 use super::worker::worker_fault;
 use super::{RegistrationError, RegistrationWorker};
 use crate::device_pairing::application::{
@@ -31,7 +32,7 @@ use std::{
 };
 use tokio::{
     runtime::Handle,
-    sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore},
+    sync::{Mutex, Semaphore},
 };
 /// Runtime refusals preserve canonical owner and unexpected physical worker facts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +60,8 @@ pub enum PairingRuntimeError {
     Entropy,
     /// No canonical Available slot with owned volatile setup exists.
     NoInvitation,
+    /// Shutdown has closed owner-command admission; nothing was done.
+    ShuttingDown,
 }
 /// Trusted composition inputs; native key is restored by its private storage owner.
 pub struct PairingRuntimeDependencies {
@@ -130,7 +133,7 @@ pub struct GatewayPairing {
     dependencies: Arc<PairingRuntimeDependencies>,
     registration: RegistrationWorker,
     creating: Arc<Semaphore>,
-    create_drained: Arc<Notify>,
+    owners: OwnerAdmission,
     available: Arc<Mutex<Option<AvailableSetup>>>,
 }
 impl GatewayPairing {
@@ -162,7 +165,7 @@ impl GatewayPairing {
             dependencies: Arc::new(dependencies),
             registration: RegistrationWorker::new(),
             creating: Arc::new(Semaphore::new(1)),
-            create_drained: Arc::new(Notify::new()),
+            owners: OwnerAdmission::new(),
             available: Arc::new(Mutex::new(None)),
         })
     }
@@ -183,16 +186,21 @@ impl GatewayPairing {
         &self,
         command: impl FnOnce(&PairingOwner<'_>, &Handle) -> Result<T, OwnerError> + Send + 'static,
     ) -> Result<T, PairingRuntimeError> {
+        let lease = self.admit_owner()?;
         let dependencies = self.dependencies.clone();
         let available = self.available.clone();
         let handle = Handle::current();
         // Owner commands, including any expiry they settle, do store work, so
         // they run on a blocking worker
-        // (`native_owner_store_work_runs_off_the_async_thread`).
-        tokio::task::spawn_blocking(move || run_owner(&dependencies, &available, &handle, command))
-            .await
-            .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
-            .map_err(PairingRuntimeError::Owner)
+        // (`native_owner_store_work_runs_off_the_async_thread`). The lease
+        // ends with that job, not with this caller (design row S12).
+        tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            run_owner(&dependencies, &available, &handle, command)
+        })
+        .await
+        .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
+        .map_err(PairingRuntimeError::Owner)
     }
     /// Read the permanent gateway key only for the native TLS composition owner.
     pub fn identity(&self) -> &NativeIdentity {
@@ -218,20 +226,19 @@ impl GatewayPairing {
         session: AuthenticatedSession,
         entropy: R,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
+        let owner_lease = self.admit_owner()?;
         let permit = self
             .creating
             .clone()
             .try_acquire_owned()
             .map_err(|_| PairingRuntimeError::Busy)?;
-        let lease = CreatePermit {
-            permit: Some(permit),
-            drained: self.create_drained.clone(),
-        };
         let owner = self.clone();
         let handle = Handle::current();
         tokio::task::spawn_blocking(move || {
-            let _lease = lease;
-            // Reverse local drop order releases the runtime/private owner before capacity.
+            // Reverse local drop order releases the runtime/private owner, then
+            // the exclusive create permit, then the owner lease a drain waits on.
+            let _owner_lease = owner_lease;
+            let _permit = permit;
             let runtime = owner;
             runtime.create_blocking(&handle, &session, entropy)
         })
@@ -586,32 +593,22 @@ impl GatewayPairing {
             }
         }
     }
-    /// Exclude physical registration and wait for its actual worker to drain.
+    /// A lease for one owner command, or `ShuttingDown` once shutdown has
+    /// closed owner admission (design rows S12, S19). Every owner command takes
+    /// one before any store work.
+    fn admit_owner(&self) -> Result<OwnerLease, PairingRuntimeError> {
+        self.owners.admit().ok_or(PairingRuntimeError::ShuttingDown)
+    }
+    /// Close owner-command admission, then physical registration (so an
+    /// admitted create that has not registered yet publishes nothing), then wait
+    /// for every admitted owner command, create included, to end.
     pub async fn shutdown(&self) {
-        self.creating.close();
+        self.owners.close();
         self.registration.shutdown().await;
-        loop {
-            let notified = self.create_drained.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.creating.available_permits() == 1 {
-                return;
-            }
-            notified.await;
-        }
+        self.owners.drained().await;
     }
 }
 
-struct CreatePermit {
-    permit: Option<OwnedSemaphorePermit>,
-    drained: Arc<Notify>,
-}
-impl Drop for CreatePermit {
-    fn drop(&mut self) {
-        drop(self.permit.take());
-        self.drained.notify_waiters();
-    }
-}
 /// Drop the open invitation's setup if its stored record has ended. A failed
 /// read leaves the setup for the next path that reads the record.
 fn discard_ended(slot: &mut Option<AvailableSetup>, dependencies: &PairingRuntimeDependencies) {

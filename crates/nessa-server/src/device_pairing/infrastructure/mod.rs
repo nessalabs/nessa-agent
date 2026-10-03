@@ -7,6 +7,7 @@
 //! connection --> enrollment_channel
 //! runtime  --> registration (one code registration at a time)
 //! owner_commands --> runtime (owner side only; the product socket's handle)
+//! runtime  --> owner_admission (every owner command's lease; drained at shutdown)
 //! ```
 //! Arrows are compile-time dependencies. Auth owns every enrollment phase; the
 //! runtime holds only the volatile PAKE setup of the one open invitation.
@@ -17,6 +18,7 @@ mod connection;
 mod enrollment_channel;
 mod identity;
 mod listener;
+mod owner_admission;
 mod owner_commands;
 mod registration;
 mod runtime;

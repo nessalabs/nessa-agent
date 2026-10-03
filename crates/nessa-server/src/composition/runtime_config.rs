@@ -49,7 +49,7 @@ impl RuntimeConfig {
             .join("config.json");
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => return Err(invalid("config.json must be a regular file")),
+            Ok(_) => return Err(refused("config.json must be a regular file")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default())
             }
@@ -60,14 +60,14 @@ impl RuntimeConfig {
         let mut bytes = Vec::new();
         file.take(65_537).read_to_end(&mut bytes).map_err(invalid)?;
         if bytes.len() > 65_536 {
-            return Err(invalid("config.json exceeds 64 KiB"));
+            return Err(refused("config.json exceeds 64 KiB"));
         }
         Self::parse(&bytes)
     }
 
     fn parse(bytes: &[u8]) -> Result<Self, RunError> {
-        let config: Self = serde_json::from_slice(bytes).map_err(invalid)?;
-        config.registry.validate().map_err(invalid)?;
+        let config: Self = serde_json::from_slice(bytes).map_err(refused)?;
+        config.registry.validate().map_err(refused)?;
         config.session()?;
         Ok(config)
     }
@@ -80,11 +80,18 @@ impl RuntimeConfig {
             Duration::from_millis(self.session.write_timeout_ms),
             Duration::from_millis(self.session.current_state_interval_ms),
         )
-        .map_err(invalid)
+        .map_err(refused)
     }
 }
+/// `config.json` could not be read: the file system can change before the next
+/// start, so this stays a retried setup failure.
 fn invalid(error: impl std::fmt::Display) -> RunError {
     RunError::Authentication(format!("invalid runtime config: {error}"))
+}
+/// `config.json` was read and its contents refused. Reading the same file
+/// again refuses it the same way (design row S2).
+fn refused(error: impl std::fmt::Display) -> RunError {
+    RunError::RuntimeConfig(error.to_string())
 }
 
 #[cfg(test)]
@@ -144,6 +151,24 @@ mod tests {
         assert_eq!(b.registry.max_credentials, 1000);
         assert_eq!(b.session().unwrap().write_timeout(), Duration::from_secs(5));
     }
+    /// Design row S2: refused contents are a configuration failure that a
+    /// restart cannot fix, whichever section they are in.
+    #[test]
+    fn refused_runtime_configuration_is_not_worth_restarting_for() {
+        for bytes in [
+            br#"{"native":{"listenAddress":"localhost:47650"}}"#.as_slice(),
+            br#"{"native":{"listenAddress":"127.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":"127.0.0.1:1","tls":true}}"#,
+            br#"{"session":{"writeTimeoutMs":0}}"#,
+            b"not json",
+        ] {
+            assert!(matches!(
+                RuntimeConfig::parse(bytes),
+                Err(RunError::RuntimeConfig(_))
+            ));
+        }
+    }
+
     #[test]
     fn invalid_settings_are_never_silently_defaulted() {
         for bytes in [

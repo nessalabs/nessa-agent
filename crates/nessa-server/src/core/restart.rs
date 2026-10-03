@@ -43,6 +43,9 @@ pub(super) fn restart(error: &RunError) -> Restart {
         // Configuration is read once, from the launchd definition and the
         // environment it fixes. Nothing rereads differently five seconds later.
         RunError::Environment(_) => Restart::Pointless,
+        // The same for `config.json`: its refused contents are read again
+        // unchanged (design row S2).
+        RunError::RuntimeConfig(_) => Restart::Pointless,
         // Contents this build cannot make sense of, including a registry
         // written by a schema it does not know. Reading them again is reading
         // the same bytes.
@@ -120,6 +123,7 @@ mod tests {
             RunError::registry(LocalStoreError::Corrupt, None),
             RunError::registry(LocalStoreError::Capacity, None),
             RunError::Environment(EnvironmentError::Empty { variable: HOST }),
+            RunError::RuntimeConfig("unknown field native.tls".into()),
             RunError::Runtime("missing bundled runtime file".into()),
             // The command line is read again unchanged, so the next attempt
             // fails on the same words.

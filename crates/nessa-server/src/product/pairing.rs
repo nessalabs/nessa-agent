@@ -223,7 +223,9 @@ fn refusal(error: PairingRuntimeError) -> &'static str {
         | PairingRuntimeError::Crypto(_)
         | PairingRuntimeError::Handshake { .. }
         | PairingRuntimeError::WorkerFault(_)
-        | PairingRuntimeError::Entropy => PairingErrorCode::PairingUnavailable,
+        | PairingRuntimeError::Entropy
+        // Shutting down: retrying against the next gateway can succeed.
+        | PairingRuntimeError::ShuttingDown => PairingErrorCode::PairingUnavailable,
     };
     code.as_str()
 }
