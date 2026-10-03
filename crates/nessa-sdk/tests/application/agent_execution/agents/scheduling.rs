@@ -552,3 +552,65 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
         .contains_key(&stranded_id));
     agent.inner.lifecycle.complete_stop(&attempt).await;
 }
+
+// Row six, by close. While a direct invocation holds the slot (this test's
+// guard) a runner waits for it, and close settles the queued input and then
+// waits for the slot behind that runner. When the slot is released the runner
+// owns it first, so a direct `invoke` is Busy until the runner has found the
+// lifecycle closed and exited. Close then takes the slot and completes.
+#[tokio::test]
+async fn close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish() {
+    let audit = Arc::new(PausingSettlementAudit {
+        settlements: Mutex::new(Vec::new()),
+        gate: Mutex::new(None),
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
+    let bound = std::time::Duration::from_secs(5);
+    let direct = agent.inner.invocation.clone().lock_owned().await;
+    let closed = tokio::time::timeout(
+        bound,
+        agent.enqueue(request("closed-while-the-runner-waits"), actor()),
+    )
+    .await
+    .expect("admission stalled")
+    .unwrap();
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(actor()).await }
+    });
+    assert_eq!(
+        tokio::time::timeout(bound, closed.wait())
+            .await
+            .expect("close did not settle the queued receipt"),
+        Err(AgentError::Closed)
+    );
+    assert!(agent.inner.scheduler.lock().await.queue.is_empty());
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+
+    drop(direct);
+    assert_eq!(
+        agent
+            .invoke(request("direct-while-the-runner-holds-the-slot"), actor())
+            .await,
+        Err(AgentError::Busy),
+        "the released slot went to the waiting runner"
+    );
+    tokio::time::timeout(bound, async {
+        while agent.inner.scheduler.lock().await.running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner did not exit after close emptied its queue and closed the lifecycle");
+    let outcome = tokio::time::timeout(bound, closing)
+        .await
+        .expect("close stalled behind the runner")
+        .expect("close task panicked");
+    assert!(outcome.is_ok(), "{outcome:?}");
+}
