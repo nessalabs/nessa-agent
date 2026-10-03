@@ -401,7 +401,9 @@ export const readinessVerification = {
 /**
  * The app-review fixture (`fixtures/app-review/`, #436): the window over a
  * fake gateway whose one conversation holds an MCP App's call, which asks for
- * a review when the page calls a tool (`__appReview.call`).
+ * a review when the page calls a tool (`__appReview.call`). The longest
+ * tool's name is the page's (`__appReview.longestTool`), from the client's
+ * own bound.
  */
 export const appReview = {
   page: "verification/desktop/fixtures/app-review/index.html",
@@ -412,6 +414,6 @@ export const appReview = {
   /** The overview row's accessible name: the title, then the app asking. */
   row: (tool) => `Clean up the stale rows. The mcptest app wants to run ${tool} {}.`,
   tool: "app_delete_row",
-  /** A tool's name with no break in it, as long as the gateway allows (128 bytes, `maxMcpNameBytes`). */
-  longTool: "deleteEveryStaleRow".repeat(7).slice(0, 128),
+  /** The fixture page's title, by which the script knows it is served. */
+  title: "Nessa: an app's review",
 }

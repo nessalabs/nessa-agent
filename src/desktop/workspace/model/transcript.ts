@@ -58,7 +58,7 @@ export type ApprovalOrigin =
   | { readonly kind: "agent" }
   | { readonly kind: "app"; readonly server: string; readonly tool: string }
 
-/** A command the agent, or one of its apps, asks to run, waiting on the person's answer. */
+/** A command the agent, or an MCP App, asks to run, waiting on the person's answer. */
 export interface Approval {
   readonly id: string
   readonly command: string

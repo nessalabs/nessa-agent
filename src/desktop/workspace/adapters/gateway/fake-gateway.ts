@@ -1,10 +1,9 @@
 /**
  * A gateway client for tests (`gateway-source.test.ts`): conversations held
  * in memory, every call recorded, and any call made to wait, fail, or answer
- * something else — the orderings the adapter's table on #248 names. Test
- * support only, and the browser fixture of an app's review
- * (`verification/desktop/fixtures/app-review/`); nothing in the window
- * imports it.
+ * something else — the orderings the adapter's table on #248 names. For
+ * tests, and the browser fixture of an app's review
+ * (`verification/desktop/fixtures/app-review/`).
  */
 import {
   NessaRpcError,

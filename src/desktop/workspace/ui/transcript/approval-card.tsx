@@ -10,8 +10,8 @@ import { failureCopy } from "../failure-copy"
 import { ApprovalActions, ApprovalCommand, approvalHead } from "./approval-request"
 
 /**
- * The one warm thing on the page: a command the agent — or one of its apps,
- * which the head then names (`approvalHead`) — waits to run, and its
+ * The one warm thing on the page: a command the agent — or an MCP App, which
+ * the head then names (`approvalHead`) — waits to run, and its
  * answers, arranged for the card's width (`approval-request.tsx`). While an
  * answer is on its way the buttons rest; a failed answer says why.
  */

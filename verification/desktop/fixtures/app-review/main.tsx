@@ -1,16 +1,26 @@
 /**
- * The real window — composed as `src/desktop/main.tsx` composes it beside a
- * gateway and its apps — over a fake gateway (`fake-gateway.ts`) holding one
+ * The window over a fake gateway (`fake-gateway.ts`) holding one
  * conversation whose turn has ended, with an MCP App's call in it (#436).
  * `app-review.mjs` drives it.
  *
+ * What is the window's own: its composition beside a gateway and its apps
+ * (`createDesktopDependencies`), the store and its startup, and
+ * `DesktopWindow` with the providers `src/desktop/main.tsx` puts around it,
+ * retyped here. What differs from the desktop app: a browser host, no app
+ * sandbox (the app itself is not drawn, and its card says so), and nothing
+ * inspectable.
+ *
  * Nothing is waiting until the app calls a tool (`__appReview.call`): the
- * call goes through the window's composition (`dependencies.ts`) and the
- * source's `appCall` to the fake's `mcp.callTool`, which opens the app's
- * review in the conversation's view, as the gateway does, and answers the
- * call once the person answers the review. Nothing in the list row moves, so
- * the review is drawn only if the source reads the conversation while the
- * call waits. Every view is held to the client's own validation
+ * call goes through that composition (`dependencies.ts`) and the source's
+ * `appCall` to the fake's `mcp.callTool`. Like the gateway, which opens a
+ * review only once the call is admitted and on record (`app_calls.rs`), the
+ * fake opens it later: after the window has read the conversation twice
+ * since the call, so a window that reads once when the call begins never
+ * sees it. Nothing in the list row moves. The person's answer is held to the
+ * review: Allow on it answers the call with the server's result, Deny
+ * refuses the call, and an answer to anything else leaves the review open
+ * and the call waiting. The fake models one call at a time and refuses a
+ * second while one waits. Every view passes the client's own validation
  * (`conversationView`) before the fake serves it.
  *
  * The sample workspace has no app reviews: its source scripts the agent's
@@ -25,6 +35,7 @@ import type {
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
+import { bounds } from "../../../../packages/nessa-client/src/generated/product"
 import { conversationView } from "../../../../packages/nessa-client/src/protocol/conversation-validate"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
 import { makeDesktopStore } from "../../../../src/desktop/store"
@@ -98,15 +109,15 @@ function viewWith(revision: number, review?: ConversationPermission): Conversati
       { id: "ask", name: "Ask", description: "Asks before each tool it runs." },
     ],
   })
-  // As the client would refuse it, so the fixture is a view a gateway may send.
+  // Held to the client's own validation: a view a gateway may send.
   return conversationView(value, conversation)
 }
 
 /** The review the gateway opens for a destructive tool an app calls (`app_reviews.rs`). */
-function reviewOf(tool: string): ConversationPermission {
+function reviewOf(permissionId: string, tool: string): ConversationPermission {
   return {
     executionId: app.executionId,
-    permissionId: `app-review-${tool.length}`,
+    permissionId,
     toolId: app.toolId,
     title: `An app asks to run ${tool} on ${server}`,
     toolName: tool,
@@ -126,20 +137,57 @@ gateway.rows.set(
 )
 gateway.views.set(conversation, viewWith(1))
 
-// What became of the app's call: unanswered, or how it was answered.
+// What became of the app's call: null before the app calls, "waiting", or
+// the outcome the app was given. And each answer the gateway was sent.
 let settled: string | null = null
+const answers: unknown[][] = []
 let revision = 1
+let reviews = 0
+let waiting = false
+
+/** Answers the app's call once the person answers its review, as the gateway does. */
+function onAnswer(review: ConversationPermission, done: (allowed: boolean) => void) {
+  gateway.once("answer", async (normal) => {
+    const args = gateway.calls.at(-1)?.args ?? []
+    answers.push([...args])
+    const [to, execution, permission, option] = args
+    const ours =
+      to === conversation &&
+      execution === review.executionId &&
+      permission === review.permissionId
+    const chosen = review.options.find((each) => each.id === option)
+    if (!ours || !chosen) {
+      // Not this review's answer: it stays open, and the call waits.
+      onAnswer(review, done)
+      return normal()
+    }
+    gateway.views.set(conversation, viewWith(++revision))
+    const answered = await normal()
+    done(chosen.effect === "allow")
+    return answered
+  })
+}
+
 const mcpApps = {
-  callTool: (_conversation: string, _app: unknown, _server: string, tool: string) =>
-    new Promise((resolve) => {
-      gateway.views.set(conversation, viewWith(++revision, reviewOf(tool)))
-      gateway.once("answer", async (normal) => {
-        gateway.views.set(conversation, viewWith(++revision))
-        const answered = await normal()
-        resolve({ resultJson: '{"content":[]}' })
-        return answered
-      })
-    }),
+  callTool: (_conversation: string, _app: unknown, _server: string, tool: string) => {
+    if (waiting)
+      return Promise.reject(new Error("the fixture models one app call at a time"))
+    waiting = true
+    return new Promise((resolve, reject) => {
+      const review = reviewOf(`app-review-${++reviews}`, tool)
+      const readsAtCall = gateway.count("read")
+      const opening = window.setInterval(() => {
+        if (gateway.count("read") < readsAtCall + 2) return
+        window.clearInterval(opening)
+        gateway.views.set(conversation, viewWith(++revision, review))
+        onAnswer(review, (allowed) => {
+          waiting = false
+          if (allowed) resolve({ resultJson: '{"content":[]}' })
+          else reject(new Error("The person denied this app's call"))
+        })
+      }, 20)
+    })
+  },
   releaseApp: () => Promise.resolve(),
 } as unknown as McpAppsApi
 
@@ -168,8 +216,11 @@ Object.assign(window, {
     snapshot: () => ({
       settled,
       reads: gateway.count("read"),
-      answers: gateway.count("answer"),
+      answers,
+      openReview: gateway.views.get(conversation)?.permissions[0]?.permissionId ?? null,
     }),
+    /** A tool's name with no break in it, as long as the gateway allows. */
+    longestTool: "deleteEveryStaleRow".repeat(8).slice(0, bounds.maxMcpNameBytes),
   },
 })
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * An MCP App's review (#436), in the real window over a fake gateway
+ * An MCP App's review (#436), in the window over a fake gateway
  * (`fixtures/app-review/`), whose conversation's turn has ended: at rest it
  * is not read again; when the app calls a destructive tool, the review the
- * gateway opens for it — which moves nothing in the list row — is read and
- * drawn, naming the app and the tool, not the agent; answered, it goes and
- * the call is answered. The card's head stays inside the card at every
- * width, with the tool's name short and as long as the gateway allows; the
- * Agents overview's row is named for the app too.
+ * gateway opens for it a few rounds later — which moves nothing in the list
+ * row — is read and drawn, naming the app and the tool, not the agent;
+ * allowed, it goes, the gateway is told Allow for that review, and the
+ * app's call is answered. The card's head stays inside the card at five
+ * widths from 280 to 900 px, with the tool's name short and as long as the
+ * gateway allows; the Agents overview's row is named for the app too.
  *
  * The fixture is a page of the dev server's, not of the production build:
  * this script runs against the dev server only.
@@ -22,26 +23,34 @@ import { join } from "node:path"
 
 const meta = {
   name: "app-review",
-  summary: "an MCP App's review: the card and the overview row name the app",
+  summary: "an MCP App's review: read while its call waits, drawn as the app's, answered",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
 Usage: node verification/desktop/scripts/app-review.mjs [options] [--shots <dir>]
 
 Checks, per engine and layout (--only <names> to pick):
-  review     at rest the conversation is not read again; the app's call makes
-             it read each round, and the review is drawn within 5 s, its head
-             "The mcptest app wants to run <tool>" and data-origin app; Allow
-             Once answers it: the card goes, the call is answered, and the
+  review     at rest the conversation is not read again; after the app's
+             call it is read each round — the fake opens the review only once
+             it has been read twice since the call — and the review is drawn
+             within 8 s, its head "The mcptest app wants to run <tool>" and
+             data-origin app; Allow Once sends one answer, Allow for that
+             review, the card goes, the app's call is answered ok, and the
              reads stop
   card       at 280/340/420/600/900 px, with the tool's name short and as one
-             128-byte word, the head stays inside the card and the card does
-             not overflow
+             word as long as the gateway allows, the head stays inside the
+             card and the card does not overflow
   overview   the overview row's accessible name names the app and its call`,
 }
 
-// What page.evaluate is handed: plain strings (\`css\` holds functions, #441).
+// What page.evaluate is handed: plain strings (`css` holds functions, #441).
 const card = { card: css.approvalCard, head: css.approvalHead }
+
+// The source polls each second (`defaultGatewayTiming.pollMs`): two and a
+// half rounds would show a read that should not happen.
+const roundsMs = 2_500
+// Two rounds before the fake opens the review, one to read it, and room.
+const drawnWithinMs = 8_000
 
 const snapshot = (page) => page.evaluate(() => window.__appReview.snapshot())
 
@@ -62,12 +71,20 @@ async function onConversation(browser, url, layout) {
   return opened
 }
 
-/** The app calls `tool`; the review it asks for is drawn, or this cannot run. */
+/** The app calls `tool`; whether the review it asks for is drawn in time. */
 async function asked(page, tool) {
   await page.evaluate((tool) => window.__appReview.call(tool), tool)
-  await need(page, css.approvalCard, "the app's approval card", 10_000)
-  await settled(page)
+  const drawn = await until(
+    page,
+    (sel) => document.querySelector(sel) !== null,
+    css.approvalCard,
+    drawnWithinMs,
+  )
+  if (drawn) await settled(page)
+  return drawn
 }
+
+const notDrawn = `no card within ${drawnWithinMs / 1000} s of the app's call`
 
 /** What the card says: who asked, by its origin and its head. */
 const cardSays = (page) =>
@@ -85,69 +102,67 @@ const checks = {
     const { page } = opened
     try {
       const failures = []
-      const wait = (ms) => page.waitForTimeout(ms)
       // P1: at rest, nothing waits and the conversation is not read again.
       if (await page.locator(css.approvalCard).count())
         failures.push("a card is drawn before the app asked for anything")
       const rest = await snapshot(page)
-      await wait(2_500)
+      await page.waitForTimeout(roundsMs)
       const rested = await snapshot(page)
       if (rested.reads !== rest.reads)
         failures.push(`read ${rested.reads - rest.reads} times at rest`)
       // P2, P3: the app's call; its review is read and drawn as the app's.
       const askedAt = Date.now()
-      await page.evaluate((tool) => window.__appReview.call(tool), appReview.tool)
-      const drawn = await until(
-        page,
-        (sel) => document.querySelector(sel) !== null,
-        css.approvalCard,
-        5_000,
-      )
+      const drawn = await asked(page, appReview.tool)
       const drawnMs = Date.now() - askedAt
-      if (!drawn) failures.push("no card within 5 s of the app's call")
+      if (!drawn) failures.push(notDrawn)
       const said = await cardSays(page)
+      const waiting = await snapshot(page)
       if (drawn && said.origin !== "app")
         failures.push(`the card's origin is ${said.origin}, not app`)
       if (drawn && said.head !== appReview.head(appReview.tool))
         failures.push(
           `the head says "${said.head}", not "${appReview.head(appReview.tool)}"`,
         )
-      const waiting = await snapshot(page)
-      // P4: Allow Once answers it; the card goes and the call is answered.
-      let gone = false
+      // P4: Allow Once answers that review with Allow; the card goes, the call is answered.
+      let answered = waiting
       if (drawn) {
         await page
           .getByRole("button", { name: names.allowOnce, exact: true })
           .first()
           .click()
-        gone = await until(
+        const gone = await until(
           page,
           (sel) => document.querySelector(sel) === null,
           css.approvalCard,
           5_000,
         )
         if (!gone) failures.push("the card is still drawn 5 s after Allow Once")
+        answered = await snapshot(page)
+        const expected = [[appReview.sessionId, "run", waiting.openReview, "allow"]]
+        if (JSON.stringify(answered.answers) !== JSON.stringify(expected))
+          failures.push(
+            `the gateway was sent ${JSON.stringify(answered.answers)}, not ${JSON.stringify(expected)}`,
+          )
+        if (answered.settled !== "ok")
+          failures.push(`the app's call came back ${answered.settled}, not ok`)
       }
-      const answered = await snapshot(page)
-      if (answered.answers !== 1)
-        failures.push(`the gateway was answered ${answered.answers} times, not once`)
-      if (answered.settled === "waiting")
-        failures.push("the app's call is still unanswered")
-      // P5: answered and read without the review, the reads stop.
-      await wait(1_500)
+      // P5: answered, and read without the review, the reads stop.
       const after = await snapshot(page)
-      await wait(2_500)
+      await page.waitForTimeout(roundsMs)
       const later = await snapshot(page)
       if (later.reads !== after.reads)
         failures.push(
           `read ${later.reads - after.reads} times after the call was answered`,
         )
+      if (later.answers.length !== after.answers.length)
+        failures.push("the gateway was answered again after the card went")
       return {
         measured: {
           drawnMs: drawn ? drawnMs : null,
           readsAtRest: rested.reads - rest.reads,
-          readsWhileAsked: waiting.reads - rested.reads,
+          readsUntilDrawn: waiting.reads - rested.reads,
           readsAfter: later.reads - after.reads,
+          answers: answered.answers,
           settled: answered.settled,
           ...said,
         },
@@ -162,14 +177,17 @@ const checks = {
     const failures = []
     const seen = []
     let said
-    for (const [tool, long] of [
-      [appReview.tool, false],
-      [appReview.longTool, true],
-    ]) {
+    for (const long of [false, true]) {
       const opened = await onConversation(browser, url, layout)
       const { page } = opened
       try {
-        await asked(page, tool)
+        const tool = long
+          ? await page.evaluate(() => window.__appReview.longestTool)
+          : appReview.tool
+        if (!(await asked(page, tool))) {
+          failures.push(`${long ? "long tool: " : ""}${notDrawn}`)
+          continue
+        }
         const now = await cardSays(page)
         if (!long) said = now
         if (now.origin !== "app")
@@ -206,7 +224,7 @@ const checks = {
             }
           }, card)
           const tag = `${width}px${long ? " long tool" : ""}`
-          seen.push({ width, long, ...r })
+          seen.push({ width, long, toolBytes: tool.length, ...r })
           if (r.headPastCard)
             failures.push(`${tag}: the head runs ${r.headPastCard}px past the card`)
           if (r.overflow) failures.push(`${tag}: the card overflows`)
@@ -223,8 +241,8 @@ const checks = {
               })
           }
         }
-        failures.push(...opened.errors)
       } finally {
+        failures.push(...opened.errors)
         await opened.close()
       }
     }
@@ -235,8 +253,9 @@ const checks = {
     const opened = await onConversation(browser, url, layout)
     const { page } = opened
     try {
+      if (!(await asked(page, appReview.tool)))
+        return { failures: [notDrawn, ...opened.errors] }
       const failures = []
-      await asked(page, appReview.tool)
       await page.keyboard.press(keys.overview)
       await need(page, css.overview, "the Agents overview")
       const name = await page
@@ -257,12 +276,13 @@ const checks = {
 
 await main(meta, async ({ options, rep, url }) => {
   // A production build has no such page and answers any path with its own:
-  // asked once, before any engine starts, whatever --mode or --url said.
+  // asked once, by the fixture's title, before any engine starts, whatever
+  // --mode or --url said.
   const page = await fetch(new URL(appReview.page, url)).then(
     (response) => (response.ok ? response.text() : ""),
     () => "",
   )
-  if (!page.includes("main.tsx"))
+  if (!page.includes(`<title>${appReview.title}</title>`))
     throw new CannotRun(
       `${appReview.page} is not served at ${url}: the fixture is the dev server's (--mode dev)`,
     )
