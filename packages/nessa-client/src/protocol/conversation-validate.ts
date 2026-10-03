@@ -13,6 +13,7 @@ import type {
 import {
   bounds,
   CompactionReportingSupport,
+  ConversationPermissionOptionEffect,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
   ModelSwitchReportingSupport,
@@ -403,11 +404,12 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (!options.length) throw new Error("Permission response has no choices")
     const ids = new Set<string>()
     for (const option of options) {
-      exact(option, ["id", "label"])
+      exact(option, ["id", "label", "effect"])
       const id = identity(option, "id")
       if (ids.has(id)) throw new Error("Permission response repeats an option")
       ids.add(id)
       text(option, "label", 2048, false)
+      oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
     }
   }
   const toolIds = new Set<string>()

@@ -313,7 +313,10 @@ export const labsSamples: readonly SampleSession[] = [
       [
         "agent",
         9 * 24 * 60 + 30,
-        [text("The fixture server's app, drawn in its sandbox:"), widget(fixtureWidget)],
+        [
+          text("The fixture server's app, drawn in its sandbox:"),
+          widget(fixtureWidget(sampleAppSession)),
+        ],
       ],
     ],
   },

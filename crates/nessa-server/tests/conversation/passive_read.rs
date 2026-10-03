@@ -315,6 +315,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     for (error, expected) in [
+        (AccessError::Denied, ReadRefusal::Forbidden),
         (AccessError::StaleRevision, ReadRefusal::Unverifiable),
         (AccessError::Unavailable, ReadRefusal::Unverifiable),
         (AccessError::Unsupported, ReadRefusal::Unverifiable),

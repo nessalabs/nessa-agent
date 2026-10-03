@@ -50,9 +50,16 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(workflow, /node --test scripts\/architecture\/\*\.test\.mjs/)
   assert.match(workflow, /node scripts\/check-architecture\.mjs/)
+  // A deadlocked test fails the step in minutes, not at the job's six-hour
+  // limit (#366).
   assert.match(
     workflow,
-    /cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
+  )
+  // The coverage gate runs the same SDK tests again, instrumented.
+  assert.match(
+    workflow,
+    /run: bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.match(
     workflow,

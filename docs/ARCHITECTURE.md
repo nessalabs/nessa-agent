@@ -282,8 +282,12 @@ not reading the session, which stays unread.
   approval and a model chosen for the next turn wait beside the source's data
   the same way. Pin and archive show when the source's update says so. An
   answer, a pin, an archive and a message carry who asked — the person or an
-  agent; the source records the first three and what became of each, and a
-  message when it lets a waiting approval go; each command returns its
+  agent; the in-memory source records the first three and what became of
+  each, and a message when it lets a waiting approval go, while the
+  gateway's source records nothing itself — what it sends the gateway
+  records as this window's authenticated caller, unable to tell the person
+  from an agent, and what it refuses without sending is on no record; each
+  command returns its
   outcome to its caller. Every
   call to the source settles; an adapter rejects on a timeout of its own.
 - `adapters/store/` is the Redux slice, which only names actions over those use
@@ -295,7 +299,10 @@ not reading the session, which stays unread.
   Try Again rather than being retried on every update, and is forgotten once
   nothing shows the session, and a read of the index again reads every
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
-  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
+  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/gateway/` is the
+  port over the gateway's conversations: a serial poller of `conversation.list`
+  and `conversation.read`, with revisions it mints and the views read into the
+  workspace's types (`gateway-views.ts`). `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/store/split-panes-source.ts` is
   the workspace as the split panes' source (below). `adapters/dom/` holds what
@@ -389,18 +396,22 @@ underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.
 The right toggle exits this mode and closes the panel.
 
-The workspace layouts read the desktop store, a projection of the in-memory
-`WorkspaceSource` described above; the window has no backend connection yet,
-and the pane arrangement is not kept between launches (the chosen layout is,
-as a stored preference).
+The workspace layouts read the desktop store, a projection of one
+`WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
+when the window is given a way to connect — today a browser preview opened
+with `?gateway` — and the in-memory sample otherwise, which is what the
+desktop app's own window still shows until its host hands it a gateway
+credential. The pane arrangement is not kept between launches (the chosen
+layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. The workspace's content is sample data until the gateway implements its port, and no layout
-persistence are implemented. Restart `pnpm app` after changing the Tauri
+window with the panel. The native minimum width is 800px. The workspace's content is the sample
+unless the page is opened with `?gateway` (above), and layout persistence is not
+implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
 This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)
@@ -843,6 +854,8 @@ provider adapters remain separate features. Existing design proposals do not rep
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
+The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. Native listener and protected activation remain separate consumers. See [device pairing](design/auth/device-pairing.md).
+
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
 **Local agent credential values** (`crates/nessa-agent-credentials`) — pure

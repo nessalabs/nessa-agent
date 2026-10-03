@@ -26,6 +26,8 @@ pub enum IssuanceCause {
     Bootstrap,
     /// `credential.issue` by an authenticated admin.
     AdminIssue,
+    /// Exact approved native device enrollment published after receiver staging.
+    DevicePairing,
     /// Offline provisioning of a distinct surface credential.
     SurfaceProvision,
     /// Offline replacement of the owner credential.

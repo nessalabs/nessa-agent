@@ -219,7 +219,8 @@ writing the full defaults on first launch is buying.
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
-  the split panes' source in `store/`; the in-memory source in `in-memory/`;
+  the split panes' source in `store/`; the gateway's source and its mapping
+  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
@@ -258,11 +259,16 @@ writing the full defaults on first launch is buying.
   and its ports — the server, the tool calls, the conversation, links,
   downloads, the timers (`app/application/`); the frame transport, the page's
   style variables, where the sandbox proxy is and its frame's sandbox flags
-  (`app/adapters/dom/`); the proxy itself and the dev server's listener for
+  (`app/adapters/dom/`); the server port over the gateway's
+  `client.mcpApps` — the typed outcomes, the resource ticket redeemed once,
+  each mount's release — and the calls an app's widgets name, read from a
+  conversation view's MCP tools, with an app plugin registered per server
+  (`app/adapters/gateway/`, #384); the proxy itself and the dev server's listener for
   it (`app/sandbox/`, served
   in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
   draw (`app/ui/`); and a fixture server's app (`app/fixture/`). How an app's
-  widgets are named — `mcp:` and the server, and the call's two identities —
+  widgets are named — `mcp:` and the server, and the call's session, execution
+  and tool ids —
   is stated once, in `app/model/app-ref.ts`, which the transcript uses. It
   knows no plugin and imports no other vertical. The workspace draws the
   chrome around the hosts and carries out their callbacks with its own
@@ -346,13 +352,13 @@ own current lifecycle and API contracts.
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
@@ -361,6 +367,8 @@ and processes out of the domain. Do not create empty counterpart modules or spli
 a live session's tool/permission consistency boundary into independent aggregates.
 
 ## Identity and access library
+
+The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
@@ -506,6 +514,12 @@ replies; `product/socket.rs` reserves independent record capacity and retains
 it until both physical source work and delivery/drop have finished. The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
+`core/read_workers/` owns tracked blocking source threads, sticky faults and the
+retained join-all drain used by record/catalogue infrastructure. It grants no
+source permission or socket capacity. Its lifecycle tests live under
+`tests/core/read_workers.rs`; record-specific admission tests stay with their
+source adapter. Attachment adapters consume this owner when activated.
+
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
@@ -548,6 +562,14 @@ The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
+`application/catalogue_watch.rs` owns payloadless owner-scoped watch interest;
+`infrastructure/catalogue_changes.rs` bounds and coalesces actual registrations.
+`LocalConversationStore` publishes after visible metadata transaction commits,
+inside the retained blocking owner. SDK `sessions/committed_changes.rs` and
+`session_storage/record_changes.rs` separately own record interest and publish
+outer save completions and reset receipts. Neither producer starts
+a read or changes receiver progress. [Committed change watches](design/committed-change-watches.md)
+owns their registration/recheck and accounting contract; wire activation remains #298.
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
 `CatalogueSource` through a bounded blocking worker bound to one authenticated
 caller and exact scope. The worker owns a Tokio runtime so metadata reads can

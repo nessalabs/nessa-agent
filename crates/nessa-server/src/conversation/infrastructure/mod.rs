@@ -13,12 +13,17 @@
 //! runs each SDK source on a tracked non-entered thread, and joins those threads
 //! before storage shutdown.
 //!
+//! `catalogue_changes` publishes coalesced payloadless notices after visible
+//! metadata transactions commit; final publisher drop closes remaining handles.
+//! Registration/head recheck belongs to its consuming authorized application.
+//!
 //! Ports and local files:
 //!
 //! ```text
 //!   ConversationRepository ─┐
 //!   ConversationSummaries  ─┼─▶ LocalConversationStore ─▶ metadata.sqlite3
 //!   ConversationListing    ─┤                              conversations ◀─ deletions
+//!   WatchCatalogue         ─┤
 //!   ConversationCatalogue  ─┘                                            ◀─ summaries
 //!                                                               catalogue_owners / identity
 //!                                                                        ◀─ mode requests
@@ -34,13 +39,14 @@
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
 //! by the conversation, the app's mount, the gateway's call id and the phase.
+mod catalogue_changes;
 mod receiver_authority;
 mod store;
+pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;
-mod read_workers;
 mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::NessaRecordReadSource;

@@ -212,7 +212,8 @@ async fn the_view_finds_a_tools_ui_once_a_session_has_listed_it() {
     // Not listed yet: no UI.
     launcher.server(0).arrived("tools/list", 1).await;
     assert_eq!(servers.tool_ui(&super::conversation(), &chart_call()), None);
-    // Listed: the UI, for the call that names it; none for one that does not.
+    // Listed: the UI, for the call that names it; a named tool with none
+    // declared is no UI, for both; another server's call names nothing.
     let asked = launcher.server(0).with_method("tools/list")[0]["id"].clone();
     launcher.server(0).send(
         json!({ "jsonrpc": "2.0", "id": asked, "result": { "tools": [
@@ -230,6 +231,7 @@ async fn the_view_finds_a_tools_ui_once_a_session_has_listed_it() {
             .tool_ui(&super::conversation(), &chart_call())
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://fixture/chart.html"
     );
@@ -238,7 +240,7 @@ async fn the_view_finds_a_tools_ui_once_a_session_has_listed_it() {
             &super::conversation(),
             &McpTool::new("fixture", "report").unwrap()
         ),
-        None
+        Some(crate::domain::mcp_apps::ToolUi::default())
     );
     assert_eq!(
         servers.tool_ui(
@@ -277,7 +279,7 @@ async fn each_conversation_sees_its_own_newest_sessions_ui() {
     let uri = |session: &SessionId| {
         servers
             .tool_ui(session, &chart_call())
-            .map(|ui| ui.resource_uri().as_str().to_owned())
+            .and_then(|ui| Some(ui.resource_uri()?.as_str().to_owned()))
     };
     assert_eq!(uri(&a).as_deref(), Some(CHART));
     assert_eq!(uri(&b).as_deref(), Some("ui://fixture/other.html"));
@@ -511,6 +513,7 @@ async fn of_two_lists_finishing_out_of_order_the_one_asked_later_is_kept() {
             .tool_ui(&super::conversation(), &chart_call())
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://fixture/later.html"
     );

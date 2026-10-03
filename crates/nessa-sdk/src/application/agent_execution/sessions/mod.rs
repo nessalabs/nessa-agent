@@ -1,3 +1,6 @@
+//! `committed_changes` owns payloadless interest independent of save bindings,
+//! writer leases and receiver progress. RecordStorage closes interest before
+//! shutdown joins.
 //! Queue evidence follows the same consistency boundary as pending dispatch:
 //! ```text
 //! Agent scheduler -> InvocationQueue -> actual membership/order changes
@@ -49,8 +52,10 @@
 //! evidence; snapshots expose only committed state. Adapters choose its encoding.
 
 pub(crate) mod attachment;
+pub(crate) mod committed_changes;
 mod manager;
 mod message_commit_clock;
+pub use committed_changes::{ChangeWatchError, ChangeWatchState, CommittedChangeWatch};
 pub(crate) mod records;
 mod retained;
 mod retention;
@@ -68,9 +73,10 @@ pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use storage::{
     CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
-    ProviderContext, QueueHistoryRecord, SessionChange, SessionSaveGeneration, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture, StorageShutdownFailure,
-    SubmissionAcknowledgement,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad, SessionLoadState,
+    SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    StorageShutdownFailure, SubmissionAcknowledgement,
 };
 
 pub(crate) use transcript::CommittedTransactionState;

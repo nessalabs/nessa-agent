@@ -978,7 +978,8 @@ use nessa_sdk::{
         },
         sessions::{
             CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus,
-            SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+            SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
+            StorageError, StorageFuture,
         },
     },
     domain::{
@@ -3655,16 +3656,26 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
     );
     let session_id = SessionId::new(id.to_string()).unwrap();
     let lease = storage.open(session_id.clone()).await.unwrap();
+    let saved = SessionSnapshot {
+        id: session_id.clone(),
+        provider: ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("retained-context").unwrap(),
+        ),
+        queue_history: vec![],
+        invocations: vec![],
+    };
     lease
-        .save(SessionSnapshot {
-            id: session_id.clone(),
-            provider: ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap(),
-            provider_context: ProviderContext::Recorded(
-                ExecutionSessionId::new("retained-context").unwrap(),
-            ),
-            queue_history: vec![],
-            invocations: vec![],
-        })
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            saved.clone(),
+            vec![SessionSaveUnit::new(vec![SessionChange::Opened {
+                id: saved.id.clone(),
+                provider: saved.provider.clone(),
+                context: saved.provider_context.clone(),
+            }])
+            .unwrap()],
+        )
         .await
         .unwrap();
     drop(lease);
@@ -3677,8 +3688,11 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         ));
     }
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
-    let lease = storage.open(session_id).await.unwrap();
-    let saved = lease.load().await.unwrap().unwrap();
+    let lease = storage.open(session_id.clone()).await.unwrap();
+    let saved = SessionSnapshot::load_saved(lease.as_ref(), &session_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         saved.provider_context.recorded().unwrap().as_str(),
         "retained-context"

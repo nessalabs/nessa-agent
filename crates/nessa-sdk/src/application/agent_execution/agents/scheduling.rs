@@ -1,4 +1,7 @@
 //! Owns accepted work independently of a surface's wait future.
+//! Pending owners retain persistence and recovery, then retire before receipt
+//! publication. The queue runner also retires their original invocation slot;
+//! separate invocation and attachment owners retain their own resources.
 #![deny(missing_docs)]
 
 use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
@@ -158,6 +161,10 @@ impl QueuedInvocation {
     /// persistence, and explicit session-close failures. Closed can indicate local
     /// cancellation or provider disconnection; it does not confirm external cleanup.
     /// SubmissionUnresolved means the runner vanished without settlement.
+    /// Publication retires this receipt's original accepted-work owner and its
+    /// invocation slot, as coordinated by the queue runner and Pending publisher.
+    /// Independent work can still make a direct invocation Busy; the receipt does
+    /// not establish universal admission readiness or confirmed provider cleanup.
     pub async fn wait(mut self) -> Result<ExecutionOutcome, AgentError> {
         loop {
             if let Some(result) = self.result.borrow_and_update().clone() {
@@ -209,7 +216,29 @@ struct Pending {
     reply: watch::Sender<Settlement>,
     _work: WorkPermit,
 }
+impl Pending {
+    fn publish(self, result: Result<ExecutionOutcome, AgentError>) {
+        let Self {
+            reply, _work: work, ..
+        } = self;
+        // The original admitted work retires before its consumer can run.
+        // Other invocation and attachment owners retain their own resources.
+        drop(work);
+        reply.send_replace(Some(result));
+    }
+}
 impl Scheduler {
+    // Nothing for a runner to select or settle. Cancellation drains the queue
+    // before it settles each owner, so an owner whose settlement was cut short
+    // stays in `pending` with no queue entry. A runner then takes the slot:
+    // it releases that slot before settling a stopped owner. Otherwise, with
+    // nothing else queued, it passes over it and exits, leaving it to the next
+    // `cancel_pending`, which collects owners whether or not they are queued.
+    // Both orderings are rows of the table in
+    // docs/agent_execution/scheduling.md, each with its test.
+    fn has_no_work(&self) -> bool {
+        self.queue.is_empty() && self.pending.is_empty()
+    }
     pub(super) fn is_idle(&self) -> bool {
         !self.running && self.queue.is_empty()
     }
@@ -682,9 +711,7 @@ impl Agent {
                     )
                 }
             };
-            pending
-                .reply
-                .send_replace(Some(Err(failure.clone().unwrap_or(AgentError::Closed))));
+            pending.publish(Err(failure.clone().unwrap_or(AgentError::Closed)));
             if let Some(error) = failure {
                 return Err(error);
             }
@@ -886,26 +913,46 @@ impl Agent {
 
     async fn run_queue(&self) {
         loop {
+            // A runner with nothing to select or settle exits without the
+            // invocation slot: holding it would turn a direct `invoke` into
+            // Busy with nothing to overlap. This check, `running` and admission
+            // share the scheduler lock, so an admission after it starts a new
+            // runner. The orderings and their tests are in
+            // docs/agent_execution/scheduling.md (#366).
+            {
+                let mut scheduler = self.inner.scheduler.lock().await;
+                if scheduler.has_no_work() {
+                    scheduler.running = false;
+                    return;
+                }
+            }
             // Wait for a direct invocation without removing pending work: close
             // can still cancel every waiting item and prevent automatic restart.
-            let _active = self.inner.invocation.lock().await;
+            let active = self.inner.invocation.lock().await;
             let (pending, close_notice, selection) = {
                 let mut scheduler = self.inner.scheduler.lock().await;
                 let close_notice = self.inner.lifecycle.close_notice();
-                // A stop may come from permission or execution cleanup, without
-                // a native-steering caller available to settle queued receipts.
-                if let Err(error) = self.settle_stopped_pending(&mut scheduler).await {
-                    // Each affected receipt already retains its persistence error.
-                    tracing::warn!(?error, "failed to save stopped queue receipts");
-                }
-                if self.inner.lifecycle.is_closed() {
-                    // A stop can race the first drain while it awaits storage.
-                    // Once closed is observed, collect those newly stopped owners too.
+                // No invocation was selected. A stopped waiter's receipt must
+                // expose its lifecycle refusal, not this runner's empty slot.
+                if self.inner.lifecycle.is_closed()
+                    || scheduler
+                        .pending
+                        .values()
+                        .any(|pending| pending._work.cancellation().is_some())
+                {
+                    drop(active);
                     if let Err(error) = self.settle_stopped_pending(&mut scheduler).await {
                         tracing::warn!(?error, "failed to save stopped queue receipts");
                     }
-                    scheduler.running = false;
-                    return;
+                    if self.inner.lifecycle.is_closed() {
+                        // A stop can race the first drain while it awaits storage.
+                        if let Err(error) = self.settle_stopped_pending(&mut scheduler).await {
+                            tracing::warn!(?error, "failed to save stopped queue receipts");
+                        }
+                        scheduler.running = false;
+                        return;
+                    }
+                    continue;
                 }
                 let Some((next, _)) = scheduler.queue.pending().first().cloned() else {
                     scheduler.running = false;
@@ -925,6 +972,9 @@ impl Agent {
                             }
                         };
                     drop(scheduler);
+                    // Startup owns its attachment independently and can publish
+                    // failed waiting receipts before this await completes.
+                    drop(active);
                     let recovered = match self.start_attachment(recovery) {
                         Ok(wait) => wait.wait().await,
                         Err(error) => Err(error),
@@ -975,8 +1025,9 @@ impl Agent {
                     let result = self
                         .recover_scheduling_panic(Some(&pending.input.execution_id), &close_notice)
                         .await;
-                    pending.reply.send_replace(Some(result));
                     self.inner.scheduler.lock().await.running = false;
+                    drop(active);
+                    pending.publish(result);
                     return;
                 }
             };
@@ -989,12 +1040,14 @@ impl Agent {
                     let result = self
                         .recover_scheduling_panic(Some(&pending.input.execution_id), &close_notice)
                         .await;
-                    pending.reply.send_replace(Some(result));
                     self.inner.scheduler.lock().await.running = false;
+                    drop(active);
+                    pending.publish(result);
                     return;
                 }
             };
-            pending.reply.send_replace(Some(result));
+            drop(active);
+            pending.publish(result);
         }
     }
 
@@ -1891,8 +1944,11 @@ impl Agent {
                     None => aggregate,
                 });
             }
-            pending.reply.send_replace(Some(result));
-            scheduler.pending.remove(&id);
+            scheduler
+                .pending
+                .remove(&id)
+                .expect("admitted queue input")
+                .publish(result);
         }
         aggregate_failure.map_or(Ok(()), Err)
     }
@@ -2082,8 +2138,11 @@ impl Agent {
                     None => aggregate,
                 });
             }
-            pending.reply.send_replace(Some(result));
-            scheduler.pending.remove(&id);
+            scheduler
+                .pending
+                .remove(&id)
+                .expect("admitted queue input")
+                .publish(result);
         }
         failure.map_or(Ok(()), Err)
     }

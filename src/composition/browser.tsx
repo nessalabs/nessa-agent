@@ -12,10 +12,10 @@ import {
   signOutBrowserSession,
 } from "../session"
 import {
-  createBrowserAuth,
   browserSessionUrl,
+  connectBrowserSession,
+  createBrowserAuth,
 } from "../session/adapters/client/browser-auth"
-import { connectDevSession } from "../session/adapters/client/dev-session"
 import { makeStore } from "../store"
 import type { Environment } from "../env/environment"
 import { maintainBrowserSession } from "../session/adapters/lifecycle/browser-renewal"
@@ -28,15 +28,13 @@ function createScope(
 ) {
   const dependencies = createDependencies({
     environment,
-    connectSession: async () => {
-      if (!(await auth.restore()))
-        throw new NessaRpcError("unauthorized", "Please sign in again.")
-      return connectDevSession({
+    connectSession: () =>
+      connectBrowserSession({
+        auth,
         stage: environment.stage,
         clientId: "nessa-browser",
-        browserUrl: browserSessionUrl(window.location.href, environment.stage),
-      })
-    },
+        pageUrl: window.location.href,
+      }),
   })
   const store = makeStore(dependencies)
   const tabStorage = createTabStorage({

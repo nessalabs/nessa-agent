@@ -84,9 +84,15 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
     let options: Vec<_> = shown[0]
         .options
         .iter()
-        .map(|option| option.id.as_str())
+        .map(|option| (option.id.as_str(), option.effect))
         .collect();
-    assert_eq!(options, [ALLOW, DENY]);
+    assert_eq!(
+        options,
+        [
+            (ALLOW, ConversationPermissionOptionEffect::Allow),
+            (DENY, ConversationPermissionOptionEffect::Deny)
+        ]
+    );
     let id = waiting.permission_id.clone();
     assert_eq!(
         reviews.answer("e1", &id, ALLOW, person()),

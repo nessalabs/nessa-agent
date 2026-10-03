@@ -91,10 +91,15 @@ end of input (Nessa's own shell server) still does.
   answered by the gateway: `ping` with `{}`, anything else with `-32601`,
   since the gateway declared none of them.
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
-  `_meta.ui`: `resourceUri` (a `ui://` URI) and `visibility` (`model`, `app`;
-  both when absent). A tool whose `_meta.ui` cannot be read is kept without a
-  UI; a tool whose name cannot be one is left out. A session's list is read
-  when it opens and again on `notifications/tools/list_changed`.
+  `_meta.ui`: an optional `resourceUri` (a `ui://` URI) and `visibility`
+  (`model`, `app`; both when absent, or when there is no `_meta.ui`), each
+  read on its own. A tool whose `resourceUri` is absent or cannot be read is
+  kept without a UI, and keeps its `visibility` (#412); one whose
+  `visibility` is not an array of strings (`null` included) is no one's —
+  hidden from the model, and an app's `tools/call` to it is refused
+  `tool_not_for_app` — and keeps a readable `resourceUri` as its UI. A tool
+  whose name cannot be one is left out. A session's list is read when it
+  opens and again on `notifications/tools/list_changed`.
 - **UI resources.** `resources/read` of a `ui://` URI must answer one content
   for that URI with MIME `text/html;profile=mcp-app` and `text` (or `blob`
   holding UTF-8), with its `_meta.ui`: `csp` (`connectDomains`,
@@ -129,6 +134,7 @@ end of input (Nessa's own shell server) still does.
 | CSP sources, the app's `domain` | 64 per list, 512 bytes each | `TooLarge` |
 | Opening a session: spawn to `initialize` answer | 30 s | `Timeout`, the process group is killed |
 | The gateway's own `tools/list`, `resources/read` | 10 s each | `Timeout`; the connection stays |
+| An MCP App's `tools/call`, `resources/read` (`call_tool`, `read_app_resource`) | the caller's budget: the gateway passes `x-mcpAppCallTiming.callTimeoutMs` and `readTimeoutMs` | `Timeout`; the connection stays |
 | A forwarded request | none from the gateway | the harness's own deadline and cancellation |
 | Closing a session | stdin closed, 2 s, then the process group killed | — |
 | A refusal's message | 512 characters, control characters as spaces | — |

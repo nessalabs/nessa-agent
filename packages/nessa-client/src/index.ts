@@ -151,8 +151,13 @@ export {
   type AttachmentBeginRefusal,
   type AttachmentFailureCode,
 } from "./application/attachment-upload.js"
-export type { McpAppsApi, McpResourceDescription } from "./presentation/mcp-apps-api.js"
+export {
+  mcpAppDeadlines,
+  type McpAppsApi,
+  type McpResourceDescription,
+} from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
+export { NessaRequestTooLargeError } from "./application/request-too-large-error.js"
 export {
   NessaMcpResourceError,
   type McpResourceFailureCode,
@@ -161,6 +166,7 @@ export {
   MAX_MCP_ARGUMENTS_BYTES,
   MAX_MCP_RESOURCE_BYTES,
   MAX_MCP_RESULT_BYTES,
+  mcpAppRequestProblem,
 } from "./protocol/mcp-app-validate.js"
 export type {
   McpAppReference,

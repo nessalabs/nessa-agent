@@ -5,7 +5,9 @@
 use super::{
     record::RecordStorage,
     stream_fact,
-    terminal_discovery::{RecordReadStatus, TerminalCache},
+    terminal_discovery::{
+        CapturedCeiling, DiscoveryQuery, ExactPublication, RecordReadStatus, TerminalCache,
+    },
     transcript::TranscriptFold,
 };
 use crate::{
@@ -22,7 +24,7 @@ use nessa_sync::replication::{
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         mpsc, Arc, Mutex, PoisonError,
@@ -32,7 +34,6 @@ use std::{
 use tokio::runtime::Handle;
 
 const SCHEMA: &str = "nessa.physical-frame.v1";
-const REMEMBERED_HEADS: usize = 64;
 const SOURCE_QUEUE_CAPACITY: usize = 64;
 const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
 const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
@@ -400,7 +401,6 @@ impl NessaRecordSource {
                     stream,
                     origin: worker_origin,
                     head: 0,
-                    observed_heads: VecDeque::from([0]),
                     terminal_cache,
                 };
                 while let Ok(command) = receiver.recv() {
@@ -440,9 +440,11 @@ impl NessaRecordSource {
     /// record bytes. The store can decode one lookahead record before its byte
     /// limit check: total decoded accounted bytes are at most twice
     /// [`super::MAX_STORED_RECORD_BYTES`]. These are not physical disk I/O bytes.
-    /// Validation runs against a captured
-    /// tail, then return the actual committed head. `Preparing` resumes shared
-    /// SDK progress on a later call. Cache eviction or restart may repeat work.
+    /// Validation runs against a captured ceiling, then returns the actual
+    /// committed head. The shared cache owner reads current physical bounds
+    /// after checkout. `Preparing` resumes shared SDK progress on a later call.
+    /// Historical queries retain a separate bounded pass and completion proofs;
+    /// cache eviction or restart may repeat work.
     /// No idle worker is retained by the cache; dropping the final source joins
     /// this worker when done outside Tokio, as for ordinary source reads.
     ///
@@ -496,13 +498,19 @@ impl NessaRecordSource {
 
     /// Read one fixed-target page after bounded shared terminal discovery.
     /// An unknown target returns `Preparing` until its immutable prefix has been
-    /// validated; subsequent pages do not scan that prefix again. Physical page
+    /// validated. Retained completion proofs share reuse across sources; an
+    /// evicted proof may need a bounded historical rescan. A different unproven
+    /// historical query advances that original scan and returns `Preparing`
+    /// until the original query finishes, then may acquire its own scan.
+    /// Each physical step retains the count/byte limits of [`Self::bounded_head`].
+    /// Physical page
     /// budgets have the same units and bounds as `RecordSource::page`. Both
     /// paths ask core `validate_page_request` before stream metadata I/O; scope,
-    /// incarnation, retention and terminal checks remain source-owned. A ready
-    /// call additionally reads one target frame and one request-bounded page;
-    /// their decoded-byte ceilings are one and two runtime record caps,
-    /// respectively, in addition to discovery's two-cap ceiling.
+    /// incarnation, retention and terminal checks use the shared cache owner.
+    /// A ready call additionally reads one request-bounded page with a two
+    /// runtime-record-cap decoded-byte ceiling, in addition to discovery's
+    /// two-cap ceiling. Retained proofs are checked against current physical
+    /// bounds before reuse.
     ///
     /// # Errors
     /// Reports invalid page budgets or a nonterminal target, replaced/pruned
@@ -578,7 +586,6 @@ struct ReaderState {
     stream: StreamKey,
     origin: Id,
     head: u64,
-    observed_heads: VecDeque<u64>,
     terminal_cache: Arc<TerminalCache>,
 }
 
@@ -682,31 +689,20 @@ impl ReaderState {
     }
 
     async fn advance_through(&mut self, through: &Cursor) -> Result<u64, SourceError> {
-        while self.head < through.offset {
-            match stream_fact::read_next_fact_through(
-                &self.runtime,
-                &self.stream,
-                &Cursor::new(self.stream.clone(), self.head),
-                through,
-            )
-            .await
-            .map_err(fact_error)?
+        self.head = loop {
+            match self
+                .terminal_cache
+                .discover(
+                    &self.runtime,
+                    &self.stream,
+                    DiscoveryQuery::CapturedHead(CapturedCeiling(through.offset)),
+                )
+                .await?
             {
-                stream_fact::FactRead::Absent | stream_fact::FactRead::Partial => {
-                    break;
-                }
-                stream_fact::FactRead::Aborted { cursor }
-                | stream_fact::FactRead::Complete { cursor, .. } => {
-                    self.head = cursor.offset;
-                }
+                RecordReadStatus::Ready(terminal) => break terminal,
+                RecordReadStatus::Preparing => tokio::task::yield_now().await,
             }
-        }
-        if self.observed_heads.back() != Some(&self.head) {
-            if self.observed_heads.len() == REMEMBERED_HEADS {
-                self.observed_heads.pop_front();
-            }
-            self.observed_heads.push_back(self.head);
-        }
+        };
         Ok(self.head)
     }
 
@@ -718,15 +714,7 @@ impl ReaderState {
         )
         .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
-        let tail = self.check_stream().await?;
-        if request.target > tail.offset {
-            return Err(SourceError::InvalidRequest);
-        }
-        if request.target > self.head {
-            self.advance_through(&Cursor::new(self.stream.clone(), request.target))
-                .await?;
-        }
-        if request.target > self.head || !self.is_terminal(request.target).await? {
+        if !self.is_terminal(request.target).await? {
             return Err(SourceError::InvalidRequest);
         }
         self.read_page(request).await
@@ -792,9 +780,8 @@ impl ReaderState {
 
     async fn bounded_head(&self, scope: &Scope) -> Result<RecordReadStatus<u64>, SourceError> {
         self.check_scope(scope)?;
-        let tail = self.check_stream().await?;
         self.terminal_cache
-            .discover(&self.runtime, &self.stream, tail.offset, None)
+            .discover(&self.runtime, &self.stream, DiscoveryQuery::Head)
             .await
     }
 
@@ -809,67 +796,39 @@ impl ReaderState {
         )
         .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
-        let tail = self.check_stream().await?;
-        if request.target > tail.offset {
-            return Err(SourceError::InvalidRequest);
-        }
-        if matches!(
-            self.terminal_cache
-                .discover(
-                    &self.runtime,
-                    &self.stream,
-                    tail.offset,
-                    Some(request.target)
-                )
-                .await?,
-            RecordReadStatus::Preparing
-        ) {
-            return Ok(RecordReadStatus::Preparing);
-        }
-        let page = self
-            .runtime
-            .read_after(
-                &Cursor::new(self.stream.clone(), request.target - 1),
-                PageLimits {
-                    max_records: 1,
-                    max_bytes: super::MAX_STORED_RECORD_BYTES,
-                },
-                Some(&Cursor::new(self.stream.clone(), request.target)),
+        match self
+            .terminal_cache
+            .discover(
+                &self.runtime,
+                &self.stream,
+                DiscoveryQuery::Publication(ExactPublication(request.target)),
             )
-            .await
-            .map_err(source_error)?;
-        let record = page.records.first().ok_or(SourceError::Unavailable)?;
-        if record.cursor.offset != request.target
-            || record.cursor.stream != self.stream
-            || !stream_fact::terminal_in_validated_prefix(&record.event)
-                .map_err(|_| SourceError::Unavailable)?
+            .await?
         {
-            return Err(SourceError::InvalidRequest);
+            RecordReadStatus::Preparing => return Ok(RecordReadStatus::Preparing),
+            RecordReadStatus::Ready(terminal) if terminal != request.target => {
+                return Err(SourceError::InvalidRequest);
+            }
+            RecordReadStatus::Ready(_) => {}
         }
         self.read_page(request).await.map(RecordReadStatus::Ready)
     }
 
     async fn is_terminal(&self, target: u64) -> Result<bool, SourceError> {
-        if self.observed_heads.contains(&target) {
-            return Ok(true);
-        }
-        let mut position = 0;
-        while position < target {
-            match stream_fact::read_next_fact_through(
-                &self.runtime,
-                &self.stream,
-                &Cursor::new(self.stream.clone(), position),
-                &Cursor::new(self.stream.clone(), target),
-            )
-            .await
-            .map_err(fact_error)?
+        loop {
+            match self
+                .terminal_cache
+                .discover(
+                    &self.runtime,
+                    &self.stream,
+                    DiscoveryQuery::Publication(ExactPublication(target)),
+                )
+                .await?
             {
-                stream_fact::FactRead::Aborted { cursor }
-                | stream_fact::FactRead::Complete { cursor, .. } => position = cursor.offset,
-                stream_fact::FactRead::Absent | stream_fact::FactRead::Partial => return Ok(false),
+                RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
+                RecordReadStatus::Preparing => tokio::task::yield_now().await,
             }
         }
-        Ok(position == target)
     }
 }
 
@@ -899,13 +858,6 @@ pub(super) fn source_error(error: event_stream::Error) -> SourceError {
         event_stream::Error::StaleIncarnation { .. }
         | event_stream::Error::StreamUnavailable { .. }
         | event_stream::Error::StreamNotFound => SourceError::IdentityChanged,
-        _ => SourceError::Unavailable,
-    }
-}
-
-fn fact_error(error: stream_fact::FactCommitError) -> SourceError {
-    match error {
-        stream_fact::FactCommitError::Stream(error) => source_error(error),
         _ => SourceError::Unavailable,
     }
 }
@@ -1144,6 +1096,11 @@ fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageErr
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        record_writer::RecordWriter,
+        save_group::{Header, SaveIdentity, EMPTY_CHAIN},
+        stream_fact::FramedFact,
+    };
     use super::Command as SourceCommand;
     use super::*;
     use crate::application::agent_execution::{
@@ -1152,9 +1109,10 @@ mod tests {
         providers::ProviderIdentity,
         sessions::{
             records::{self, FactKey, FactKind},
-            CommittedCompleteness, CommittedFreshness, CommittedViewState, InvocationRecord,
-            ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
-            SubmissionAcknowledgement,
+            ChangeWatchError, ChangeWatchState, CommittedCompleteness, CommittedFreshness,
+            CommittedViewState, InvocationRecord, ProviderContext, SessionChange,
+            SessionSaveBackend, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
+            SessionStorage, SubmissionAcknowledgement,
         },
     };
     use crate::domain::agent_execution::{
@@ -1177,13 +1135,63 @@ mod tests {
     };
     use rusqlite::{params, Connection, OptionalExtension};
     use std::{
+        future::Future,
         io::{BufRead, BufReader, Write},
         net::{Ipv4Addr, SocketAddrV4},
         path::Path,
         process::{Child, Command, Stdio},
-        sync::Arc,
+        sync::{mpsc::TryRecvError, Arc},
+        task::{Context, Poll, Waker},
         time::Duration,
     };
+
+    fn opening(session: &SessionId) -> SessionChange {
+        SessionChange::Opened {
+            id: session.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        }
+    }
+    fn test_save_frames(
+        stream: &StreamKey,
+        base: u64,
+        generation: u64,
+        changes: &[SessionChange],
+        padding: usize,
+    ) -> Vec<NewEvent> {
+        let binding = SessionSaveGeneration::new(
+            SessionSaveBackend::Record {
+                stream: id(stream.id.as_str()),
+                incarnation: stream.incarnation.0,
+            },
+            base,
+            generation,
+        );
+        let identity = SaveIdentity::binding(&binding).unwrap();
+        let mut frames = Vec::new();
+        let mut chain = EMPTY_CHAIN;
+        for (ordinal, change) in changes.iter().enumerate() {
+            let mut payload =
+                super::super::snapshot::encode_semantic_batch(std::slice::from_ref(change))
+                    .unwrap();
+            // Whitespace preserves JSON semantics while controlling physical
+            // piece size in these source/receiver boundary fixtures.
+            payload.resize(payload.len().max(padding), b' ');
+            let header = Header::unit(identity.clone(), ordinal as u64, chain, &payload);
+            chain = header.chain(payload.len() as u64);
+            let unit = FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, ordinal as u64).unwrap(),
+                body: header.encode(&payload),
+            };
+            frames.extend(stream_fact::frame_fact(&unit, base + frames.len() as u64 + 1).unwrap());
+        }
+        let complete = FramedFact {
+            key: FactKey::new(FactKind::SaveComplete, None, changes.len() as u64).unwrap(),
+            body: Header::unit(identity, changes.len() as u64, chain, &[]).encode(&[]),
+        };
+        frames.extend(stream_fact::frame_fact(&complete, base + frames.len() as u64 + 1).unwrap());
+        frames
+    }
 
     fn cached_receiver(
         cache: &Mutex<CommittedCache>,
@@ -1202,17 +1210,27 @@ mod tests {
         runtime: &Runtime<SqliteStore>,
         stream: &StreamKey,
         session: &SessionId,
-    ) {
+    ) -> u64 {
         let change = SessionChange::Opened {
             id: session.clone(),
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
             context: ProviderContext::Absent,
         };
-        let key = records::key_for_changes(None, std::slice::from_ref(&change), 0).unwrap();
-        let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
-        let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 1).unwrap();
-        assert_eq!(frames.len(), 1);
-        runtime.append(stream, frames[0].clone()).await.unwrap();
+        let observed = records::fold_changes(None, std::slice::from_ref(&change)).unwrap();
+        let mut writer = RecordWriter::replay(runtime, session.clone(), stream.clone())
+            .await
+            .unwrap();
+        let original = writer.readable_snapshot().unwrap().binding().clone();
+        let receipt = writer
+            .save(
+                runtime,
+                original,
+                &observed,
+                &[SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        receipt.next().base()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1260,7 +1278,11 @@ mod tests {
             changes.push(SessionChange::InputAccepted(Box::new(record)));
         }
         lease
-            .save_changes(SessionSaveGeneration::initial(), snapshot, changes)
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(changes).unwrap()],
+            )
             .await
             .unwrap();
         let prior = storage
@@ -1285,13 +1307,17 @@ mod tests {
                 .snapshot_materializations(),
             1
         );
-        for count in 2..=4 {
+        for _ in 0..3 {
             let view = storage
                 .read_committed(session.clone())
                 .await
                 .unwrap()
                 .unwrap();
             assert_eq!(view.snapshot(), prior.snapshot());
+            assert!(
+                std::ptr::eq(view.snapshot().unwrap(), prior.snapshot().unwrap()),
+                "warm reads share the immutable final-completion publication"
+            );
             assert_eq!(
                 entry
                     .receiver
@@ -1299,7 +1325,7 @@ mod tests {
                     .unwrap()
                     .fold
                     .snapshot_materializations(),
-                count
+                1
             );
         }
         drop(lease);
@@ -1336,7 +1362,7 @@ mod tests {
         assert!(reading.await.unwrap().is_err());
         {
             let receiver = entry.receiver.lock().unwrap();
-            assert_eq!(receiver.fold.snapshot_materializations(), 4);
+            assert_eq!(receiver.fold.snapshot_materializations(), 1);
             assert_eq!(receiver.fold.snapshot(), prior.snapshot());
             assert_eq!(receiver.fold.downloaded(), prior.downloaded());
             assert_eq!(receiver.fold.applied(), prior.position());
@@ -1480,15 +1506,8 @@ mod tests {
                 before: ProviderContext::Absent,
                 after: ProviderContext::Recorded(ExecutionSessionId::new("context").unwrap()),
             };
-            let key =
-                records::key_for_changes(initial.snapshot(), std::slice::from_ref(&change), 1)
-                    .unwrap();
-            let mut body = super::super::snapshot::encode_semantic_change(&change).unwrap();
-            if partial {
-                body.splice(0..0, std::iter::repeat_n(b' ', 100_000));
-            }
             let frames =
-                stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap();
+                test_save_frames(&stream, 2, 1, &[change], if partial { 100_000 } else { 0 });
             let appended = if partial { 2 } else { frames.len() };
             for event in &frames[..appended] {
                 runtime.append(&stream, event.clone()).await.unwrap();
@@ -1507,15 +1526,15 @@ mod tests {
                     .unwrap()
                     .fold
                     .snapshot_materializations(),
-                2
+                1
             );
             assert_eq!(
                 initial.snapshot().unwrap().provider_context,
                 ProviderContext::Absent
             );
-            assert_eq!(stale.position(), 1);
-            assert_eq!(stale.downloaded(), 1);
-            assert_eq!(stale.observed_head(), 1 + appended as u64);
+            assert_eq!(stale.position(), 2);
+            assert_eq!(stale.downloaded(), 2);
+            assert_eq!(stale.observed_head(), 2 + appended as u64);
             assert_eq!(stale.status().freshness(), CommittedFreshness::Stale);
             assert_eq!(
                 stale.status().completeness(),
@@ -1526,10 +1545,10 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(caught.downloaded(), 1 + appended as u64);
+            assert_eq!(caught.downloaded(), 2 + appended as u64);
             assert_eq!(caught.status().freshness(), CommittedFreshness::Current);
             if partial {
-                assert_eq!(caught.position(), 1);
+                assert_eq!(caught.position(), 2);
                 assert_eq!(
                     caught.status().completeness(),
                     CommittedCompleteness::Partial
@@ -1542,14 +1561,14 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-                assert_eq!(sealed.position(), 1 + frames.len() as u64);
+                assert_eq!(sealed.position(), 2 + frames.len() as u64);
                 assert_eq!(sealed.status().freshness(), CommittedFreshness::Current);
                 assert_eq!(
                     sealed.status().completeness(),
                     CommittedCompleteness::Complete
                 );
             } else {
-                assert_eq!(caught.position(), 2);
+                assert_eq!(caught.position(), 4);
                 assert_eq!(
                     caught.status().completeness(),
                     CommittedCompleteness::Complete
@@ -1610,7 +1629,7 @@ mod tests {
                 let before = storage.read_committed(session.clone()).await.unwrap();
                 assert_eq!(before.is_none(), missing);
                 if let Some(view) = before {
-                    assert_eq!(view.position(), 1);
+                    assert_eq!(view.position(), 2);
                 }
                 None
             };
@@ -1636,7 +1655,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(view.position(), 1);
+            assert_eq!(view.position(), 2);
             assert_eq!(view.incarnation(), incarnation_id(&current).as_str());
             let current_entry = storage
                 .committed_views
@@ -1681,15 +1700,11 @@ mod tests {
                 before: ProviderContext::Absent,
                 after: ProviderContext::Recorded(ExecutionSessionId::new("new-context").unwrap()),
             };
-            let key = records::key_for_changes(view.snapshot(), std::slice::from_ref(&change), 1)
-                .unwrap();
-            let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
-            let frame = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2)
-                .unwrap()
-                .remove(0);
-            runtime.append(&current, frame).await.unwrap();
+            for frame in test_save_frames(&current, 2, 1, &[change], 0) {
+                runtime.append(&current, frame).await.unwrap();
+            }
             let progressed = storage.read_committed(session).await.unwrap().unwrap();
-            assert_eq!(progressed.position(), 2);
+            assert_eq!(progressed.position(), 4);
             assert_eq!(progressed.incarnation(), view.incarnation());
             assert!(!current_entry.lifetime.is_obsolete());
             assert_eq!(
@@ -1716,11 +1731,18 @@ mod tests {
         let mut receiver = entry.receiver.lock().unwrap();
         receiver.through = Some(10);
         entry.lifetime.pin(true).unwrap();
-        let fact = stream_fact::FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body: vec![b'x'; 100_000],
+        let stream = StreamKey {
+            id: StreamId::new("conversation").unwrap(),
+            incarnation: IncarnationId([0; 16]),
         };
-        let frame = stream_fact::frame_fact(&fact, 1).unwrap().remove(0);
+        let frame = test_save_frames(
+            &stream,
+            0,
+            0,
+            &[opening(&SessionId::new("conversation").unwrap())],
+            100_000,
+        )
+        .remove(0);
         let mut payload = vec![stream_fact::frame_tag(&frame).unwrap()];
         payload.extend_from_slice(frame.payload.as_bytes());
         receiver
@@ -1938,8 +1960,8 @@ mod tests {
         );
         let entry = cached_receiver(&cache, scope.clone()).unwrap();
         let frames = stream_fact::frame_fact(
-            &stream_fact::FramedFact {
-                key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
                 body: vec![b'x'; 16 * 1024 * 1024],
             },
             65,
@@ -1959,9 +1981,11 @@ mod tests {
             let mut receiver = entry.receiver.lock().unwrap();
             receiver.fold = TranscriptFold::from_test_snapshot(
                 scope.clone(),
-                super::super::snapshot::checkpoint::history_fixture(63),
+                super::super::snapshot::checkpoint::history_fixture(31),
                 64,
             );
+            // Private continuation plus published snapshot are both charged;
+            // 31 fixture inputs leave room for the actual pending body to cross the target.
             assert!(receiver_retained_bytes(&receiver.fold, &scope) < COMMITTED_VIEW_CACHE_BYTES);
             receiver.through = Some(193);
             entry.lifetime.pin(true).unwrap();
@@ -2001,7 +2025,7 @@ mod tests {
             let abort = stream_fact::test_abort_event(&frames[0], 192);
             receiver.fold.apply(&[physical(193, &abort)]).unwrap();
             assert_eq!(receiver.fold.downloaded(), 193);
-            assert_eq!(receiver.fold.applied(), 193);
+            assert_eq!(receiver.fold.applied(), 64);
             assert_eq!(
                 receiver.fold.snapshot().unwrap() as *const SessionSnapshot,
                 before
@@ -2021,6 +2045,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let storage = Arc::new(RecordStorage::new(root.path().join("sessions")).unwrap());
         storage.initialize().await.unwrap();
+        let session = SessionId::new("stream").unwrap();
+        let mut watch = storage.watch_committed(&session).unwrap();
+        let (finished, joined_worker) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let (entered, started) = mpsc::channel();
         let receipt = storage
@@ -2034,6 +2061,7 @@ mod tests {
                         thread: Mutex::new(Some(thread::spawn(move || {
                             gate.recv().unwrap();
                             assert!(matches!(receiver.recv().unwrap(), SourceCommand::Shutdown));
+                            finished.send(()).unwrap();
                         }))),
                     }),
                     identity: RecordStreamIdentity {
@@ -2050,20 +2078,55 @@ mod tests {
             .unwrap();
         started.recv().unwrap();
         drop(receipt);
-        let first_storage = storage.clone();
-        let first = tokio::spawn(async move { first_storage.shutdown().await });
-        // Poll the same owner rather than racing a scheduler delay.
-        loop {
-            if matches!(storage.owner.initialize(), Err(StorageError::Closed)) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        first.abort();
+        let mut original_waiter = storage.shutdown();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            original_waiter.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        assert_eq!(storage.owner.initialize(), Err(StorageError::Closed));
         assert!(
-            tokio::time::timeout(Duration::from_millis(10), storage.shutdown())
-                .await
-                .is_err()
+            matches!(
+                Box::pin(watch.changed()).as_mut().poll(&mut context),
+                Poll::Ready(ChangeWatchState::Closed)
+            ),
+            "watch closes before held source joins"
+        );
+        assert!(
+            matches!(
+                storage.watch_committed(&session),
+                Err(ChangeWatchError::Closed)
+            ),
+            "watch admission closes before held source joins"
+        );
+        let (original_completion, work) = storage.owner.close().unwrap();
+        assert!(
+            work.is_none(),
+            "first shutdown already owns physical cleanup"
+        );
+        assert!(matches!(
+            Box::pin(original_completion.wait())
+                .as_mut()
+                .poll(&mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(joined_worker.try_recv(), Err(TryRecvError::Empty)));
+        drop(original_waiter);
+        let (retained_completion, work) = storage.owner.close().unwrap();
+        assert!(work.is_none());
+        assert!(
+            Arc::ptr_eq(&original_completion, &retained_completion),
+            "cancelled caller cannot replace the original completion owner"
+        );
+        assert!(matches!(
+            Box::pin(retained_completion.wait())
+                .as_mut()
+                .poll(&mut context),
+            Poll::Pending
+        ));
+        assert!(
+            matches!(joined_worker.try_recv(), Err(TryRecvError::Empty)),
+            "cancelled caller cannot complete the held physical worker"
         );
         assert!(matches!(
             storage.open(SessionId::new("closed-writer").unwrap()).await,
@@ -2076,6 +2139,11 @@ mod tests {
             Err(StorageError::Closed)
         ));
         release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), original_completion.wait())
+            .await
+            .expect("released physical source joins within fixture deadline")
+            .unwrap();
+        joined_worker.recv().unwrap();
         storage.shutdown().await.unwrap();
         storage.shutdown().await.unwrap();
     }
@@ -2115,10 +2183,20 @@ mod tests {
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
             context: ProviderContext::Absent,
         };
-        let key = records::key_for_changes(None, std::slice::from_ref(&change), 0).unwrap();
-        let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
-        let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 1).unwrap();
-        runtime.append(&stream, frames[0].clone()).await.unwrap();
+        let mut writer = RecordWriter::replay(&runtime, session.clone(), stream.clone())
+            .await
+            .unwrap();
+        let opening_snapshot = records::fold_changes(None, std::slice::from_ref(&change)).unwrap();
+        let binding = writer.readable_snapshot().unwrap().binding().clone();
+        writer
+            .save(
+                &runtime,
+                binding,
+                &opening_snapshot,
+                &[SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
         let (first, second, third, fourth) = tokio::join!(
             storage.read_committed(session.clone()),
             storage.read_committed(session.clone()),
@@ -2128,10 +2206,10 @@ mod tests {
         let view = first.unwrap().unwrap();
         for result in [second, third, fourth] {
             let concurrent = result.unwrap().unwrap();
-            assert_eq!(concurrent.position(), 1);
+            assert_eq!(concurrent.position(), 2);
             assert_eq!(view.snapshot(), concurrent.snapshot());
         }
-        assert_eq!(view.position(), 1);
+        assert_eq!(view.position(), 2);
         assert_eq!(view.snapshot().unwrap().id, session);
         let unchanged = storage
             .read_committed(session.clone())
@@ -2144,17 +2222,24 @@ mod tests {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         };
-        let key =
-            records::key_for_changes(view.snapshot(), std::slice::from_ref(&context), 1).unwrap();
-        let body = super::super::snapshot::encode_semantic_change(&context).unwrap();
-        let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap();
-        runtime.append(&stream, frames[0].clone()).await.unwrap();
+        let with_context =
+            records::fold_changes(view.snapshot(), std::slice::from_ref(&context)).unwrap();
+        let binding = writer.readable_snapshot().unwrap().binding().clone();
+        writer
+            .save(
+                &runtime,
+                binding,
+                &with_context,
+                &[SessionSaveUnit::new(vec![context]).unwrap()],
+            )
+            .await
+            .unwrap();
         let newer = storage
             .read_committed(session.clone())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(newer.position(), 2);
+        assert_eq!(newer.position(), 4);
         assert_eq!(
             newer.snapshot().unwrap().provider_context,
             ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
@@ -2165,47 +2250,48 @@ mod tests {
         );
         assert_eq!(unchanged.snapshot(), view.snapshot());
         let mut snapshot = newer.snapshot().unwrap().clone();
-        for position in 3..=514u64 {
+        for index in 0..256 {
             let before = snapshot.provider_context.clone();
-            let after = if position % 2 == 0 {
-                ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
-            } else {
+            let after = if index % 2 == 0 {
                 ProviderContext::Absent
+            } else {
+                ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
             };
             let change = SessionChange::ProviderContext { before, after };
-            let key = records::key_for_changes(
-                Some(&snapshot),
-                std::slice::from_ref(&change),
-                position - 1,
-            )
-            .unwrap();
-            let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
-            let frame =
-                stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, position).unwrap();
-            runtime.append(&stream, frame[0].clone()).await.unwrap();
-            snapshot = records::fold_changes(Some(&snapshot), &[change]).unwrap();
+            snapshot =
+                records::fold_changes(Some(&snapshot), std::slice::from_ref(&change)).unwrap();
+            let binding = writer.readable_snapshot().unwrap().binding().clone();
+            writer
+                .save(
+                    &runtime,
+                    binding,
+                    &snapshot,
+                    &[SessionSaveUnit::new(vec![change]).unwrap()],
+                )
+                .await
+                .unwrap();
         }
         let partial = storage
             .read_committed(session.clone())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(partial.position(), 258);
+        assert_eq!(partial.position(), 260);
         assert_eq!(partial.state(), CommittedViewState::Stale);
-        // This suffix is newer than the retained pass target514. The next read
-        // must finish that target even though the writer has advanced to515.
+        // This suffix is newer than the retained pass target516. The next read
+        // must finish that target even though the writer has advanced to518.
         let later = SessionChange::ProviderContext {
             before: snapshot.provider_context.clone(),
             after: ProviderContext::Absent,
         };
-        let key =
-            records::key_for_changes(Some(&snapshot), std::slice::from_ref(&later), 514).unwrap();
-        let body = super::super::snapshot::encode_semantic_change(&later).unwrap();
-        runtime
-            .append(
-                &stream,
-                stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 515).unwrap()[0]
-                    .clone(),
+        let last = records::fold_changes(Some(&snapshot), std::slice::from_ref(&later)).unwrap();
+        let binding = writer.readable_snapshot().unwrap().binding().clone();
+        writer
+            .save(
+                &runtime,
+                binding,
+                &last,
+                &[SessionSaveUnit::new(vec![later.clone()]).unwrap()],
             )
             .await
             .unwrap();
@@ -2214,11 +2300,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(caught_up.position(), 514);
+        assert_eq!(caught_up.position(), 516);
         assert_eq!(caught_up.state(), CommittedViewState::Stale);
         assert_eq!(caught_up.snapshot(), Some(&snapshot));
         let hot = storage.read_committed(session).await.unwrap().unwrap();
-        assert_eq!(hot.position(), 515);
+        assert_eq!(hot.position(), 518);
         assert_eq!(
             hot.snapshot(),
             Some(&records::fold_changes(Some(&snapshot), &[later]).unwrap())
@@ -2275,7 +2361,7 @@ mod tests {
         }
         assert!(matches!(
             receiver.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
+            Err(TryRecvError::Disconnected)
         ));
     }
 
@@ -2289,13 +2375,18 @@ mod tests {
             .create_stream(&StreamId::new(session.as_str()).unwrap())
             .await
             .unwrap();
-        let fact = |body: Vec<u8>| stream_fact::FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body,
-        };
-        let first = stream_fact::frame_fact(&fact(b"first".to_vec()), 1).unwrap();
-        runtime.append(&stream, first[0].clone()).await.unwrap();
-        let chunked = stream_fact::frame_fact(&fact(vec![b'x'; 100_000]), 2).unwrap();
+        let first = append_opening(&runtime, &stream, &session).await;
+        assert_eq!(first, 2);
+        let chunked = test_save_frames(
+            &stream,
+            first,
+            1,
+            &[SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Absent,
+            }],
+            100_000,
+        );
         runtime.append(&stream, chunked[0].clone()).await.unwrap();
         runtime.append(&stream, chunked[1].clone()).await.unwrap();
         let source = storage
@@ -2307,20 +2398,20 @@ mod tests {
         let (source, before, wrong) = tokio::task::spawn_blocking(move || {
             let mut source = source;
             let before = source.head(&scope).unwrap();
-            let wrong = source.page(&request(scope, 0, 2, 2));
+            let wrong = source.page(&request(scope, 0, 3, 2));
             (source, before, wrong)
         })
         .await
         .unwrap();
-        assert_eq!(before, 1);
+        assert_eq!(before, first);
         assert_eq!(wrong, Err(SourceError::InvalidRequest));
         let scope = source.scope(id("receiver"), id("epoch"));
         let (source, oversized, unbounded) = tokio::task::spawn_blocking(move || {
             let mut source = source;
-            let mut small = request(scope.clone(), 0, 1, 2);
+            let mut small = request(scope.clone(), 0, first, 2);
             small.max_payload_bytes = 1;
             let oversized = source.page(&small);
-            let mut large = request(scope, 0, 1, 2);
+            let mut large = request(scope, 0, first, 2);
             large.max_payload_bytes = MAX_PAGE_PAYLOAD + 1;
             let unbounded = source.page(&large);
             (source, oversized, unbounded)
@@ -2344,7 +2435,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(after, chunked.len() as u64 + 1);
+        assert_eq!(after, chunked.len() as u64 + first);
         assert_eq!(page.records.len(), 2);
         assert_eq!(page.records[0].position, 1);
         assert_eq!(page.records[1].position, 2);
@@ -2352,7 +2443,7 @@ mod tests {
         let scope = source.scope(id("receiver"), id("epoch"));
         let maximum_piece = tokio::task::spawn_blocking(move || {
             let mut source = source;
-            let mut request = request(scope, 2, after, 1);
+            let mut request = request(scope, first + 1, after, 1);
             request.max_payload_bytes = MAX_PHYSICAL_RECORD_PAYLOAD_BYTES;
             request.max_record_bytes = MAX_PHYSICAL_RECORD_PAYLOAD_BYTES;
             source
@@ -2379,31 +2470,35 @@ mod tests {
             .create_stream(&StreamId::new(session.as_str()).unwrap())
             .await
             .unwrap();
-        let fact = stream_fact::FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body: b"first".to_vec(),
-        };
-        let first = stream_fact::frame_fact(&fact, 1).unwrap().remove(0);
-        runtime.append(&stream, first).await.unwrap();
+        let first = append_opening(&runtime, &stream, &session).await;
         let mut reader = ReaderState {
             runtime: runtime.clone(),
             stream: stream.clone(),
             origin: id("origin"),
             head: 0,
-            observed_heads: VecDeque::from([0]),
             terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
 
         // A later record is deliberately invalid. Neither the earlier captured
         // head nor a fixed historical page should inspect it. A fresh head must.
-        let mut later = stream_fact::frame_fact(&fact, 2).unwrap().remove(0);
+        let mut later = test_save_frames(
+            &stream,
+            first,
+            1,
+            &[SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Absent,
+            }],
+            0,
+        )
+        .remove(0);
         later.schema = SchemaRef {
             id: SchemaId::new("foreign.schema").unwrap(),
             version: 1,
         };
         runtime.append(&stream, later).await.unwrap();
-        assert_eq!(reader.advance_through(&captured).await, Ok(1));
+        assert_eq!(reader.advance_through(&captured).await, Ok(first));
 
         let source = storage
             .record_source(&session, id("origin"))
@@ -2413,7 +2508,7 @@ mod tests {
         let scope = source.scope(id("receiver"), id("epoch"));
         let (page, current_head) = tokio::task::spawn_blocking(move || {
             let mut source = source;
-            let page = source.page(&request(scope.clone(), 0, 1, 1));
+            let page = source.page(&request(scope.clone(), 0, first, 1));
             let current_head = source.head(&scope);
             (page, current_head)
         })
@@ -2433,18 +2528,18 @@ mod tests {
             .create_stream(&StreamId::new("conversation").unwrap())
             .await
             .unwrap();
-        let fact = |body| stream_fact::FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body,
-        };
-        runtime
-            .append(
-                &stream,
-                stream_fact::frame_fact(&fact(b"first".to_vec()), 1).unwrap()[0].clone(),
-            )
-            .await
-            .unwrap();
-        let frames = stream_fact::frame_fact(&fact(vec![b'x'; 100_000]), 2).unwrap();
+        let session = SessionId::new("conversation").unwrap();
+        let first = append_opening(&runtime, &stream, &session).await;
+        let frames = test_save_frames(
+            &stream,
+            first,
+            1,
+            &[SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Absent,
+            }],
+            100_000,
+        );
         runtime.append(&stream, frames[0].clone()).await.unwrap();
         runtime.append(&stream, frames[1].clone()).await.unwrap();
         let mut reader = ReaderState {
@@ -2452,18 +2547,17 @@ mod tests {
             stream: stream.clone(),
             origin: id("origin"),
             head: 0,
-            observed_heads: VecDeque::from([0]),
             terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
         for frame in frames.iter().skip(2) {
             runtime.append(&stream, frame.clone()).await.unwrap();
         }
-        assert_eq!(reader.advance_through(&captured).await, Ok(1));
+        assert_eq!(reader.advance_through(&captured).await, Ok(first));
         let current = reader.check_stream().await.unwrap();
         assert_eq!(
             reader.advance_through(&current).await,
-            Ok(frames.len() as u64 + 1)
+            Ok(frames.len() as u64 + first)
         );
         storage.shutdown().await.unwrap();
     }
@@ -2536,7 +2630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abort_advances_physical_head_and_reset_or_delete_refuses_old_source() {
+    async fn abort_keeps_public_head_and_reset_or_delete_refuses_old_source() {
         let directory = tempfile::tempdir().unwrap();
         let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
         let runtime = storage.runtime().await.unwrap().clone();
@@ -2545,11 +2639,7 @@ mod tests {
             .create_stream(&StreamId::new(session.as_str()).unwrap())
             .await
             .unwrap();
-        let fact = stream_fact::FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body: vec![b'x'; 100_000],
-        };
-        let frames = stream_fact::frame_fact(&fact, 1).unwrap();
+        let frames = test_save_frames(&stream, 0, 0, &[opening(&session)], 100_000);
         runtime.append(&stream, frames[0].clone()).await.unwrap();
         runtime.append(&stream, frames[1].clone()).await.unwrap();
         let observed = storage
@@ -2588,7 +2678,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(aborted, Ok(3));
+        assert_eq!(aborted, Ok(0));
         let mut clone = source.clone();
         runtime
             .change_lifecycle(LifecycleRequest {
@@ -2657,11 +2747,7 @@ mod tests {
             .create_stream(&StreamId::new(session.as_str()).unwrap())
             .await
             .unwrap();
-        let fact = stream_fact::FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body: b"first".to_vec(),
-        };
-        let mut frame = stream_fact::frame_fact(&fact, 1).unwrap().remove(0);
+        let mut frame = test_save_frames(&stream, 0, 0, &[opening(&session)], 0).remove(0);
         frame.schema = SchemaRef {
             id: SchemaId::new("foreign.schema").unwrap(),
             version: 1,
@@ -3031,7 +3117,7 @@ mod tests {
         let initial = receiver.progress().unwrap().unwrap();
         assert_eq!(
             (initial.downloaded, initial.applied, initial.facts),
-            (2, 1, 1)
+            (2, 2, 1)
         );
         assert_eq!(
             receiver.load(&authority.scope).unwrap().unwrap().position(),
@@ -3106,7 +3192,7 @@ mod tests {
         let completed = receiver.progress().unwrap().unwrap();
         assert!(completed.downloaded > 2);
         assert_eq!(completed.applied, completed.downloaded);
-        assert_eq!(completed.facts, 2);
+        assert_eq!(completed.facts, 1 + 2 * 800);
         assert_eq!(
             receiver.load(&authority.scope).unwrap().unwrap().position(),
             completed.downloaded
@@ -3170,9 +3256,9 @@ mod tests {
         };
         runtime
             .block_on(lease.save_changes(
-                SessionSaveGeneration::initial(),
+                runtime.block_on(lease.load()).unwrap().binding().clone(),
                 snapshot.clone(),
-                vec![opened],
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             ))
             .unwrap();
         let mut changes = Vec::new();
@@ -3190,11 +3276,16 @@ mod tests {
             });
         }
         runtime
-            .block_on(lease.save_changes(
-                SessionSaveGeneration::initial().checked_next().unwrap(),
-                snapshot,
-                changes,
-            ))
+            .block_on(
+                lease.save_changes(
+                    runtime.block_on(lease.load()).unwrap().binding().clone(),
+                    snapshot,
+                    changes
+                        .into_iter()
+                        .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
+                        .collect(),
+                ),
+            )
             .unwrap();
         let source = runtime
             .block_on(storage.record_source(&session, id("origin")))
@@ -3276,7 +3367,7 @@ mod tests {
                 .await
                 .unwrap();
             append_opening(&runtime, &stream, &session).await;
-            let initial = storage
+            storage
                 .read_committed(session.clone())
                 .await
                 .unwrap()
@@ -3309,28 +3400,12 @@ mod tests {
                 local_outcome: None,
                 result: None,
             }));
-            let key = records::key_for_changes(initial.snapshot(), std::slice::from_ref(&input), 1)
-                .unwrap();
-            let body = super::super::snapshot::encode_semantic_change(&input).unwrap();
-            for frame in stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap()
-            {
-                runtime.append(&stream, frame).await.unwrap();
-            }
+            let mut changes = vec![input];
             if reject {
-                let invalid = SessionChange::Opened {
-                    id: session.clone(),
-                    provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
-                    context: ProviderContext::Absent,
-                };
-                let key =
-                    records::key_for_changes(initial.snapshot(), std::slice::from_ref(&invalid), 2)
-                        .unwrap();
-                let body = super::super::snapshot::encode_semantic_change(&invalid).unwrap();
-                for frame in
-                    stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 3).unwrap()
-                {
-                    runtime.append(&stream, frame).await.unwrap();
-                }
+                changes.push(opening(&session));
+            }
+            for frame in test_save_frames(&stream, 2, 1, &changes, 0) {
+                runtime.append(&stream, frame).await.unwrap();
             }
             let (entered, waiting) = mpsc::channel();
             let (release, gate) = mpsc::channel();
@@ -3374,8 +3449,8 @@ mod tests {
             }
             {
                 let receiver = entry.receiver.lock().unwrap();
-                assert_eq!(receiver.fold.applied(), if reject { 1 } else { 2 });
-                assert_eq!(receiver.fold.downloaded(), if reject { 1 } else { 2 });
+                assert_eq!(receiver.fold.applied(), if reject { 2 } else { 4 });
+                assert_eq!(receiver.fold.downloaded(), if reject { 2 } else { 4 });
                 // Check cached semantic totals against current allocation owners first.
                 receiver.fold.assert_retained_accounting();
                 // Sum the entry's actual layouts and separate scope/StreamKey copies,

@@ -34,6 +34,8 @@ pub mod credential_admin;
 pub mod credential_registry;
 pub mod dto;
 mod mapping;
+/// Bounded device enrollment through current authentication and policy.
+pub mod pairing;
 pub mod ports;
 pub mod session;
 

@@ -267,7 +267,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     const { gatewayToolWidget } =
       await import("../../src/desktop/workspace/adapters/gateway/tool-widget.ts")
     const widgets = (view?.tools ?? []).flatMap((tool) => {
-      const part = gatewayToolWidget(tool)
+      const part = gatewayToolWidget(id, tool)
       return part ? [{ tool: tool.mcp, part }] : []
     })
     const summary = {

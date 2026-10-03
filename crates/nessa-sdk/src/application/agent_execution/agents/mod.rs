@@ -7,6 +7,7 @@
 //!       |-> AgentProvider -> provider session + event reader
 //!       |-> saved submission identity -> shared retry receipt
 //!       |-> supervised direct invocation / bounded queue -> invocation hooks
+//!       |-> queue settlement -> original work retirement -> receipt publication
 //!       |-> control admission -> provider acknowledgement -> local validation / saved receipt
 //!       |                        |-> pending wait interrupted by shared stop
 //!       |-> SessionLifecycle -> work permits / work generations
@@ -22,7 +23,8 @@
 //! neither diagnostic text nor its presence grants lifecycle authority.
 //! Provider and storage adapters remain injected.
 //! The lifecycle coordinator alone opens/closes admission. Supervised submission
-//! owners retain work permits through evidence and receipt settlement; waiting
+//! owners retain work permits through evidence and receipt settlement. Their original
+//! queue permit and invocation slot retire before receipt publication. Waiting
 //! callers own no dispatch authority. Attachment generation and admission work generation
 //! remain distinct: new queued input may be stopped without restoring a provider.
 
