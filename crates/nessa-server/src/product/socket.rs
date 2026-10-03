@@ -487,7 +487,9 @@ where
     let (sink, mut incoming) = socket.split();
     let (control_send, control_receive) = mpsc::channel(4);
     let (refusal_send, refusal_receive) = mpsc::channel(1);
-    let (ordinary_send, ordinary_receive) = mpsc::channel(16);
+    // Room for every ordinary slot's response and every app call's, which
+    // share it: a full queue closes the socket.
+    let (ordinary_send, ordinary_receive) = mpsc::channel(16 + APP_CALLS_PER_SOCKET);
     let (record_send, record_receive) = mpsc::channel(1);
     let mut writer = tokio::spawn(write_authenticated(
         sink,

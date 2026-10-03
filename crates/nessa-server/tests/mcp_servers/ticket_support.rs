@@ -4,7 +4,7 @@
 use super::{ResourceTicketStore, TicketEvent, TicketEvents, TokenSource};
 use crate::conversation::application::{
     ConversationError, ConversationFuture, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppInitiator, McpAppRef,
+    McpAppAuditRecord, McpAppInitiator, McpAppRef, ResourceTickets,
 };
 use crate::conversation::domain::ConversationId;
 use nessa_auth::application::ports::Clock;
@@ -160,6 +160,17 @@ impl TicketEvents for RecordedEnds {
 
 /// A store over a manual clock at `start`, counting random bytes, and a
 /// recorder.
+/// Issue `resource` on `store` and make its ticket redeemable at once, as
+/// the conversation service does once the issue is on record.
+pub(crate) fn issued(
+    store: &ResourceTicketStore,
+    resource: HeldResource,
+) -> Result<String, crate::conversation::application::TicketRefusal> {
+    let ticket = store.issue(resource)?;
+    store.activate(&ticket).expect("issued just now");
+    Ok(ticket)
+}
+
 pub(crate) struct Fixture {
     pub(crate) clock: Arc<ManualClock>,
     pub(crate) random: Arc<ScriptedRandom>,
