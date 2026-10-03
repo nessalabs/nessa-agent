@@ -138,8 +138,6 @@ pub(in crate::product) struct ConnectionWatches {
     // later one; and cancels that bound when the check returns.
     recheck_generation: u64,
     recheck_bound: Option<AbortHandle>,
-    // The watches the running periodic check covers.
-    recheck_keys: Vec<u64>,
     pub deliveries: Arc<WatchDeliveries>,
 }
 
@@ -153,7 +151,6 @@ impl ConnectionWatches {
             recheck_pending: false,
             recheck_generation: 0,
             recheck_bound: None,
-            recheck_keys: Vec::new(),
             deliveries: Arc::new(WatchDeliveries::new()),
         }
     }
@@ -415,7 +412,6 @@ impl ConnectionWatches {
         self.recheck_generation += 1;
         let generation = self.recheck_generation;
         let keys: Vec<u64> = live.iter().map(|(key, _, _)| *key).collect();
-        self.recheck_keys = keys.clone();
         let state_for_task = state.clone();
         let current = current.clone();
         let task = tokio::spawn(async move {
@@ -567,15 +563,9 @@ impl ConnectionWatches {
                 generation,
                 overdue,
             } => {
-                // Like a refusal (A5), an overdue check matters only while one
-                // of the watches it covers is still live (A3b).
-                let live = self.recheck_keys.iter().any(|key| {
-                    self.targets
-                        .iter()
-                        .any(|target| target.key == *key && !self.deliveries.retiring(&target.id))
-                });
-                if overdue && self.recheck_pending && generation == self.recheck_generation && live
-                {
+                // Always closes: while the check is outstanding, no later watch
+                // on this connection can be re-checked (A3b).
+                if overdue && self.recheck_pending && generation == self.recheck_generation {
                     return WatchOutcome::Close(SessionCloseReason::TemporaryUnavailable);
                 }
                 WatchOutcome::Progress

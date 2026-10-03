@@ -1736,10 +1736,12 @@ async fn periodic_check_overdue_closes_the_connection_and_keeps_owners_until_it_
     let _ = fixture.storage.shutdown().await;
 }
 
-/// Row A3b, second half: an overdue periodic check whose watches have all
-/// been unwatched meanwhile is ignored, as a refusal for them would be.
+/// Row A3b, second half: an overdue periodic check closes the connection even
+/// after every watch it covers was unwatched. While that check is outstanding
+/// no later watch on the connection could be re-checked, so the connection
+/// must not stay open around it.
 #[tokio::test]
-async fn periodic_check_overdue_is_ignored_once_its_watches_are_unwatched() {
+async fn periodic_check_overdue_closes_even_after_its_watches_are_unwatched() {
     let (fixture, work, authority) = held_receiver_fixture(Duration::from_millis(50)).await;
     let _release = ReleaseHeld(work.clone());
     let (socket, mut peer) = test_socket(None);
@@ -1761,11 +1763,15 @@ async fn periodic_check_overdue_is_ignored_once_its_watches_are_unwatched() {
     tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1))
         .await;
     tokio::time::resume(); // Wait on the real clock, as in the test above.
-    peer.request("after-bound");
-    assert_success(peer.message().await, "after-bound");
-    work.release();
-    drop(peer);
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("an overdue periodic check must close the connection");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::TemporaryUnavailable.web_socket_code()
+    );
     socket.await.unwrap();
+    work.release();
     assert_eq!(fixture.state.drain_watches().await, Ok(()));
     // The clock advance also expires the record storage's own deadlines.
     let _ = fixture.storage.shutdown().await;
