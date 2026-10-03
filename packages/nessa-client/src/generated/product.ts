@@ -1334,6 +1334,7 @@ export const mcpAppCallTiming = {
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
+  maxRequestFrameBytes: 65536,
   maxReadyMethods: 32,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,

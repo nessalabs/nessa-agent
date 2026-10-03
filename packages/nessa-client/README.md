@@ -350,7 +350,15 @@ person's answer to a review with `origin: {kind: "app", server, tool}`, and
 take the gateway, as the protocol publishes it (`x-mcpAppCallTiming`), for a host
 that bounds an app's requests. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
-bound throw `TypeError` before anything is sent.
+bound throw `TypeError` before anything is sent. What an app sends — a tool's
+name, a resource's URI, the arguments' text — is held to its bounds, and to
+being Unicode text, by `mcpAppRequestProblem`, which `callTool` and
+`readResource` ask and a host may ask first, to refuse the app's request
+itself. What the arguments decode to is the gateway's to judge
+(`invalid_request`). Any request whose frame is longer than the gateway takes
+(`bounds.maxRequestFrameBytes`) is refused before it is sent, as
+`NessaRequestTooLargeError` — inside `NessaMcpAppError`, with `uncertain`
+false: the gateway would close the socket on it rather than answer.
 
 `callTool` and `readResource` fail with `NessaMcpAppError`. Its `uncertain` is
 `false` when nothing reached the app's server — `mcp_app_unknown`,

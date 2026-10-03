@@ -178,7 +178,8 @@ export type Outgoing =
   | {
       readonly jsonrpc: "2.0"
       readonly id: RequestId
-      readonly error: { readonly code: ErrorCode; readonly message: string }
+      /** One of `errorCodes`, or a server's own code passed on (`relayError`). */
+      readonly error: { readonly code: number; readonly message: string }
     }
   | { readonly jsonrpc: "2.0"; readonly method: string; readonly params: JsonObject }
   | {
@@ -198,6 +199,20 @@ export const refuse = (id: RequestId, code: ErrorCode, message: string): Outgoin
   jsonrpc: "2.0",
   id,
   error: { code, message },
+})
+
+/**
+ * An error the app's own server answered with, passed on as it came: its code
+ * is any integer, of either sign (JSON-RPC 2.0, *Error object*), and the
+ * gateway has already bounded its message (`McpRemoteErrorDetails`).
+ */
+export const relayError = (
+  id: RequestId,
+  error: { readonly code: number; readonly message: string },
+): Outgoing => ({
+  jsonrpc: "2.0",
+  id,
+  error: { code: error.code, message: error.message },
 })
 
 export const notify = (method: string, params: JsonObject): Outgoing => ({

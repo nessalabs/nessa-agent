@@ -43,14 +43,16 @@
  *   the agent asks (`view.questions`) has no place in the workspace's model
  *   and is not shown; nor is a review the gateway withholds from its view
  *   (`interactionViewError`) — the session shows no approval while it waits.
- * - **For MCP Apps (#384)**: a widget part is named by its call alone
- *   (`gatewayToolWidget`), and the apps are not yet told each view or a
- *   deleted conversation. #384's API does that; whichever of the two merges
- *   second wires it: `transcriptFrom` for the conversation-scoped widget id,
- *   `applyRead` for each view in the order read, and a read refused as a
- *   deleted conversation for `forget` (the plan is on #248).
+ * - **For MCP Apps (#384)**: a widget part is named in its conversation
+ *   (`gatewayToolWidget`, from `transcriptFrom`); each view applied is handed
+ *   to `apps.observe`, in the order read — opaque revisions cannot order them
+ *   there — and a read the gateway refuses as `conversation_deleted` to
+ *   `apps.forget`. Not a removal: a conversation missing from a complete list
+ *   is archived or deleted, which a list cannot tell apart, and a closed one
+ *   reopens under its id (the plan is on #248).
  *
- * It owns the client it connects (`connect`), and `dispose` closes it.
+ * It owns the client it connects (`connect`), and `dispose` closes it; an
+ * app's calls go on that client too (`connected`).
  */
 import {
   ConversationErrorCode,
@@ -120,9 +122,24 @@ export interface GatewayTiming {
  */
 export const defaultGatewayTiming: GatewayTiming = { callMs: 35_000, pollMs: 1_000 }
 
-export interface GatewaySource extends WorkspaceSource {
+export interface GatewaySource<
+  C extends GatewayClient = GatewayClient,
+> extends WorkspaceSource {
+  /**
+   * The client this source holds, or one connecting, within the call budget:
+   * rejects `unavailable` once disposed or when none connects in time.
+   */
+  connected(): Promise<C>
   /** Stops polling, refuses every later call, and closes the client it connected. */
   dispose(): void
+}
+
+/** Who is told each conversation view as it is read, and each conversation deleted (#384). */
+export interface GatewayViewObserver {
+  /** A view, in the order its conversation's reads were applied. */
+  observe(view: ConversationView): void
+  /** The gateway said the conversation was deleted; its id is never used again. */
+  forget(conversationId: string): void
 }
 
 /** What one conversation's latest read left: its view, its count, and the row it was read against. */
@@ -132,12 +149,14 @@ interface Read {
   readonly against: ConversationSummary | undefined
 }
 
-export function gatewaySource(options: {
+export function gatewaySource<C extends GatewayClient = GatewayClient>(options: {
   /** Connects a client: called again after a failed attempt, or once the last one closed. */
-  readonly connect: () => Promise<GatewayClient>
+  readonly connect: () => Promise<C>
   readonly clock: GatewayClock
   readonly timing?: GatewayTiming
-}): GatewaySource {
+  /** Told each view applied and each conversation deleted: the window's MCP Apps. */
+  readonly apps?: GatewayViewObserver
+}): GatewaySource<C> {
   const { clock } = options
   const timing = options.timing ?? defaultGatewayTiming
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
@@ -173,6 +192,15 @@ export function gatewaySource(options: {
       } catch (error) {
         console.error("A workspace listener failed", error)
       }
+    }
+  }
+
+  // The apps' fault is theirs: it neither stops the read nor the source.
+  const tellApps = (tell: () => void) => {
+    try {
+      tell()
+    } catch (error) {
+      console.error("The window's MCP Apps failed to take a conversation view", error)
     }
   }
 
@@ -216,11 +244,11 @@ export function gatewaySource(options: {
     })
 
   // The connection: one client at a time, connected on first need.
-  let current: { client: GatewayClient; off: () => void } | undefined
-  let connecting: Promise<GatewayClient> | undefined
+  let current: { client: C; off: () => void } | undefined
+  let connecting: Promise<C> | undefined
   let connectedBefore = false
   /** Takes a client that connected as the current one. */
-  const adopt = (connected: GatewayClient) => {
+  const adopt = (connected: C) => {
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
       if (state.status === "connected") resync()
@@ -241,11 +269,11 @@ export function gatewaySource(options: {
    * attempt has the call budget too: one that outlasts it is given up — the
    * next call tries again — and a client it brings late is closed unused.
    */
-  const client = (): Promise<GatewayClient> => {
+  const client = (): Promise<C> => {
     if (disposed) return Promise.reject(new WorkspaceSourceError("unavailable"))
     if (current) return Promise.resolve(current.client)
     if (connecting) return connecting
-    const attempt = new Promise<GatewayClient>((resolve, reject) => {
+    const attempt = new Promise<C>((resolve, reject) => {
       let over = false
       const giveUp = () => {
         over = true
@@ -290,7 +318,7 @@ export function gatewaySource(options: {
    */
   const dispatch = async <T>(
     live: () => boolean,
-    request: (connected: GatewayClient) => Promise<T>,
+    request: (connected: C) => Promise<T>,
   ): Promise<T> => {
     const connected = await client()
     if (!live()) throw new WorkspaceSourceError("unavailable")
@@ -412,6 +440,7 @@ export function gatewaySource(options: {
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(view, revision, seenIn(sessionId))
     reads.set(sessionId, { view, transcript, against })
+    tellApps(() => options.apps?.observe(view))
     emit({ kind: "transcript", transcript })
     // The summary follows what the read says: an approval waiting, the model it runs on.
     publish(sessionId)
@@ -450,8 +479,16 @@ export function gatewaySource(options: {
           const against = rows.get(sessionId)
           const removed = removals.get(sessionId) ?? 0
           let view: ConversationView
+          // Whether the gateway answered that the conversation was deleted:
+          // `refusalOf` keeps only that it is gone.
+          let deleted = false
           try {
-            view = await within(async () => (await client()).conversation.read(sessionId))
+            view = await within(async () =>
+              (await client()).conversation.read(sessionId).catch((error: unknown) => {
+                deleted = deletedConversation(error)
+                throw error
+              }),
+            )
           } catch (error) {
             if (!caller()) throw new WorkspaceSourceError("unavailable")
             if (!gone(error)) throw error
@@ -461,6 +498,9 @@ export function gatewaySource(options: {
             // a session listed again is asked again (S3c).
             if ((removals.get(sessionId) ?? 0) !== removed) continue
             remove(sessionId)
+            // Deleted, its apps' calls go with it; not found may be this
+            // caller's alone, and says nothing of what the apps hold.
+            if (deleted) tellApps(() => options.apps?.forget(sessionId))
             throw error
           }
           if (!caller()) throw new WorkspaceSourceError("unavailable")
@@ -681,6 +721,7 @@ export function gatewaySource(options: {
       }),
     // The gateway keeps no unread mark: every summary is read already.
     markRead: () => within(() => Promise.resolve()),
+    connected: () => within(() => client()),
     dispose() {
       disposed = true
       stopPolling()
@@ -702,6 +743,18 @@ function always() {
 /** Whether a failure says the session is gone: no such conversation, or one taken out. */
 function gone(error: unknown): boolean {
   return error instanceof WorkspaceSourceError && error.reason === "unknown-session"
+}
+
+/** Whether the gateway answered that a conversation was deleted, which it never reuses the id of. */
+function deletedConversation(error: unknown): boolean {
+  const code =
+    error instanceof NessaConversationMutationError ||
+    error instanceof NessaConversationControlError
+      ? error.code
+      : error instanceof NessaRpcError
+        ? conversationErrorCode(error.code)
+        : undefined
+  return code === ConversationErrorCode.ConversationDeleted
 }
 
 /** Whether a failure is a refusal that asking again changes nothing of (`reasonFor`). */

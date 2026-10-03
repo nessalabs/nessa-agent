@@ -219,7 +219,7 @@ export function transcriptFrom(
         if (!tool) continue
         lastTool = tool
         parts.push({ kind: "step", step: stepKind(tool.kind), label: tool.title })
-        const widget = gatewayToolWidget(tool)
+        const widget = gatewayToolWidget(view.conversationId, tool)
         if (widget) parts.push(widget)
       }
     }

@@ -230,6 +230,45 @@ app widgets alike.
   and the app's `srcdoc` load in a frame (`links.rs`). Not driven by a script:
   the scripts run the browser build.
 
+## Evidence (#384)
+
+- **The adapter** (`widgets/app/adapters/gateway/mcp-app-server.ts`), against
+  a fake `client.mcpApps` that gives every answer the gateway can:
+  `mcp-app-server.test.ts`, one test at least per row of the state table on
+  #384 — each refusal with its reason, `server-gone` and `failed` apart, a
+  server's own JSON-RPC error passed on with its signed code, what the app
+  sends held to the client's bounds (`mcpAppRequestProblem`) before sending,
+  the ticket redeemed once and never handed on — and
+  #349's L14 and L24 through the real bridge over it.
+- **The mount**: each view mints its `instanceId` and releases it once, the
+  first time it fails or ends, aborting what its reads have not fetched
+  (`bridge.test.ts`, "the mount and its release"; `app-view.test.tsx` under
+  StrictMode). A first read the gateway was too busy for is made again
+  (`bridge.test.ts`, L1b).
+- **Limits, each its own issue**: a release ends the reviews already open, but
+  a call admitted before it can still open one after (#397); the app lane's
+  4 slots per socket are shared by every app in the window (#398); an app is
+  told `{}` for arguments the view does not carry (#394); the gateway drops,
+  unanswered, a frame it cannot decode (#403), so the client refuses a lone
+  surrogate in what it sends; and it closes the socket on a frame past its
+  message limit, so the client refuses one before sending
+  (`NessaRequestTooLargeError`).
+- **The calls from the transcript** (`app-calls.ts`), each named by its
+  conversation as well as its execution and tool ids, and kept, at the last
+  state a view reported, until the conversation is deleted — a view holds only
+  its latest tools — and a forgotten conversation is not brought back by a
+  late view. The order of views is the gateway source's to keep: it tells
+  the apps each view in the order read, and a conversation the gateway says
+  was deleted (`gateway-source.test.ts`, "MCP Apps (#384)"), and its apps'
+  calls go on the client it holds (`dependencies.test.ts`):
+  `app-calls.test.ts`, and
+  `workspace/adapters/gateway/tool-widget.test.ts` for the widget the
+  transcript draws reading the same call.
+- **Not yet in a real browser against a real gateway**: the gateway source
+  (#248) is on `main`, so the window draws a real conversation's apps in a
+  browser preview opened with `?gateway`; the Chromium and WebKit run against
+  a real server is still to do.
+
 ## What each harness passes through ACP
 
 A spike for #347, first read from the pinned harnesses' bundled code and then

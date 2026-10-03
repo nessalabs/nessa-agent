@@ -21,8 +21,8 @@ import {
 } from "../protocol/conversation-validate.js"
 import {
   boundedName,
-  MAX_MCP_ARGUMENTS_BYTES,
   mcpAppReferenceProblem,
+  mcpAppRequestProblem,
   mcpCallToolResult,
   mcpReadResourceResult,
   validResourceDigest,
@@ -104,7 +104,9 @@ export type McpAppsApi = {
    * @returns The server's `CallToolResult`, encoded, exactly as it answered.
    * `isError: true` inside it is a result for the app, not a refusal.
    * @throws TypeError for arguments outside the schema's bounds, before
-   * anything is sent; otherwise {@link NessaMcpAppError}. Its `uncertain` is
+   * anything is sent — for the tool and the arguments, what
+   * {@link mcpAppRequestProblem} says, which a host may ask first; otherwise
+   * {@link NessaMcpAppError}. Its `uncertain` is
    * false — nothing reached the server — for `mcp_app_unknown`,
    * `mcp_server_mismatch`, `mcp_tool_not_for_app`, `mcp_request_too_large`,
    * `mcp_approval_denied`, `mcp_approval_expired` and `mcp_cancelled`. The
@@ -136,7 +138,8 @@ export type McpAppsApi = {
    * `fetchResource`: secret, single use, and redeemable for `expiresInMs`
    * Never log it or put it in a URL.
    * @throws TypeError for arguments outside the schema's bounds, before
-   * anything is sent; otherwise {@link NessaMcpAppError}, with `uncertain`
+   * anything is sent — for the URI, what {@link mcpAppRequestProblem} says,
+   * which a host may ask first; otherwise {@link NessaMcpAppError}, with `uncertain`
    * false for a refusal made before anything reached the server, such as
    * `mcp_app_unknown` and `mcp_server_mismatch`. An `mcp_app_unknown` for a
    * resource that is not an app's HTML was read, which changes nothing. The
@@ -256,16 +259,17 @@ export function createMcpAppsApi(
     async callTool(conversationId, app, server, tool, argumentsJson, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!boundedName(tool, bounds.maxMcpNameBytes))
-        throw new TypeError(`Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`)
-      if (
-        argumentsJson !== undefined &&
-        (typeof argumentsJson !== "string" ||
-          utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES)
-      )
-        throw new TypeError(
-          `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`,
-        )
+      const toolProblem =
+        typeof tool === "string"
+          ? mcpAppRequestProblem.tool(tool)
+          : "Tool must be a string"
+      if (toolProblem) throw new TypeError(toolProblem)
+      if (argumentsJson !== undefined) {
+        if (typeof argumentsJson !== "string")
+          throw new TypeError("Arguments must be a string")
+        const problem = mcpAppRequestProblem.argumentsJson(argumentsJson)
+        if (problem) throw new TypeError(problem)
+      }
       return call(
         ProductMethod.McpCallTool,
         {
@@ -281,10 +285,11 @@ export function createMcpAppsApi(
     async readResource(conversationId, app, server, uri, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!boundedName(uri, bounds.maxMcpResourceUriBytes))
-        throw new TypeError(
-          `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
-        )
+      const uriProblem =
+        typeof uri === "string"
+          ? mcpAppRequestProblem.uri(uri)
+          : "Resource URI must be a string"
+      if (uriProblem) throw new TypeError(uriProblem)
       return call(
         ProductMethod.McpReadResource,
         { ...command, server, uri },

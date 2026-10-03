@@ -4,9 +4,11 @@
  * plugin's name while it loads, one line when it cannot be shown, and notices
  * above it while it runs (`model/app-view.ts`).
  *
- * One bridge per view, for the life of the view: a call or a context that
- * changes is handed to it; a place that goes takes the frame, the bridge and
- * its listener with it (`remove`), and nothing is posted after.
+ * One bridge per view, for the life of the view — one mount of the app, with
+ * its own `instanceId`: a call or a context that changes is handed to it; a
+ * call of another view (`callView`) is drawn by a new one; a place that goes
+ * takes the frame, the bridge and its listener with it (`remove`), and nothing
+ * is posted after.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { HostContext, WidgetPlace } from "../../model/widget-state"
@@ -16,7 +18,7 @@ import { frameTransport, type FrameTransport } from "../adapters/dom/frame-trans
 import { proxyFrameSandbox } from "../adapters/dom/sandbox-origin"
 import { createAppBridge, type AppBridge } from "../application/bridge"
 import { appDraws, firstView } from "../model/app-view"
-import type { AppCall } from "../model/tool-call"
+import { callView, type AppCall } from "../model/tool-call"
 import { useAppCall } from "./use-app-call"
 import "./app-view.css"
 
@@ -67,6 +69,8 @@ function AppFrame({
   context: HostContext
 }) {
   const [view, setView] = useState(firstView)
+  // The bridge is one call's: another call is another view (`callView`).
+  const drawnAs = callView(call)
   const bridge = useRef<AppBridge | undefined>(undefined)
   const transport = useRef<FrameTransport | undefined>(undefined)
   // What this render was given, for a bridge that outlives it: kept first,
@@ -96,7 +100,7 @@ function AppFrame({
       created.remove()
       if (bridge.current === created) bridge.current = undefined
     }
-  }, [plugin, place, call.sessionId, call.resourceUri])
+  }, [plugin, place, drawnAs])
 
   useEffect(() => bridge.current?.setCall(call), [call])
   useEffect(() => bridge.current?.setContext(context), [context])

@@ -1637,3 +1637,180 @@ describe("through the window's store, unchanged", () => {
     ])
   })
 })
+
+describe("MCP Apps (#384)", () => {
+  /** A source whose apps are a recorder, told each view and each deletion. */
+  function withApps(gateway: FakeGateway = fakeGateway()) {
+    const { clock, advance } = manualClock()
+    const told: (["observe", string, string] | ["forget", string])[] = []
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      apps: {
+        observe: (seen) => told.push(["observe", seen.conversationId, seen.revision]),
+        forget: (conversationId) => told.push(["forget", conversationId]),
+      },
+    })
+    const updates: WorkspaceUpdate[] = []
+    const follow = () => source.subscribe((update) => updates.push(update))
+    return { gateway, source, told, updates, follow, advance }
+  }
+
+  const appTool = {
+    executionId: "turn",
+    toolId: "call-1",
+    title: "show_chart",
+    kind: "other" as const,
+    status: "running" as const,
+    details: "",
+    input: "",
+    mcp: { server: "mcptest", tool: "show_chart", resourceUri: "ui://t/chart.html" },
+  }
+
+  it("each view applied is told to the apps in the order read, and the same view is not told twice", async () => {
+    const { gateway, source, told } = withApps()
+    gateway.views.set("a", view("a", { revision: "1" }))
+    await source.transcript("a")
+    await source.transcript("a")
+    gateway.views.set("a", view("a", { revision: "2" }))
+    await source.transcript("a")
+    expect(told).toEqual([
+      ["observe", "a", "1"],
+      ["observe", "a", "2"],
+    ])
+  })
+
+  it("a read let go is not told: one that timed out, or crossed a removal", async () => {
+    const { gateway, source, told, advance } = withApps()
+    gateway.views.set("a", view("a", { revision: "late" }))
+    const held = deferred<unknown>()
+    gateway.once("read", () => held.promise)
+    const call = source.transcript("a").catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await call).toMatchObject({ reason: "unavailable" })
+    held.resolve(view("a", { revision: "late" }))
+    await flush()
+    expect(told).toEqual([])
+  })
+
+  it("an app's widget is named in its conversation, so two conversations' calls under one id are two widgets", async () => {
+    const { gateway, source } = withApps()
+    const tools = [appTool]
+    const messages = [
+      {
+        ...running(),
+        parts: [
+          { offset: 0, kind: "tool" as const, text: "", toolId: "call-1", noticeId: "" },
+        ],
+      },
+    ]
+    gateway.views.set("a", view("a", { tools, messages }))
+    gateway.views.set("b", view("b", { tools, messages }))
+    const widgetOf = async (id: string) =>
+      (await source.transcript(id)).messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.kind === "widget")
+    const [a, b] = [await widgetOf("a"), await widgetOf("b")]
+    expect(a).toBeDefined()
+    expect(b).toBeDefined()
+    expect(a).not.toEqual(b)
+  })
+
+  it("a conversation the gateway says was deleted is forgotten by the apps, after it is taken out", async () => {
+    const { gateway, source, told, updates, follow } = withApps()
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    follow()
+    gateway.once("read", () => Promise.reject(rpcCode("conversation_deleted")))
+    await expect(source.transcript("a")).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+    expect(kinds(updates)).toContain("session-removed")
+    expect(told).toEqual([["forget", "a"]])
+  })
+
+  it("a deletion the client reports as a control error is forgotten too", async () => {
+    const { gateway, source, told } = withApps()
+    gateway.once("read", () =>
+      Promise.reject(
+        new NessaConversationControlError(
+          "a",
+          "r",
+          undefined,
+          rpcCode("conversation_deleted"),
+        ),
+      ),
+    )
+    await source.transcript("a").catch(() => undefined)
+    expect(told).toEqual([["forget", "a"]])
+  })
+
+  it("not found, an archive, or a complete list that leaves it out forgets nothing: a closed or archived conversation comes back", async () => {
+    const { gateway, source, told } = withApps()
+    // Not found may be this caller's alone.
+    await source.transcript("missing").catch(() => undefined)
+    // Archived here.
+    gateway.rows.set("b", row("b"))
+    await source.index()
+    await source.archive("b", "person")
+    // Missing from a complete list: archived or deleted elsewhere, which a list cannot tell.
+    gateway.rows.set("c", row("c"))
+    await source.index()
+    gateway.rows.delete("c")
+    await source.index()
+    expect(told).toEqual([])
+  })
+
+  it("a deletion answered after its session was taken out and listed again forgets nothing", async () => {
+    const { gateway, source, told, follow, advance } = withApps()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { revision: "1", messages: [running()] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    const held = deferred<unknown>()
+    gateway.once("read", () => held.promise)
+    await advance(timing.pollMs)
+    gateway.rows.delete("a")
+    await source.index()
+    gateway.rows.set("a", row("a", { running: true }))
+    await source.index()
+    held.reject(rpcCode("conversation_deleted"))
+    await flush()
+    expect(told.filter(([kind]) => kind === "forget")).toEqual([])
+  })
+
+  it("the apps' fault is theirs: the read still applies and is said", async () => {
+    const gateway = fakeGateway()
+    const { clock } = manualClock()
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      apps: {
+        observe: () => {
+          throw new Error("app registry broke")
+        },
+        forget: () => {},
+      },
+    })
+    const updates: WorkspaceUpdate[] = []
+    source.subscribe((update) => updates.push(update))
+    gateway.views.set("a", view("a"))
+    await expect(source.transcript("a")).resolves.toMatchObject({ sessionId: "a" })
+    expect(kinds(updates)).toContain("transcript")
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+
+  it("an app's calls go on the client the source holds, and none once it is disposed", async () => {
+    const { gateway, source } = withApps()
+    expect(await source.connected()).toBe(gateway.client)
+    await source.index()
+    expect(await source.connected()).toBe(gateway.client)
+    source.dispose()
+    await expect(source.connected()).rejects.toMatchObject({ reason: "unavailable" })
+  })
+})

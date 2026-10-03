@@ -259,11 +259,16 @@ writing the full defaults on first launch is buying.
   and its ports — the server, the tool calls, the conversation, links,
   downloads, the timers (`app/application/`); the frame transport, the page's
   style variables, where the sandbox proxy is and its frame's sandbox flags
-  (`app/adapters/dom/`); the proxy itself and the dev server's listener for
+  (`app/adapters/dom/`); the server port over the gateway's
+  `client.mcpApps` — the typed outcomes, the resource ticket redeemed once,
+  each mount's release — and the calls an app's widgets name, read from a
+  conversation view's MCP tools, with an app plugin registered per server
+  (`app/adapters/gateway/`, #384); the proxy itself and the dev server's listener for
   it (`app/sandbox/`, served
   in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
   draw (`app/ui/`); and a fixture server's app (`app/fixture/`). How an app's
-  widgets are named — `mcp:` and the server, and the call's two identities —
+  widgets are named — `mcp:` and the server, and the call's session, execution
+  and tool ids —
   is stated once, in `app/model/app-ref.ts`, which the transcript uses. It
   knows no plugin and imports no other vertical. The workspace draws the
   chrome around the hosts and carries out their callbacks with its own

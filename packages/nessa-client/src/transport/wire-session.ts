@@ -7,12 +7,14 @@ import {
   type Frame,
 } from "../protocol/index.js"
 import { buildRequestFrame } from "../protocol/encode.js"
+import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import type { RequestDeadline } from "../application/session-port.js"
 import { bounds, ProductMethod } from "../generated/product.js"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const utf8 = new TextEncoder()
 
 function boundedUtf8Length(text: string, maximum: number): number {
   let bytes = 0
@@ -94,7 +96,12 @@ export class WireSession {
     }
 
     const id = String(++this.requestSeq)
-    const frame = buildRequestFrame(id, method, params)
+    const text = encodeWireMessage(buildRequestFrame(id, method, params))
+    // The gateway closes the socket on a message past its limit rather than
+    // answering it: such a request is refused here, before anything is sent.
+    const bytes = utf8.encode(text).byteLength
+    if (bytes > bounds.maxRequestFrameBytes)
+      return Promise.reject(new NessaRequestTooLargeError(method, bytes))
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -116,7 +123,7 @@ export class WireSession {
       })
 
       try {
-        this.socket.send(encodeWireMessage(frame))
+        this.socket.send(text)
       } catch {
         clearTimeout(timer)
         this.pending.delete(id)
