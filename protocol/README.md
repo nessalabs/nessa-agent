@@ -150,7 +150,7 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 as `PUT /attachments` takes an upload:
 - **Redeeming.** The ticket goes in the `x-nessa-resource-ticket` header,
   never in the URL, and is the whole authority: 256 random bits, single use,
-  valid for at most 60 s from its issue, bound to its conversation and app, and issued only after
+  valid for at most `expiresInMs` from its issue, bound to its conversation and app, and issued only after
   the socket's policy and audit. The route authenticates nobody else, and has
   the same origin checks and CORS as `/attachments`.
 - **Refusals.** An unknown, used, expired or wrong-credential ticket gets the

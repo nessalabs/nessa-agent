@@ -191,8 +191,8 @@ A ticket is pending from its issue until `TicketIssued` is on record: it
 cannot be redeemed, and if it is let go meanwhile its end is not reported by
 the store but by the read that issued it, after its issue — how and by whom
 it ended, kept until the read asks, however long its records took. So no
-ticket's end is ever on record before its issue. Its 60 s run from its issue,
-so the host has at most 60 s. An issuer that panics between holding its
+ticket's end is ever on record before its issue. Its lifetime (`expiresInMs`) runs from its issue,
+so the host has at most that long. An issuer that panics between holding its
 ticket and recording its issue leaves its pending end kept until the
 gateway stops; nothing reports it.
 
