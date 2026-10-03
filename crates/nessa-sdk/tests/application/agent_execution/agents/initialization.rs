@@ -1,10 +1,13 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
-use nessa_sdk::infrastructure::session_storage::RecordStorage;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
+use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
     future::Future,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 use tempfile::tempdir;
@@ -184,7 +187,7 @@ struct PanickingStorageLease {
     failure: Arc<Mutex<Option<SavePanic>>>,
 }
 struct PanickingSaveFuture<'a> {
-    backing: StorageFuture<'a, ()>,
+    backing: StorageFuture<'a, SessionSaveReceipt>,
     failure: SavePanic,
 }
 struct PanickingCleanupProvider {
@@ -388,18 +391,23 @@ impl SessionStorage for PanickingStorage {
     }
 }
 impl SessionStorageLease for PanickingStorageLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         let Some(failure) = self.failure.lock().unwrap().take() else {
-            return self.backing.save(snapshot);
+            return self.backing.save_changes(binding, snapshot, units);
         };
         if matches!(failure, SavePanic::Construct) {
             panic!("save construction panic");
         }
         Box::pin(PanickingSaveFuture {
-            backing: self.backing.save(snapshot),
+            backing: self.backing.save_changes(binding, snapshot, units),
             failure,
         })
     }
@@ -408,7 +416,7 @@ impl SessionStorageLease for PanickingStorageLease {
     }
 }
 impl Future for PanickingSaveFuture<'_> {
-    type Output = Result<(), StorageError>;
+    type Output = Result<SessionSaveReceipt, StorageError>;
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         if matches!(self.failure, SavePanic::Poll) {
             panic!("save poll panic");
@@ -448,6 +456,346 @@ async fn prepared(
     Agent::prepare(provider, storage.manager().await, audit)
         .await
         .unwrap()
+}
+
+struct ContradictoryRecordLoadStorage {
+    backing: Arc<RecordStorage>,
+    base: u64,
+    generation: u64,
+    saves: Arc<AtomicUsize>,
+}
+struct ContradictoryRecordLoadLease {
+    backing: Box<dyn SessionStorageLease>,
+    base: u64,
+    generation: u64,
+    saves: Arc<AtomicUsize>,
+}
+impl SessionStorage for ContradictoryRecordLoadStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(ContradictoryRecordLoadLease {
+                backing: self.backing.open(id).await?,
+                base: self.base,
+                generation: self.generation,
+                saves: self.saves.clone(),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+impl SessionStorageLease for ContradictoryRecordLoadLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        Box::pin(async move {
+            let actual = self.backing.load().await?;
+            Ok(SessionLoad::new(
+                actual.snapshot().cloned(),
+                SessionSaveGeneration::new(
+                    actual.binding().backend().clone(),
+                    self.base,
+                    self.generation,
+                ),
+                SessionLoadState::Published,
+            ))
+        })
+    }
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.saves.fetch_add(1, Ordering::SeqCst);
+        self.backing.save_changes(binding, snapshot, units)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
+}
+
+#[tokio::test]
+async fn contradictory_published_record_load_refuses_before_initial_save_or_provider_open() {
+    for (base, generation) in [(1, 0), (0, 1), (1, 1)] {
+        let directory = tempdir().unwrap();
+        let backing = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+        let saves = Arc::new(AtomicUsize::new(0));
+        let storage = Arc::new(ContradictoryRecordLoadStorage {
+            backing: backing.clone(),
+            base,
+            generation,
+            saves: saves.clone(),
+        });
+        let manager = SessionManager::open(
+            Some(SessionId::new("contradictory-load").unwrap()),
+            storage,
+            Arc::new(RuntimeMessageCommitClock::new()),
+        )
+        .await
+        .unwrap();
+        let provider = TestProvider::new();
+        let result = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit)).await;
+        assert!(matches!(
+            result.as_ref().map_err(|failure| failure.cause()),
+            Err(AgentError::Storage(StorageError::Corrupt(_)))
+        ));
+        assert_eq!(
+            saves.load(Ordering::SeqCst),
+            0,
+            "refusal must precede the initial save, not rely on later writer rejection"
+        );
+        assert!(provider.calls.opens.lock().unwrap().is_empty());
+        drop(result);
+        backing.shutdown().await.unwrap();
+    }
+}
+
+// Refuses every physical append once the stream holds `rows` records, the way
+// a full disk or a SQLite fault refuses the completion after its Unit.
+fn refuse_record_appends_from(root: &std::path::Path, rows: i64) {
+    rusqlite::Connection::open(root.join("records.sqlite3"))
+        .unwrap()
+        .execute_batch(&format!(
+            "CREATE TRIGGER refuse_append BEFORE INSERT ON event_records \
+             WHEN (SELECT COUNT(*) FROM event_records) >= {rows} \
+             BEGIN SELECT RAISE(ABORT, 'fixture append refusal'); END;"
+        ))
+        .unwrap();
+}
+fn allow_record_appends(root: &std::path::Path) {
+    rusqlite::Connection::open(root.join("records.sqlite3"))
+        .unwrap()
+        .execute_batch("DROP TRIGGER refuse_append;")
+        .unwrap();
+}
+fn record_rows(root: &std::path::Path) -> i64 {
+    rusqlite::Connection::open(root.join("records.sqlite3"))
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+        .unwrap()
+}
+async fn prepare_record_session(
+    storage: &Arc<RecordStorage>,
+    id: &SessionId,
+    provider: Arc<dyn AgentProvider>,
+) -> Result<Agent, AgentInitializationError> {
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    Agent::prepare(provider, manager, Arc::new(AcceptingAudit)).await
+}
+
+#[tokio::test]
+async fn initialization_unit_left_unfinished_is_completed_by_the_next_prepare() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    storage.initialize().await.unwrap();
+    let id = SessionId::new("initial-completion-refused").unwrap();
+    let provider = TestProvider::new();
+    refuse_record_appends_from(&root, 1);
+    let failed = prepare_record_session(&storage, &id, provider.clone()).await;
+    assert!(matches!(
+        failed.as_ref().map_err(|failure| failure.cause()),
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    drop(failed);
+    assert_eq!(
+        record_rows(&root),
+        1,
+        "the Unit is durable, its completion is not"
+    );
+    let lease = storage.open(id.clone()).await.unwrap();
+    assert_eq!(
+        lease.load().await.unwrap().state(),
+        SessionLoadState::Unfinished
+    );
+    drop(lease);
+
+    // While the fault lasts, a retry fails the same way and appends nothing.
+    let still_failing = prepare_record_session(&storage, &id, provider.clone()).await;
+    assert!(matches!(
+        still_failing.as_ref().map_err(|failure| failure.cause()),
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    drop(still_failing);
+    assert_eq!(record_rows(&root), 1);
+
+    allow_record_appends(&root);
+    let agent = prepare_record_session(&storage, &id, provider.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        record_rows(&root),
+        2,
+        "only the missing completion is appended"
+    );
+    let expected = SessionSnapshot {
+        id: id.clone(),
+        provider: provider.identity(),
+        provider_context: ProviderContext::Absent,
+        invocations: Vec::new(),
+        queue_history: Vec::new(),
+    };
+    assert_eq!(
+        agent.session_manager().snapshot().await,
+        Some(expected.clone())
+    );
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    drop(agent);
+
+    let lease = storage.open(id.clone()).await.unwrap();
+    let loaded = lease.load().await.unwrap();
+    assert_eq!(loaded.state(), SessionLoadState::Published);
+    assert_eq!(loaded.snapshot(), Some(&expected));
+    drop(lease);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn restoration_unit_left_unfinished_is_completed_by_the_next_prepare() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    storage.initialize().await.unwrap();
+    let id = SessionId::new("restoration-completion-refused").unwrap();
+    let provider = TestProvider::new();
+    let agent = prepare_record_session(&storage, &id, provider.clone())
+        .await
+        .unwrap();
+    let queued = agent
+        .enqueue(request("queued-across-restart"), actor())
+        .await
+        .unwrap();
+    drop(queued);
+    drop(agent);
+    let lease = storage.open(id.clone()).await.unwrap();
+    let saved = lease.load().await.unwrap().snapshot().unwrap().clone();
+    drop(lease);
+
+    let rows = record_rows(&root);
+    refuse_record_appends_from(&root, rows + 1);
+    let failed = prepare_record_session(&storage, &id, provider.clone()).await;
+    assert!(matches!(
+        failed.as_ref().map_err(|failure| failure.cause()),
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    drop(failed);
+    assert_eq!(
+        record_rows(&root),
+        rows + 1,
+        "the restoration Unit is durable"
+    );
+
+    allow_record_appends(&root);
+    let agent = prepare_record_session(&storage, &id, provider.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        record_rows(&root),
+        rows + 2,
+        "only the completion is appended"
+    );
+    let restored = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(restored.invocations, saved.invocations);
+    assert_eq!(restored.queue_history.len(), saved.queue_history.len() + 1);
+    assert_eq!(
+        restored.queue_history.last().unwrap().mutation,
+        QueueMutation::Restored
+    );
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    drop(agent);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepare_leaves_an_unfinished_save_it_did_not_plan_unresolved() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    storage.initialize().await.unwrap();
+    let provider = TestProvider::new();
+
+    // Another provider's opening: the same kind of plan, different decisions.
+    let foreign = SessionId::new("foreign-opening").unwrap();
+    let other = ProviderIdentity::new("other", "fixture", "workspace").unwrap();
+    let lease = storage.open(foreign.clone()).await.unwrap();
+    let binding = lease.load().await.unwrap().binding().clone();
+    refuse_record_appends_from(&root, 1);
+    assert!(matches!(
+        lease
+            .save_changes(
+                binding,
+                SessionSnapshot {
+                    id: foreign.clone(),
+                    provider: other.clone(),
+                    provider_context: ProviderContext::Absent,
+                    invocations: Vec::new(),
+                    queue_history: Vec::new(),
+                },
+                vec![SessionSaveUnit::new(vec![SessionChange::Opened {
+                    id: foreign.clone(),
+                    provider: other,
+                    context: ProviderContext::Absent,
+                }])
+                .unwrap()],
+            )
+            .await,
+        Err(StorageError::Io(_))
+    ));
+    allow_record_appends(&root);
+    drop(lease);
+    let rows = record_rows(&root);
+    let refused = prepare_record_session(&storage, &foreign, provider.clone()).await;
+    assert!(matches!(
+        refused.as_ref().map_err(|failure| failure.cause()),
+        Err(AgentError::Storage(StorageError::Unresolved))
+    ));
+    drop(refused);
+    assert_eq!(record_rows(&root), rows, "a different plan appends nothing");
+
+    // A later save on a published conversation: initialization plans nothing.
+    let later = SessionId::new("unfinished-later-save").unwrap();
+    drop(
+        prepare_record_session(&storage, &later, provider.clone())
+            .await
+            .unwrap(),
+    );
+    let lease = storage.open(later.clone()).await.unwrap();
+    let loaded = lease.load().await.unwrap();
+    let prior = loaded.snapshot().unwrap().clone();
+    let context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+    refuse_record_appends_from(&root, record_rows(&root) + 1);
+    assert!(matches!(
+        lease
+            .save_changes(
+                loaded.binding().clone(),
+                SessionSnapshot {
+                    provider_context: context.clone(),
+                    ..prior.clone()
+                },
+                vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
+                    before: ProviderContext::Absent,
+                    after: context,
+                }])
+                .unwrap()],
+            )
+            .await,
+        Err(StorageError::Io(_))
+    ));
+    allow_record_appends(&root);
+    drop(lease);
+    let rows = record_rows(&root);
+    let refused = prepare_record_session(&storage, &later, provider.clone()).await;
+    assert!(matches!(
+        refused.as_ref().map_err(|failure| failure.cause()),
+        Err(AgentError::Storage(StorageError::Unresolved))
+    ));
+    drop(refused);
+    assert_eq!(record_rows(&root), rows);
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    storage.shutdown().await.unwrap();
 }
 
 #[tokio::test]

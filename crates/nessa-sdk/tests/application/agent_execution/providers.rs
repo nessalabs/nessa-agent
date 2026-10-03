@@ -2,6 +2,7 @@ mod opening;
 
 use super::support::*;
 use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
+use nessa_sdk::application::agent_execution::sessions::{SessionChange, SessionSaveUnit};
 use nessa_sdk::{
     application::agent_execution::providers::OperationCapabilities,
     infrastructure::session_storage::InMemoryStorage, Agent,
@@ -159,36 +160,46 @@ pub(super) async fn provider_agent_with_review(
     let storage = Arc::new(InMemoryStorage::new());
     let id = SessionId::new("retained-review").unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
-    lease
-        .save(SessionSnapshot {
-            queue_history: Vec::new(),
+    let snapshot = SessionSnapshot {
+        queue_history: Vec::new(),
+        id: id.clone(),
+        provider: provider.identity(),
+        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("fixture").unwrap()),
+        invocations: vec![InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: review.execution_id().clone(),
+                user_message: UserMessage::text_only(PromptText::new("reviewed input").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            actor: close_action(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: vec![review],
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        }],
+    };
+    let mut accepted = snapshot.invocations[0].clone();
+    accepted.events.clear();
+    let unit = SessionSaveUnit::new(vec![
+        SessionChange::Opened {
             id: id.clone(),
-            provider: provider.identity(),
-            provider_context: ProviderContext::Recorded(
-                ExecutionSessionId::new("fixture").unwrap(),
-            ),
-            invocations: vec![InvocationRecord {
-                target_event_offset: None,
-                submission: SubmissionMode::Immediate,
-                request: ExecutionRequest {
-                    execution_id: review.execution_id().clone(),
-                    user_message: UserMessage::text_only(
-                        PromptText::new("reviewed input").unwrap(),
-                    ),
-                    estimated_input_tokens: 1,
-                    reserved_output_tokens: 1,
-                },
-                actor: close_action(),
-                acknowledgement: SubmissionAcknowledgement::Pending,
-                events: vec![review],
-                scheduling: Vec::new(),
-                cancellation: None,
-                provider_report: None,
-                local_cancellation: None,
-                local_outcome: None,
-                result: None,
-            }],
-        })
+            provider: snapshot.provider.clone(),
+            context: snapshot.provider_context.clone(),
+        },
+        SessionChange::InputAccepted(Box::new(accepted)),
+        SessionChange::ProviderObservation(snapshot.invocations[0].events[0].clone()),
+    ])
+    .unwrap();
+    let original = lease.load().await.unwrap().binding().clone();
+    lease
+        .save_changes(original, snapshot, vec![unit])
         .await
         .unwrap();
     drop(lease);

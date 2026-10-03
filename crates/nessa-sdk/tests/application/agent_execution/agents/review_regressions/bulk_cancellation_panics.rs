@@ -1,5 +1,8 @@
 //! Explicit close retains the whole cancellation batch across storage panics.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 use std::{pin::Pin, task::Context};
 
 struct CancellationPanicStorage {
@@ -27,10 +30,15 @@ impl SessionStorage for CancellationPanicStorage {
     }
 }
 impl SessionStorageLease for CancellationPanicLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         let cancelling = snapshot.invocations.iter().any(|record| {
             record.request.execution_id.as_str() == "pending-one"
                 && record
@@ -54,12 +62,12 @@ impl SessionStorageLease for CancellationPanicLease {
                         "cancellation save panicked before commit"
                     );
                 }
-                self.backing.save(snapshot).await?;
+                let receipt = self.backing.save_changes(binding, snapshot, units).await?;
                 assert!(
                     !panic || self.drop_panics,
                     "cancellation save panicked after commit"
                 );
-                Ok(())
+                Ok(receipt)
             }),
             panic_on_drop: panic && self.drop_panics,
         })
@@ -69,11 +77,11 @@ impl SessionStorageLease for CancellationPanicLease {
     }
 }
 struct CancellationSave<'a> {
-    inner: StorageFuture<'a, ()>,
+    inner: StorageFuture<'a, SessionSaveReceipt>,
     panic_on_drop: bool,
 }
 impl Future for CancellationSave<'_> {
-    type Output = Result<(), StorageError>;
+    type Output = Result<SessionSaveReceipt, StorageError>;
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         self.inner.as_mut().poll(context)
     }
