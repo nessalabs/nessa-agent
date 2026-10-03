@@ -6,6 +6,7 @@ import {
   type McpUiCsp,
   type McpUiPermissions,
 } from "../generated/product.js"
+import { wellFormedText } from "./unicode.js"
 
 /**
  * Bounds the protocol schema puts on an MCP App's calls, named here for what
@@ -20,52 +21,15 @@ export const MAX_MCP_RESOURCE_BYTES = bounds.maxMcpResourceBytes
 
 const utf8 = new TextEncoder()
 
-/** A UTF-16 surrogate with no partner: text that is no Unicode at all. */
-const loneSurrogate =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
-
-/**
- * Whether `text` is Unicode: no lone surrogate, which the gateway's JSON
- * decoder cannot read — it drops a frame holding one, unanswered.
- */
-function wellFormed(text: string): boolean {
-  return !loneSurrogate.test(text)
-}
-
-/** Whether every string in the JSON `text` encodes — keys included — is Unicode. */
-function wellFormedJson(text: string): boolean {
-  let value: unknown
-  try {
-    value = JSON.parse(text)
-  } catch {
-    // Not JSON: whether the arguments are an object is the gateway's to say.
-    return true
-  }
-  // Walked without recursion: 32 KiB of brackets is deeper than a stack.
-  const pending: unknown[] = [value]
-  while (pending.length > 0) {
-    const next = pending.pop()
-    if (typeof next === "string") {
-      if (!wellFormed(next)) return false
-    } else if (Array.isArray(next)) {
-      pending.push(...next)
-    } else if (next !== null && typeof next === "object") {
-      for (const [key, item] of Object.entries(next)) {
-        if (!wellFormed(key)) return false
-        pending.push(item)
-      }
-    }
-  }
-  return true
-}
-
 /**
  * What an MCP App may send its server, held to the schema's bounds: the one
  * statement of them. `McpAppsApi` refuses a request past them before sending
  * anything, and a host may ask first, so it can refuse the app's request
- * itself rather than read a `TypeError` whose cause it cannot tell. Every
- * string must also be Unicode: one with a lone surrogate never reaches the
- * gateway as a request it can answer.
+ * itself rather than read a `TypeError` whose cause it cannot tell. Each
+ * must also be Unicode text (`wellFormedText`): a lone surrogate makes the
+ * whole frame one the gateway cannot read. What the arguments decode to — an
+ * object, its strings — is the gateway's to judge, and it answers
+ * `invalid_request`.
  *
  * Each answers the problem in words, or `undefined` within bounds.
  */
@@ -74,24 +38,21 @@ export const mcpAppRequestProblem = {
   tool: (tool: string): string | undefined =>
     !boundedName(tool, bounds.maxMcpNameBytes)
       ? `Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`
-      : !wellFormed(tool)
+      : !wellFormedText(tool)
         ? "Tool must be Unicode text"
         : undefined,
   /** A resource's URI: 1 to `maxMcpResourceUriBytes` UTF-8 bytes of Unicode. */
   uri: (uri: string): string | undefined =>
     !boundedName(uri, bounds.maxMcpResourceUriBytes)
       ? `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`
-      : !wellFormed(uri)
+      : !wellFormedText(uri)
         ? "Resource URI must be Unicode text"
         : undefined,
-  /**
-   * A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8
-   * bytes, every string in them Unicode.
-   */
+  /** A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8 bytes of Unicode text. */
   argumentsJson: (argumentsJson: string): string | undefined =>
     utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES
       ? `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`
-      : !wellFormed(argumentsJson) || !wellFormedJson(argumentsJson)
+      : !wellFormedText(argumentsJson)
         ? "Arguments must be Unicode text"
         : undefined,
 } as const

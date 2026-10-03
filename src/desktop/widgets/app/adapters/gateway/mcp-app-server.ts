@@ -5,7 +5,7 @@
  * `mcp.releaseApp`. Who may call what — a tool hidden from apps, another
  * server's, a destructive tool the person must review — is the gateway's to
  * decide; this only says what it answered, in the port's typed outcomes (the
- * state table on #384, rows A1–A12, R1–R5).
+ * state table on #384, rows A1–A14, R1–R6).
  *
  * A resource's bytes are fetched with the single-use ticket `readResource`
  * answers, at once and once. The client's `fetchResource` holds them to the
@@ -18,8 +18,10 @@
  * (`mcpAppRequestProblem`), before anything is sent: past them, the app's
  * request is refused in the client's words, and nothing is logged (A2). So a
  * `TypeError` the client throws after that is from what the host built — its
- * address — and is a fault, logged. A read whose mount was released fetches
- * nothing more (R6).
+ * address — and is a fault, logged. What the gateway judges invalid
+ * (`invalid_request`, A13), and a request too large for it to take
+ * (`NessaRequestTooLargeError`, A14), are the app's request refused. A read
+ * whose mount was released fetches nothing more (R6).
  *
  * `callTool` and `readResource` settle with an outcome whatever the client
  * throws, so the bridge never mistakes one for a fault of this adapter
@@ -33,6 +35,7 @@ import {
   NessaConversationControlError,
   NessaMcpAppError,
   NessaMcpResourceError,
+  NessaRequestTooLargeError,
   type McpAppsApi,
   type McpReadResourceResult,
 } from "@nessa/client"
@@ -40,7 +43,8 @@ import type { AppAddress, McpAppServer, ServerAnswer } from "../../application/p
 import type { JsonObject } from "../../model/json-rpc"
 
 /** What the gateway refused, in words the app is shown. */
-type Refusal = "declined" | "expired" | "withdrawn" | "not-for-app" | "too-large"
+type Refusal =
+  "declined" | "expired" | "withdrawn" | "not-for-app" | "too-large" | "invalid"
 
 /** What one of the gateway's codes comes to (gate 11: every code is placed). */
 type Outcome = { readonly refused: Refusal } | "busy" | "server-gone" | "failed"
@@ -55,6 +59,9 @@ const outcomes: Record<ConversationErrorCode, Outcome> = {
   [ConversationErrorCode.McpRequestTooLarge]: { refused: "too-large" },
   // No room on the app lane; nothing reached the server (L1b, A8).
   [ConversationErrorCode.TemporarilyUnavailable]: "busy",
+  // The gateway judged the request itself — arguments that are no JSON
+  // object, a URI that is no app's — before dispatch: the app's to fix.
+  [ConversationErrorCode.InvalidRequest]: { refused: "invalid" },
   // The server's session, or the conversation it belongs to, is gone.
   [ConversationErrorCode.McpSessionUnavailable]: "server-gone",
   [ConversationErrorCode.ConversationNotFound]: "server-gone",
@@ -76,7 +83,6 @@ const outcomes: Record<ConversationErrorCode, Outcome> = {
   [ConversationErrorCode.TurnRunning]: "failed",
   [ConversationErrorCode.ConversationsNotConfigured]: "failed",
   [ConversationErrorCode.UnknownMethod]: "failed",
-  [ConversationErrorCode.InvalidRequest]: "failed",
   [ConversationErrorCode.ConversationCapacity]: "failed",
   [ConversationErrorCode.ConversationConfigurationChanged]: "failed",
   [ConversationErrorCode.ConversationStateUnreadable]: "failed",
@@ -115,6 +121,10 @@ const refusalWords: Record<Refusal, { tool: string; resource: string }> = {
     tool: "The request is larger than the gateway accepts",
     resource: "The request is larger than the gateway accepts",
   },
+  invalid: {
+    tool: "The gateway refused the request as invalid",
+    resource: "The gateway refused the request as invalid",
+  },
 }
 
 const failed: ServerAnswer = { kind: "failed" }
@@ -127,6 +137,12 @@ const conversationGone: ReadonlySet<ConversationErrorCode | undefined> = new Set
 
 /** The port's answer for what a call threw: a refusal, a server gone, or a failure. */
 function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
+  // Too large to send at all: the client refused it, and nothing was sent.
+  if (
+    error instanceof NessaMcpAppError &&
+    error.cause instanceof NessaRequestTooLargeError
+  )
+    return { kind: "refused", reason: refusalWords["too-large"][asked] }
   // The client narrows the gateway's code to the ones this build knows, or
   // none (`conversationErrorCode`): a code that is not one is no key here.
   if (!(error instanceof NessaMcpAppError) || error.code === undefined) {

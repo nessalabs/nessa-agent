@@ -14,6 +14,7 @@ import {
   NessaConversationControlError,
   NessaMcpAppError,
   NessaMcpResourceError,
+  NessaRequestTooLargeError,
   NessaRpcError,
   type McpAppReference,
   type McpAppsApi,
@@ -150,7 +151,6 @@ describe("tools/call", () => {
     // A lone surrogate is no Unicode: the gateway could not decode the frame.
     for (const answer of [
       await server.callTool(address, "get\ud800", {}),
-      await server.callTool(address, "get", { a: "\udc00" }),
       await server.readResource(address, "ui://w/\ud800", live()),
     ])
       expect(answer).toMatchObject({ kind: "refused" })
@@ -161,6 +161,53 @@ describe("tools/call", () => {
     })
     expect(apps.callTool).toHaveBeenCalledTimes(1)
     expect(apps.readResource).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it("A13: arguments the gateway judges invalid — a lone surrogate inside them, escaped — are the gateway's refusal", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const apps = fakeApps({
+      callTool: vi.fn(() =>
+        Promise.reject(refusal(ConversationErrorCode.InvalidRequest)),
+      ),
+    })
+    // Escaped in the arguments' text, it reaches the gateway, which answers.
+    expect(
+      await gatewayAppServer(apps).callTool(address, "get", { a: "\udc00" }),
+    ).toEqual({
+      kind: "refused",
+      reason: "The gateway refused the request as invalid",
+    })
+    expect(apps.callTool).toHaveBeenCalledWith(
+      conversationId,
+      app,
+      "weather",
+      "get",
+      JSON.stringify({ a: "\udc00" }),
+    )
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it("A14: a request too large for the gateway to take is refused, nothing sent, nothing logged", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const tooLarge = () =>
+      Promise.reject(
+        new NessaMcpAppError(
+          conversationId,
+          "r",
+          app,
+          new NessaRequestTooLargeError("mcp.callTool", 70_000),
+        ),
+      )
+    const server = gatewayAppServer(
+      fakeApps({ callTool: vi.fn(tooLarge), readResource: vi.fn(tooLarge) }),
+    )
+    const refused = {
+      kind: "refused",
+      reason: "The request is larger than the gateway accepts",
+    }
+    expect(await server.callTool(address, "t", { a: '"'.repeat(16380) })).toEqual(refused)
+    expect(await server.readResource(address, uri, live())).toEqual(refused)
     expect(error).not.toHaveBeenCalled()
   })
 
@@ -287,6 +334,7 @@ describe("tools/call", () => {
         "mcp_request_too_large",
         "mcp_server_mismatch",
         "mcp_tool_not_for_app",
+        "invalid_request",
       ].sort(),
     )
     expect(gone.sort()).toEqual(

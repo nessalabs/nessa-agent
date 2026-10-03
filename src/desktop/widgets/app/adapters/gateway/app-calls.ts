@@ -2,7 +2,7 @@
  * The tool calls an app's widgets name, read from a gateway conversation's
  * view (`ConversationTool`): the `McpAppCalls` of each server's app plugin,
  * from the transcript's real MCP tool calls (the state table on #384, rows
- * C1–C9). The transcript names a call's widget with the same identities
+ * C1–C11). The transcript names a call's widget with the same identities
  * (`workspace/adapters/gateway/tool-widget.ts`, `appWidget`), so the widget a
  * message draws and the call it reads here are one fact.
  *

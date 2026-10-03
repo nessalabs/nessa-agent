@@ -248,7 +248,11 @@ app widgets alike.
 - **Limits, each its own issue**: a release ends the reviews already open, but
   a call admitted before it can still open one after (#397); the app lane's
   4 slots per socket are shared by every app in the window (#398); an app is
-  told `{}` for arguments the view does not carry (#394).
+  told `{}` for arguments the view does not carry (#394); the gateway drops,
+  unanswered, a frame it cannot decode (#403), so the client refuses a lone
+  surrogate in what it sends; and it closes the socket on a frame past its
+  message limit, so the client refuses one before sending
+  (`NessaRequestTooLargeError`).
 - **The calls from the transcript** (`app-calls.ts`), each named by its
   conversation as well as its execution and tool ids, and kept, at the last
   state a view reported, until the conversation is deleted — a view holds only

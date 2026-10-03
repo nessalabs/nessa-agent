@@ -239,6 +239,10 @@ const catalogueDecimalFields = [
 ]
 const bounds = {
   maxOrdinaryResponseBytes,
+  // The same gateway limit, read where it bites a client: the gateway takes no
+  // WebSocket message longer (`max_message_size`), and its read loop closes the
+  // socket on one rather than answering it, so a client must not send one.
+  maxRequestFrameBytes: maxOrdinaryResponseBytes,
   maxReadyMethods: schema.$defs.ProductSessionReady.properties.methods.maxItems,
   maxAuthCredentialCharacters:
     schema.$defs.SessionAuthenticateParams.properties.credential.maxLength,

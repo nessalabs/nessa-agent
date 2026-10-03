@@ -13,6 +13,7 @@ import {
   type McpResourceReply,
   type McpResourceTransport,
 } from "../application/mcp-resource-fetch.js"
+import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
 import { mcpAppRequestProblem } from "../protocol/mcp-app-validate.js"
@@ -149,14 +150,8 @@ it.each([
   ["arguments past 32 KiB of UTF-8", { argumentsJson: `{"a":"${"é".repeat(16384)}"}` }],
   // A lone surrogate is no Unicode: the gateway cannot decode the frame.
   ["a tool with a lone surrogate", { tool: "get\ud800" }],
-  [
-    "arguments with a lone surrogate, escaped",
-    { argumentsJson: JSON.stringify({ a: "\ud800" }) },
-  ],
-  [
-    "arguments with a lone surrogate in a key",
-    { argumentsJson: JSON.stringify({ ["\udc00"]: 1 }) },
-  ],
+  // Written into the arguments' text itself, it would break the frame too.
+  ["arguments holding a lone surrogate", { argumentsJson: '{"a":"\ud800"}' }],
   ["a tool that is no string", { tool: 7 as unknown as string }],
   ["arguments that are no string", { argumentsJson: {} as unknown as string }],
 ] as const)(
@@ -819,6 +814,11 @@ describe("what an app may send its server (mcpAppRequestProblem)", () => {
     ).toBeUndefined()
     // Not JSON: whether the arguments are an object is the gateway's to say.
     expect(mcpAppRequestProblem.argumentsJson("[")).toBeUndefined()
+    // Escaped, a lone surrogate is ASCII in the frame: what it decodes to is
+    // the gateway's to judge, and it answers `invalid_request`.
+    expect(
+      mcpAppRequestProblem.argumentsJson(JSON.stringify({ a: "\ud800" })),
+    ).toBeUndefined()
   })
 
   it.each([
@@ -830,16 +830,10 @@ describe("what an app may send its server (mcpAppRequestProblem)", () => {
     ["uri", `ui://${"x".repeat(2044)}`],
     ["uri", "ui://w/\udfff"],
     ["argumentsJson", `{"a":"${"x".repeat(32761)}"}`],
-    ["argumentsJson", '{"a":"\\ud800"}'],
-    ["argumentsJson", '{"a":[[{"b":"\\udc00"}]]}'],
-    ["argumentsJson", '{"\\ud800":1}'],
+    ["argumentsJson", '{"a":"\ud800"}'],
+    ["argumentsJson", '{"\udc00":1}'],
   ] as const)("says what is wrong with a %s of %j", (kind, value) => {
     expect(mcpAppRequestProblem[kind](value)).toEqual(expect.any(String))
-  })
-
-  it("walks deeply nested arguments without exhausting the stack", () => {
-    const deep = `${"[".repeat(16000)}"\\ud800"${"]".repeat(16000)}`
-    expect(mcpAppRequestProblem.argumentsJson(deep)).toEqual(expect.any(String))
   })
 })
 
@@ -850,4 +844,18 @@ it("refuses to read a URI that is no string, or not Unicode, before asking the g
       api(request).readResource(conversationId, app, "charts", uri),
     ).rejects.toBeInstanceOf(TypeError)
   expect(request).not.toHaveBeenCalled()
+})
+
+it("is certain nothing reached the gateway for a request too large to send", async () => {
+  const cause = new NessaRequestTooLargeError("mcp.callTool", 70_000)
+  const error = await failure(
+    api(async () => Promise.reject(cause)).callTool(
+      conversationId,
+      app,
+      "charts",
+      "list",
+    ),
+  )
+  expect(error).toBeInstanceOf(NessaMcpAppError)
+  expect(error).toMatchObject({ code: undefined, uncertain: false, cause })
 })

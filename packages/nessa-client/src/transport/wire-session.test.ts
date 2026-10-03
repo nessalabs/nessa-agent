@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import { WireSession } from "./wire-session.js"
@@ -119,6 +120,35 @@ describe("WireSession", () => {
     const session = new WireSession(socket, { requestTimeoutMs: 500 })
     await expect(session.request("connect", {})).rejects.toThrow("send failed")
     await expect(session.request("connect", {})).rejects.toThrow("send failed")
+  })
+
+  it("refuses, before sending, a request whose frame is past the gateway's message limit", async () => {
+    const sent: string[] = []
+    const socket = {
+      readyState: 1,
+      send: (text: string) => void sent.push(text),
+      addEventListener: () => {},
+      close: () => {},
+    } as unknown as WebSocket
+    const session = new WireSession(socket, { requestTimeoutMs: 500 })
+    // Each quote is escaped once more in the frame: 2 bytes become 4.
+    const quotes = '"'.repeat(bounds.maxRequestFrameBytes / 2)
+    const refused = session.request("conversation.send", { text: quotes })
+    await expect(refused).rejects.toBeInstanceOf(NessaRequestTooLargeError)
+    await expect(refused).rejects.toMatchObject({ method: "conversation.send" })
+    expect(sent).toEqual([])
+    // At the limit exactly, it is sent.
+    const envelope = JSON.stringify({
+      type: "req",
+      id: "2",
+      method: "m",
+      params: { t: "" },
+    })
+    void session
+      .request("m", { t: "x".repeat(bounds.maxRequestFrameBytes - envelope.length) })
+      .catch(() => {})
+    expect(sent).toHaveLength(1)
+    expect(new TextEncoder().encode(sent[0]).byteLength).toBe(bounds.maxRequestFrameBytes)
   })
 
   it("rejects RPC failures as NessaRpcError with wire code", async () => {

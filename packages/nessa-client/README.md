@@ -344,13 +344,20 @@ await client.mcpApps.releaseApp(conversationId, app)
 origin, as `upload` does, with the ticket in the `x-nessa-resource-ticket`
 header and never in the URL, and hands back the bytes only once their size and
 SHA-256 are the ones `readResource` described. A destructive tool waits for the
-person's answer to a review with `origin: {kind: "app", server, tool}`, for up
-to 5 minutes, and `callTool` waits that long for it. `argumentsJson` is at most
+person's answer to a review with `origin: {kind: "app", server, tool}`, for as
+long as the protocol publishes (`mcpAppCallTiming`), and `callTool` waits that
+long for it: `MCP_APP_CALL_DEADLINE_MS`, which a host waiting on an app's call
+reads rather than writing it out. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
 bound throw `TypeError` before anything is sent. What an app sends — a tool's
-name, a resource's URI, the arguments — is held to its bounds, and to being
-Unicode, by `mcpAppRequestProblem`, which `callTool` and `readResource` ask and
-a host may ask first, to refuse the app's request itself.
+name, a resource's URI, the arguments' text — is held to its bounds, and to
+being Unicode text, by `mcpAppRequestProblem`, which `callTool` and
+`readResource` ask and a host may ask first, to refuse the app's request
+itself. What the arguments decode to is the gateway's to judge
+(`invalid_request`). Any request whose frame is longer than the gateway takes
+(`bounds.maxRequestFrameBytes`) is refused before it is sent, as
+`NessaRequestTooLargeError` — inside `NessaMcpAppError`, with `uncertain`
+false: the gateway would close the socket on it rather than answer.
 
 `callTool` and `readResource` fail with `NessaMcpAppError`. Its `uncertain` is
 `false` when nothing reached the app's server — `mcp_app_unknown`,
