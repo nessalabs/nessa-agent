@@ -8,9 +8,10 @@
  *
  * The credential is the bundled surface's, which the session's client id
  * names (`connectDevSession`'s `nessa-panel`), not the window; the window is
- * told apart by its surface kind and instance. The token goes from the host
- * to the client's handshake and nowhere else: not the URL, not storage, not
- * a log.
+ * told apart by its surface kind and instance. This module never holds the
+ * token: it hands the client the credential source, which the client asks at
+ * its handshake, and passes no URL or `auth` of its own
+ * (`host-gateway.test.ts`).
  */
 import type { CredentialSource, GatewayEndpointSource, NessaClient } from "@nessa/client"
 import type { Environment } from "../../env/environment"
