@@ -2019,6 +2019,29 @@ describe("an app's review is read after its turn ended (#436)", () => {
     },
   )
 
+  it("P2: a conversation no list has named yet is read each round while an app's call waits, and not at rest", async () => {
+    const { gateway, source, follow, advance } = started()
+    // Past an incomplete list that does not name it (S7).
+    gateway.complete = false
+    gateway.views.set("a", view("a", { revision: "1", messages: [ended] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    const readsOf = () =>
+      gateway.calls.filter((call) => call.method === "read" && call.args[0] === "a")
+        .length
+    await advance(timing.pollMs * 2)
+    expect(readsOf()).toBe(1)
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs * 2)
+    expect(readsOf()).toBe(3)
+    answer.resolve("done")
+    await call
+    await advance(timing.pollMs * 2)
+    expect(readsOf()).toBe(3)
+  })
+
   it("P2: a call begun while a round's list is still on its way is read in that round", async () => {
     const { gateway, source, readsOf, advance } = await idle()
     const list = deferred<void>()

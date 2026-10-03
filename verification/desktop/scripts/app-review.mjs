@@ -184,6 +184,11 @@ const checks = {
         const tool = long
           ? await page.evaluate(() => window.__appReview.longestTool)
           : appReview.tool
+        const bound = await page.evaluate(() => window.__appReview.toolBound)
+        if (long && tool.length !== bound)
+          failures.push(
+            `the long tool's name is ${tool.length} bytes, not the ${bound} allowed`,
+          )
         if (!(await asked(page, tool))) {
           failures.push(`${long ? "long tool: " : ""}${notDrawn}`)
           continue

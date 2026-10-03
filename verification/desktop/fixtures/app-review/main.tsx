@@ -138,9 +138,8 @@ gateway.rows.set(
 gateway.views.set(conversation, viewWith(1))
 
 // What became of the app's call: null before the app calls, "waiting", or
-// the outcome the app was given. And each answer the gateway was sent.
+// the outcome the app was given.
 let settled: string | null = null
-const answers: unknown[][] = []
 let revision = 1
 let reviews = 0
 let waiting = false
@@ -149,7 +148,6 @@ let waiting = false
 function onAnswer(review: ConversationPermission, done: (allowed: boolean) => void) {
   gateway.once("answer", async (normal) => {
     const args = gateway.calls.at(-1)?.args ?? []
-    answers.push([...args])
     const [to, execution, permission, option] = args
     const ours =
       to === conversation &&
@@ -216,11 +214,16 @@ Object.assign(window, {
     snapshot: () => ({
       settled,
       reads: gateway.count("read"),
-      answers,
+      // Every answer the gateway was sent, whichever review it named.
+      answers: gateway.calls
+        .filter((call) => call.method === "answer")
+        .map((call) => [...call.args]),
       openReview: gateway.views.get(conversation)?.permissions[0]?.permissionId ?? null,
     }),
     /** A tool's name with no break in it, as long as the gateway allows. */
-    longestTool: "deleteEveryStaleRow".repeat(8).slice(0, bounds.maxMcpNameBytes),
+    longestTool: "x".repeat(bounds.maxMcpNameBytes),
+    /** The most bytes a tool's name may have (`maxMcpNameBytes`). */
+    toolBound: bounds.maxMcpNameBytes,
   },
 })
 
