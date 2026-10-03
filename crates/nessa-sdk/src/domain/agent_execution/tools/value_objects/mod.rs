@@ -11,7 +11,7 @@
 //!
 //! Arrows mean the update produces observed data composed from these values.
 mod identity;
-mod json;
+pub(in crate::domain::agent_execution) mod json;
 mod mcp;
 mod tool;
 pub use identity::ToolCallId;

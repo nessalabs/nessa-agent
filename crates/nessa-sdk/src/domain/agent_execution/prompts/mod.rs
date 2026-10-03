@@ -12,6 +12,6 @@ pub mod builders;
 pub mod value_objects;
 pub use builders::SystemPromptBuilder;
 pub use value_objects::{
-    ImageReference, LinkedFile, PromptContribution, PromptContributionView, PromptSource,
-    PromptSourceKind, PromptText, SystemPrompt, UserMessage,
+    AppContext, ImageReference, LinkedFile, McpAppSource, MessageSender, PromptContribution,
+    PromptContributionView, PromptSource, PromptSourceKind, PromptText, SystemPrompt, UserMessage,
 };

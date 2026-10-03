@@ -116,11 +116,30 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   until its socket goes. Past either they are refused
   `temporarily_unavailable`, so held calls never stop `conversation.read` or
   `conversation.answer`.
+- **`mcp.sendMessage`** (MCP Apps `ui/message`, #390) puts the app's text
+  into its conversation as the person's turn, written by the app: the
+  transcript says so (`ConversationMessage.app`, `ConversationPending.app`),
+  and the agent is given it as the person's. The first message from a mount
+  in an opening of the conversation waits on a review in `permissions`, as a
+  destructive tool's call does; allowed, the mount sends without asking
+  again until it is released or the opening ends. Text is at most what
+  `conversation.send` takes. While a turn runs or input waits it is refused
+  `turn_running`: an app never queues behind the person. Any other refusal
+  of the message is its own conversation code.
+- **`mcp.updateModelContext`** (MCP Apps `ui/update-model-context`) holds
+  what a mount gives the model, in place of what it gave; neither part clears
+  it. The next message admitted into the conversation — the person's or an
+  app's, queued or steered — takes every context held, and the agent is
+  given them once, with that turn, ahead of its text: one text block, the
+  contexts JSON-encoded. They are never shown in the transcript. A release of
+  the mount, or the end of the opening, lets go of a context unsent. The
+  schema states its bounds (`McpUpdateModelContextParams`).
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's
-  open reviews (their calls answer `mcp_cancelled`) and releases its
-  resource tickets, and is idempotent. Nothing is admitted, opened or issued
+  open reviews (their calls answer `mcp_cancelled`), releases its resource
+  tickets, forgets that it may send messages and lets go of its context, and
+  is idempotent. Nothing is admitted, opened or issued
   for that mount again — across a close and a reopening, and when the
   release came before the conversation was open: its later calls answer
   `mcp_cancelled`. An `mcp.callTool` already handed to the session is not

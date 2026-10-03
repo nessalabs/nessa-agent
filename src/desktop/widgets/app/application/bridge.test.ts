@@ -302,7 +302,11 @@ describe("the handshake", () => {
       ports: {
         links: { open: answered },
         downloads: { download: answered },
-        conversation: { sendMessage: answered, updateModelContext: answered },
+        conversation: {
+          sendMessage: answered,
+          updateModelContext: answered,
+          messageWithin: deadlines.request,
+        },
       },
     })
     await flush()
@@ -814,6 +818,36 @@ describe("how long a tools/call is waited for", () => {
   })
 })
 
+describe("how long a ui/message is waited for", () => {
+  it("D2: ui/message waits the conversation's messageWithin, so its first review is not cut off", async () => {
+    const answer = deferred<"done">()
+    const app = harness({
+      ports: {
+        conversation: {
+          sendMessage: () => answer.promise,
+          updateModelContext: async () => "done",
+          messageWithin: 370_000,
+        },
+      },
+    })
+    await live(app)
+    app.say({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "ui/message",
+      params: { role: "user", content: [{ type: "text", text: "Hi" }] },
+    })
+    app.say({ jsonrpc: "2.0", id: 2, method: "ui/update-model-context", params: {} })
+    expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([
+      370_000,
+      deadlines.request,
+    ])
+    answer.resolve("done")
+    await flush()
+    expect(app.take()).toContainEqual({ jsonrpc: "2.0", id: 1, result: {} })
+  })
+})
+
 describe("a gateway too busy to read the app (L1b)", () => {
   it("L1b: the first read answered busy is made again, retryRead apart, and the app loads", async () => {
     const answers: ServerAnswer[] = [{ kind: "busy" }, { kind: "busy" }]
@@ -1072,15 +1106,19 @@ describe("the mount and its release (#384)", () => {
 describe("a live app's other requests", () => {
   it("L15: ui/message and ui/update-model-context go to the conversation, or are not offered", async () => {
     const sent: unknown[] = []
+    const addresses: AppAddress[] = []
     const conversation = {
-      sendMessage: async (session: string, content: readonly JsonObject[]) => {
-        sent.push(["message", session, content])
+      sendMessage: async (address: AppAddress, content: readonly JsonObject[]) => {
+        addresses.push(address)
+        sent.push(["message", address.sessionId, content])
         return sent.length > 1 ? ("refused" as const) : ("done" as const)
       },
-      updateModelContext: async (session: string, update: JsonObject) => {
-        sent.push(["context", session, update])
+      updateModelContext: async (address: AppAddress, update: JsonObject) => {
+        addresses.push(address)
+        sent.push(["context", address.sessionId, update])
         return "refused" as const
       },
+      messageWithin: deadlines.request,
     }
     const app = harness({ ports: { conversation } })
     await live(app)
@@ -1111,6 +1149,11 @@ describe("a live app's other requests", () => {
         { content: [{ type: "text", text: "Selected" }], structuredContent: { row: 2 } },
       ],
     ])
+    // Each names the app — its server, its tool call, this mount — as the
+    // view's own call does, never as anything the app said.
+    expect(new Set(addresses.map((address) => JSON.stringify(address))).size).toBe(1)
+    expect(addresses[0]!.server).toBe("weather")
+    expect(addresses[0]!.app.instanceId).toEqual(expect.any(String))
     expect(app.take()).toEqual([
       { jsonrpc: "2.0", id: 2, result: {} },
       { jsonrpc: "2.0", id: 3, result: { isError: true } },

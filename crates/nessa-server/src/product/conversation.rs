@@ -495,6 +495,7 @@ pub(super) fn wire_code(code: McpAppCode) -> ConversationErrorCode {
         McpAppCode::RemoteError => ConversationErrorCode::McpRemoteError,
         McpAppCode::InvalidRequest => ConversationErrorCode::InvalidRequest,
         McpAppCode::TemporarilyUnavailable => ConversationErrorCode::TemporarilyUnavailable,
+        McpAppCode::TurnRunning => ConversationErrorCode::TurnRunning,
     }
 }
 

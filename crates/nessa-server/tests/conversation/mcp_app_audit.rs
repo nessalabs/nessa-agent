@@ -219,6 +219,30 @@ async fn every_phase_of_one_request_is_its_own_record() {
             McpAppInitiator::System,
             json!({"kind": "ticket_ended", "ticketDigest": "ticket-digest", "cause": "expired"}),
         ),
+        (
+            McpAppAuditPhase::MessageSent {
+                execution_id: "turn-9".into(),
+            },
+            app_initiator(),
+            json!({"kind": "message_sent", "executionId": "turn-9"}),
+        ),
+        (
+            McpAppAuditPhase::MessageNotSent {
+                execution_id: "turn-9".into(),
+            },
+            app_initiator(),
+            json!({"kind": "message_not_sent", "executionId": "turn-9"}),
+        ),
+        (
+            McpAppAuditPhase::ContextHeld { bytes: 12 },
+            app_initiator(),
+            json!({"kind": "context_held", "bytes": 12}),
+        ),
+        (
+            McpAppAuditPhase::ContextCleared,
+            app_initiator(),
+            json!({"kind": "context_cleared"}),
+        ),
     ];
     let count = cases.len();
     for (phase, initiator, _) in cases.clone() {

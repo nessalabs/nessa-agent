@@ -9,13 +9,17 @@
  * nothing for either: `fixture_refresh` answers, `fixture_secret` is refused
  * as the gateway refuses a tool hidden from apps, and any other tool is
  * refused too. Its one call is finished, with arguments and a result. A
- * release holds nothing to let go of.
+ * release holds nothing to let go of. Its conversation, where composition
+ * gives it one, is the sample workspace's (`fixtureConversation`): a message
+ * lands there written by the app, and a context is taken and kept nowhere,
+ * as the sample's agent reads none.
  */
 import type { JsonObject } from "../model/json-rpc"
 import type { AppCall } from "../model/tool-call"
 import type { AppWidgetPlugin } from "../../ui/plugin"
 import type {
   CallRead,
+  McpAppConversation,
   McpAppPorts,
   McpAppServer,
   SandboxOrigin,
@@ -67,6 +71,34 @@ export function fixtureServerPort(html = fixtureAppHtml): McpAppServer {
   }
 }
 
+/**
+ * The fixture app's conversation: its message given to `write`, as the
+ * fixture server's app, which a refusal of `write` is the app's answer to.
+ */
+export function fixtureConversation(
+  write: (
+    sessionId: string,
+    app: { readonly server: string; readonly tool: string },
+    text: string,
+  ) => Promise<void>,
+): McpAppConversation {
+  return {
+    messageWithin: deadlines.request,
+    sendMessage: (address, content) =>
+      write(
+        address.sessionId,
+        { server: address.server, tool: fixtureCall(address.sessionId).tool },
+        content
+          .map((block) => (typeof block.text === "string" ? block.text : ""))
+          .join("\n\n"),
+      ).then(
+        () => "done" as const,
+        () => "refused" as const,
+      ),
+    updateModelContext: async () => "done",
+  }
+}
+
 /** The fixture's one call, finished, in session `sessionId`. */
 export function fixtureCall(sessionId: string): AppCall {
   const result: JsonObject = {
@@ -90,6 +122,8 @@ export function fixtureAppPlugin(options: {
   readonly timers: Timers
   readonly newId: () => string
   readonly page: () => PageContext
+  /** Its conversation: none, and `ui/message` is not offered. */
+  readonly conversation?: McpAppConversation
 }): AppWidgetPlugin {
   const known: CallRead = { kind: "known", call: fixtureCall(options.sessionId) }
   const missing: CallRead = { kind: "missing" }
@@ -104,6 +138,7 @@ export function fixtureAppPlugin(options: {
     ...(options.sandbox ? { sandbox: options.sandbox } : {}),
     hostInfo: { name: "Nessa", version: "fixture" },
     page: options.page,
+    ...(options.conversation ? { conversation: options.conversation } : {}),
   }
   return appPlugin({ server: fixtureServer, name: "Fixture", ports })
 }

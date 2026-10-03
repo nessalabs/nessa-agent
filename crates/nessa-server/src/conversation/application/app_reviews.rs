@@ -9,12 +9,19 @@
 //! beside the agent's, answered through the same `conversation.answer` and
 //! `conversation.cancel`, and each ended exactly once — allowed, denied,
 //! expired, or withdrawn.
+//!
+//! Under the same lock (#390): the mounts the person allowed to send
+//! messages in this opening, and the context each mount last gave the model,
+//! held until a message takes it. A release or an opening's end lets go of
+//! both with everything else (`docs/design/mcp-app-calls.md`, "An app in its
+//! conversation").
 use super::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
 use super::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
 };
 use crate::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
+use nessa_sdk::domain::agent_execution::prompts::{AppContext, UserMessage};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
@@ -46,8 +53,24 @@ pub const MAX_OPEN_APP_REVIEWS: usize = 16;
 pub const MAX_APP_REVIEW_BYTES: usize = 16_000;
 /// How many released mounts a conversation remembers.
 pub const MAX_RELEASED_MOUNTS: usize = 1024;
+/// The most mounts that hold a context at once, in one conversation: as
+/// many as one message carries, so a message takes every one held.
+pub const MAX_HELD_CONTEXTS: usize = UserMessage::MAX_APP_CONTEXTS;
+/// The most mounts one opening remembers allowing to send messages. Past it
+/// the longest allowed is forgotten, and asks again.
+pub const MAX_CONSENTED_MOUNTS: usize = 64;
 /// What an app review's identity starts with.
 const APP_REVIEW_PREFIX: &str = "app-";
+
+/// What an app's review asks the person to allow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewAsk {
+    /// Running a destructive tool of its server.
+    RunTool,
+    /// Sending a message in the conversation as them: the first of its
+    /// mount's, in this opening.
+    SendMessage,
+}
 
 /// Who answered a review.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,8 +148,50 @@ struct Reviews {
     ended: bool,
     /// The conversation was deleted: no opening begins again.
     deleted: bool,
+    /// The mounts the person allowed to send messages in this opening,
+    /// longest allowed first, at most [`MAX_CONSENTED_MOUNTS`].
+    consented: VecDeque<McpAppRef>,
+    /// The context each mount last gave, in the order they were given, from at most
+    /// [`MAX_HELD_CONTEXTS`] mounts: held until a message takes it. A mount
+    /// may have one pending beside it, not yet on record.
+    contexts: Vec<HeldContext>,
+    /// What the next held context is numbered: a message takes a context
+    /// only if it is still the one it read.
+    next_context: u64,
+}
+/// One mount's context, as it gave it.
+struct HeldContext {
+    app: McpAppRef,
+    number: u64,
+    context: AppContext,
+    /// Its update is on record, so a message may take it. Until then it is
+    /// pending: it holds its mount's place, and no message sees it.
+    recorded: bool,
+}
+
+/// Why a context was not held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextRefusal {
+    /// [`MAX_HELD_CONTEXTS`] other mounts hold one already.
+    Full,
+    /// Its mount was released, or the opening ended.
+    Gone(ReviewRefusal),
+}
+
+/// The contexts held when a message read them, in the order given, and
+/// which they were: [`AppReviews::took`] lets go of exactly these, and of
+/// none replaced since.
+pub struct HeldContexts {
+    pub contexts: Vec<AppContext>,
+    taken: Vec<(McpAppRef, u64)>,
 }
 impl Reviews {
+    /// What an opening holds for its mounts besides reviews and tickets:
+    /// let go of when it ends, as it begins.
+    fn let_go_of_the_opening(&mut self) {
+        self.consented.clear();
+        self.contexts.clear();
+    }
     fn key(&self, permission: &str) -> Option<u64> {
         self.pending
             .iter()
@@ -173,6 +238,7 @@ impl AppReviews {
         // wait reads its review as withdrawn by the system. Its tickets are
         // not let go of here; they run out their lifetime.
         state.pending.clear();
+        state.let_go_of_the_opening();
         state.epoch
     }
 
@@ -190,9 +256,138 @@ impl AppReviews {
             state.ended = true;
             state.released.clear();
             state.bytes = 0;
+            state.let_go_of_the_opening();
             std::mem::take(&mut state.pending)
         };
         withdraw_ended(ended, &McpAppInitiator::System);
+    }
+
+    /// Whether the person allowed `app` to send messages in the opening
+    /// `epoch`, where it may still be admitted.
+    pub fn consented(&self, epoch: u64, app: &McpAppRef) -> Result<bool, ReviewRefusal> {
+        let state = self.state.lock().expect("app reviews");
+        state.live(epoch, app)?;
+        Ok(state.consented.contains(app))
+    }
+
+    /// The person allowed `app` to send messages in the opening `epoch`:
+    /// it does not ask again until it is released or the opening ends.
+    pub fn consent(&self, epoch: u64, app: &McpAppRef) -> Result<(), ReviewRefusal> {
+        let mut state = self.state.lock().expect("app reviews");
+        state.live(epoch, app)?;
+        if !state.consented.contains(app) {
+            if state.consented.len() == MAX_CONSENTED_MOUNTS {
+                state.consented.pop_front();
+            }
+            state.consented.push_back(app.clone());
+        }
+        Ok(())
+    }
+
+    /// Hold `context` pending, as what `app` gives the model next, in the
+    /// opening `epoch`: its number, for [`Self::recorded_context`] once its
+    /// update is on record, or [`Self::discard_context`] if it cannot be.
+    /// Until then what the mount held before is what a message takes.
+    pub fn stage_context(
+        &self,
+        epoch: u64,
+        app: &McpAppRef,
+        context: AppContext,
+    ) -> Result<u64, ContextRefusal> {
+        let mut state = self.state.lock().expect("app reviews");
+        state.live(epoch, app).map_err(ContextRefusal::Gone)?;
+        let mut mounts: Vec<&McpAppRef> = Vec::new();
+        for held in &state.contexts {
+            if &held.app != app && !mounts.contains(&&held.app) {
+                mounts.push(&held.app);
+            }
+        }
+        if mounts.len() >= MAX_HELD_CONTEXTS {
+            return Err(ContextRefusal::Full);
+        }
+        state.next_context += 1;
+        let number = state.next_context;
+        state.contexts.push(HeldContext {
+            app: app.clone(),
+            number,
+            context,
+            recorded: false,
+        });
+        Ok(number)
+    }
+
+    /// The update that staged context `number` is on record: it replaces
+    /// what its mount held, unless a later one of the mount's already did.
+    /// One let go of meanwhile — its mount released, its opening ended —
+    /// stays let go of: the release came after it.
+    pub fn recorded_context(&self, number: u64) {
+        let mut state = self.state.lock().expect("app reviews");
+        let Some(app) = state
+            .contexts
+            .iter()
+            .find(|held| held.number == number)
+            .map(|held| held.app.clone())
+        else {
+            return;
+        };
+        let newer = state
+            .contexts
+            .iter()
+            .any(|held| held.app == app && held.recorded && held.number > number);
+        state.contexts.retain(|held| {
+            held.app != app
+                || if newer {
+                    held.number != number
+                } else {
+                    held.number >= number || !held.recorded
+                }
+        });
+        if let Some(held) = state.contexts.iter_mut().find(|held| held.number == number) {
+            held.recorded = true;
+        }
+    }
+
+    /// Let go of the pending context `number`: its update could not be
+    /// recorded, so it was never given.
+    pub fn discard_context(&self, number: u64) {
+        let mut state = self.state.lock().expect("app reviews");
+        state
+            .contexts
+            .retain(|held| held.recorded || held.number != number);
+    }
+
+    /// `app` gives the model nothing now, in the opening `epoch`: what it
+    /// held is let go of, and any update of its still pending with it — this
+    /// came after it.
+    pub fn clear_context(&self, epoch: u64, app: &McpAppRef) -> Result<(), ReviewRefusal> {
+        let mut state = self.state.lock().expect("app reviews");
+        state.live(epoch, app)?;
+        state.contexts.retain(|held| &held.app != app);
+        Ok(())
+    }
+
+    /// The contexts held now, in the order they were given, for a message
+    /// to carry: those on record, never one pending.
+    pub fn held_contexts(&self) -> HeldContexts {
+        let state = self.state.lock().expect("app reviews");
+        let held = state.contexts.iter().filter(|held| held.recorded);
+        HeldContexts {
+            contexts: held.clone().map(|held| held.context.clone()).collect(),
+            taken: held.map(|held| (held.app.clone(), held.number)).collect(),
+        }
+    }
+
+    /// A message carried `taken`: let go of each that is still held as it
+    /// was read. One replaced since is newer than what was sent, and is
+    /// kept for the next message.
+    pub fn took(&self, taken: &HeldContexts) {
+        let mut state = self.state.lock().expect("app reviews");
+        state.contexts.retain(|held| {
+            !taken
+                .taken
+                .iter()
+                .any(|(app, number)| &held.app == app && held.number == *number)
+        });
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -201,20 +396,23 @@ impl AppReviews {
     }
 
     /// Open the review `permission_id` ([`new_review_id`], taken first so
-    /// that its request is on record before it is shown) of `app`'s call to
-    /// `tool` on `server` with `arguments_json`; it stands, in the view,
-    /// until it ends.
+    /// that its request is on record before it is shown) of what `app`
+    /// asks: to run `tool` on `server` with `arguments_json`, or — `tool`
+    /// its own — to send the message `arguments_json` shows. It stands, in
+    /// the view, until it ends.
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         self: &Arc<Self>,
         epoch: u64,
         permission_id: String,
+        ask: ReviewAsk,
         app: &McpAppRef,
         server: &str,
         tool: &str,
         arguments_json: &str,
     ) -> Result<Waiting, ReviewRefusal> {
         let (end, ended) = oneshot::channel();
-        let review = review_of(&permission_id, app, server, tool, arguments_json);
+        let review = review_of(&permission_id, ask, app, server, tool, arguments_json);
         let bytes = encoded_len(&review);
         if bytes > MAX_APP_REVIEW_BYTES {
             return Err(ReviewRefusal::TooLarge);
@@ -339,6 +537,8 @@ impl AppReviews {
                 .filter(|(_, open)| &open.app == app)
                 .map(|(key, _)| *key)
                 .collect();
+            state.consented.retain(|consented| consented != app);
+            state.contexts.retain(|held| &held.app != app);
             release();
             keys.into_iter()
                 .filter_map(|key| state.remove(key))
@@ -365,27 +565,36 @@ impl AppReviews {
             state.ended = true;
             release();
             state.bytes = 0;
+            state.let_go_of_the_opening();
             std::mem::take(&mut state.pending)
         };
         withdraw_ended(ended, by);
     }
 }
 
-/// Whether the review of `app`'s call to `tool` on `server` with
-/// `arguments_json` fits within [`MAX_APP_REVIEW_BYTES`] on its own.
+/// Whether the review of what `app` asks ([`AppReviews::open`]) fits within
+/// [`MAX_APP_REVIEW_BYTES`] on its own.
 pub fn fits(
     permission_id: &str,
+    ask: ReviewAsk,
     app: &McpAppRef,
     server: &str,
     tool: &str,
     arguments_json: &str,
 ) -> bool {
-    encoded_len(&review_of(permission_id, app, server, tool, arguments_json))
-        <= MAX_APP_REVIEW_BYTES
+    encoded_len(&review_of(
+        permission_id,
+        ask,
+        app,
+        server,
+        tool,
+        arguments_json,
+    )) <= MAX_APP_REVIEW_BYTES
 }
 
 fn review_of(
     permission_id: &str,
+    ask: ReviewAsk,
     app: &McpAppRef,
     server: &str,
     tool: &str,
@@ -395,7 +604,12 @@ fn review_of(
         execution_id: app.execution_id.clone(),
         permission_id: permission_id.to_owned(),
         tool_id: app.tool_id.clone(),
-        title: format!("An app asks to run {tool} on {server}"),
+        title: match ask {
+            ReviewAsk::RunTool => format!("An app asks to run {tool} on {server}"),
+            ReviewAsk::SendMessage => {
+                format!("The {tool} app on {server} asks to send a message as you")
+            }
+        },
         tool_name: tool.to_owned(),
         arguments_json: arguments_json.to_owned(),
         options: OPTIONS

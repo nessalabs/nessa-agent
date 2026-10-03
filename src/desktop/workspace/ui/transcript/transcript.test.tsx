@@ -72,8 +72,8 @@ const conversation: TranscriptValue = {
   approval: { id: "ap", command: "cargo test", reason: "Runs the tests." },
 }
 
-async function shown(source = fakeSource()) {
-  source.transcripts.set("b", conversation)
+async function shown(source = fakeSource(), transcript = conversation) {
+  source.transcripts.set("b", transcript)
   const store = testStore(source)
   await store.dispatch(loadWorkspace())
   store.dispatch(openSession({ sessionId: "b" }))
@@ -133,6 +133,33 @@ describe("a transcript", () => {
     expect(
       [...(failed?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
     ).toEqual(["Send Again", "Discard"])
+  })
+
+  it("says above a message of the person's which app wrote it, and nothing above their own", async () => {
+    await shown()
+    expect(host.querySelector(".workspace-message-author")).toBeNull()
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    const written: TranscriptValue = {
+      ...conversation,
+      revision: 2,
+      messages: [
+        ...conversation.messages,
+        {
+          id: "m3",
+          role: "user",
+          at: 3,
+          parts: [{ kind: "text", text: "Plot May" }],
+          app: { server: "charts", tool: "show" },
+        },
+      ],
+    }
+    await shown(fakeSource(), written)
+    const authors = [...host.querySelectorAll(".workspace-message-author")]
+    expect(authors.map((author) => author.textContent)).toEqual(["Sent by the show app"])
+    expect(authors[0]?.closest(".workspace-message")?.getAttribute("data-role")).toBe(
+      "user",
+    )
   })
 
   it("keeps messages sent while the conversation was read in place when it loads", async () => {

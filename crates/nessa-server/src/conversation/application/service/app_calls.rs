@@ -12,7 +12,8 @@
 //! conversation's [`AppReviews`](super::super::app_reviews::AppReviews) lock
 //! decides it.
 use super::super::app_reviews::{
-    new_review_id, AppReviews, ReviewAnswerer, ReviewEnd, ReviewRefusal, APP_REVIEW_DEADLINE,
+    new_review_id, AppReviews, ContextRefusal, ReviewAnswerer, ReviewAsk, ReviewEnd, ReviewRefusal,
+    APP_REVIEW_DEADLINE,
 };
 use super::super::mcp_apps::{
     HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppCode, McpAppError,
@@ -22,13 +23,22 @@ use super::super::mcp_apps::{
 use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
 use super::super::session_key::conversation_session;
 use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
-use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
+use super::super::SubmittedMessage;
+use super::{
+    ConversationCaller, ConversationError, ConversationService, LiveConversation, SubmissionMode,
+};
 use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
 };
-use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
+use nessa_sdk::domain::agent_execution::{
+    executions::ExecutionId,
+    prompts::{AppContext, McpAppSource, MessageSender},
+    sessions::SessionId,
+    tools::{McpTool, ToolCallId},
+    ExecutionError,
+};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResourceUri};
 use serde_json::Value;
@@ -61,6 +71,26 @@ pub struct McpAppRead {
     pub app: McpAppRef,
     pub server: String,
     pub uri: String,
+}
+
+/// An app's `mcp.sendMessage` (`ui/message`): text for its conversation, as
+/// the person.
+#[derive(Clone, Debug)]
+pub struct McpAppMessage {
+    pub app: McpAppRef,
+    pub server: String,
+    pub text: String,
+}
+
+/// An app's `mcp.updateModelContext` (`ui/update-model-context`): what it
+/// gives the model now. Neither part is no context: what it held is cleared.
+#[derive(Clone, Debug)]
+pub struct McpAppModelContext {
+    pub app: McpAppRef,
+    pub server: String,
+    pub text: Option<String>,
+    /// One JSON object, encoded.
+    pub structured_content_json: Option<String>,
 }
 
 /// A resource read for an app: what its bytes are, and the ticket that
@@ -128,6 +158,47 @@ impl ConversationService {
         tokio::spawn(async move {
             let _running = running;
             service.app_resource_read(id, caller, read).await
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+    }
+
+    /// Send `message.text` into the conversation as the person's turn,
+    /// written by the app: the identity of the turn it became. The first of
+    /// a mount's messages in an opening waits for the person to allow it;
+    /// one while a turn runs or input waits is refused `turn_running`.
+    pub async fn send_app_message(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        message: McpAppMessage,
+    ) -> Result<String, ConversationError> {
+        let running = self.app_call_permit()?;
+        // Dropped with this future: the caller went.
+        let (_present, gone) = oneshot::channel::<()>();
+        let service = self.clone();
+        tokio::spawn(async move {
+            let _running = running;
+            service.app_message(id, caller, message, gone).await
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+    }
+
+    /// Hold what the app gives the model now, in place of what it gave
+    /// before, until the conversation's next message carries it; or clear
+    /// it.
+    pub async fn update_app_context(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        update: McpAppModelContext,
+    ) -> Result<(), ConversationError> {
+        let running = self.app_call_permit()?;
+        let service = self.clone();
+        tokio::spawn(async move {
+            let _running = running;
+            service.app_context(id, caller, update).await
         })
         .await
         .map_err(|_| ConversationError::Unavailable)?
@@ -263,8 +334,14 @@ impl ConversationService {
                 let shown = arguments
                     .as_ref()
                     .map_or_else(|| "{}".to_owned(), Value::to_string);
-                self.approved(&opening, &step, &call, &shown, &mut gone)
-                    .await?;
+                let asked = Asked {
+                    ask: ReviewAsk::RunTool,
+                    app: &call.app,
+                    server: &call.server,
+                    tool: &call.tool,
+                    shown: &shown,
+                };
+                self.approved(&opening, &step, asked, &mut gone).await?;
                 // Allowed: the tool must still be what the person allowed.
                 match admitted(&ports, &session, facts.as_ref(), &call, arguments_text) {
                     Ok(AppCallAdmission::Approve) => {}
@@ -320,17 +397,17 @@ impl ConversationService {
         &self,
         opening: &Opening,
         step: &Step,
-        call: &McpAppCall,
-        arguments_json: &str,
+        asked: Asked<'_>,
         gone: &mut oneshot::Receiver<()>,
     ) -> Result<(), ConversationError> {
         let permission_id = new_review_id();
         if !super::super::app_reviews::fits(
             &permission_id,
-            &call.app,
-            &call.server,
-            &call.tool,
-            arguments_json,
+            asked.ask,
+            asked.app,
+            asked.server,
+            asked.tool,
+            asked.shown,
         ) {
             return Err(step.refuse(McpAppError::RequestTooLarge).await);
         }
@@ -344,10 +421,11 @@ impl ConversationService {
         let waiting = match opening.apps.open(
             opening.epoch,
             permission_id.clone(),
-            &call.app,
-            &call.server,
-            &call.tool,
-            arguments_json,
+            asked.ask,
+            asked.app,
+            asked.server,
+            asked.tool,
+            asked.shown,
         ) {
             Ok(waiting) => waiting,
             Err(refusal) => {
@@ -415,6 +493,214 @@ impl ConversationService {
         };
         step.record(phase, Some(initiator)).await?;
         error.map_or(Ok(()), |error| Err(ConversationError::McpApp(error)))
+    }
+
+    async fn app_message(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        message: McpAppMessage,
+        mut gone: oneshot::Receiver<()>,
+    ) -> Result<String, ConversationError> {
+        let (opening, seen, ports) = self.app_in_conversation(&id, &caller, &message.app).await?;
+        let step = Step::new(
+            &ports,
+            &id,
+            &caller,
+            &message.app,
+            McpAppAsk::SendMessage {
+                server: message.server.clone(),
+            },
+        );
+        if let Err(refusal) = admit_app(seen.as_ref().map(|(facts, _)| facts), &message.server) {
+            return Err(step.refuse(refusal.into()).await);
+        }
+        let Some((_, tool)) = seen else {
+            return Err(step.refuse(McpAppError::AppUnknown).await);
+        };
+        if message.text.trim().is_empty() {
+            return Err(step
+                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .await);
+        }
+        if message.text.len() > self.inner.limits.max_input_bytes {
+            return Err(step.refuse(McpAppError::RequestTooLarge).await);
+        }
+        let Ok(sender) = app_source(&message.app, tool) else {
+            return Err(step
+                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .await);
+        };
+        match opening.apps.consented(opening.epoch, &message.app) {
+            Err(_) => return Err(step.refuse_by_system(McpAppError::Cancelled).await),
+            Ok(true) => step.record(McpAppAuditPhase::Admitted, None).await?,
+            Ok(false) => {
+                // What the person is shown is what is sent.
+                let shown = serde_json::json!({ "text": message.text }).to_string();
+                let asked = Asked {
+                    ask: ReviewAsk::SendMessage,
+                    app: &message.app,
+                    server: &message.server,
+                    tool: sender.tool().tool(),
+                    shown: &shown,
+                };
+                self.approved(&opening, &step, asked, &mut gone).await?;
+                // Allowed: this mount does not ask again in this opening —
+                // unless it was released, or the opening ended, meanwhile.
+                if opening.apps.consent(opening.epoch, &message.app).is_err() {
+                    return Err(step.refuse_by_system(McpAppError::Cancelled).await);
+                }
+            }
+        }
+        // Once more just before it is handed to the conversation: see
+        // `app_tool_call`.
+        if opening.admit(&message.app).is_err() {
+            return Err(step.refuse_by_system(McpAppError::Cancelled).await);
+        }
+        let execution_id = Uuid::new_v4().to_string();
+        let submitted = self
+            .submit_as(
+                id,
+                caller,
+                execution_id.clone(),
+                SubmittedMessage {
+                    text: message.text,
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                SubmissionMode::Queue,
+                MessageSender::App(sender),
+            )
+            .await;
+        let sent = McpAppAuditPhase::MessageSent {
+            execution_id: execution_id.clone(),
+        };
+        match submitted {
+            Ok(_) => {
+                step.record(sent, None).await?;
+                Ok(execution_id)
+            }
+            Err(ConversationError::TurnRunning) => Err(step
+                .refuse_as(McpAppCode::TurnRunning, ConversationError::TurnRunning)
+                .await),
+            // The agent has it; what failed is its evidence, which the
+            // answer says.
+            Err(error @ ConversationError::AdmissionEvidence { .. }) => {
+                Err(step.ended(sent, None, error).await)
+            }
+            Err(error) => Err(step
+                .ended(
+                    McpAppAuditPhase::MessageNotSent { execution_id },
+                    None,
+                    error,
+                )
+                .await),
+        }
+    }
+
+    async fn app_context(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        update: McpAppModelContext,
+    ) -> Result<(), ConversationError> {
+        let (opening, seen, ports) = self.app_in_conversation(&id, &caller, &update.app).await?;
+        let step = Step::new(
+            &ports,
+            &id,
+            &caller,
+            &update.app,
+            McpAppAsk::UpdateModelContext {
+                server: update.server.clone(),
+            },
+        );
+        if let Err(refusal) = admit_app(seen.as_ref().map(|(facts, _)| facts), &update.server) {
+            return Err(step.refuse(refusal.into()).await);
+        }
+        let Some((_, tool)) = seen else {
+            return Err(step.refuse(McpAppError::AppUnknown).await);
+        };
+        let text = update.text.filter(|text| !text.is_empty());
+        // Sent as parsed: re-encoded, a duplicate key's last value kept, as
+        // a tool's arguments are.
+        let structured = match update
+            .structured_content_json
+            .as_deref()
+            .map(serde_json::from_str::<Value>)
+        {
+            None => None,
+            Some(Ok(value @ Value::Object(_))) => Some(value.to_string()),
+            Some(_) => {
+                return Err(step
+                    .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                    .await)
+            }
+        };
+        let Ok(source) = app_source(&update.app, tool) else {
+            return Err(step
+                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .await);
+        };
+        let context = match (text, structured) {
+            (None, None) => None,
+            (text, structured) => {
+                match AppContext::new(source, text, structured) {
+                    Ok(context) => Some(context),
+                    // The bound is the context's own, on what is held and
+                    // sent: the structured content as re-encoded.
+                    Err(ExecutionError::ValueTooLong { .. }) => {
+                        return Err(step.refuse(McpAppError::RequestTooLarge).await)
+                    }
+                    Err(_) => {
+                        return Err(step
+                            .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                            .await)
+                    }
+                }
+            }
+        };
+        let Some(context) = context else {
+            if opening.admit(&update.app).is_err() {
+                return Err(step.refuse_by_system(McpAppError::Cancelled).await);
+            }
+            step.record(McpAppAuditPhase::ContextCleared, None).await?;
+            // A release or an end since let go of it already.
+            let _ = opening.apps.clear_context(opening.epoch, &update.app);
+            return Ok(());
+        };
+        let bytes =
+            context.text().map_or(0, str::len) + context.structured_content().map_or(0, str::len);
+        // Held pending, its mount's place taken, under the lock its release
+        // and the opening's end take; no message sees it until its update
+        // is on record.
+        let number = match opening
+            .apps
+            .stage_context(opening.epoch, &update.app, context)
+        {
+            Ok(number) => number,
+            Err(ContextRefusal::Full) => {
+                return Err(step
+                    .refuse_as(
+                        McpAppCode::TemporarilyUnavailable,
+                        ConversationError::Unavailable,
+                    )
+                    .await)
+            }
+            Err(ContextRefusal::Gone(_)) => {
+                return Err(step.refuse_by_system(McpAppError::Cancelled).await)
+            }
+        };
+        if let Err(error) = step
+            .record(McpAppAuditPhase::ContextHeld { bytes }, None)
+            .await
+        {
+            opening.apps.discard_context(number);
+            return Err(error);
+        }
+        // Held from here. A release or an end since let go of it: they came
+        // after it, as they would have a moment later.
+        opening.apps.recorded_context(number);
+        Ok(())
     }
 
     async fn app_resource_read(
@@ -580,6 +866,18 @@ impl ConversationService {
         caller: &ConversationCaller,
         app: &McpAppRef,
     ) -> Result<(Opening, Option<AppFacts>, McpAppPorts), ConversationError> {
+        let (opening, facts, ports) = self.app_in_conversation(id, caller, app).await?;
+        Ok((opening, facts.map(|(facts, _)| facts), ports))
+    }
+
+    /// [`Self::app_opening`], with the MCP tool the app's tool call was to,
+    /// for what speaks in the conversation as the app.
+    async fn app_in_conversation(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        app: &McpAppRef,
+    ) -> Result<(Opening, Option<(AppFacts, McpTool)>, McpAppPorts), ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         let live = self.resolve(id, caller).await?;
@@ -598,13 +896,14 @@ impl ConversationService {
     }
 
     /// What the conversation's view says of the tool call `app` names as
-    /// itself: its MCP server, and whether its tool declared a UI.
+    /// itself: its MCP server, and whether its tool declared a UI; and the
+    /// MCP tool it was to.
     async fn app_facts(
         &self,
         live: &LiveConversation,
         app: &McpAppRef,
         session: &SessionId,
-    ) -> Option<AppFacts> {
+    ) -> Option<(AppFacts, McpTool)> {
         let projection = live.projection.lock().await;
         let tool =
             projection.view.tools.iter().find(|tool| {
@@ -612,11 +911,21 @@ impl ConversationService {
             })?;
         let mcp = tool.mcp.as_ref()?;
         let call = McpTool::new(mcp.server.as_str(), mcp.tool.as_str()).ok()?;
-        Some(AppFacts {
+        let facts = AppFacts {
             server: mcp.server.clone(),
             has_ui: self.inner.tool_uis.resource_uri(session, &call).is_some(),
-        })
+        };
+        Some((facts, call))
     }
+}
+
+/// What a review asks the person, and what it shows them.
+struct Asked<'a> {
+    ask: ReviewAsk,
+    app: &'a McpAppRef,
+    server: &'a str,
+    tool: &'a str,
+    shown: &'a str,
 }
 
 /// What an app call keeps of the conversation it is in: its apps, and the
@@ -631,6 +940,16 @@ impl Opening {
     fn admit(&self, app: &McpAppRef) -> Result<(), ReviewRefusal> {
         self.apps.admit(self.epoch, app)
     }
+}
+
+/// The app `app` names, as the conversation's transcript keeps it: its tool
+/// call, and the MCP tool that call was to.
+fn app_source(app: &McpAppRef, tool: McpTool) -> Result<McpAppSource, ExecutionError> {
+    McpAppSource::new(
+        ExecutionId::new(app.execution_id.as_str())?,
+        ToolCallId::new(app.tool_id.as_str())?,
+        tool,
+    )
 }
 
 /// The policy's answer for `call` as the session lists its tool now.
@@ -875,3 +1194,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 #[path = "../../../../tests/conversation/app_calls.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/app_messages.rs"]
+mod message_tests;

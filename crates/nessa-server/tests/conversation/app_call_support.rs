@@ -1,18 +1,21 @@
 //! Substitutes for what an MCP App's calls go through — the conversation's
 //! MCP session, the audit, the ticket store — and a conversation whose one
 //! turn called a tool with a UI, for the service's tests and the socket's.
+use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     conversation_session, ConversationCaller, ConversationDependencies, ConversationError,
     ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationPermission,
     ConversationPermissionOrigin, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppPorts,
-    McpAppRef, McpApps, McpToolUis, ProviderSessionErasers, RequestedConversation, ResourceTickets,
-    SubmissionMode, SubmittedMessage, TicketEnd, TicketRefusal,
+    McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppMessage,
+    McpAppModelContext, McpAppPorts, McpAppRef, McpApps, McpToolUis, ProviderSessionErasers,
+    RequestedConversation, ResourceTickets, SubmissionMode, SubmittedMessage, TicketEnd,
+    TicketRefusal,
 };
+use crate::conversation::application::{ConversationAgent, ConversationAgents};
 use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
-    only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
-    Provider, ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
+    AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries, Provider,
+    ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
     DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -35,6 +38,27 @@ pub(crate) const UI_TOOL: &str = "show";
 pub(crate) const URI: &str = "ui://charts/show.html";
 pub(crate) const INSTANCE: &str = "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c";
 pub(crate) const OTHER_INSTANCE: &str = "0d6c3e7a-1b2c-4d5e-8f90-a1b2c3d4e5f6";
+
+/// The agent's own audit of what it was given: accepting, until told to fail.
+#[derive(Default)]
+pub(crate) struct ExecutionRecords {
+    pub(crate) failing: AtomicBool,
+}
+impl nessa_sdk::application::agent_execution::executions::ExecutionAudit for ExecutionRecords {
+    fn record(
+        &self,
+        _record: nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord,
+    ) -> nessa_sdk::application::agent_execution::agents::AgentFuture<'_, ()> {
+        let failing = self.failing.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if failing {
+                Err(nessa_sdk::application::agent_execution::agents::AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
 
 /// The UI the call `charts/show` declared, for the conversation's session.
 pub(crate) struct Uis(String);
@@ -223,6 +247,12 @@ pub(crate) struct Fixture {
     pub(crate) apps: Arc<Apps>,
     pub(crate) audit: Arc<Audit>,
     pub(crate) tickets: Arc<Tickets>,
+    /// The conversation's agent: what each turn it ran was given.
+    pub(crate) provider: Arc<ProviderFactory>,
+    /// The conversation's own record.
+    pub(crate) repository: Arc<MemoryRepository>,
+    /// The agent's audit of what it was given.
+    pub(crate) execution_audit: Arc<ExecutionRecords>,
     /// The tool call whose UI the app is.
     pub(crate) execution_id: String,
     pub(crate) tool_id: String,
@@ -261,11 +291,24 @@ impl Fixture {
         let audit = Arc::new(Audit::default());
         let tickets = Arc::new(Tickets::default());
         let repository = Arc::new(MemoryRepository::default());
+        let execution_audit = Arc::new(ExecutionRecords::default());
         let service = ConversationService::with_mcp_apps(
             ConversationDependencies {
-                agents: only(Arc::new(Provider::new(provider))),
+                agents: ConversationAgents::new(
+                    HashMap::from([(
+                        AgentId::Claude,
+                        ConversationAgent {
+                            provider: Arc::new(Provider::new(provider.clone())),
+                            execution_audit: execution_audit.clone(),
+                            reserved_output_tokens: 4096,
+                            readiness: None,
+                        },
+                    )]),
+                    AgentId::Claude,
+                )
+                .unwrap(),
                 storage: Arc::new(InMemoryStorage::new()),
-                metadata: repository,
+                metadata: repository.clone(),
                 mode_audit: Arc::new(RecordingModeAudit::default()),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -344,7 +387,120 @@ impl Fixture {
             apps,
             audit,
             tickets,
+            provider,
+            repository,
+            execution_audit,
         }
+    }
+
+    /// The app at the mount `instance` sends `text` into the conversation.
+    pub(crate) async fn send_message(
+        &self,
+        instance: &str,
+        text: &str,
+    ) -> Result<String, ConversationError> {
+        self.service
+            .send_app_message(
+                self.id.clone(),
+                self.caller("app-message"),
+                McpAppMessage {
+                    app: self.app(instance),
+                    server: SERVER.into(),
+                    text: text.into(),
+                },
+            )
+            .await
+    }
+
+    /// The app at the mount `instance` gives the model `text` and
+    /// `structured` content.
+    pub(crate) async fn update_context(
+        &self,
+        instance: &str,
+        text: Option<&str>,
+        structured: Option<&str>,
+    ) -> Result<(), ConversationError> {
+        self.service
+            .update_app_context(
+                self.id.clone(),
+                self.caller("app-context"),
+                McpAppModelContext {
+                    app: self.app(instance),
+                    server: SERVER.into(),
+                    text: text.map(str::to_owned),
+                    structured_content_json: structured.map(str::to_owned),
+                },
+            )
+            .await
+    }
+
+    /// The person sends `text`, as `execution`.
+    pub(crate) async fn person_sends(&self, execution: &str, text: &str) {
+        self.service
+            .submit(
+                self.id.clone(),
+                self.caller(execution),
+                execution.into(),
+                SubmittedMessage {
+                    text: text.into(),
+                    ..SubmittedMessage::default()
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+    }
+
+    /// The message the agent was given as `execution`, once it was.
+    pub(crate) async fn given(
+        &self,
+        execution: &str,
+    ) -> nessa_sdk::domain::agent_execution::prompts::UserMessage {
+        let executions = || self.provider.executions.lock().unwrap().clone();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(at) = executions().iter().position(|id| id == execution) {
+                    break self.provider.messages.lock().unwrap()[at].clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The app's message started in the background, with the review it
+    /// waits on once the conversation shows it.
+    pub(crate) async fn held_message(
+        &self,
+        instance: &str,
+        text: &str,
+    ) -> (
+        tokio::task::JoinHandle<Result<String, ConversationError>>,
+        ConversationPermission,
+    ) {
+        let before = self.app_reviews().await.len();
+        let service = self.service.clone();
+        let id = self.id.clone();
+        let caller = self.caller("held-message");
+        let message = McpAppMessage {
+            app: self.app(instance),
+            server: SERVER.into(),
+            text: text.into(),
+        };
+        let task = tokio::spawn(async move { service.send_app_message(id, caller, message).await });
+        let review = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let reviews = self.app_reviews().await;
+                if reviews.len() > before {
+                    break reviews.last().unwrap().clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        (task, review)
     }
 
     /// The owner, acting by `action`.

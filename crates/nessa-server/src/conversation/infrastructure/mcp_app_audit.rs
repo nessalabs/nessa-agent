@@ -212,6 +212,10 @@ fn ask(ask: &McpAppAsk) -> Value {
         McpAppAsk::ReadResource { server, uri } => {
             json!({"kind": "read_resource", "server": server, "uri": uri})
         }
+        McpAppAsk::SendMessage { server } => json!({"kind": "send_message", "server": server}),
+        McpAppAsk::UpdateModelContext { server } => {
+            json!({"kind": "update_model_context", "server": server})
+        }
     }
 }
 
@@ -295,6 +299,14 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
             "ticketDigest": ticket_digest,
             "cause": ticket_end(*cause),
         }),
+        McpAppAuditPhase::MessageSent { execution_id } => {
+            json!({"kind": "message_sent", "executionId": execution_id})
+        }
+        McpAppAuditPhase::MessageNotSent { execution_id } => {
+            json!({"kind": "message_not_sent", "executionId": execution_id})
+        }
+        McpAppAuditPhase::ContextHeld { bytes } => json!({"kind": "context_held", "bytes": bytes}),
+        McpAppAuditPhase::ContextCleared => json!({"kind": "context_cleared"}),
     }
 }
 

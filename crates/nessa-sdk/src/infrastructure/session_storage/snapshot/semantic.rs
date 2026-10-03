@@ -340,7 +340,10 @@ mod tests {
                 ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
                 ReviewDeclineStage,
             },
-            prompts::{ImageReference, PromptText, UserMessage},
+            prompts::{
+                AppContext, ImageReference, McpAppSource, MessageSender, PromptText, UserMessage,
+            },
+            tools::{McpTool, ToolCallId},
         },
         domain::common::value_objects::{ImageMediaType, Sha256Digest},
     };
@@ -543,6 +546,124 @@ mod tests {
                 "{field}"
             );
         }
+    }
+
+    #[test]
+    fn semantic_admission_restores_who_wrote_it_and_what_apps_gave_with_it() {
+        let app = |tool_id: &str| {
+            McpAppSource::new(
+                ExecutionId::new("turn-0").unwrap(),
+                ToolCallId::new(tool_id).unwrap(),
+                McpTool::new("charts", "plot").unwrap(),
+            )
+            .unwrap()
+        };
+        let message = UserMessage::text_only(PromptText::new("plot May").unwrap())
+            .sent_by(MessageSender::App(app("call-1")))
+            .with_app_context(vec![
+                AppContext::new(app("call-1"), Some("zoomed".into()), None).unwrap(),
+                AppContext::new(app("call-2"), None, Some(r#"{"month":5}"#.into())).unwrap(),
+            ])
+            .unwrap();
+        let record = InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new("one").unwrap(),
+                user_message: message,
+                estimated_input_tokens: 7,
+                reserved_output_tokens: 8,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        };
+        let bytes = encode_change(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        assert!(matches!(
+            decode_change(&bytes, &ProviderContext::Absent).unwrap(),
+            SessionChange::InputAccepted(next) if *next == record
+        ));
+        // Each part is rebuilt through the domain: what it would refuse is a
+        // corrupt record, not a message the agent is handed.
+        let valid: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for (path, replacement) in [
+            (
+                &["user_app", "server"][..],
+                serde_json::Value::from("two words"),
+            ),
+            (&["user_app", "tool_id"][..], serde_json::Value::from(" ")),
+            (&["user_app", "extra"][..], serde_json::Value::from("x")),
+            (
+                &["user_app_context", "1", "structured_content"][..],
+                "[5]".into(),
+            ),
+            (
+                &["user_app_context", "0", "text"][..],
+                serde_json::Value::Null,
+            ),
+            (
+                &["user_app_context", "0", "text"][..],
+                "x".repeat(AppContext::MAX_BYTES + 1).into(),
+            ),
+        ] {
+            let mut invalid = valid.clone();
+            let mut at = &mut invalid["InputAccepted"]["metadata"];
+            for key in path {
+                at = match key.parse::<usize>() {
+                    Ok(index) => &mut at[index],
+                    Err(_) => &mut at[*key],
+                };
+            }
+            *at = replacement;
+            assert!(
+                matches!(
+                    decode_change(
+                        &serde_json::to_vec(&invalid).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{path:?}"
+            );
+        }
+        // Five contexts are refused before a fifth is built.
+        let mut five = valid.clone();
+        let contexts = five["InputAccepted"]["metadata"]["user_app_context"]
+            .as_array_mut()
+            .unwrap();
+        let first = contexts[0].clone();
+        contexts.extend([first.clone(), first.clone(), first]);
+        assert!(matches!(
+            decode_change(
+                &serde_json::to_vec(&five).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        // A record from before apps could write or give context: the person
+        // wrote it, and it carries none.
+        let mut older = valid;
+        let metadata = older["InputAccepted"]["metadata"].as_object_mut().unwrap();
+        metadata.remove("user_app");
+        metadata.remove("user_app_context");
+        let SessionChange::InputAccepted(restored) = decode_change(
+            &serde_json::to_vec(&older).unwrap(),
+            &ProviderContext::Absent,
+        )
+        .unwrap() else {
+            panic!("an admission");
+        };
+        assert_eq!(
+            restored.request.user_message.sender(),
+            &MessageSender::Person
+        );
+        assert!(restored.request.user_message.app_context().is_empty());
     }
 
     #[test]

@@ -11,6 +11,7 @@
  * in is the adapter's best word for it (`modelFor`).
  */
 import type {
+  ConversationMessageApp,
   ConversationPermission,
   ConversationSummary,
   ConversationTool,
@@ -21,6 +22,7 @@ import { decodeId, encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
   Message,
+  MessageApp,
   Part,
   StepKind,
   Transcript,
@@ -177,6 +179,11 @@ function stepKind(kind: ConversationTool["kind"]): StepKind {
  * (`gatewayToolWidget`). Thoughts are not shown. Inputs still waiting follow,
  * so a message the window sent is found as soon as the gateway holds it.
  */
+/** The app that wrote a turn, as a message carries it; nothing for the person's own. */
+function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp } {
+  return app ? { app: { server: app.server, tool: app.tool } } : {}
+}
+
 export function transcriptFrom(
   view: ConversationView,
   revision: number,
@@ -194,6 +201,7 @@ export function transcriptFrom(
       role: "user",
       at: seen(input),
       parts: [{ kind: "text", text: turn.userText }],
+      ...writtenBy(turn.app),
     })
     const parts: Part[] = []
     // The provider message the last text part came from, while text is last.
@@ -243,6 +251,7 @@ export function transcriptFrom(
       role: "user",
       at: seen(input),
       parts: [{ kind: "text", text: waiting.text }],
+      ...writtenBy(waiting.app),
     })
   }
   // What runs is the tool and its exact input, which the gateway offers a

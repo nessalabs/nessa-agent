@@ -57,7 +57,10 @@ export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
 export { ClockProvider } from "./adapters/dom/clock"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
-export { inMemorySource } from "./adapters/in-memory/in-memory-source"
+export {
+  inMemorySource,
+  type InMemorySource,
+} from "./adapters/in-memory/in-memory-source"
 export { gatewaySource, type GatewayClient } from "./adapters/gateway/gateway-source"
 export { sampleAppSession, sampleWidgetSession } from "./adapters/in-memory/sample-labs"
 export { workspaceEffects } from "./adapters/store/effects"

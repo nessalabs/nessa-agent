@@ -7,7 +7,9 @@
  * What it does, by `data-fixture` control: `call-allowed` calls a tool the
  * server lets apps call, `call-hidden` one it does not; `fetch` asks the
  * network for a page no CSP of its declares; `fullscreen` asks for the
- * fullscreen mode; `close` asks the host to tear it down, and it answers the
+ * fullscreen mode; `message` sends the conversation a message as the app
+ * (`ui/message`) and `context` gives the model context
+ * (`ui/update-model-context`); `close` asks the host to tear it down, and it answers the
  * teardown a moment later, as an app saving its work would; `navigate`,
  * `refresh`, `rewrite` and `forge` try what its sandbox must refuse. What it heard is
  * in `data-fixture-*` attributes on its body.
@@ -34,6 +36,8 @@ export const fixtureAppHtml = `<!doctype html>
   <button data-fixture="call-hidden">Call hidden tool</button>
   <button data-fixture="fetch">Fetch</button>
   <button data-fixture="fullscreen">Fullscreen</button>
+  <button data-fixture="message">Send message</button>
+  <button data-fixture="context">Give context</button>
   <button data-fixture="close">Close</button>
   <button data-fixture="navigate">Navigate away</button>
   <button data-fixture="refresh">Refresh away</button>
@@ -45,6 +49,8 @@ export const fixtureAppHtml = `<!doctype html>
 <output id="call"></output>
 <output id="fetch"></output>
 <output id="mode"></output>
+<output id="message"></output>
+<output id="context"></output>
 <script>
 (function () {
   var parentWindow = window.parent;
@@ -135,6 +141,16 @@ export const fixtureAppHtml = `<!doctype html>
   });
   on("fullscreen", function () {
     ask("ui/request-display-mode", { mode: "fullscreen" }).then(function (m) { show("mode", outcome(m)); });
+  });
+  on("message", function () {
+    ask("ui/message", { role: "user", content: [{ type: "text", text: "Plot May next to April" }] })
+      .then(function (m) { show("message", outcome(m)); });
+  });
+  on("context", function () {
+    ask("ui/update-model-context", {
+      content: [{ type: "text", text: "Showing April" }],
+      structuredContent: { month: 4 }
+    }).then(function (m) { show("context", outcome(m)); });
   });
   on("close", function () { tell("ui/notifications/request-teardown", {}); });
   // What an app might try past its policy: leave its frame for a page with

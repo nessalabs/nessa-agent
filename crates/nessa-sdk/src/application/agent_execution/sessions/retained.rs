@@ -7,7 +7,10 @@ use crate::{
     application::agent_execution::{
         agents::AgentError, executions::ExecutionEvent, permissions::ActionContext,
     },
-    domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, QueueMutation},
+    domain::agent_execution::{
+        executions::{ExecutionId, ExecutionOutcome, QueueMutation},
+        prompts::{AppContext, MessageSender},
+    },
 };
 use std::{collections::HashMap, mem::size_of};
 
@@ -87,6 +90,18 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
                 .files()
                 .iter()
                 .map(|file| file.path().len())
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(match message.sender() {
+            MessageSender::Person => 0,
+            MessageSender::App(app) => app.payload_bytes(),
+        })
+        .saturating_add(std::mem::size_of_val(message.app_context()))
+        .saturating_add(
+            message
+                .app_context()
+                .iter()
+                .map(AppContext::payload_bytes)
                 .fold(0usize, usize::saturating_add),
         );
     let events = record

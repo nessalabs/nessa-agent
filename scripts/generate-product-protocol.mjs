@@ -245,6 +245,9 @@ const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties
 const mcpResource = schema.$defs.McpReadResourceResult.properties
+const mcpMessage = schema.$defs.McpSendMessageParams.properties
+const mcpContext = schema.$defs.McpUpdateModelContextParams.properties
+const messageApp = schema.$defs.ConversationMessageApp.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const catalogueDecimalFields = [
@@ -341,6 +344,10 @@ const bounds = {
     mcpCall.server["x-utf8MaxBytes"],
     mcpCall.tool["x-utf8MaxBytes"],
     mcpRead.server["x-utf8MaxBytes"],
+    mcpMessage.server["x-utf8MaxBytes"],
+    mcpContext.server["x-utf8MaxBytes"],
+    messageApp.server["x-utf8MaxBytes"],
+    messageApp.tool["x-utf8MaxBytes"],
   ]),
   maxUiResourceUriBytes:
     schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
@@ -352,6 +359,16 @@ const bounds = {
   ]),
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
+  // An app's message is held to what the person's own may take.
+  maxMcpMessageBytes: agreeing("app message and sent message bytes", [
+    mcpMessage.text["x-utf8MaxBytes"],
+    schema.$defs.ConversationSendParams.properties.text["x-utf8MaxBytes"],
+  ]),
+  // An app's context: its text and its structured content, together.
+  maxMcpContextBytes: agreeing("app context bytes", [
+    mcpContext.text["x-utf8MaxBytes"],
+    mcpContext.structuredContentJson["x-utf8MaxBytes"],
+  ]),
   maxMcpResourceUriBytes: agreeing("app resource URI bytes", [
     mcpRead.uri["x-utf8MaxBytes"],
     mcpResource.uri["x-utf8MaxBytes"],

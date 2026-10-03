@@ -48,6 +48,17 @@ export interface Message {
   readonly at: number
   readonly parts: readonly Part[]
   readonly delivery?: Delivery
+  /**
+   * The MCP App that wrote a message of the person's on their behalf
+   * (`ui/message`); absent when the person wrote it.
+   */
+  readonly app?: MessageApp
+}
+
+/** An MCP App, as a message it wrote names it: its server and its tool. */
+export interface MessageApp {
+  readonly server: string
+  readonly tool: string
 }
 
 /** A command the agent asks to run, waiting on the person's answer. */

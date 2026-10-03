@@ -34,7 +34,9 @@
     "conversation.catalogueResolve": "ConversationCatalogueResolveParams",
     "mcp.callTool": "McpCallToolParams",
     "mcp.readResource": "McpReadResourceParams",
-    "mcp.releaseApp": "McpReleaseAppParams"
+    "mcp.releaseApp": "McpReleaseAppParams",
+    "mcp.sendMessage": "McpSendMessageParams",
+    "mcp.updateModelContext": "McpUpdateModelContextParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

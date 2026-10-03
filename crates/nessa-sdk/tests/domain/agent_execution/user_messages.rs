@@ -279,3 +279,99 @@ fn a_user_message_bounds_image_count_and_total_bytes() {
         })
     );
 }
+
+fn app(tool_id: &str) -> McpAppSource {
+    McpAppSource::new(
+        ExecutionId::new("turn-1").unwrap(),
+        ToolCallId::new(tool_id).unwrap(),
+        McpTool::new("charts", "plot").unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_apps_tool_call_identity_is_bounded_as_an_executions_is() {
+    let long = "t".repeat(McpAppSource::MAX_TOOL_ID_BYTES + 1);
+    assert_eq!(
+        McpAppSource::new(
+            ExecutionId::new("turn-1").unwrap(),
+            ToolCallId::new(long).unwrap(),
+            McpTool::new("charts", "plot").unwrap(),
+        ),
+        Err(ExecutionError::ValueTooLong {
+            field: "app tool call ID",
+            max_bytes: McpAppSource::MAX_TOOL_ID_BYTES,
+        })
+    );
+    let exact = "t".repeat(McpAppSource::MAX_TOOL_ID_BYTES);
+    assert_eq!(app(&exact).tool_id().as_str(), exact);
+}
+
+#[test]
+fn an_apps_context_holds_text_or_one_json_object_within_its_bound() {
+    assert_eq!(
+        AppContext::new(app("call-1"), None, None),
+        Err(ExecutionError::EmptyValue("app context"))
+    );
+    // An empty text is none, so it alone is no context.
+    assert_eq!(
+        AppContext::new(app("call-1"), Some(String::new()), None),
+        Err(ExecutionError::EmptyValue("app context"))
+    );
+    let both = AppContext::new(
+        app("call-1"),
+        Some("May".into()),
+        Some(r#" {"month":5}"#.into()),
+    )
+    .unwrap();
+    assert_eq!(both.text(), Some("May"));
+    assert_eq!(both.structured_content(), Some(r#" {"month":5}"#));
+    for not_an_object in ["[1]", "5", "\"x\"", "{", "{} {}", "", "null"] {
+        assert_eq!(
+            AppContext::new(app("call-1"), None, Some(not_an_object.into())),
+            Err(ExecutionError::InvalidStructuredContent),
+            "{not_an_object:?}"
+        );
+    }
+    // The bound is on both parts together, in UTF-8 bytes: exactly at it is
+    // a context, one byte past it is not, multibyte text included.
+    let half = "é".repeat(AppContext::MAX_BYTES / 4);
+    let object = format!(r#"{{"k":"{}"}}"#, "x".repeat(AppContext::MAX_BYTES / 2 - 8));
+    assert_eq!(half.len() + object.len(), AppContext::MAX_BYTES);
+    assert!(AppContext::new(app("call-1"), Some(half.clone()), Some(object.clone())).is_ok());
+    assert_eq!(
+        AppContext::new(app("call-1"), Some(format!("{half}x")), Some(object)),
+        Err(ExecutionError::ValueTooLong {
+            field: "app context",
+            max_bytes: AppContext::MAX_BYTES,
+        })
+    );
+}
+
+#[test]
+fn a_message_is_the_persons_until_said_otherwise_and_carries_at_most_four_contexts() {
+    let message = UserMessage::text_only(PromptText::new("hello").unwrap());
+    assert_eq!(message.sender(), &MessageSender::Person);
+    assert!(message.app_context().is_empty());
+
+    let sent = message.clone().sent_by(MessageSender::App(app("call-1")));
+    assert_eq!(sent.sender(), &MessageSender::App(app("call-1")));
+    // Who wrote it is part of the message: the same words from an app are
+    // another message, so a retry that changed it is a conflict.
+    assert_ne!(sent, message);
+
+    let context = |id: &str| AppContext::new(app(id), Some("ctx".into()), None).unwrap();
+    let four: Vec<_> = ["a", "b", "c", "d"].into_iter().map(context).collect();
+    let carrying = message.clone().with_app_context(four.clone()).unwrap();
+    assert_eq!(carrying.app_context(), four.as_slice());
+    assert_ne!(carrying, message);
+    let mut five = four;
+    five.push(context("e"));
+    assert_eq!(
+        message.with_app_context(five),
+        Err(ExecutionError::TooManyValues {
+            field: "user message app contexts",
+            max: UserMessage::MAX_APP_CONTEXTS,
+        })
+    );
+}

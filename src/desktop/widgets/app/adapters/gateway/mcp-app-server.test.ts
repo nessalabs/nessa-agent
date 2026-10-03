@@ -91,6 +91,13 @@ function fakeApps(overrides: Partial<McpAppsApi> = {}) {
       requestId: "request-1",
       applied: true,
     })),
+    sendMessage: vi.fn<McpAppsApi["sendMessage"]>(async () => ({
+      executionId: "turn",
+    })),
+    updateModelContext: vi.fn<McpAppsApi["updateModelContext"]>(async () => ({
+      requestId: "request-1",
+      applied: true,
+    })),
   }
   return Object.assign(apps, overrides)
 }

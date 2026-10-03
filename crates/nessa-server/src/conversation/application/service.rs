@@ -55,7 +55,7 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
+    prompts::{ImageReference, LinkedFile, MessageSender, PromptText, UserMessage},
     questions::{QuestionChoice, QuestionId},
     sessions::ExecutionSessionId,
 };
@@ -1699,6 +1699,32 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
+        self.submit_as(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            MessageSender::Person,
+        )
+        .await
+    }
+    /// [`Self::submit`], written by `sender`. Every message takes the
+    /// contexts the conversation's apps hold, and carries them to the agent
+    /// ahead of what it says; a message that is refused takes none.
+    ///
+    /// An app's message is refused [`ConversationError::TurnRunning`] while a
+    /// turn runs or input waits, so it never queues behind the person's own
+    /// or fills the queue (`an_apps_message_waits_for_nobody`).
+    pub(super) async fn submit_as(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        sender: MessageSender,
+    ) -> Result<SubmissionReceipt, ConversationError> {
         let service = self.clone();
         supervised(async move {
             let SubmittedMessage {
@@ -1787,17 +1813,36 @@ impl ConversationService {
             // checked when it was first accepted. Asking again would turn a
             // retry of a delivered turn into "not found" once its upload was
             // let go, where the same retry of a text turn succeeds.
-            let known = live
+            let original = live
                 .agent
                 .session_manager()
                 .snapshot()
                 .await
-                .is_some_and(|snapshot| {
+                .and_then(|snapshot| {
                     snapshot
                         .invocations
                         .iter()
-                        .any(|record| record.request.execution_id == execution)
+                        .find(|record| record.request.execution_id == execution)
+                        .map(|record| record.request.user_message.app_context().to_vec())
                 });
+            let known = original.is_some();
+            // Checked under the conversation's submission lock (`_mode`), so
+            // no other submission through this service comes between this
+            // and the enqueue below.
+            if matches!(sender, MessageSender::App(_))
+                && !known
+                && !live.agent.idle_for_approval_change().await
+            {
+                return Err(ConversationError::TurnRunning);
+            }
+            // What apps gave the model goes with the next message, once. A
+            // retry carries what its first attempt took — the agent compares
+            // it with what it has — and takes nothing more.
+            let held = live.app_reviews.held_contexts();
+            let message = message
+                .sent_by(sender)
+                .with_app_context(original.unwrap_or_else(|| held.contexts.clone()))
+                .map_err(|_| ConversationError::InvalidInput)?;
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.
@@ -1899,6 +1944,10 @@ impl ConversationService {
                 }
             };
             let delivery = delivery.map_err(ConversationError::Agent)?;
+            // The agent has it, and what it carries: those contexts are sent.
+            if !known {
+                live.app_reviews.took(&held);
+            }
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -3890,7 +3939,8 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
 
 mod app_calls;
 pub use app_calls::{
-    McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS, MAX_RESOURCE_META_BYTES,
+    McpAppCall, McpAppMessage, McpAppModelContext, McpAppRead, McpAppResource, MAX_APP_CALLS,
+    MAX_RESOURCE_META_BYTES,
 };
 
 #[cfg(test)]
