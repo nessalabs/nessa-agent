@@ -185,6 +185,14 @@ The table's `test` column names required test cases. These are planned enforcers
 | P31 | Real TLS wrong key/proof / PAKE tamper / exporter substitution | Actual cryptographic rejection before claim/product dispatch; forwarding relay succeeds, terminating MITM fails | `native_proof_rejects_mitm` |
 | P32 | Worker cancellation / slow or oversized frames | Ingress/egress/parser/worker permits bounded until physical release; close controls retain capacity | `physical_capacity_retained` |
 | P33 | Restore contradictory evidence / valid counterpart | Same transition replay rejects cause/actor/key/intent/target/stage contradictions without repairing stored bytes | `pairing_history_agrees` |
+| P01 policy refusal | Current valid owner session; manage or proposed-read policy denies, or its authority is unavailable | `AuthorizePairing` retains `Denied` separately from proof invalidity and `Unavailable`; no admission or registry change | `pairing_admission_current_access_policy_revision_and_deadline_neighbors` checks exact typed cases, current-session validity and the original allowed counterpart |
+| P26 active cancellation | Owner cancels Active at millisecond110001; same current command is retried | Original atomic commit retains Cancelled plus Explicit revocation by that owner at second110; current-admission retry preserves the first evidence | `active_cancellation_preserves_original_revocation_and_retry` observes public commands, persisted bytes and reopened terminal record |
+| P33 cancelled actor disagreement | Otherwise-valid canonical revocation uses LocalOperator or an existing different principal | Pairing transition agreement refuses the contradiction without replacing stored bytes | `public_reopen_requires_original_cancellation_actor` restores the exact cancelled original as its accepted counterpart |
+| P33 cancelled time disagreement | Canonical Explicit command/after-state/metadata coherently advance to a different valid second | Pairing transition agreement requires original cancellation milliseconds / 1000 | `public_reopen_requires_original_cancellation_time` rejects coherent changed bytes and reopens the exact original |
+| P33 cancelled cause disagreement | Valid Superseded revocation refers to an actual separately issued credential at that issuance revision | Pairing transition agreement requires Explicit for owner Cancel; independent canonical revocation keeps its original meaning | `public_reopen_requires_original_cancellation_cause`; `cancellation_revocation_matches_original_command` also isolates cause, target, actor and time through public domain values |
+| P26 unpublished cancellation / independent revocation | Cancel before Active, or consume the original canonical credential-revocation event | No published-cancellation revocation is invented; canonical bridge retains its independent original cause and actor | `cancellation_revocation_matches_original_command`, `cancelled_stage_keeps_identity_reserved_after_restart`, `native_key_publication_and_canonical_explicit_revoke_agree` |
+| P01 denial consumption | Typed policy denial reaches existing passive admission or browser invalidation mapping | Passive refusal is Forbidden before source access; browser invalidation has no removal cause | `passive_admission_preserves_unverifiable_authority_failures` and `passive_socket_preserves_retryable_authority_failures` include Denied; `every_automatic_invalidation_retains_its_typed_cause_without_an_initiator` checks the public mapping and a separately retained/reopened journal session, not an enrollment HTTP pipeline |
+| P01 socket admission denial | Current identity or browser-presence authority reports Denied before record/catalogue parameters and source routing; the next read recovers | Socket consumes the same exhaustive ReadRefusal-to-record-wire mapping as record dispatch, preserving Forbidden independently of Unauthorized and Unverifiable | `passive_socket_preserves_retryable_authority_failures` covers the actual five passive methods and recovered response; the first 5a789 FIRST failed with unauthorized instead of forbidden and is retained as historical evidence |
 
 A new ordering goes into this table before its implementation. Source-call counters remain zero for every unapproved/partially staged/refused state. Current per-request authorization retains the existing semantics that already admitted bounded work may finish after later revocation. A successful snapshot decision is not reused for future requests.
 
@@ -1374,7 +1382,10 @@ path. `Registry`, its fields, `persist` and `publish_snapshot` are private.
 
 For each published DevicePairing proof the validator asks the original projection
 for its credential binding. That projection permits Active with an unrevoked
-credential, or formerly Active Terminal with a revoked credential. Consequently,
+credential, or formerly Active Terminal with a revoked credential whose replayed
+transition also passes the domain cancellation/revocation agreement when the owner
+cancelled Active. The canonical external-revocation bridge retains its separate
+original cause/actor/time. Consequently,
 after the verifier's current revocation refusal, its later Active-phase comparison
 is a derived copy. The requested audience, proof mechanism and actual native TLS
 key comparison remain dynamic.

@@ -41,6 +41,11 @@ pub struct AuthorizePairing<'a> {
 impl AuthorizePairing<'_> {
     /// Admit this exact intent for its authenticated owner. This grants no device access.
     /// `gateway` is resolved by composition; a caller-selected resource is not authority.
+    ///
+    /// # Errors
+    /// Returns [`AccessError::Denied`] when current policy refuses management or the
+    /// proposed grant, without invalidating the session. Current-session, identity
+    /// and unavailable-authority errors retain their original typed outcomes.
     pub async fn execute(
         &self,
         session: &AuthenticatedSession,
@@ -69,7 +74,7 @@ impl AuthorizePairing<'_> {
             (intent.grant().action(), intent.resource()),
         ] {
             if self.policy.evaluate(context, action, resource, &snapshot)? != Decision::Allow {
-                return Err(AccessError::InvalidCredential);
+                return Err(AccessError::Denied);
             }
         }
         Ok(PairingAdmission {

@@ -244,6 +244,17 @@ impl StoredPairing {
                 step.actor.domain()?,
                 step.ordering_time_ms,
             )?;
+            let revocation = record.credential().and_then(|id| {
+                canonical.iter().find(|entry| {
+                    entry.credential_id == id.as_str()
+                        && matches!(entry.cause, TransitionCauseDto::Revoked { .. })
+                })
+            });
+            let revocation = revocation
+                .map(|entry| CredentialTransition::try_from(entry.clone()))
+                .transpose()
+                .map_err(invalid)?;
+            transition.verify_cancellation_revocation(revocation.as_ref())?;
             record = transition.after().clone();
         }
         Ok(record)

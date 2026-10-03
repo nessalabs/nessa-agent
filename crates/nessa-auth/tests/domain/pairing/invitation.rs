@@ -1304,3 +1304,110 @@ fn collection_completed_receipts_do_not_consume_unfinished_capacity() {
         .collect();
     assert_eq!(validate_pairing_collection(&terminal), Ok(()));
 }
+
+#[test]
+fn cancellation_revocation_matches_original_command() {
+    let active = receiver(&staged())
+        .transition(PairingEvent::activate(1), owner(), 1_006)
+        .unwrap();
+    let cancel = active
+        .after()
+        .transition(PairingEvent::end(TerminalCause::Cancelled), owner(), 2_001)
+        .unwrap();
+    let credential = |name| {
+        Credential::new(
+            CredentialId::new(name).unwrap(),
+            PrincipalId::new("owner").unwrap(),
+            OrganizationId::new("org").unwrap(),
+            AudienceId::new("gateway").unwrap(),
+            1,
+            None,
+            vec![active.after().intent().grant().clone()],
+        )
+        .unwrap()
+    };
+    let principal = Initiator::Principal(PrincipalId::new("owner").unwrap());
+    let original = credential("device")
+        .revoke(2, principal.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cancel.verify_cancellation_revocation(Some(&original)),
+        Ok(())
+    );
+    assert_eq!(
+        cancel.verify_cancellation_revocation(None),
+        Err(PairingError::Conflict)
+    );
+    for (label, contradictory) in [
+        (
+            "credential",
+            credential("other")
+                .revoke(2, principal.clone())
+                .unwrap()
+                .unwrap(),
+        ),
+        (
+            "operator",
+            credential("device")
+                .revoke(2, Initiator::LocalOperator)
+                .unwrap()
+                .unwrap(),
+        ),
+        (
+            "principal",
+            credential("device")
+                .revoke(2, Initiator::Principal(PrincipalId::new("other").unwrap()))
+                .unwrap()
+                .unwrap(),
+        ),
+        (
+            "time",
+            credential("device")
+                .revoke(3, principal.clone())
+                .unwrap()
+                .unwrap(),
+        ),
+        (
+            "cause",
+            credential("device")
+                .supersede(
+                    2,
+                    CredentialId::new("replacement").unwrap(),
+                    Supersession::OwnerRecovery,
+                    principal,
+                )
+                .unwrap(),
+        ),
+    ] {
+        assert_eq!(
+            cancel.verify_cancellation_revocation(Some(&contradictory)),
+            Err(PairingError::Conflict),
+            "{label}"
+        );
+    }
+    let unpublished = staged()
+        .transition(PairingEvent::end(TerminalCause::Cancelled), owner(), 2_001)
+        .unwrap();
+    assert_eq!(unpublished.verify_cancellation_revocation(None), Ok(()));
+    let independent = credential("device")
+        .revoke(2, Initiator::LocalOperator)
+        .unwrap()
+        .unwrap();
+    let ended = active
+        .after()
+        .transition(
+            PairingEvent::credential_revoked(independent),
+            PairingInitiator::LocalOperator,
+            2_000,
+        )
+        .unwrap();
+    assert_eq!(ended.verify_cancellation_revocation(None), Ok(()));
+    assert_eq!(
+        ended.after().terminal(),
+        Some((
+            TerminalCause::CredentialRevoked,
+            &PairingInitiator::LocalOperator
+        ))
+    );
+}

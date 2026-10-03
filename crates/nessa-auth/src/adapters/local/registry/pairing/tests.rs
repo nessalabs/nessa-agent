@@ -1865,7 +1865,7 @@ fn pairing_admission_current_access_policy_revision_and_deadline_neighbors() {
                 unavailable,
                 actions: Mutex::new(Vec::new()),
             };
-            assert!(matches!(
+            assert_eq!(
                 ready(
                     AuthorizePairing {
                         access: fixture.store.as_ref(),
@@ -1877,9 +1877,23 @@ fn pairing_admission_current_access_policy_revision_and_deadline_neighbors() {
                         fixture.record.intent(),
                         &fixture.gateway
                     )
-                ),
-                Err(AccessError::InvalidCredential | AccessError::Unavailable)
-            ));
+                )
+                .err(),
+                Some(if unavailable {
+                    AccessError::Unavailable
+                } else {
+                    AccessError::Denied
+                })
+            );
+            // Denial is about this operation, not current session validity.
+            ready(
+                ReadCurrentSession {
+                    access: fixture.store.as_ref(),
+                    clock: &Time,
+                }
+                .execute(&fixture.session),
+            )
+            .unwrap();
             let expected: &[&str] = if action == "credential.manage" {
                 &["credential.manage"]
             } else {
@@ -3331,4 +3345,161 @@ fn public_reopen_validates_original_consent_and_history_bound() {
         reopened.read_pairing(fixture.record.id()).unwrap().phase(),
         PairingPhase::Approved
     );
+}
+
+#[test]
+fn active_cancellation_preserves_original_revocation_and_retry() {
+    let fixture = enrolled_claim();
+    publish(&fixture);
+    cancel_stage(&fixture);
+    let original = fixture.store.read_pairing(fixture.record.id()).unwrap();
+    assert_eq!(original.terminal().unwrap().0, TerminalCause::Cancelled);
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let bytes = std::fs::read(&path).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let revocation = value["transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["credentialId"] == "native-device" && entry["cause"]["kind"] == "revoked"
+        })
+        .unwrap();
+    assert_eq!(revocation["at"], 110);
+    assert_eq!(revocation["cause"]["cause"]["kind"], "explicit");
+    assert_eq!(
+        revocation["initiator"],
+        serde_json::json!({"kind":"principal", "id":"owner"})
+    );
+    // A fresh admission covers the now-current revision; retry is not another write.
+    cancel_stage(&fixture);
+    assert_eq!(
+        fixture.store.read_pairing(fixture.record.id()).unwrap(),
+        original
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    drop(fixture.store);
+    let reopened = open_store(&path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(fixture.record.id()).unwrap(),
+        original
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+fn cancelled_registry_refuses_contradictions(changes: &[fn(&mut serde_json::Value)]) {
+    let fixture = enrolled_claim();
+    publish(&fixture);
+    cancel_stage(&fixture);
+    // A real later issuance supplies an existing other principal and supersession target.
+    fixture
+        .store
+        .issue_sync(ordinary_issue("distinct-reader"))
+        .unwrap();
+    let terminal = fixture.store.read_pairing(fixture.record.id()).unwrap();
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let original = std::fs::read(&path).unwrap();
+    drop(fixture.store);
+    // Establish the complete untampered boundary input is accepted before each mutation.
+    for change in changes {
+        let reopened = open_store(&path).unwrap();
+        assert_eq!(
+            reopened.read_pairing(fixture.record.id()).unwrap(),
+            terminal
+        );
+        drop(reopened);
+        let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        change(&mut value);
+        let changed = serde_json::to_vec(&value).unwrap();
+        std::fs::write(&path, &changed).unwrap();
+        assert!(matches!(
+            open_store(&path),
+            Err(LocalStoreError::InvalidRegistry { .. })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), changed);
+        std::fs::write(&path, &original).unwrap();
+        let restored = open_store(&path).unwrap();
+        assert_eq!(
+            restored.read_pairing(fixture.record.id()).unwrap(),
+            terminal
+        );
+        drop(restored);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+}
+
+#[test]
+fn public_reopen_requires_original_cancellation_actor() {
+    cancelled_registry_refuses_contradictions(&[
+        |value| {
+            let revocation = value["transitions"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| {
+                    entry["credentialId"] == "native-device" && entry["cause"]["kind"] == "revoked"
+                })
+                .unwrap();
+            revocation["initiator"] = serde_json::json!({"kind":"local_operator"});
+        },
+        |value| {
+            let revocation = value["transitions"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| {
+                    entry["credentialId"] == "native-device" && entry["cause"]["kind"] == "revoked"
+                })
+                .unwrap();
+            revocation["initiator"] = serde_json::json!({"kind":"principal", "id":"reader"});
+        },
+    ]);
+}
+
+#[test]
+fn public_reopen_requires_original_cancellation_time() {
+    cancelled_registry_refuses_contradictions(&[|value| {
+        let revocation = value["transitions"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| {
+                entry["credentialId"] == "native-device" && entry["cause"]["kind"] == "revoked"
+            })
+            .unwrap();
+        revocation["at"] = serde_json::json!(111);
+        revocation["after"]["revokedAt"] = serde_json::json!(111);
+        let credential = value["credentials"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| entry["metadata"]["id"] == "native-device")
+            .unwrap();
+        credential["metadata"]["revokedAt"] = serde_json::json!(111);
+    }]);
+}
+
+#[test]
+fn public_reopen_requires_original_cancellation_cause() {
+    cancelled_registry_refuses_contradictions(&[|value| {
+        let replacement_revision = value["transitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["credentialId"] == "distinct-reader")
+            .unwrap()["revision"]
+            .clone();
+        let revocation = value["transitions"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| {
+                entry["credentialId"] == "native-device" && entry["cause"]["kind"] == "revoked"
+            })
+            .unwrap();
+        revocation["revision"] = replacement_revision;
+        revocation["cause"]["cause"] = serde_json::json!({
+            "kind":"superseded", "by":"distinct-reader", "supersession":"owner_recovery"
+        });
+    }]);
 }

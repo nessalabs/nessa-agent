@@ -2,7 +2,9 @@ use super::super::{
     AttemptId, ConsentIntent, DeviceKey, InvitationId, PairingError, PairingInitiator,
     PairingPolicy,
 };
-use crate::domain::{CredentialId, CredentialTransition, ResourceId, TransitionCause};
+use crate::domain::{
+    CredentialId, CredentialTransition, ResourceId, RevocationCause, TransitionCause,
+};
 
 /// The registry publication stage; device possession never implies approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,6 +590,32 @@ pub struct PairingTransition {
     at_ms: u64,
 }
 impl PairingTransition {
+    /// Check the canonical revocation committed by cancellation of an Active pairing.
+    /// Other transitions, including cancellation before publication and independent
+    /// credential revocation, have no cancellation-owned revocation to correlate.
+    ///
+    /// # Errors
+    /// Returns [`PairingError::Conflict`] when an Active cancellation lacks the
+    /// original credential's Explicit revocation, actor or whole-second command time.
+    pub fn verify_cancellation_revocation(
+        &self,
+        revocation: Option<&CredentialTransition>,
+    ) -> Result<(), PairingError> {
+        if self.before.phase() != PairingPhase::Active
+            || self.event.kind() != &Event::End(TerminalCause::Cancelled)
+        {
+            return Ok(());
+        }
+        let revocation = revocation.ok_or(PairingError::Conflict)?;
+        if self.before.credential() != Some(revocation.credential_id())
+            || revocation.cause() != &TransitionCause::Revoked(RevocationCause::Explicit)
+            || self.actor != PairingInitiator::from_credential(revocation.initiator())
+            || revocation.at() != self.at_ms / 1000
+        {
+            return Err(PairingError::Conflict);
+        }
+        Ok(())
+    }
     /// Record before the decision.
     pub fn before(&self) -> &PairingRecord {
         &self.before

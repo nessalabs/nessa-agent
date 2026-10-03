@@ -1,4 +1,5 @@
 //! Registry-owned pairing persistence, conditional publication, and key authentication.
+//! Restored history asks the domain transition to correlate cancellation and revocation.
 mod device_verifier;
 mod enrollment;
 mod projection;
