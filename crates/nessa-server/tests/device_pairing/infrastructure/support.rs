@@ -36,6 +36,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{sync_channel, Receiver, SyncSender},
         Arc, Mutex,
     },
     time::Duration,
@@ -286,12 +287,16 @@ pub enum Fault {
     Claim,
     /// Every read after a claim commits.
     ReadsAfterClaim,
+    /// Every read.
+    Reads,
 }
 /// The real registry behind the `PairingStore` port, refusing one chosen call.
 pub struct FaultyStore {
     inner: Arc<LocalCredentialStore>,
     fault: Mutex<Option<Fault>>,
     claimed: AtomicBool,
+    gate: Mutex<Option<Receiver<()>>>,
+    gate_timed_out: AtomicBool,
 }
 impl FaultyStore {
     pub fn new(inner: Arc<LocalCredentialStore>) -> Arc<Self> {
@@ -299,7 +304,21 @@ impl FaultyStore {
             inner,
             fault: Mutex::new(None),
             claimed: AtomicBool::new(false),
+            gate: Mutex::new(None),
+            gate_timed_out: AtomicBool::new(false),
         })
+    }
+    /// The next store read waits until the returned sender fires, for at most
+    /// two seconds. On a current-thread runtime, a read made on the async
+    /// thread cannot be released by a task on that thread, so it times out.
+    pub fn gate_next_read(&self) -> SyncSender<()> {
+        let (release, gate) = sync_channel(1);
+        *self.gate.lock().unwrap() = Some(gate);
+        release
+    }
+    /// Whether a gated read timed out.
+    pub fn gate_timed_out(&self) -> bool {
+        self.gate_timed_out.load(Ordering::SeqCst)
     }
     pub fn refuse(&self, fault: Option<Fault>) {
         *self.fault.lock().unwrap() = fault;
@@ -312,6 +331,13 @@ impl FaultyStore {
         }
     }
     fn read(&self) -> Result<(), PairingStoreError> {
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if gate.recv_timeout(Duration::from_secs(2)).is_err() {
+                self.gate_timed_out.store(true, Ordering::SeqCst);
+            }
+        }
+        self.refuses(Fault::Reads)?;
         if self.claimed.load(Ordering::SeqCst) {
             self.refuses(Fault::ReadsAfterClaim)
         } else {

@@ -19,8 +19,8 @@ use nessa_auth::{
     },
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, ConsentIntentId, InvitationId, PairingError, PairingPhase,
-            PairingPolicy, PairingRecord, PublicIntent,
+            AttemptFailure, AttemptId, ConsentIntentId, InvitationId, PairingPhase, PairingPolicy,
+            PairingRecord, PublicIntent,
         },
         Resource,
     },
@@ -134,11 +134,11 @@ pub struct GatewayPairing {
     available: Arc<Mutex<Option<AvailableSetup>>>,
 }
 impl GatewayPairing {
-    /// Settle this gateway's unfinished records before serving. An Available
-    /// record lost its volatile PAKE setup with the previous process, so it ends
-    /// Restarted. Every other unfinished record is offered to Auth's expiry, so
-    /// one past its deadline ends Expired. Composition calls this before
-    /// accepting native or owner requests.
+    /// Settle this gateway's unfinished records before serving. Every one is
+    /// offered to Auth's expiry first, so a past-due record keeps Expired as its
+    /// first cause. A record still Available afterwards lost its volatile PAKE
+    /// setup with the previous process, so it ends Restarted. Composition calls
+    /// this before accepting native or owner requests.
     pub fn open(dependencies: PairingRuntimeDependencies) -> Result<Self, PairingRuntimeError> {
         let enrollments = dependencies.enrollments.as_ref();
         let clock = dependencies.clock.as_ref();
@@ -149,12 +149,14 @@ impl GatewayPairing {
             if record.intent().resource() != &dependencies.gateway {
                 continue;
             }
+            let record = enrollments
+                .expire_pairing_if_due(record.id(), clock)
+                .map_err(PairingRuntimeError::Enrollment)?;
             if record.phase() == PairingPhase::Available {
-                enrollments.end_pairing(record.id(), RuntimeEnd::Restarted, clock)
-            } else {
-                enrollments.expire_pairing_if_due(record.id(), clock)
+                enrollments
+                    .end_pairing(record.id(), RuntimeEnd::Restarted, clock)
+                    .map_err(PairingRuntimeError::Enrollment)?;
             }
-            .map_err(PairingRuntimeError::Enrollment)?;
         }
         Ok(Self {
             dependencies: Arc::new(dependencies),
@@ -182,11 +184,20 @@ impl GatewayPairing {
         command: impl FnOnce(&PairingOwner<'_>, &Handle) -> Result<T, OwnerError> + Send + 'static,
     ) -> Result<T, PairingRuntimeError> {
         let dependencies = self.dependencies.clone();
+        let available = self.available.clone();
         let handle = Handle::current();
-        tokio::task::spawn_blocking(move || command(&Self::owner_from(&dependencies), &handle))
-            .await
-            .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
-            .map_err(PairingRuntimeError::Owner)
+        // Owner commands, including any expiry they settle, do store work, so
+        // they run on a blocking worker
+        // (`native_owner_store_work_runs_off_the_async_thread`).
+        tokio::task::spawn_blocking(move || {
+            let result = command(&Self::owner_from(&dependencies), &handle);
+            // The command may have ended the open invitation; drop its setup.
+            discard_ended(&mut available.blocking_lock(), dependencies.as_ref());
+            result
+        })
+        .await
+        .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
+        .map_err(PairingRuntimeError::Owner)
     }
     /// Read the permanent gateway key only for the native TLS composition owner.
     pub fn identity(&self) -> &NativeIdentity {
@@ -199,7 +210,6 @@ impl GatewayPairing {
         &self,
         session: &AuthenticatedSession,
     ) -> Result<Box<[PairingRecord]>, PairingRuntimeError> {
-        self.expire_due().await?;
         let session = session.clone();
         self.owner_command(move |owner, handle| handle.block_on(owner.pending(&session)))
             .await
@@ -246,8 +256,6 @@ impl GatewayPairing {
         invite.copy_from_slice(&bytes[..16]);
         let mut consent = [0; 16];
         consent.copy_from_slice(&bytes[16..]);
-        // A past-due invitation would otherwise hold the slot and the live limit.
-        self.expire_due().await?;
         let session = session.clone();
         let prepared = self
             .owner_command(move |owner, handle| {
@@ -400,7 +408,11 @@ impl GatewayPairing {
         public: PublicIntent,
     ) -> Result<DevicePairingStatus, PairingRuntimeError> {
         self.verify_channel(channel)?;
-        let record = self.expire(public.invitation()).await?;
+        let record = self
+            .dependencies
+            .enrollments
+            .read_pairing(public.invitation())
+            .map_err(PairingRuntimeError::Enrollment)?;
         if PublicIntent::from_record(&record, public.attempt())
             .map_err(|error| PairingRuntimeError::Enrollment(PairingStoreError::Domain(error)))?
             != public
@@ -409,15 +421,19 @@ impl GatewayPairing {
                 PairingCryptoError::InvalidContext,
             ));
         }
-        ReadDevicePairing {
+        let status = ReadDevicePairing {
             enrollments: self.dependencies.enrollments.as_ref(),
+            clock: self.dependencies.clock.as_ref(),
         }
         .execute(
             public.invitation(),
             public.attempt(),
             channel.device_proof(),
         )
-        .map_err(PairingRuntimeError::Enrollment)
+        .map_err(PairingRuntimeError::Enrollment)?;
+        // The read may have expired the open invitation; drop its setup.
+        discard_ended(&mut *self.available.lock().await, &self.dependencies);
+        Ok(status)
     }
     /// Current protected owner status; historical Active is not read authority.
     pub async fn owner_status(
@@ -425,7 +441,6 @@ impl GatewayPairing {
         session: &AuthenticatedSession,
         id: InvitationId,
     ) -> Result<PairingRecord, PairingRuntimeError> {
-        self.expire(id).await?;
         let session = session.clone();
         self.owner_command(move |owner, handle| handle.block_on(owner.status(&session, id)))
             .await
@@ -438,16 +453,11 @@ impl GatewayPairing {
         id: InvitationId,
         decision: OwnerDecision,
     ) -> Result<PairingRecord, PairingRuntimeError> {
-        // Expiry first, so a past-due enrollment keeps Expired as its cause.
-        self.expire(id).await?;
         let session = session.clone();
-        let record = self
-            .owner_command(move |owner, handle| {
-                handle.block_on(owner.decide(&session, id, decision))
-            })
-            .await?;
-        self.discard_if_ended(&record).await;
-        Ok(record)
+        self.owner_command(move |owner, handle| {
+            handle.block_on(owner.decide(&session, id, decision))
+        })
+        .await
     }
     fn verify_channel<S: Read + Write>(
         &self,
@@ -518,29 +528,17 @@ impl GatewayPairing {
         self.discard_if_ended(&record).await;
         Ok(record)
     }
-    /// `expire` for every unfinished record of this gateway.
-    async fn expire_due(&self) -> Result<(), PairingRuntimeError> {
-        for record in self
-            .dependencies
-            .enrollments
-            .pending_pairings()
-            .map_err(PairingRuntimeError::Enrollment)?
-        {
-            if record.intent().resource() == &self.dependencies.gateway {
-                self.expire(record.id()).await?;
-            }
-        }
-        Ok(())
-    }
-    /// A store refusal of a device step. When Auth refused because the invitation
-    /// is past due, settle the expiry so neither the record nor the setup stays
-    /// open. The original refusal is returned either way.
+    /// A store refusal of a device reservation or claim. After any Auth domain
+    /// refusal, ask Auth's expiry, which changes nothing unless the record is
+    /// due, so a past-due record does not stay open whichever rule refused
+    /// first. A store failure settles nothing. The original refusal is returned
+    /// either way.
     async fn refused_by_store(
         &self,
         id: InvitationId,
         error: PairingStoreError,
     ) -> PairingRuntimeError {
-        if error == PairingStoreError::Domain(PairingError::Expired) {
+        if matches!(error, PairingStoreError::Domain(_)) {
             // A failed settlement leaves the record for the next path that reads it.
             self.expire(id).await.ok();
         }
@@ -578,5 +576,18 @@ impl Drop for CreatePermit {
     fn drop(&mut self) {
         drop(self.permit.take());
         self.drained.notify_waiters();
+    }
+}
+/// Drop the open invitation's setup if its stored record has ended. A failed
+/// read leaves the setup for the next path that reads the record.
+fn discard_ended(slot: &mut Option<AvailableSetup>, dependencies: &PairingRuntimeDependencies) {
+    let ended = slot.as_ref().is_some_and(|setup| {
+        dependencies
+            .enrollments
+            .read_pairing(setup.id)
+            .is_ok_and(|record| record.phase() != PairingPhase::Available)
+    });
+    if ended {
+        *slot = None;
     }
 }

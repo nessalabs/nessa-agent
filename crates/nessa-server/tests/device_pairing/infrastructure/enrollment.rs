@@ -1872,3 +1872,369 @@ async fn native_client_refuses_a_gateway_that_changes_the_operation() {
     }
     fixture.gateway.shutdown().await;
 }
+
+/// The default `#[tokio::test]` runtime has one thread, so a store call made on
+/// the async thread would hold the task that releases the gate.
+#[tokio::test]
+async fn native_owner_store_work_runs_off_the_async_thread() {
+    let store = std::sync::OnceLock::new();
+    let fixture = Fixture::with_store(|registry| {
+        let faulty = FaultyStore::new(registry);
+        store.set(faulty.clone()).ok();
+        faulty
+    })
+    .await;
+    let store = store.get().unwrap().clone();
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    // Past due, so each command settles an expiry as well as reading.
+    fixture.time.set(created.record().expires_at_ms());
+    for command in 0..4 {
+        let release = store.gate_next_read();
+        let releaser = tokio::spawn(async move {
+            release.send(()).ok();
+        });
+        match command {
+            0 => {
+                fixture.gateway.pending(&fixture.session).await.unwrap();
+            }
+            1 => {
+                fixture
+                    .gateway
+                    .owner_status(&fixture.session, id)
+                    .await
+                    .unwrap();
+            }
+            2 => {
+                fixture
+                    .gateway
+                    .decide(&fixture.session, id, OwnerDecision::Cancel)
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                fixture
+                    .gateway
+                    .create(fixture.session.clone(), OsEntropy)
+                    .await
+                    .unwrap();
+            }
+        }
+        releaser.await.unwrap();
+        assert!(
+            !store.gate_timed_out(),
+            "command {command} read on the async thread"
+        );
+    }
+    assert!(expired_by_system(
+        &fixture.registry.read_pairing(id).unwrap()
+    ));
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_refused_owner_changes_no_enrollment() {
+    let fixture = Fixture::short_lived_owner().await;
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    let (address, stop, listener, connections) = fixture.listener().await;
+    let (_, state) = pending(fixture.directory.path(), "client-private");
+    let client = NativeEnrollmentClient::new(state, RuntimeDependencies::default().clock);
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let claimed = tokio::time::timeout(
+        WAIT,
+        client.enroll(TcpStream::connect(address).unwrap(), code, OsEntropy),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let public = claimed.public();
+    // At the invitation's expiry the owner's credential (500 s) has expired too.
+    fixture.time.set(created.record().expires_at_ms());
+    let before = fixture.registry.read_pairing(id).unwrap();
+    assert_eq!(before.phase(), PairingPhase::Claimed);
+    let refused =
+        PairingRuntimeError::Owner(OwnerError::Authorization(AccessError::CredentialExpired));
+    assert_eq!(
+        fixture
+            .gateway
+            .owner_status(&fixture.session, id)
+            .await
+            .unwrap_err(),
+        refused
+    );
+    assert_eq!(
+        fixture.gateway.pending(&fixture.session).await.unwrap_err(),
+        refused
+    );
+    assert_eq!(
+        fixture
+            .gateway
+            .decide(&fixture.session, id, OwnerDecision::Cancel)
+            .await
+            .unwrap_err(),
+        refused
+    );
+    assert!(matches!(
+        fixture
+            .gateway
+            .create(fixture.session.clone(), OsEntropy)
+            .await,
+        Err(error) if error == refused
+    ));
+    assert_eq!(fixture.registry.read_pairing(id).unwrap(), before);
+    // A device whose key is not the attempt's is refused and changes nothing.
+    let pin = fixture.gateway.identity().public_spki();
+    let (server, stream) = sockets();
+    let owner = Arc::new(NativeEnrollmentConnections::new(
+        fixture.gateway.clone(),
+        RuntimeDependencies::default().clock,
+    ));
+    let serving = owner.clone();
+    let served = tokio::spawn(async move { serving.serve(server, OsEntropy).await });
+    let wrong = tokio::task::spawn_blocking(move || {
+        let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        let transport =
+            NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin)).unwrap();
+        let mut channel = EnrollmentChannel::new(transport);
+        channel
+            .send_envelope(&encode_request(&NativePairingRequest::Status(public)).unwrap())
+            .unwrap();
+        channel.receive_envelope().unwrap()
+    });
+    assert!(matches!(
+        decode_reply(&tokio::time::timeout(WAIT, wrong).await.unwrap().unwrap()).unwrap(),
+        NativePairingReply::Refused
+    ));
+    assert_eq!(
+        tokio::time::timeout(WAIT, served)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .failure,
+        NativeConnectionFailure::Runtime(PairingRuntimeError::Enrollment(
+            PairingStoreError::Domain(PairingError::WrongActor)
+        ))
+    );
+    owner.shutdown().await;
+    assert_eq!(fixture.registry.read_pairing(id).unwrap(), before);
+    // The attempt's own device settles the expiry and reads it.
+    assert!(matches!(
+        tokio::time::timeout(
+            WAIT,
+            client.status(TcpStream::connect(address).unwrap(), None)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Terminal {
+            cause: TerminalCause::Expired,
+            ..
+        }
+    ));
+    assert!(expired_by_system(
+        &fixture.registry.read_pairing(id).unwrap()
+    ));
+    client.shutdown().await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    connections.shutdown().await;
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_restart_records_expiry_before_restart() {
+    let fixture = Fixture::new().await;
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    let open = fixture.registry.read_pairing(id).unwrap();
+    // Not yet due: a restart still ends it Restarted.
+    fixture.time.set(open.expires_at_ms() - 1);
+    fixture.gateway.shutdown().await;
+    let fixture = fixture.reopen().await;
+    assert_eq!(
+        fixture.registry.read_pairing(id).unwrap().terminal(),
+        Some((TerminalCause::Restarted, &PairingInitiator::System))
+    );
+    // Already due when the gateway restarts: Expired is the first cause.
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    fixture.time.set(created.record().expires_at_ms() + 10);
+    fixture.gateway.shutdown().await;
+    let fixture = fixture.reopen().await;
+    assert!(expired_by_system(
+        &fixture.registry.read_pairing(id).unwrap()
+    ));
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_past_due_conflicting_reservation_settles_expiry() {
+    let fixture = Fixture::new().await;
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let public = fixture
+        .gateway
+        .hello(AttemptId::new([101; AttemptId::LENGTH]))
+        .await
+        .unwrap();
+    let first = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let (server, _client) = actual_channel(&fixture, &first).await;
+    let (_, request) = ClientAttempt::start(&mut OsEntropy, &code).unwrap();
+    assert!(matches!(
+        fixture
+            .gateway
+            .begin(&server, public, &request, &mut OsEntropy)
+            .await,
+        Ok(BeginPairing::Admitted(_))
+    ));
+    // Past due, another device replays the same attempt: Auth refuses the
+    // replay as a conflict before it checks expiry.
+    fixture.time.set(created.record().expires_at_ms());
+    let second = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let (other, _other_client) = actual_channel(&fixture, &second).await;
+    let (_, request) = ClientAttempt::start(&mut OsEntropy, &code).unwrap();
+    assert!(matches!(
+        fixture
+            .gateway
+            .begin(&other, public, &request, &mut OsEntropy)
+            .await,
+        Err(PairingRuntimeError::Enrollment(PairingStoreError::Domain(
+            PairingError::Conflict
+        )))
+    ));
+    let record = fixture.registry.read_pairing(id).unwrap();
+    assert!(expired_by_system(&record));
+    let key = DeviceKey::new(first.public_spki()[12..].try_into().unwrap());
+    assert_eq!(
+        record.attempt_status(public.attempt(), key).unwrap(),
+        AttemptOutcome::Superseded
+    );
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_ended_invitation_setup_is_discarded() {
+    let store = std::sync::OnceLock::new();
+    let fixture = Fixture::with_store(|registry| {
+        let faulty = FaultyStore::new(registry);
+        store.set(faulty.clone()).ok();
+        faulty
+    })
+    .await;
+    let store = store.get().unwrap().clone();
+    let hello = || {
+        fixture
+            .gateway
+            .hello(AttemptId::new([103; AttemptId::LENGTH]))
+    };
+    // With store reads failing, Hello answers NoInvitation without a read only
+    // when the setup is gone; with a setup present it reports the read failure.
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    store.refuse(Some(Fault::Reads));
+    assert_eq!(
+        hello().await.unwrap_err(),
+        PairingRuntimeError::Enrollment(PairingStoreError::Unavailable)
+    );
+    store.refuse(None);
+    // An owner command that settles the expiry drops the setup.
+    fixture.time.set(created.record().expires_at_ms());
+    fixture
+        .gateway
+        .owner_status(&fixture.session, created.record().id())
+        .await
+        .unwrap();
+    store.refuse(Some(Fault::Reads));
+    assert_eq!(
+        hello().await.unwrap_err(),
+        PairingRuntimeError::NoInvitation
+    );
+    store.refuse(None);
+
+    // A device status that settles the expiry drops the setup.
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let (address, stop, listener, connections) = fixture.listener().await;
+    let (root, state) = pending(fixture.directory.path(), "client-private");
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let stream = TcpStream::connect(address).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    let saving = state.clone();
+    // The device saves its pending record and disconnects before KE3.
+    tokio::task::spawn_blocking(move || {
+        ready_to_confirm(
+            stream,
+            AttemptId::new([107; AttemptId::LENGTH]),
+            &code,
+            &saving,
+        );
+    })
+    .await
+    .unwrap();
+    drop(state);
+    let state = Arc::new(FilePairingState::open(&root, Path::new("state")).unwrap());
+    let client = NativeEnrollmentClient::new(state, RuntimeDependencies::default().clock);
+    fixture.time.set(created.record().expires_at_ms());
+    let status = tokio::time::timeout(
+        WAIT,
+        client.status(TcpStream::connect(address).unwrap(), None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        status,
+        NativePairingStatus::Unclaimed {
+            terminal: Some(TerminalCause::Expired),
+            ..
+        }
+    ));
+    store.refuse(Some(Fault::Reads));
+    assert_eq!(
+        hello().await.unwrap_err(),
+        PairingRuntimeError::NoInvitation
+    );
+    store.refuse(None);
+    client.shutdown().await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    connections.shutdown().await;
+    fixture.gateway.shutdown().await;
+}

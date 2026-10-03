@@ -71,6 +71,23 @@ impl PairingOwner<'_> {
             self.gateway.clone(),
         )
         .map_err(OwnerError::Domain)?;
+        self.authorization
+            .execute(session, &intent, self.gateway)
+            .await
+            .map_err(OwnerError::Authorization)?;
+        // Admitted: settle past-due records so they release the slot and the
+        // live limit before the collection check below.
+        for record in self
+            .enrollments
+            .pending_pairings()
+            .map_err(OwnerError::Enrollment)?
+        {
+            if record.intent().resource() == self.gateway {
+                self.expire(record.id())?;
+            }
+        }
+        // An expiry advances the registry revision an admission is bound to, so
+        // the admission the create commits against is taken afterwards.
         let admission = self
             .authorization
             .execute(session, &intent, self.gateway)
@@ -98,7 +115,9 @@ impl PairingOwner<'_> {
     }
     /// Select immutable current-owner candidates, then ask full current admission.
     /// A selector match grants nothing by itself: each match is then read through
-    /// `status`, which asks current session and policy.
+    /// `status`, which asks current session and policy and settles expiry. The
+    /// result is the store's unfinished list after that, limited to the admitted
+    /// records, so the store alone decides what counts as unfinished.
     pub async fn pending(
         &self,
         session: &AuthenticatedSession,
@@ -117,26 +136,27 @@ impl PairingOwner<'_> {
                 context.organization_id(),
                 self.gateway,
             ) {
-                admitted.push(self.status(session, record.id()).await?);
+                admitted.push(self.status(session, record.id()).await?.id());
             }
         }
-        Ok(admitted.into_boxed_slice())
+        Ok(self
+            .enrollments
+            .pending_pairings()
+            .map_err(OwnerError::Enrollment)?
+            .into_vec()
+            .into_iter()
+            .filter(|record| admitted.contains(&record.id()))
+            .collect())
     }
-    /// Read protected enrollment history only after current exact-intent admission.
+    /// Read protected enrollment history only after current exact-intent
+    /// admission; then settle expiry, so a refused caller changes nothing.
     pub async fn status(
         &self,
         session: &AuthenticatedSession,
         id: InvitationId,
     ) -> Result<PairingRecord, OwnerError> {
-        let record = self
-            .enrollments
-            .read_pairing(id)
-            .map_err(OwnerError::Enrollment)?;
-        self.authorization
-            .execute(session, record.intent(), self.gateway)
-            .await
-            .map_err(OwnerError::Authorization)?;
-        Ok(record)
+        self.admit(session, id).await?;
+        self.expire(id)
     }
     /// Record explicit approval of an exact displayed key, denial, or cancellation.
     /// Existing registry behavior atomically revokes an Active key on cancellation;
@@ -147,18 +167,34 @@ impl PairingOwner<'_> {
         id: InvitationId,
         decision: OwnerDecision,
     ) -> Result<PairingRecord, OwnerError> {
+        self.admit(session, id).await?;
+        // Expiry before the decision, so a past-due enrollment keeps Expired.
+        // It may advance the registry revision, so admit again for the write.
+        self.expire(id)?;
+        let admission = self.admit(session, id).await?;
+        self.enrollments
+            .decide_pairing(id, decision, &admission, self.clock)
+            .await
+            .map_err(OwnerError::Enrollment)
+    }
+    async fn admit(
+        &self,
+        session: &AuthenticatedSession,
+        id: InvitationId,
+    ) -> Result<PairingAdmission, OwnerError> {
         let record = self
             .enrollments
             .read_pairing(id)
             .map_err(OwnerError::Enrollment)?;
-        let admission = self
-            .authorization
+        self.authorization
             .execute(session, record.intent(), self.gateway)
             .await
-            .map_err(OwnerError::Authorization)?;
+            .map_err(OwnerError::Authorization)
+    }
+    /// Auth's expiry, which changes nothing unless the record is due.
+    fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
         self.enrollments
-            .decide_pairing(id, decision, &admission, self.clock)
-            .await
+            .expire_pairing_if_due(id, self.clock)
             .map_err(OwnerError::Enrollment)
     }
 }
