@@ -391,7 +391,8 @@ native listen address. Public tests are under
 `tests/device_pairing/infrastructure/activation.rs` and the composed process in
 `tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
 `tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`, the
-socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`;
+socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`
+and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
 composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
 Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
 [owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
