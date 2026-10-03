@@ -2,7 +2,7 @@
 
 use crate::conversation::application::{ReadRefusal, ReceiverAuthority, ReceiverBinding};
 use crate::conversation::domain::{
-    ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
+    PairedReceiver, ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
@@ -105,7 +105,7 @@ impl LocalReceiverAuthority {
             &ReceiverInitiator::Principal(initiator_id.clone()),
             &request_id,
         )? {
-            let exact = original.cause == "paired"
+            let exact = matches!(original.cause, ReceiverIntent::Pair { .. })
                 && original.after.credential_id == credential_id
                 && original.after.organization_id == organization_id
                 && original.after.owner_id == owner_id;
@@ -153,7 +153,9 @@ impl LocalReceiverAuthority {
             &ReceiverInitiator::Principal(initiator_id.clone()),
             request_id,
         )? {
-            Some(original) if original.cause == "paired" => Ok(Some(original.after)),
+            Some(original) if matches!(original.cause, ReceiverIntent::Pair { .. }) => {
+                Ok(Some(original.after))
+            }
             // Another transition under this request is not a pair receipt.
             Some(_) => Err(ReceiverChangeError::Conflict),
             None => Ok(None),
@@ -172,16 +174,33 @@ impl LocalReceiverAuthority {
         load_by_credential(&connection, credential_id.as_str())
     }
 
+    /// The current binding of `paired`'s receiver, if it still holds that
+    /// pairing (`PairedReceiver::admits`, with this journal saying whether the
+    /// credential was revoked on it since the pair). `None` otherwise.
+    pub fn holding(
+        &self,
+        paired: &PairedReceiver,
+    ) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        let Some(current) = load_by_receiver(&connection, &paired.receiver_id)? else {
+            return Ok(None);
+        };
+        let revoked_since = load_revocation(&connection, paired)?.is_some();
+        Ok(paired.admits(&current, revoked_since).then_some(current))
+    }
+
     /// Fence the exact receiver a device enrollment paired, as the system, once
-    /// that enrollment has ended (design rows P39, P41, P42). The receiver must
-    /// still hold the same credential, organization and owner at an epoch no
-    /// older than `paired_epoch`. A repeat of `request_id` returns the original
-    /// fence; a receiver already revoked from that credential returns that
-    /// revocation rather than revoking a replacement; anything else conflicts.
+    /// that enrollment has ended (design rows P39, P41, P42). A repeat of
+    /// `request_id` returns the original fence. A revocation of the paired
+    /// credential on that receiver since the pair is the fence, with its own
+    /// initiator kept, even if the receiver was regranted since; it is never
+    /// fenced again. Otherwise the domain's `PairedReceiver::fence` decides.
     pub fn fence(
         &self,
-        receiver_id: &str,
-        expected: &ReceiverBinding,
+        paired: &PairedReceiver,
         request_id: String,
     ) -> Result<ReceiverBinding, ReceiverChangeError> {
         let observed_at_ms = i64::try_from(self.clock.unix_milliseconds())
@@ -193,42 +212,27 @@ impl LocalReceiverAuthority {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ReceiverChangeError::Unavailable)?;
-        let matches = |binding: &ReceiverBinding| {
-            binding.receiver_id == receiver_id
-                && binding.credential_id == expected.credential_id
-                && binding.organization_id == expected.organization_id
-                && binding.owner_id == expected.owner_id
-                && binding.access_epoch >= expected.access_epoch
-        };
         if let Some(original) = load_receipt(&transaction, &ReceiverInitiator::System, &request_id)?
         {
-            return match original.before {
-                Some(before) if original.cause == "revoked" && matches(&before) => {
-                    Ok(original.after)
-                }
-                _ => Err(ReceiverChangeError::Conflict),
+            return if paired.revoked_by(&original.cause, original.before.as_ref()) {
+                Ok(original.after)
+            } else {
+                Err(ReceiverChangeError::Conflict)
             };
         }
-        let current =
-            load_by_receiver(&transaction, receiver_id)?.ok_or(ReceiverChangeError::Missing)?;
-        if current.active && matches(&current) {
-            let transition = ReceiverTransition::apply(
-                Some(&current),
-                ReceiverIntent::Revoke,
-                ReceiverInitiator::System,
-                request_id,
-                observed_at_ms,
-            )
-            .map_err(map_transition_error)?;
-            persist_transition(&transaction, &transition).map_err(map_write_error)?;
-            transaction
-                .commit()
-                .map_err(|_| ReceiverChangeError::Unavailable)?;
-            return Ok(transition.after);
+        if let Some(revocation) = load_revocation(&transaction, paired)? {
+            return Ok(revocation);
         }
-        // Already revoked from this credential by someone else: that
-        // revocation is the fence, with its own initiator kept.
-        load_revocation(&transaction, receiver_id, expected)?.ok_or(ReceiverChangeError::Conflict)
+        let current = load_by_receiver(&transaction, &paired.receiver_id)?
+            .ok_or(ReceiverChangeError::Missing)?;
+        let transition = paired
+            .fence(&current, false, request_id, observed_at_ms)
+            .map_err(map_transition_error)?;
+        persist_transition(&transaction, &transition).map_err(map_write_error)?;
+        transaction
+            .commit()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        Ok(transition.after)
     }
 
     /// Revoke or regrant a known receiver. Each committed transition increments
@@ -540,7 +544,7 @@ fn load_by_receiver(
 struct Receipt {
     before: Option<ReceiverBinding>,
     after: ReceiverBinding,
-    cause: String,
+    cause: ReceiverIntent,
 }
 
 const RECEIPT_COLUMNS: &str = "receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause";
@@ -566,17 +570,20 @@ fn receipt_row(
         )?),
         _ => None,
     };
+    let after = binding_from_fields(
+        receiver_id,
+        row.get(8)?,
+        organization_id,
+        owner_id,
+        row.get(4)?,
+        row.get(6)?,
+    )?;
+    let cause = ReceiverIntent::from_cause_name(&row.get::<_, String>(9)?, &after)
+        .ok_or(nessa_local_database::rusqlite::Error::InvalidQuery)?;
     Ok(Receipt {
         before,
-        after: binding_from_fields(
-            receiver_id,
-            row.get(8)?,
-            organization_id,
-            owner_id,
-            row.get(4)?,
-            row.get(6)?,
-        )?,
-        cause: row.get(9)?,
+        after,
+        cause,
     })
 }
 
@@ -598,29 +605,25 @@ fn load_receipt(
         .map_err(|_| ReceiverChangeError::Unavailable)
 }
 
-/// The first revocation of `expected`'s credential on this receiver after the
-/// epoch it was paired at.
+/// The first revocation of `paired`'s credential on its receiver since the
+/// pair, as the domain's `PairedReceiver::revoked_by` reads the journal.
 fn load_revocation(
     connection: &Connection,
-    receiver_id: &str,
-    expected: &ReceiverBinding,
+    paired: &PairedReceiver,
 ) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
-    let epoch = i64::try_from(expected.access_epoch).map_err(|_| ReceiverChangeError::Conflict)?;
-    connection
-        .query_row(
-            &format!("SELECT {RECEIPT_COLUMNS} FROM receiver_transitions WHERE receiver_id = ?1 AND cause = 'revoked' AND before_credential = ?2 AND organization_id = ?3 AND owner_id = ?4 AND before_epoch >= ?5 ORDER BY sequence LIMIT 1"),
-            params![
-                receiver_id,
-                expected.credential_id.as_str(),
-                expected.organization_id.as_str(),
-                expected.owner_id.as_str(),
-                epoch
-            ],
-            receipt_row,
-        )
-        .optional()
-        .map(|receipt| receipt.map(|receipt| receipt.after))
-        .map_err(|_| ReceiverChangeError::Unavailable)
+    let mut query = connection
+        .prepare(&format!("SELECT {RECEIPT_COLUMNS} FROM receiver_transitions WHERE receiver_id = ?1 ORDER BY sequence"))
+        .map_err(|_| ReceiverChangeError::Unavailable)?;
+    let receipts = query
+        .query_map([&paired.receiver_id], receipt_row)
+        .map_err(|_| ReceiverChangeError::Unavailable)?;
+    for receipt in receipts {
+        let receipt = receipt.map_err(|_| ReceiverChangeError::Unavailable)?;
+        if paired.revoked_by(&receipt.cause, receipt.before.as_ref()) {
+            return Ok(Some(receipt.after));
+        }
+    }
+    Ok(None)
 }
 
 fn load_by_credential(
@@ -678,6 +681,16 @@ mod tests {
                 map_write_error(Error::SqliteFailure(ffi::Error::new(code), None)),
                 ReceiverChangeError::Unavailable
             );
+        }
+    }
+
+    fn pairing(binding: &ReceiverBinding) -> PairedReceiver {
+        PairedReceiver {
+            receiver_id: binding.receiver_id.clone(),
+            credential_id: binding.credential_id.clone(),
+            organization_id: binding.organization_id.clone(),
+            owner_id: binding.owner_id.clone(),
+            paired_epoch: binding.access_epoch,
         }
     }
 
@@ -1276,28 +1289,32 @@ mod tests {
             },
         ] {
             assert_eq!(
-                store.fence(&paired.receiver_id, &expected, "fence".into()),
+                store.fence(&pairing(&expected), "fence".into()),
                 Err(ReceiverChangeError::Conflict)
             );
         }
         assert_eq!(
-            store.fence("receiver-missing", &paired, "fence".into()),
+            store.fence(
+                &PairedReceiver {
+                    receiver_id: "receiver-missing".into(),
+                    ..pairing(&paired)
+                },
+                "fence".into()
+            ),
             Err(ReceiverChangeError::Missing)
         );
-        let fenced = store
-            .fence(&paired.receiver_id, &paired, "fence".into())
-            .unwrap();
+        let fenced = store.fence(&pairing(&paired), "fence".into()).unwrap();
         assert!(!fenced.active);
         assert_eq!(fenced.access_epoch, 2);
         assert_eq!(store.binding(&credential), Ok(Some(fenced.clone())));
         // Retried fence: the original, with no further epoch.
         assert_eq!(
-            store.fence(&paired.receiver_id, &paired, "fence".into()),
+            store.fence(&pairing(&paired), "fence".into()),
             Ok(fenced.clone())
         );
         // Another fence request finds the same revocation rather than a new one.
         assert_eq!(
-            store.fence(&paired.receiver_id, &paired, "fence-2".into()),
+            store.fence(&pairing(&paired), "fence-2".into()),
             Ok(fenced.clone())
         );
         let raw = Connection::open(&path).unwrap();
@@ -1364,10 +1381,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            store.fence(&paired.receiver_id, &paired, "fence".into()),
-            Ok(revoked)
-        );
+        assert_eq!(store.fence(&pairing(&paired), "fence".into()), Ok(revoked));
         assert!(
             store
                 .binding(&CredentialId::new("replacement").unwrap())
@@ -1375,5 +1389,53 @@ mod tests {
                 .unwrap()
                 .active
         );
+    }
+
+    /// Row P46: a receiver holds its pairing until its credential is revoked on
+    /// it, even if that same credential is regranted back afterwards.
+    #[tokio::test]
+    async fn holding_ends_at_an_intervening_revocation_even_when_regranted_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let store = open(&private.join("receiver-access.sqlite3"), "policy-one").unwrap();
+        let owner = PrincipalId::new("owner").unwrap();
+        let credential = CredentialId::new("device").unwrap();
+        let paired = store
+            .pair_now(
+                credential.clone(),
+                OrganizationId::new("org").unwrap(),
+                owner.clone(),
+                owner.clone(),
+                "stage".into(),
+            )
+            .unwrap();
+        assert_eq!(store.holding(&pairing(&paired)), Ok(Some(paired.clone())));
+        let receiver = paired.receiver_id.clone();
+        let steps = [
+            (None, false, "revoke-1"),
+            (
+                Some(CredentialId::new("other").unwrap()),
+                true,
+                "regrant-other",
+            ),
+            (None, false, "revoke-2"),
+            (Some(credential.clone()), true, "regrant-back"),
+        ];
+        for (replacement, active, request) in steps {
+            store
+                .change(
+                    receiver.clone(),
+                    replacement,
+                    active,
+                    owner.clone(),
+                    request.into(),
+                )
+                .await
+                .unwrap();
+        }
+        let current = store.binding(&credential).unwrap().unwrap();
+        assert!(current.active && current.access_epoch > paired.access_epoch);
+        assert_eq!(store.holding(&pairing(&paired)), Ok(None));
     }
 }

@@ -305,6 +305,8 @@ async fn owner_route_approve_exact_claim_before_effect() {
                 "pairing.approve",
                 json!({"invitationId": id, "deviceKey": key}),
             );
+            assert!(approved.get("activationStopped").is_none(), "{approved}");
+            let approved = approved["status"].clone();
             // Approval carries the exact key through to an issued credential
             // and its paired receiver (slice 2b, rows A1, A2).
             assert_eq!(approved["phase"], "active");

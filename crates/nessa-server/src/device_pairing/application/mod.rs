@@ -20,5 +20,5 @@ pub use activation::{ActivationError, Approval, FreshStage};
 pub use cleanup::{CleanupError, SettleCleanup};
 pub use owner::{OwnerError, PairingOwner, PreparedInvitation};
 pub use read_status::{DeviceStatusError, ReadDevicePairing};
-pub use receivers::{CurrentReceiver, PairingReceivers, ReceiverError, ReceiverRequest};
+pub use receivers::{PairingReceivers, ReceiverError, ReceiverRequest};
 pub use status::DevicePairingStatus;

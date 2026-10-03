@@ -196,7 +196,9 @@ impl NativeEnrollmentClient {
     /// the pending record in one publication (design row A10). If that save
     /// fails the pending record stays, and the next status delivers the same
     /// credential again. A credential other than the one already saved is
-    /// refused as a storage conflict.
+    /// refused as a storage conflict. A Terminal status for this enrollment
+    /// removes the device's record, pending or credential, before it is
+    /// returned (design row A14), so the device can enroll again.
     pub async fn status(
         &self,
         stream: TcpStream,
@@ -224,15 +226,24 @@ impl NativeEnrollmentClient {
             send(&mut channel, NativePairingRequest::Status(public))?;
             let status = receive_status(&mut channel, public, received.as_ref())?;
             check_deadline(&deadline).map_err(physical_error)?;
-            if let NativePairingStatus::Active {
-                credential,
-                receiver,
-                ..
-            } = &status
-            {
-                pending
+            match &status {
+                NativePairingStatus::Active {
+                    credential,
+                    receiver,
+                    ..
+                } => pending
                     .save_credential(credential, receiver, public)
-                    .map_err(NativeClientError::Storage)?;
+                    .map_err(NativeClientError::Storage)?,
+                // Authenticated end of this enrollment: the record goes, and
+                // the returned status is the trusted end signal (row A14).
+                NativePairingStatus::Terminal { .. } => pending
+                    .end_enrollment(public)
+                    .map_err(NativeClientError::Storage)?,
+                NativePairingStatus::Pending(_)
+                | NativePairingStatus::Unclaimed { .. }
+                | NativePairingStatus::Claimed(_)
+                | NativePairingStatus::Approved(_)
+                | NativePairingStatus::Staging(_) => {}
             }
             Ok(status)
         })

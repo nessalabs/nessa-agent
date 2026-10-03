@@ -1,6 +1,7 @@
 //! The owner side of one gateway's enrollment runtime, as the product socket
 //! sees it: create, list, read and decide, with entropy chosen by composition.
 use super::{CreatedInvitation, GatewayPairing, PairingRuntimeError};
+use crate::device_pairing::application::Approval;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, RngCore},
     application::{pairing::OwnerDecision, session::AuthenticatedSession},
@@ -63,7 +64,7 @@ impl PairingOwnerCommands {
         session: &AuthenticatedSession,
         id: InvitationId,
         key: DeviceKey,
-    ) -> Result<PairingRecord, PairingRuntimeError> {
+    ) -> Result<Approval, PairingRuntimeError> {
         self.gateway
             .approve(session, id, key, Entropy((self.entropy)()))
             .await

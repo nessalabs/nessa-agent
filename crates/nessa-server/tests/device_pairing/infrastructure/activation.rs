@@ -20,22 +20,30 @@ use nessa_auth::{
     },
     domain::{
         pairing::{
-            DeviceKey, InvitationId, PairingInitiator, PairingPhase, PairingRecord, PublicIntent,
-            TerminalCause,
+            DeviceKey, InvitationId, PairingError, PairingInitiator, PairingPhase, PairingRecord,
+            PublicIntent, TerminalCause,
         },
         Action, AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId,
     },
 };
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
-    conversation::{domain::ReceiverBinding, infrastructure::LocalReceiverAuthority},
+    conversation::{
+        domain::{PairedReceiver, ReceiverBinding},
+        infrastructure::LocalReceiverAuthority,
+    },
     device_pairing::{
         application::{
-            CleanupError, CurrentReceiver, PairingReceivers, ReceiverError, ReceiverRequest,
+            ActivationError, Approval, CleanupError, PairingReceivers, ReceiverError,
+            ReceiverRequest,
         },
         infrastructure::{
-            wire::NativePairingStatus, ConversationReceivers, NativeClientError,
-            NativeEnrollmentClient, PairingRuntimeError,
+            wire::{
+                decode_reply, encode_request, NativePairingReply, NativePairingRequest,
+                NativePairingStatus,
+            },
+            ConversationReceivers, EnrollmentChannel, NativeClientError, NativeConnectionFailure,
+            NativeEnrollmentClient, NativeEnrollmentConnections, PairingRuntimeError,
         },
     },
 };
@@ -59,6 +67,7 @@ struct Receivers {
     wrong_credential: AtomicBool,
     revoke_after_pair: AtomicBool,
     refuse_lookups: AtomicBool,
+    not_holding: AtomicBool,
     park: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
     pairs: AtomicUsize,
 }
@@ -71,6 +80,7 @@ impl Receivers {
             wrong_credential: AtomicBool::new(false),
             revoke_after_pair: AtomicBool::new(false),
             refuse_lookups: AtomicBool::new(false),
+            not_holding: AtomicBool::new(false),
             park: Mutex::new(None),
             pairs: AtomicUsize::new(0),
         })
@@ -93,20 +103,15 @@ impl PairingReceivers for Receivers {
             released.recv().ok();
         }
         if self.revoke_after_pair.swap(false, Ordering::SeqCst) {
-            let paired = ReceiverBinding {
+            let paired = PairedReceiver {
                 receiver_id: outcome.receiver().as_str().to_owned(),
                 credential_id: outcome.credential().clone(),
                 organization_id: request.organization().clone(),
                 owner_id: request.owner().clone(),
-                access_epoch: outcome.epoch(),
-                active: true,
+                paired_epoch: outcome.epoch(),
             };
             self.authority
-                .fence(
-                    outcome.receiver().as_str(),
-                    &paired,
-                    "revoked-meanwhile".into(),
-                )
+                .fence(&paired, "revoked-meanwhile".into())
                 .unwrap();
         }
         if self.lose_pair_answer.swap(false, Ordering::SeqCst) {
@@ -130,8 +135,16 @@ impl PairingReceivers for Receivers {
         }
         self.real.paired(request)
     }
-    fn current(&self, credential: &CredentialId) -> Result<Option<CurrentReceiver>, ReceiverError> {
-        self.real.current(credential)
+    fn holding(
+        &self,
+        request: &ReceiverRequest,
+        receiver: &ResourceId,
+        paired_epoch: u64,
+    ) -> Result<Option<u64>, ReceiverError> {
+        if self.not_holding.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        self.real.holding(request, receiver, paired_epoch)
     }
     fn fence(
         &self,
@@ -229,12 +242,15 @@ impl Claimed {
     }
 }
 
-async fn approve(fixture: &Fixture, claimed: &Claimed) -> PairingRecord {
+async fn approval(fixture: &Fixture, claimed: &Claimed) -> Approval {
     fixture
         .gateway
         .approve(&fixture.session, claimed.id, claimed.key, OsEntropy)
         .await
         .unwrap()
+}
+async fn approve(fixture: &Fixture, claimed: &Claimed) -> PairingRecord {
+    approval(fixture, claimed).await.record
 }
 
 /// Authenticate a fresh TLS connection made with the device's saved key as
@@ -424,7 +440,8 @@ async fn approval_retry_rejoins_the_original_receiver() {
         .gateway
         .approve(&fixture.session, claimed.id, claimed.key, OsEntropy)
         .await
-        .unwrap();
+        .unwrap()
+        .record;
     assert_eq!(active.phase(), PairingPhase::Active);
     assert_eq!(active.stage_binding(), staging.stage_binding());
     let (receiver, epoch) = active.receiver_binding().unwrap();
@@ -526,7 +543,8 @@ async fn cancel_during_activation_is_settled_by_the_activation() {
         .await
         .unwrap()
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .record;
     assert_eq!(settled.phase(), PairingPhase::Terminal);
     assert!(!settled.cleanup_pending());
     assert_eq!(settled.terminal().unwrap().0, TerminalCause::Cancelled);
@@ -556,8 +574,8 @@ async fn startup_settles_ended_enrollments_before_serving() {
     // S8: still unavailable.
     assert_eq!(
         fixture.gateway.reconcile_cleanup().await,
-        Err(PairingRuntimeError::Cleanup(CleanupError::Enrollment(
-            PairingStoreError::Unavailable
+        Err(PairingRuntimeError::Cleanup(CleanupError::Receiver(
+            ReceiverError::Unavailable
         )))
     );
     assert_eq!(fixture.registry.read_pairing(claimed.id).unwrap(), pending);
@@ -623,14 +641,15 @@ async fn shutdown_settles_ended_enrollments_after_the_drains() {
         .await
         .unwrap()
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .record;
     assert_eq!(active.phase(), PairingPhase::Active);
     tokio::time::timeout(WAIT, shutdown).await.unwrap().unwrap();
     // D6: the receiver authority still refuses; the obligation stays.
     assert_eq!(
         fixture.gateway.reconcile_cleanup().await,
-        Err(PairingRuntimeError::Cleanup(CleanupError::Enrollment(
-            PairingStoreError::Unavailable
+        Err(PairingRuntimeError::Cleanup(CleanupError::Receiver(
+            ReceiverError::Unavailable
         )))
     );
     assert_eq!(fixture.registry.read_pairing(first.id).unwrap(), pending);
@@ -659,6 +678,9 @@ impl ClientPendingStore for RefusedCredentialSave {
     }
     fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
         self.state.load_credential()
+    }
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        self.state.end_enrollment(expected)
     }
     fn save_pending(
         &self,
@@ -719,7 +741,8 @@ async fn device_keeps_the_issued_credential_and_clears_pending() {
         .gateway
         .approve(&fixture.session, id, key, OsEntropy)
         .await
-        .unwrap();
+        .unwrap()
+        .record;
     assert_eq!(active.phase(), PairingPhase::Active);
     let status = || async {
         tokio::time::timeout(
@@ -751,4 +774,242 @@ async fn device_keeps_the_issued_credential_and_clears_pending() {
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
     fixture.gateway.shutdown().await;
+}
+
+/// Row A6: another device key asking for an Active enrollment's status is
+/// refused before disclosure, and its reply carries no credential.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_key_cannot_read_an_active_enrollment() {
+    let (fixture, _) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    let active = approve(&fixture, &claimed).await;
+    assert_eq!(active.phase(), PairingPhase::Active);
+    let credential = active.credential().unwrap().as_str().to_owned();
+    claimed.status().await.unwrap();
+    let public = claimed.store.load_credential().unwrap().unwrap().intent();
+    let (server, stream) = sockets();
+    let owner = Arc::new(NativeEnrollmentConnections::new(
+        fixture.gateway.clone(),
+        RuntimeDependencies::default().clock,
+    ));
+    let serving = owner.clone();
+    let observer = tokio::spawn(async move { serving.serve(server, OsEntropy).await });
+    let pin = fixture.gateway.identity().public_spki();
+    let wrong = tokio::task::spawn_blocking(move || {
+        let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        let transport =
+            NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin)).unwrap();
+        let mut channel = EnrollmentChannel::new(transport);
+        channel
+            .send_envelope(&encode_request(&NativePairingRequest::Status(public)).unwrap())
+            .unwrap();
+        channel.receive_envelope()
+    });
+    let refusal = tokio::time::timeout(WAIT, observer)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        refusal.failure,
+        NativeConnectionFailure::Runtime(PairingRuntimeError::Enrollment(
+            PairingStoreError::Domain(PairingError::WrongActor)
+        ))
+    );
+    let reply = tokio::time::timeout(WAIT, wrong)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        decode_reply(&reply).unwrap(),
+        NativePairingReply::Refused
+    ));
+    assert!(!String::from_utf8_lossy(&reply).contains(&credential));
+    assert_eq!(fixture.registry.read_pairing(claimed.id).unwrap(), active);
+    owner.shutdown().await;
+    claimed.finish(&fixture).await;
+}
+
+/// Row A11: a stop approving again can finish is `retryable` (and does
+/// finish); one it cannot is permanent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_reports_whether_a_stop_is_retryable() {
+    let (fixture, receivers) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    receivers.lose_pair_answer.store(true, Ordering::SeqCst);
+    let stopped = approval(&fixture, &claimed).await;
+    assert_eq!(stopped.record.phase(), PairingPhase::Staging);
+    assert_eq!(
+        stopped.stopped,
+        Some(ActivationError::Receiver(ReceiverError::Unavailable))
+    );
+    assert!(stopped.stopped.unwrap().retryable());
+    let finished = approval(&fixture, &claimed).await;
+    assert_eq!(finished.record.phase(), PairingPhase::Active);
+    assert_eq!(finished.stopped, None);
+    claimed.finish(&fixture).await;
+
+    let (fixture, receivers) = crate::activation::fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    receivers.revoke_after_pair.store(true, Ordering::SeqCst);
+    let stopped = approval(&fixture, &claimed).await;
+    assert_eq!(stopped.record.phase(), PairingPhase::Staging);
+    assert_eq!(stopped.stopped, Some(ActivationError::ReceiverNotCurrent));
+    assert!(!stopped.stopped.unwrap().retryable());
+    claimed.finish(&fixture).await;
+}
+
+/// Row A12: an Active enrollment whose receiver no longer holds the pairing
+/// gets no status, so no epoch; the device keeps what it saved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_status_refuses_a_receiver_that_no_longer_holds_the_pairing() {
+    let (fixture, receivers) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    approve(&fixture, &claimed).await;
+    let delivered = claimed.status().await.unwrap();
+    receivers.not_holding.store(true, Ordering::SeqCst);
+    assert_eq!(
+        claimed.status().await.unwrap_err(),
+        NativeClientError::Refused
+    );
+    assert!(claimed.store.load_credential().unwrap().is_some());
+    receivers.not_holding.store(false, Ordering::SeqCst);
+    assert_eq!(claimed.status().await.unwrap(), delivered);
+    claimed.finish(&fixture).await;
+}
+
+/// Row A13: a Staging enrollment that reaches its expiry is settled by the
+/// owner read or device status that expires it, not left for a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_staging_is_settled_by_the_path_that_expires_it() {
+    for owner_path in [true, false] {
+        let (fixture, receivers) = fixture().await;
+        let claimed = Claimed::new(&fixture, "device").await;
+        // Staging without a remembered receiver; the pair itself committed.
+        receivers.wrong_credential.store(true, Ordering::SeqCst);
+        let staging = approve(&fixture, &claimed).await;
+        receivers.wrong_credential.store(false, Ordering::SeqCst);
+        assert_eq!(staging.phase(), PairingPhase::Staging);
+        fixture.time.set(staging.expires_at_ms());
+        if owner_path {
+            let read = fixture
+                .gateway
+                .owner_status(&fixture.session, claimed.id)
+                .await
+                .unwrap();
+            assert!(!read.cleanup_pending());
+        } else {
+            let status = claimed.status().await.unwrap();
+            assert!(
+                matches!(
+                    status,
+                    NativePairingStatus::Terminal {
+                        cause: TerminalCause::Expired,
+                        ..
+                    }
+                ),
+                "{status:?}"
+            );
+        }
+        let settled = fixture.registry.read_pairing(claimed.id).unwrap();
+        assert_eq!(settled.terminal().unwrap().0, TerminalCause::Expired);
+        assert_eq!(settled.terminal().unwrap().1, &PairingInitiator::System);
+        assert!(!settled.cleanup_pending());
+        let (credential, _) = settled.stage_binding().unwrap();
+        assert!(!transitions(&fixture, credential).unwrap().active);
+        assert_eq!(receivers.pairs.load(Ordering::SeqCst), 1);
+        claimed.finish(&fixture).await;
+    }
+}
+
+/// Row A5 (P46): a revocation of the credential on the paired receiver before
+/// publication refuses it, even after the credential was regranted back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn intervening_fence_refuses_publication_even_when_regranted_back() {
+    let (fixture, receivers) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    receivers.lose_pair_answer.store(true, Ordering::SeqCst);
+    let staging = approve(&fixture, &claimed).await;
+    let (credential, _) = staging.stage_binding().unwrap();
+    let paired = transitions(&fixture, credential).unwrap();
+    let owner = PrincipalId::new("owner").unwrap();
+    for (replacement, active, request) in [
+        (None, false, "revoke-1"),
+        (
+            Some(CredentialId::new("other").unwrap()),
+            true,
+            "regrant-other",
+        ),
+        (None, false, "revoke-2"),
+        (Some(credential.clone()), true, "regrant-back"),
+    ] {
+        fixture
+            .receivers
+            .change(
+                paired.receiver_id.clone(),
+                replacement,
+                active,
+                owner.clone(),
+                request.into(),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(transitions(&fixture, credential).unwrap().active);
+    let stopped = approval(&fixture, &claimed).await;
+    assert_eq!(stopped.record.phase(), PairingPhase::Staging);
+    assert_eq!(stopped.stopped, Some(ActivationError::ReceiverNotCurrent));
+    assert!(stopped.record.receiver_binding().is_some());
+    claimed.finish(&fixture).await;
+}
+
+/// Row A14: the device's authenticated Terminal status removes its credential
+/// and lets it enroll again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_status_ends_the_device_record_and_allows_a_new_enrollment() {
+    let (fixture, _) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    approve(&fixture, &claimed).await;
+    claimed.status().await.unwrap();
+    assert!(claimed.store.load_credential().unwrap().is_some());
+    fixture
+        .gateway
+        .decide(&fixture.session, claimed.id, OwnerDecision::Cancel)
+        .await
+        .unwrap();
+    let ended = claimed.status().await.unwrap();
+    assert!(matches!(
+        ended,
+        NativePairingStatus::Terminal {
+            cause: TerminalCause::Cancelled,
+            ..
+        }
+    ));
+    assert!(claimed.store.load_credential().unwrap().is_none());
+    assert!(claimed.store.load_pending().unwrap().is_none());
+    // Nothing is left to ask about, and a new code enrolls the same device.
+    assert_eq!(
+        claimed.status().await.unwrap_err(),
+        NativeClientError::NoPending
+    );
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let again = tokio::time::timeout(
+        WAIT,
+        claimed.client.enroll(
+            TcpStream::connect(claimed.address).unwrap(),
+            code,
+            OsEntropy,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(again, NativePairingStatus::Claimed(_)));
+    claimed.finish(&fixture).await;
 }

@@ -1,5 +1,5 @@
 //! Exact-attempt status consumes the original store and live TLS proof.
-use super::receivers::{PairingReceivers, ReceiverError};
+use super::receivers::{PairingReceivers, ReceiverError, ReceiverRequest};
 use super::DevicePairingStatus;
 use nessa_auth::{
     application::{
@@ -15,7 +15,8 @@ pub enum DeviceStatusError {
     /// The registry refused or failed, including a key that is not this
     /// attempt's (`WrongActor`).
     Enrollment(PairingStoreError),
-    /// An Active record's receiver could not be read.
+    /// An Active record's receiver could not be read, or no longer holds its
+    /// pairing (`NotPaired`): no epoch is delivered then.
     Receiver(ReceiverError),
 }
 
@@ -67,18 +68,17 @@ impl ReadDevicePairing<'_> {
         if record.phase() != PairingPhase::Active {
             return Ok(DevicePairingStatus::Claimed(Box::new(record)));
         }
-        // Auth publishes Active only with a credential; the receiver authority
-        // binds that credential to the record's receiver alone.
-        let credential = record
-            .credential()
-            .ok_or(DeviceStatusError::Receiver(ReceiverError::Conflict))?;
-        let current = self
+        // Auth publishes Active only with a stage and its receiver.
+        let conflict = DeviceStatusError::Receiver(ReceiverError::Conflict);
+        let request = ReceiverRequest::for_stage(&record).ok_or(conflict)?;
+        let (receiver, paired_epoch) = record.receiver_binding().ok_or(conflict)?;
+        let access_epoch = self
             .receivers
-            .current(credential)
+            .holding(&request, receiver, paired_epoch)
             .map_err(DeviceStatusError::Receiver)?
-            .ok_or(DeviceStatusError::Receiver(ReceiverError::Missing))?;
+            .ok_or(DeviceStatusError::Receiver(ReceiverError::NotPaired))?;
         Ok(DevicePairingStatus::Active {
-            access_epoch: current.epoch,
+            access_epoch,
             record: Box::new(record),
         })
     }

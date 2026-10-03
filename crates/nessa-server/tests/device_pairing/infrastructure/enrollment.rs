@@ -228,6 +228,9 @@ impl ClientPendingStore for RefusingSave {
     fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
         self.0.load_credential()
     }
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        self.0.end_enrollment(expected)
+    }
     fn save_credential(
         &self,
         credential: &CredentialId,

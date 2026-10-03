@@ -17,9 +17,13 @@
 //! else keeps the behaviour it had, because a service that retries too often is
 //! a worse bug than one that retries when it did not need to, but a service
 //! that gives up on a failure that would have cleared is worse than both.
-use crate::device_pairing::infrastructure::GatewayIdentityError;
+use crate::device_pairing::{
+    application::{CleanupError, ReceiverError},
+    infrastructure::{GatewayIdentityError, PairingRuntimeError},
+};
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::pairing::{PairingStoreError, PrivateStateError};
+use nessa_auth::domain::pairing::PairingError;
 
 use super::{error::NativeFailure, RunError};
 
@@ -90,6 +94,15 @@ pub(super) fn restart(error: &RunError) -> Restart {
                 ),
             ),
         ) => Restart::Pointless,
+        // An ended enrollment's receiver that is missing, conflicts or cannot
+        // advance, or a registry conflict, refuses the same way on the same
+        // files: startup cleanup would fail forever (design rows S8, S16).
+        RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+            CleanupError::Receiver(
+                ReceiverError::Missing | ReceiverError::Conflict | ReceiverError::Exhausted,
+            )
+            | CleanupError::Enrollment(PairingStoreError::Domain(PairingError::Conflict)),
+        ))) => Restart::Pointless,
         // Everything below is either transient by nature or carries no typed
         // cause to judge — an opaque message is not evidence of permanence, and
         // guessing wrong here strands a gateway that would have started.
@@ -143,6 +156,16 @@ mod tests {
                 PrivateStateError::Conflict,
             ))),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Corrupt)),
+            // An ended enrollment's cleanup that refuses the same way (row S8).
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Receiver(ReceiverError::Missing),
+            ))),
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Receiver(ReceiverError::Conflict),
+            ))),
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Enrollment(PairingStoreError::Domain(PairingError::Conflict)),
+            ))),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Conflict)),
             // The same private state, met by the first key publication.
             RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
@@ -185,6 +208,13 @@ mod tests {
                 source: Error::from(ErrorKind::AddrInUse),
             }),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Locked)),
+            // A receiver or registry that is only unavailable can clear.
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Receiver(ReceiverError::Unavailable),
+            ))),
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Enrollment(PairingStoreError::StageOccupied),
+            ))),
             RunError::Native(NativeFailure::Identity(GatewayIdentityError::PrivateState(
                 PrivateStateError::Unavailable,
             ))),

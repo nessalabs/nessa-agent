@@ -315,10 +315,12 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
         let mut owner = gateway.owner();
         let status = owner.ok("pairing.status", json!({"invitationId": id}));
         assert_eq!(status["phase"], "claimed");
-        owner.ok(
+        let approved = owner.ok(
             "pairing.approve",
             json!({"invitationId": id, "deviceKey": status["claimedDeviceKey"]}),
-        )
+        );
+        assert!(approved.get("activationStopped").is_none(), "{approved}");
+        approved["status"].clone()
     });
     assert_eq!(approved["phase"], "active", "{approved}");
     assert_eq!(approved["cleanupPending"], false);
@@ -380,37 +382,15 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
     assert!(!issued.cleanup_pending);
 
     // Row A9: the owner revokes the credential with the existing method.
+    // Nothing reads the enrollment afterwards: an owner read or the device's
+    // status would settle its receiver at once (row A13).
     let server = tokio::task::block_in_place(|| gateway.start());
-    let revoked = tokio::task::block_in_place(|| {
-        let mut owner = gateway.owner();
-        owner.ok(
+    tokio::task::block_in_place(|| {
+        gateway.owner().ok(
             "credential.revoke",
             json!({"requestId": "revoke-device", "credentialId": credential}),
-        );
-        owner.ok("pairing.status", json!({"invitationId": id}))
+        )
     });
-    assert_eq!(revoked["phase"], "terminal", "{revoked}");
-    assert_eq!(revoked["terminal"]["cause"], "credential_revoked");
-    assert_eq!(revoked["cleanupPending"], true);
-    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
-    let status = tokio::time::timeout(
-        WAIT,
-        client.status(TcpStream::connect(native).unwrap(), None),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(
-        matches!(
-            &status,
-            NativePairingStatus::Terminal {
-                cause: TerminalCause::CredentialRevoked,
-                ..
-            }
-        ),
-        "{status:?}"
-    );
-    client.shutdown().await;
     // Killed, so shutdown's reconciliation never runs: the credential is
     // refused at once, while its receiver's fence is still owed.
     drop(server);
@@ -432,8 +412,30 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
             .owner()
             .ok("pairing.status", json!({"invitationId": id}))
     });
-    assert_eq!(settled["cleanupPending"], false, "{settled}");
-    assert_eq!(settled["terminal"], revoked["terminal"]);
+    assert_eq!(settled["phase"], "terminal", "{settled}");
+    assert_eq!(settled["terminal"]["cause"], "credential_revoked");
+    assert_eq!(settled["cleanupPending"], false);
+    // Row A14: the device's status reads the end and removes its credential.
+    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    let status = tokio::time::timeout(
+        WAIT,
+        client.status(TcpStream::connect(native).unwrap(), None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        matches!(
+            &status,
+            NativePairingStatus::Terminal {
+                cause: TerminalCause::CredentialRevoked,
+                ..
+            }
+        ),
+        "{status:?}"
+    );
+    assert!(store.load_credential().unwrap().is_none());
+    client.shutdown().await;
 
     // Row D5: a second device, revoked while serving, is settled by an
     // ordinary stop after the drains.
@@ -453,10 +455,12 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
     let approved = tokio::task::block_in_place(|| {
         let mut owner = gateway.owner();
         let status = owner.ok("pairing.status", json!({"invitationId": second}));
-        owner.ok(
+        let approved = owner.ok(
             "pairing.approve",
             json!({"invitationId": second, "deviceKey": status["claimedDeviceKey"]}),
-        )
+        );
+        assert!(approved.get("activationStopped").is_none(), "{approved}");
+        approved["status"].clone()
     });
     assert_eq!(approved["phase"], "active", "{approved}");
     assert!(matches!(
@@ -469,29 +473,19 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
         .unwrap(),
         NativePairingStatus::Active { .. }
     ));
-    let revoked = tokio::task::block_in_place(|| {
-        let mut owner = gateway.owner();
-        owner.ok(
+    let issued = second_store.load_credential().unwrap().unwrap();
+    tokio::task::block_in_place(|| {
+        gateway.owner().ok(
             "credential.revoke",
             json!({"requestId": "revoke-second", "credentialId": approved["credentialId"]}),
-        );
-        owner.ok("pairing.status", json!({"invitationId": second}))
-    });
-    assert_eq!(revoked["cleanupPending"], true, "{revoked}");
-    assert!(matches!(
-        tokio::time::timeout(
-            WAIT,
-            client.status(TcpStream::connect(native).unwrap(), None)
         )
-        .await
-        .unwrap()
-        .unwrap(),
-        NativePairingStatus::Terminal { .. }
-    ));
+    });
     client.shutdown().await;
     let stopped = tokio::task::block_in_place(|| server.stop());
     assert!(stopped.success(), "{stopped}");
-    let ended = device_at_gateway(&gateway, second_store.load_credential().unwrap().unwrap()).await;
+    // Nothing read it after the revocation, so only the stop's
+    // reconciliation could have fenced it.
+    let ended = device_at_gateway(&gateway, issued).await;
     assert!(ended.authenticated.is_err());
     assert!(
         !ended.receiver_active,

@@ -7,16 +7,11 @@
 //! correlation, so every retry of one stage names the same receipt.
 use super::runtime::hex;
 use crate::conversation::{
-    domain::ReceiverBinding,
+    domain::{PairedReceiver, ReceiverBinding},
     infrastructure::{LocalReceiverAuthority, ReceiverChangeError},
 };
-use crate::device_pairing::application::{
-    CurrentReceiver, PairingReceivers, ReceiverError, ReceiverRequest,
-};
-use nessa_auth::{
-    application::pairing::ReceiverOutcome,
-    domain::{CredentialId, ResourceId},
-};
+use crate::device_pairing::application::{PairingReceivers, ReceiverError, ReceiverRequest};
+use nessa_auth::{application::pairing::ReceiverOutcome, domain::ResourceId};
 use std::sync::Arc;
 
 /// The receiver authority, as device enrollment asks for it.
@@ -35,6 +30,17 @@ fn stage_request(request: &ReceiverRequest) -> String {
 /// The fence's request text, derived from the same stage.
 fn fence_request(request: &ReceiverRequest) -> String {
     format!("pairing-fence-{}", hex(request.request().bytes()))
+}
+
+/// The pairing a stage recorded, as the conversation domain names it.
+fn paired(request: &ReceiverRequest, receiver: &ResourceId, paired_epoch: u64) -> PairedReceiver {
+    PairedReceiver {
+        receiver_id: receiver.as_str().to_owned(),
+        credential_id: request.credential().clone(),
+        organization_id: request.organization().clone(),
+        owner_id: request.owner().clone(),
+        paired_epoch,
+    }
 }
 
 fn receiver_error(error: ReceiverChangeError) -> ReceiverError {
@@ -87,21 +93,16 @@ impl PairingReceivers for ConversationReceivers {
             .transpose()
     }
 
-    fn current(&self, credential: &CredentialId) -> Result<Option<CurrentReceiver>, ReceiverError> {
+    fn holding(
+        &self,
+        request: &ReceiverRequest,
+        receiver: &ResourceId,
+        paired_epoch: u64,
+    ) -> Result<Option<u64>, ReceiverError> {
         self.0
-            .binding(credential)
-            .map_err(receiver_error)?
-            .map(|binding| {
-                Ok(CurrentReceiver {
-                    receiver: ResourceId::new(binding.receiver_id)
-                        .map_err(|_| ReceiverError::Conflict)?,
-                    epoch: binding.access_epoch,
-                    active: binding.active,
-                    organization: binding.organization_id,
-                    owner: binding.owner_id,
-                })
-            })
-            .transpose()
+            .holding(&paired(request, receiver, paired_epoch))
+            .map(|current| current.map(|binding| binding.access_epoch))
+            .map_err(receiver_error)
     }
 
     fn fence(
@@ -110,17 +111,12 @@ impl PairingReceivers for ConversationReceivers {
         receiver: &ResourceId,
         paired_epoch: u64,
     ) -> Result<ReceiverOutcome, ReceiverError> {
-        let expected = ReceiverBinding {
-            receiver_id: receiver.as_str().to_owned(),
-            credential_id: request.credential().clone(),
-            organization_id: request.organization().clone(),
-            owner_id: request.owner().clone(),
-            access_epoch: paired_epoch,
-            active: true,
-        };
         let binding = self
             .0
-            .fence(receiver.as_str(), &expected, fence_request(request))
+            .fence(
+                &paired(request, receiver, paired_epoch),
+                fence_request(request),
+            )
             .map_err(receiver_error)?;
         outcome(request, binding)
     }

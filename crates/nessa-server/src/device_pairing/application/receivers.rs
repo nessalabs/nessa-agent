@@ -58,22 +58,6 @@ impl ReceiverRequest {
     }
 }
 
-/// A credential's current receiver binding, read when it is needed and never
-/// kept: an epoch is stale the moment it is written down.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CurrentReceiver {
-    /// The receiver identity.
-    pub receiver: ResourceId,
-    /// Its current access epoch.
-    pub epoch: u64,
-    /// Whether the binding currently admits reads.
-    pub active: bool,
-    /// The organization the receiver is bound in.
-    pub organization: OrganizationId,
-    /// The owner it reads for.
-    pub owner: PrincipalId,
-}
-
 /// Why the receiver authority did not answer, without its diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReceiverError {
@@ -85,6 +69,9 @@ pub enum ReceiverError {
     Missing,
     /// The receiver's epoch cannot advance further.
     Exhausted,
+    /// The receiver no longer holds the stage's pairing: inactive, another
+    /// binding, or its credential revoked on it since the pair.
+    NotPaired,
 }
 
 /// The canonical receiver authority, as device enrollment reaches it. Calls run
@@ -96,8 +83,15 @@ pub trait PairingReceivers: Send + Sync {
     /// The original pair receipt for this stage, without pairing: `None` is a
     /// coherent absence, never an unavailable read.
     fn paired(&self, request: &ReceiverRequest) -> Result<Option<ReceiverOutcome>, ReceiverError>;
-    /// The credential's current binding, if it has one.
-    fn current(&self, credential: &CredentialId) -> Result<Option<CurrentReceiver>, ReceiverError>;
+    /// The receiver's current epoch if it still holds this stage's pairing at
+    /// `paired_epoch` (active, the same receiver, credential, organization and
+    /// owner, and the credential not revoked on it since); `None` otherwise.
+    fn holding(
+        &self,
+        request: &ReceiverRequest,
+        receiver: &ResourceId,
+        paired_epoch: u64,
+    ) -> Result<Option<u64>, ReceiverError>;
     /// Fence the receiver this stage paired at `paired_epoch`, as the system.
     /// A repeat returns the original fence; a receiver already revoked from
     /// this credential returns that revocation.

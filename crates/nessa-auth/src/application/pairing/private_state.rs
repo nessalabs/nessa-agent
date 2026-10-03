@@ -298,6 +298,10 @@ pub trait ClientPendingStore: Send + Sync {
         receiver: &ResourceId,
         expected: PublicIntent,
     ) -> Result<(), PrivateStateError>;
+    /// Remove the record for exactly `expected`, pending or credential, once the
+    /// device's authenticated status has read its enrollment Terminal. Absence
+    /// is already ended; a record for another enrollment is a conflict.
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError>;
     /// Publish or compare-and-swap exact prior metadata, preserving identity on retry.
     /// The calling application owns admission from a pinned terminal receipt.
     fn save_pending(

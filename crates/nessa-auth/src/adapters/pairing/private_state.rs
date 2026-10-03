@@ -252,6 +252,42 @@ impl FilePairingState {
     }
 }
 impl ClientPendingStore for FilePairingState {
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        self.verify_lock()?;
+        let name = OsStr::new(ENROLLMENT_FILE);
+        let mut file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut bytes = Zeroizing::new(Vec::with_capacity(CREDENTIAL_MAX_BYTES + 1));
+        (&mut file)
+            .take((CREDENTIAL_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(storage_error)?;
+        if bytes.len() > CREDENTIAL_MAX_BYTES {
+            return Err(PrivateStateError::Corrupt);
+        }
+        let intent = match decode_client(&bytes)? {
+            ClientRecord::Pending(pending) => pending.intent(),
+            ClientRecord::Credential(credential) => credential.intent(),
+        };
+        if intent != expected {
+            return Err(PrivateStateError::Conflict);
+        }
+        // The open handle names the file read: a replacement is refused.
+        self.directory
+            .remove_file(name, &file)
+            .map_err(storage_error)?;
+        self.directory
+            .sync()
+            .map_err(|_| PrivateStateError::Uncertain)?;
+        self.verify_lock()
+    }
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         let _guard = self
             .operation

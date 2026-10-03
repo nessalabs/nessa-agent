@@ -290,6 +290,9 @@ impl ClientPendingStore for AcknowledgedSave {
     fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
         self.state.load_credential()
     }
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        self.state.end_enrollment(expected)
+    }
     fn save_credential(
         &self,
         credential: &CredentialId,

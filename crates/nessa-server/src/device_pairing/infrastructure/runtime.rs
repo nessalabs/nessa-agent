@@ -500,8 +500,10 @@ impl GatewayPairing {
             DeviceStatusError::Enrollment(error) => PairingRuntimeError::Enrollment(error),
             DeviceStatusError::Receiver(error) => PairingRuntimeError::Receiver(error),
         })?;
-        // The read may have expired the open invitation; drop its setup.
+        // The read may have expired the open invitation; drop its setup. If
+        // it ended a staged one, settle its receiver now (design row A13).
         discard_ended(&mut *self.available.lock().await, &self.dependencies);
+        self.settle_if_ended(public.invitation()).await;
         Ok(status)
     }
     /// Current protected owner status; historical Active is not read authority.
@@ -518,15 +520,16 @@ impl GatewayPairing {
     /// issued credential: stage, receiver, publication (design rows P19–P25,
     /// O5, O6). The server mints the stage's credential and correlation from
     /// `entropy`; a retry keeps the stage the record already has. A step that
-    /// does not complete leaves the record where it stands, and the record is
-    /// what is returned: approving again continues from there.
+    /// does not complete leaves the record where it stands; the record is
+    /// returned with why activation stopped, and approving again continues
+    /// from there when that stop is retryable.
     pub async fn approve<R: RngCore + CryptoRng + Send + 'static>(
         &self,
         session: &AuthenticatedSession,
         id: InvitationId,
         key: DeviceKey,
         mut entropy: R,
-    ) -> Result<PairingRecord, PairingRuntimeError> {
+    ) -> Result<Approval, PairingRuntimeError> {
         let mut bytes = [0; 32];
         entropy
             .try_fill_bytes(&mut bytes)
@@ -540,19 +543,25 @@ impl GatewayPairing {
             request: AttemptId::new(request),
         };
         let session = session.clone();
-        let Approval { record, stopped } = self
+        let approval = self
             .owner_command(move |owner, handle| {
                 handle.block_on(owner.approve(&session, id, key, fresh))
             })
             .await?;
-        if let Some(stopped) = stopped {
+        if let Approval {
+            record,
+            stopped: Some(stopped),
+        } = &approval
+        {
             tracing::warn!(
+                invitation = ?id,
                 ?stopped,
+                retryable = stopped.retryable(),
                 phase = ?record.phase(),
-                "device pairing activation stopped; approving again continues it"
+                "device pairing activation stopped"
             );
         }
-        Ok(record)
+        Ok(approval)
     }
     /// Record an owner decision. `Approve` here records consent only; `approve`
     /// carries it on to Active. An enrollment that ends after it was staged has its
@@ -582,7 +591,7 @@ impl GatewayPairing {
             match settled {
                 Ok(record) => Ok(record),
                 Err(error) => {
-                    tracing::warn!(?error, "device pairing cleanup left pending");
+                    tracing::warn!(invitation = ?id, ?error, "device pairing cleanup left pending");
                     owner
                         .enrollments
                         .read_pairing(id)
@@ -591,6 +600,20 @@ impl GatewayPairing {
             }
         })
         .await
+    }
+    /// Settle `id`'s receiver if it ended with cleanup owed; a failure leaves
+    /// the obligation for the next path or reconciliation.
+    async fn settle_if_ended(&self, id: InvitationId) {
+        let settled = SettleCleanup {
+            enrollments: &self.dependencies.enrollments,
+            receivers: self.dependencies.receivers.as_ref(),
+            clock: self.dependencies.clock.as_ref(),
+        }
+        .execute(id)
+        .await;
+        if let Err(error) = settled {
+            tracing::warn!(invitation = ?id, ?error, "device pairing cleanup left pending");
+        }
     }
     /// Settle every ended enrollment of this gateway whose receiver cleanup is
     /// pending: lookup only, then fence or no-receiver completion (design rows

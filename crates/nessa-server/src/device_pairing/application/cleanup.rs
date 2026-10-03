@@ -21,7 +21,7 @@ use nessa_auth::{
     },
     domain::pairing::{InvitationId, PairingError, PairingRecord},
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Why an ended enrollment's cleanup did not complete. Its record keeps the
 /// obligation (`cleanup_pending`) and its first cause either way.
@@ -81,11 +81,15 @@ impl SettleCleanup<'_> {
                 let receipts = Receipts {
                     receivers: self.receivers,
                     request: &request,
+                    failed: Mutex::new(None),
                 };
-                match resolve_terminal_stage(stage, &receipts)
-                    .await
-                    .map_err(CleanupError::Enrollment)?
-                {
+                let resolved = resolve_terminal_stage(stage, &receipts).await;
+                // A receiver failure is the receiver's, on this path as on the
+                // fence below; only Auth's own refusals are the registry's.
+                if let Some(error) = receipts.failed.lock().ok().and_then(|failed| *failed) {
+                    return Err(CleanupError::Receiver(error));
+                }
+                match resolved.map_err(CleanupError::Enrollment)? {
                     StageResolution::NoReceiver(proof) => {
                         return self
                             .enrollments
@@ -111,10 +115,12 @@ impl SettleCleanup<'_> {
     }
 }
 
-/// Lookup-only receipts for one stage, for Auth's terminal resolution.
+/// Lookup-only receipts for one stage, for Auth's terminal resolution. Auth's
+/// port can only answer with its own error, so the receiver's is kept here.
 struct Receipts<'a> {
     receivers: &'a dyn PairingReceivers,
     request: &'a ReceiverRequest,
+    failed: Mutex<Option<ReceiverError>>,
 }
 impl StageReceiptLookup for Receipts<'_> {
     fn lookup<'a>(
@@ -122,15 +128,12 @@ impl StageReceiptLookup for Receipts<'_> {
         stage: StageOwnership,
     ) -> PortFuture<'a, (StageOwnership, Option<ReceiverOutcome>), PairingStoreError> {
         Box::pin(async move {
-            let receipt = self
-                .receivers
-                .paired(self.request)
-                .map_err(|error| match error {
-                    ReceiverError::Conflict => PairingStoreError::Domain(PairingError::Conflict),
-                    ReceiverError::Unavailable
-                    | ReceiverError::Missing
-                    | ReceiverError::Exhausted => PairingStoreError::Unavailable,
-                })?;
+            let receipt = self.receivers.paired(self.request).map_err(|error| {
+                if let Ok(mut failed) = self.failed.lock() {
+                    *failed = Some(error);
+                }
+                PairingStoreError::Unavailable
+            })?;
             Ok((stage, receipt))
         })
     }

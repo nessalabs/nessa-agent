@@ -845,3 +845,50 @@ fn issued_credential_replaces_pending_once_and_reopens() {
         );
     }
 }
+
+/// Slice 2b row A14: an ended enrollment's record, pending or credential, is
+/// removed for exactly its own enrollment; absence is already ended, and a
+/// new enrollment can then be saved.
+#[test]
+fn ended_enrollment_is_removed_exactly() {
+    let fixture = Fixture::new();
+    assert_eq!(fixture.store.end_enrollment(intent(2)), Ok(()));
+    for issued in [false, true] {
+        fixture
+            .store
+            .save_pending(&key(7), &[5; 44], intent(2), None)
+            .unwrap();
+        if issued {
+            fixture
+                .store
+                .save_credential(
+                    &CredentialId::new("device-1").unwrap(),
+                    &ResourceId::new("receiver-1").unwrap(),
+                    intent(2),
+                )
+                .unwrap();
+        }
+        let before = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
+        assert_eq!(
+            fixture.store.end_enrollment(intent(4)),
+            Err(PrivateStateError::Conflict)
+        );
+        assert_eq!(
+            fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap(),
+            before
+        );
+        fixture.store.end_enrollment(intent(2)).unwrap();
+        assert!(!fixture.path().join(ENROLLMENT_FILE).exists());
+        assert!(fixture.store.load_pending().unwrap().is_none());
+        assert!(fixture.store.load_credential().unwrap().is_none());
+        assert_eq!(fixture.store.end_enrollment(intent(2)), Ok(()));
+    }
+    fixture
+        .store
+        .save_pending(&key(8), &[6; 44], intent(3), None)
+        .unwrap();
+    assert_eq!(
+        fixture.store.load_pending().unwrap().unwrap().intent(),
+        intent(3)
+    );
+}

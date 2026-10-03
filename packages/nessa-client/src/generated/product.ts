@@ -1321,14 +1321,14 @@ export interface PairingInvitationParams {
   /** Random identity of the invitation, as its bytes. */
   invitationId: number[]
 }
-/** Wire input for pairing.approve. Approval records consent to this exact key; it issues no credential. */
+/** Wire input for pairing.approve. Approval records consent to this exact key, then stages, pairs a receiver and publishes the device's credential. */
 export interface PairingApproveParams {
   /** Random identity of the invitation, as its bytes. */
   invitationId: number[]
   /** The exact device key the owner was shown as claimed, as its bytes. Any other key is refused. */
   deviceKey: number[]
 }
-/** Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging and active follow approval once credential publication is built. terminal: ended; see terminal. */
+/** Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging: a credential and receiver are being prepared for it. active: the credential is issued; this is historical enrollment, not read authority. terminal: ended; see terminal. */
 export const PairingOwnerPhase = {
   Available: "available",
   Claimed: "claimed",
@@ -1373,7 +1373,7 @@ export interface PairingTerminal {
   /** Who caused it. */
   initiator: PairingInitiator
 }
-/** Receiver recorded for an enrollment once credential publication is built; absent before. */
+/** Receiver paired for an enrollment, with the access epoch of its original pair receipt; absent before a receiver is paired. */
 export interface PairingReceiver {
   /** Receiver the device's reads are admitted through. */
   receiverId: string
@@ -1408,6 +1408,20 @@ export interface PairingOwnerStatus {
   terminal?: PairingTerminal
   /** Whether physical cleanup of a staged receiver is still owed. Read from the record, never stored separately. */
   cleanupPending: boolean
+}
+/** Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again. */
+export const PairingActivationStop = {
+  Retryable: "retryable",
+  Permanent: "permanent",
+} as const
+export type PairingActivationStop =
+  (typeof PairingActivationStop)[keyof typeof PairingActivationStop]
+/** Result of pairing.approve: the enrollment after approval and activation, and why activation stopped if it did. */
+export interface PairingApproveResult {
+  /** The enrollment as it now stands. The approval itself is committed whatever else happened. */
+  status: PairingOwnerStatus
+  /** Present when activation stopped before active: whether approving again can finish it. */
+  activationStopped?: PairingActivationStop
 }
 /** Result of pairing.create: a code for one device, valid until status.expiresAtMs. */
 export interface PairingCreateResult {
