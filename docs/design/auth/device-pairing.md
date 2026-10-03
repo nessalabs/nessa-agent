@@ -1058,8 +1058,10 @@ lifetimes from the same eight native connection permits.
 | Shared committed-view cache | Source owner publishes64 entries and256MiB admission/eviction threshold, queue64 and remembered heads64 | Threshold is checked for cache admission; an existing pinned/current fold may grow beyond it. Source tests explicitly cover retained bytes above threshold. This is not a256MiB absolute heap ceiling | Maximum current fold/shared storage must be bounded by its own domain/source contract, not omitted or assigned per-native connection |
 | Caller-owned outputs | Public immutable response output has published individual wire/method bounds; there is no maximum number of successful historical outputs a caller can retain | A caller can keep prior outputs while beginning later successful passes. Physical connection/pass permits bound in-flight work, not that historical collection | Whole application acceptance requires the actual calling owner and retained-output policy; a producer-only ceiling cannot claim arbitrary caller retention |
 
-Source owners: server device_pairing/infrastructure/connection/wake.rs and
-infrastructure/channel.rs; product/socket.rs and protocol/json.rs; auth
+Source owners. Implemented native enrollment: server
+device_pairing/infrastructure/connection/wake.rs and
+infrastructure/enrollment_channel.rs. Existing files whose native protected-read
+role is proposed, not built: server product/socket.rs and protocol/json.rs. Auth
 adapters/local/registry.rs and registry/pairing/{device_verifier,projection}.rs;
 SDK infrastructure/session_storage/{record,record_source}.rs. The global
 requested-live Rust tracker measures actual cross-thread owned allocations
@@ -1626,11 +1628,12 @@ of identity and key widths.
 holds:
 
 - `GatewayPairing` (`infrastructure/runtime.rs`): owner create/pending/status/
-  decide and device hello/begin/finish/status, over the existing
-  `LocalCredentialStore`, Cedar policy, wall clock, gateway key store and a
+  decide and device hello/begin/finish/status. It reaches Auth only through the
+  `PairingStore` and `AccessReader` ports (the credential registry in real
+  composition), with Cedar policy, the wall clock, the gateway key store and a
   gateway identity restored by `restore_gateway_identity`.
 - `NativeEnrollmentConnections` and `NativeEnrollmentListener`: up to eight
-  blocking connection workers serving the enrollment exchange over Auth's TLS
+  blocking connection workers per connection owner, serving the enrollment exchange over Auth's TLS
   transport, with a ten-second TLS deadline and a thirty-second enrollment
   deadline on the injected monotonic clock.
 - `NativeEnrollmentClient`: the device side — enroll, pinned status, and retry
@@ -1689,18 +1692,25 @@ slice.
 | --- | --- | --- | --- |
 | P01 | Owner creates from a current session; policy allows or denies | Admission, then code registration, then registry commit, then the code. Denied keeps the session valid and the registry unchanged. | `native_create_claim_approve_and_reopen_status`; `native_owner_policy_denial_preserves_session_and_registry` |
 | P02, P04 | Device presents a wrong code | Begin charges the attempt before ServerLogin. The device's PAKE fails at KE2, so it saves nothing and sends no KE3; the gateway settles the attempt as ConnectionClosed. The invitation stays open. | `native_wrong_codes_are_charged_within_the_attempt_bound` |
+| P04, P54 | Admitted attempt ends without a claim: connection closes before KE3; KE3 bytes fail PAKE; a request other than Confirm arrives where KE3 belongs | Settled as ConnectionClosed, InvalidProof and InvalidProof respectively (a non-Confirm request is treated as a failed proof). VerifierUnavailable is the cause for any other crypto failure; no public path produces one, because an Available invitation always has its setup. | `native_attempt_failures_record_their_cause` |
+| P28 | The store refuses a write: reserving the attempt, settling a failed attempt, committing the claim | Reserve: the connection fails with the store error, no PAKE runs, nothing is charged. Settlement: the connection reports the primary failure and the settlement failure together, and the attempt stays Pending. Claim: `Refused`; the attempt stays Pending and the device keeps its pending record. | `native_failed_store_writes_stay_visible` |
 | P05 | Four wrong codes then the right one; five wrong codes then the right one | The fifth attempt can still claim. With five charged, Begin is refused (`AttemptsExhausted`) before PAKE and the record is unchanged. | `native_wrong_codes_are_charged_within_the_attempt_bound` |
 | P06 direct expiry | Hello one millisecond before expiry; any request at expiry | Before: Hello answers. At: Auth's `expire_pairing_if_due` ends the invitation as Expired, nothing is charged, the device gets `Refused`. | `native_expired_and_used_codes_are_refused_without_a_claim` |
+| P06, S11 | An invitation passes its expiry and nothing touches it until the owner creates again, lists, reads or decides | Every runtime path that reads an enrollment (create, pending, owner status, decide, device hello, begin and status) first asks Auth's `expire_pairing_if_due`, then discards the volatile setup if the record has ended. The old invitation ends Expired by System, not Cancelled, and the new create succeeds. There is no timer: an untouched record stays Available in storage until one of these paths, or a restart, settles it. | `native_expired_code_is_settled_before_the_next_create` |
+| P06, P10 | Valid KE3 or Begin arrives at or after expiry | Auth refuses the claim or the reservation with Expired; the runtime then asks `expire_pairing_if_due`, so the invitation ends Expired, the pending attempt becomes Superseded and the setup is discarded. The device gets `Refused`; its pinned status then reads Unclaimed (Superseded, Expired), not Pending, and the next create succeeds. | `native_claim_losing_to_expiry_is_settled_and_recoverable` |
+| P06, S6, S9 | Gateway restarts holding a Claimed enrollment past its expiry | `GatewayPairing::open` ends Available records as Restarted and asks `expire_pairing_if_due` for every other unfinished record of this gateway, so the Claimed one ends Expired before serving and no longer counts toward the live limit. | `native_restart_expires_due_claimed_enrollments` |
 | P08 | A second device presents a code after it was claimed | Hello finds no open invitation; `Refused`; the claimed record is unchanged and the device saves nothing. | `native_expired_and_used_codes_are_refused_without_a_claim` |
 | P09, P56, P58 | KE2 succeeds, the device's pending save fails | No KE3 is sent and no claim exists; after the gateway settles the attempt, a fresh enrollment claims. | `native_pending_save_failure_sends_no_claim_and_retry_recovers` |
+| P56 | A gateway answers Hello for another attempt, or a Challenge for another operation | The device refuses (Phase) before PAKE finish; nothing is saved and no KE3 is sent. | `native_client_refuses_a_gateway_that_changes_the_operation` |
 | P12, P57 | Claim committed, reply lost, gateway restarted | Fresh pinned status with the saved key reads the same claim, without a second attempt. | `native_claim_reply_loss_preserves_pinned_status` |
+| P54 | Claim committed; reading the store afterwards would fail | The reply is built from the record the claim commit returned, and the setup is discarded from that record, so no read follows the commit. A failure to send the reply is a typed `ClaimReply` failure, which is never answered with `Refused`. | `native_committed_claim_is_reported_without_a_later_read` |
 | P13, S6 | Gateway restarts with an Available invitation | `GatewayPairing::open` ends it as Restarted before serving; the gateway key is restored, not regenerated. | `native_restart_ends_available_setup_and_preserves_key` |
 | P17 | Owner approves another valid key, then the claimed key | Conflict for the other key; Approved for the claimed one, with no credential. | `native_create_claim_approve_and_reopen_status` |
 | P31, P60 | Valid KE3 on another TLS channel with the same device key; a channel accepted under another gateway key | Refused as InvalidContext before PAKE finish; the record is unchanged. The original channel claims. | `native_finish_refuses_another_channel_without_claim` |
 | P31 | Status request from another device key | Auth refuses (WrongActor) before disclosure; `Refused`; the original key reads its status. | `native_status_refuses_another_device_and_accepts_original` |
 | P32 | Frame prefix announces 4097 bytes; exactly 4096 | Refused before the body is read or allocated; 4096 accepted. Encoding refuses 4097. | `native_framing_refuses_oversize_before_body_and_accepts_exact` |
 | P32 | Partial prefix, body or output, interrupted by `WouldBlock` | The channel keeps its offsets and resumes; a different envelope cannot replace pending output. | `native_framing_retains_partial_io_and_output` |
-| P52, P66 | Eight connections held, a ninth arrives, waiters dropped, shutdown | Ninth refused for capacity; dropped waiters leave permits with workers; shutdown wakes each socket once and waits; later admission refused. A connection takes its permit under the lock `close` takes; this ordering is structural, and no public seam can pause between the two to test it. | `native_shutdown_keeps_original_physical_capacity` |
+| P52, P66 | Eight connections held, a ninth arrives, waiters dropped, shutdown | The limit is per `NativeEnrollmentConnections`; composition must build one per gateway, which is not enforced by construction. Ninth refused for capacity; dropped waiters leave permits with workers; shutdown wakes each socket once and waits; later admission refused. A connection takes its permit under the lock `close` takes; this ordering is structural, and no public seam can pause between the two to test it. | `native_shutdown_keeps_original_physical_capacity` |
 | P53 | Begin without Hello; Begin naming another attempt; refusals | Refused as Phase before any attempt is charged. A gateway decision on a readable channel is answered with the redacted `Refused` reply; physical failures are not. | `native_out_of_order_requests_are_refused_before_an_attempt_is_charged`; `native_expired_and_used_codes_are_refused_without_a_claim` |
 | P54, P59 | KE3 arrives at the enrollment deadline; one millisecond earlier | At: refused, attempt settled HandshakeDeadline, no claim. Earlier: claims. Both on the injected clock. | `native_late_confirmation_is_settled_as_deadline_without_claim` |
 | P55 | Entropy panics inside create, registration or client work | Typed `WorkerFault(Panic)`; capacity released; nothing published; the next operation succeeds. | `native_worker_faults_preserve_type_and_allow_new_work` |
@@ -1712,14 +1722,22 @@ slice.
 | O2, O3 | Owner lists unfinished enrollments and reads one; the session has expired | Each listed record and each status read asks current session and policy; an expired session is refused and the record is unchanged. Terminal records are not listed. | `native_owner_discovers_unfinished_enrollments_through_current_policy` |
 
 Not implemented here, by row: P03 identical-retry receipt through the native
-client, P07, P10 (a Pending status read before the gateway settles), P11, P14,
-P18–P30, P63, P65 (Auth's TLS budget, not this slice), O1/O4–O9 as product
-routes, and S1–S5, S7–S12.
+client, P07, P11, P14, P18–P27, P29, P30, P63, P65 (Auth's TLS budget, not this
+slice), M1–M2 periodic expiry (expiry is settled when a path reads the record,
+not by a timer), O1/O4–O9 as product routes, and S1–S5, S7, S8, S10, S12.
 
-### Open design question: accept failures
+### Open design items for mounting
 
-P67 ends service when `accept` fails. On BSD-derived systems, including macOS,
-`accept` can return `ECONNABORTED` when a peer resets a connection before it is
-accepted, so a remote peer can end enrollment. The MCP relay listener instead
-logs and retries after 100 ms. Changing P67 is a design decision for its owner,
-and it matters only once the listener is mounted.
+- **Accept failures (P67).** P67 ends service when `accept` fails. On
+  BSD-derived systems, including macOS, `accept` can return `ECONNABORTED` when
+  a peer resets before it is accepted, so a remote peer can end enrollment. The
+  MCP relay listener instead logs and retries after 100 ms. The path has no test:
+  there is no seam that makes `accept` fail. Decide when the listener is mounted.
+- **Who closed the connection.** When the gateway's own shutdown wakes a
+  connection waiting for KE3, the attempt is settled ConnectionClosed with the
+  device as actor, because Auth accepts only the device as the actor of a failed
+  attempt. The gateway caused it. Recording a System cause needs an Auth
+  producer change.
+- **One connection owner per gateway.** The eight-connection limit belongs to a
+  `NativeEnrollmentConnections`; nothing stops composition building two for one
+  `GatewayPairing`. Mounting composition must build exactly one.

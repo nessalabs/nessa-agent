@@ -6,6 +6,7 @@ use super::{
     BeginPairing, EnrollmentChannel, GatewayPairing, NativeFrameError, PairingRuntimeError,
 };
 use crate::app::ports::Clock;
+use crate::device_pairing::application::DevicePairingStatus;
 use nessa_auth::{
     adapters::pairing::{CryptoRng, NativeTransport, PairingCryptoError, RngCore},
     application::pairing::{PairingStoreError, PairingWorkerFault},
@@ -44,6 +45,9 @@ pub enum NativeConnectionFailure {
     Runtime(PairingRuntimeError),
     /// Unexpected outer worker fault, not ordinary service unavailability.
     WorkerFault(PairingWorkerFault),
+    /// The claim committed, but its reply could not be encoded or sent. The
+    /// claim stands; the device recovers it with a pinned status request.
+    ClaimReply(NativeFrameError),
 }
 /// Primary failure and independent failure to settle the original charged attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -312,7 +316,8 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         NativeConnectionFailure::Capacity
         | NativeConnectionFailure::Crypto(_)
         | NativeConnectionFailure::Io(_)
-        | NativeConnectionFailure::WorkerFault(_) => false,
+        | NativeConnectionFailure::WorkerFault(_)
+        | NativeConnectionFailure::ClaimReply(_) => false,
     }
 }
 fn exchange<R: RngCore + CryptoRng>(
@@ -327,7 +332,7 @@ fn exchange<R: RngCore + CryptoRng>(
     check_deadline(deadline)?;
     let public = match first {
         NativePairingRequest::Status(public) => {
-            return send_status(gateway, channel, public);
+            return send_status(gateway, handle, channel, public);
         }
         NativePairingRequest::Hello(attempt) => {
             handle.block_on(gateway.hello(attempt)).map_err(|error| {
@@ -352,7 +357,9 @@ fn exchange<R: RngCore + CryptoRng>(
         .block_on(gateway.begin(channel.transport(), public, &request, entropy))
         .map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Runtime(error)))?
     {
-        BeginPairing::Existing(_) => return send_status(gateway, channel, public),
+        BeginPairing::Existing(status) => {
+            return write_reply(channel, wire::encode_status(public, &status));
+        }
         BeginPairing::Admitted(handshake) => handshake,
     };
     // From here, this closure exclusively owns the original completion opportunity.
@@ -381,12 +388,28 @@ fn exchange<R: RngCore + CryptoRng>(
             return Err(error);
         }
     };
-    handle
+    let record = handle
         .block_on(gateway.finish(channel.transport(), *handshake, &message))
         .map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Runtime(error)))?;
-    // After the claim commits, a failed reply is an IO failure of this connection;
-    // the claim stands (`native_claim_reply_loss_preserves_pinned_status`).
-    send_status(gateway, channel, public)
+    // The reply comes from the committed record, with no further read, and any
+    // failure from here is `ClaimReply`: the claim stands
+    // (`native_committed_claim_is_reported_without_a_later_read`,
+    // `native_claim_reply_loss_preserves_pinned_status`).
+    let status = DevicePairingStatus::Claimed(Box::new(record));
+    let bytes = wire::encode_status(public, &status).map_err(|error| {
+        NativeConnectionError::from(NativeConnectionFailure::ClaimReply(NativeFrameError::Wire(
+            error,
+        )))
+    })?;
+    write_reply(channel, Ok(bytes)).map_err(|error| match error.failure {
+        NativeConnectionFailure::Io(kind) => {
+            NativeConnectionFailure::ClaimReply(NativeFrameError::Io(kind)).into()
+        }
+        NativeConnectionFailure::Wire(wire) => {
+            NativeConnectionFailure::ClaimReply(NativeFrameError::Wire(wire)).into()
+        }
+        _ => error,
+    })
 }
 fn admit_confirmation(
     deadline: &NativeDeadline,
@@ -451,11 +474,12 @@ fn write_reply<S: Read + Write>(
 }
 fn send_status<S: Read + Write>(
     gateway: &GatewayPairing,
+    handle: &Handle,
     channel: &mut EnrollmentChannel<S>,
     public: PublicIntent,
 ) -> Result<(), NativeConnectionError> {
-    let status = gateway
-        .status(channel.transport(), public)
+    let status = handle
+        .block_on(gateway.status(channel.transport(), public))
         .map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Runtime(error)))?;
     write_reply(channel, wire::encode_status(public, &status))
 }

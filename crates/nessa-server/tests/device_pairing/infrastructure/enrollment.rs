@@ -1,4 +1,4 @@
-use super::support::{pending, sockets, Fixture, Time, NOW_MS, WAIT};
+use super::support::{pending, sockets, Fault, FaultyStore, Fixture, Time, NOW_MS, WAIT};
 use nessa_auth::{
     adapters::pairing::{
         ClientAttempt, FilePairingState, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
@@ -13,8 +13,8 @@ use nessa_auth::{
         session::ReadCurrentSession,
     },
     domain::pairing::{
-        AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingPhase,
-        PairingPolicy, PublicIntent, TerminalCause,
+        AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingInitiator,
+        PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
     },
 };
 use nessa_server::{
@@ -23,8 +23,8 @@ use nessa_server::{
         application::OwnerError,
         infrastructure::{
             wire::{
-                decode_reply, encode_request, NativePairingReply, NativePairingRequest,
-                NativePairingStatus,
+                decode_reply, decode_request, encode_challenge, encode_hello, encode_request,
+                NativePairingReply, NativePairingRequest, NativePairingStatus,
             },
             BeginPairing, CreatedInvitation, EnrollmentChannel, NativeClientError,
             NativeConnectionError, NativeConnectionFailure, NativeEnrollmentClient,
@@ -646,7 +646,7 @@ async fn native_finish_refuses_another_channel_without_claim() {
             .unwrap();
     let stray_client = connecting.await.unwrap();
     assert!(matches!(
-        fixture.gateway.status(&stray, public),
+        fixture.gateway.status(&stray, public).await,
         Err(PairingRuntimeError::Crypto(
             PairingCryptoError::InvalidContext
         ))
@@ -882,7 +882,7 @@ async fn native_expired_and_used_codes_are_refused_without_a_claim() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_owner_discovers_unfinished_enrollments_through_current_policy() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::short_lived_owner().await;
     let created = fixture
         .gateway
         .create(fixture.session.clone(), OsEntropy)
@@ -909,9 +909,10 @@ async fn native_owner_discovers_unfinished_enrollments_through_current_policy() 
             .unwrap(),
         claimed
     );
-    // Moving the owner's clock past the session's expiry withdraws current access;
-    // the stored enrollment is unchanged.
-    fixture.time.set(u64::MAX);
+    // Past the owner credential's expiry (500 s) but before the invitation's,
+    // current access is withdrawn and the stored enrollment is unchanged.
+    assert!(claimed.expires_at_ms() > 600_000);
+    fixture.time.set(600_000);
     assert_eq!(
         fixture
             .gateway
@@ -1258,5 +1259,616 @@ async fn native_out_of_order_requests_are_refused_before_an_attempt_is_charged()
             .charged_attempts(),
         1
     );
+    fixture.gateway.shutdown().await;
+}
+
+fn expired_by_system(record: &PairingRecord) -> bool {
+    record.phase() == PairingPhase::Terminal
+        && record.terminal() == Some((TerminalCause::Expired, &PairingInitiator::System))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_expired_code_is_settled_before_the_next_create() {
+    let fixture = Fixture::new().await;
+    // create: the past-due invitation no longer holds the slot.
+    let first = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    fixture.time.set(first.record().expires_at_ms());
+    let second = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    assert!(expired_by_system(
+        &fixture.registry.read_pairing(first.record().id()).unwrap()
+    ));
+    // pending: a past-due invitation is settled, not listed.
+    fixture.time.set(second.record().expires_at_ms());
+    assert!(fixture
+        .gateway
+        .pending(&fixture.session)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(expired_by_system(
+        &fixture.registry.read_pairing(second.record().id()).unwrap()
+    ));
+    // decide: cancelling a past-due invitation keeps Expired as its cause.
+    let third = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    fixture.time.set(third.record().expires_at_ms());
+    let decided = fixture
+        .gateway
+        .decide(&fixture.session, third.record().id(), OwnerDecision::Cancel)
+        .await
+        .unwrap();
+    assert!(expired_by_system(&decided));
+    assert_eq!(
+        fixture.registry.read_pairing(third.record().id()).unwrap(),
+        decided
+    );
+    // owner status: reads the settled record.
+    let fourth = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    fixture.time.set(fourth.record().expires_at_ms());
+    assert!(expired_by_system(
+        &fixture
+            .gateway
+            .owner_status(&fixture.session, fourth.record().id())
+            .await
+            .unwrap()
+    ));
+    // Before its deadline an invitation is left open.
+    let open = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    fixture.time.set(open.record().expires_at_ms() - 1);
+    assert_eq!(
+        &*fixture.gateway.pending(&fixture.session).await.unwrap(),
+        std::slice::from_ref(open.record())
+    );
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
+    let fixture = Fixture::new().await;
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    let expires = created.record().expires_at_ms();
+    // KE3 arrives at the deadline.
+    let connections = Arc::new(NativeEnrollmentConnections::new(
+        fixture.gateway.clone(),
+        RuntimeDependencies::default().clock,
+    ));
+    let (server, stream) = sockets();
+    let serving = connections.clone();
+    let served = tokio::spawn(async move { serving.serve(server, OsEntropy).await });
+    let (root, store) = pending(fixture.directory.path(), "client-private");
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let time = fixture.time.clone();
+    let saving = store.clone();
+    let device = tokio::task::spawn_blocking(move || {
+        let attempt = AttemptId::new([47; AttemptId::LENGTH]);
+        let (mut channel, public, key, message) = ready_to_confirm(stream, attempt, &code, &saving);
+        time.set(expires);
+        channel
+            .send_envelope(
+                &encode_request(&NativePairingRequest::Confirm { public, message }).unwrap(),
+            )
+            .unwrap();
+        (public, key, channel.receive_envelope().unwrap())
+    });
+    let (public, key, reply) = tokio::time::timeout(WAIT, device).await.unwrap().unwrap();
+    assert!(matches!(
+        decode_reply(&reply).unwrap(),
+        NativePairingReply::Refused
+    ));
+    assert_eq!(
+        tokio::time::timeout(WAIT, served)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .failure,
+        NativeConnectionFailure::Runtime(PairingRuntimeError::Enrollment(
+            PairingStoreError::Domain(PairingError::Expired)
+        ))
+    );
+    connections.shutdown().await;
+    let record = fixture.registry.read_pairing(id).unwrap();
+    assert!(expired_by_system(&record));
+    assert_eq!(
+        record.attempt_status(public.attempt(), key).unwrap(),
+        AttemptOutcome::Superseded
+    );
+    // The device's pinned status reads the settled attempt, so it may retry.
+    let (address, stop, listener, connections) = fixture.listener().await;
+    drop(store);
+    let store = Arc::new(FilePairingState::open(&root, Path::new("state")).unwrap());
+    let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+    assert_eq!(
+        tokio::time::timeout(
+            WAIT,
+            client.status(TcpStream::connect(address).unwrap(), None)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Unclaimed {
+            public,
+            outcome: AttemptOutcome::Superseded,
+            terminal: Some(TerminalCause::Expired),
+        }
+    );
+    client.shutdown().await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    connections.shutdown().await;
+
+    // Begin arrives at the deadline, after a Hello one millisecond earlier.
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    let expires = created.record().expires_at_ms();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let (_, request) = ClientAttempt::start(&mut OsEntropy, &code).unwrap();
+    fixture.time.set(expires - 1);
+    let public = fixture
+        .gateway
+        .hello(AttemptId::new([53; AttemptId::LENGTH]))
+        .await
+        .unwrap();
+    fixture.time.set(expires);
+    let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let (server, client) = actual_channel(&fixture, &identity).await;
+    assert!(matches!(
+        fixture
+            .gateway
+            .begin(&server, public, &request, &mut OsEntropy)
+            .await,
+        Err(PairingRuntimeError::Enrollment(PairingStoreError::Domain(
+            PairingError::Expired
+        )))
+    ));
+    drop(client);
+    let record = fixture.registry.read_pairing(id).unwrap();
+    assert!(expired_by_system(&record));
+    assert_eq!(record.charged_attempts(), 0);
+    assert_eq!(
+        fixture
+            .gateway
+            .hello(AttemptId::new([59; AttemptId::LENGTH]))
+            .await
+            .unwrap_err(),
+        PairingRuntimeError::NoInvitation
+    );
+    // The slot is free for the next invitation.
+    assert_eq!(
+        fixture
+            .gateway
+            .create(fixture.session.clone(), OsEntropy)
+            .await
+            .unwrap()
+            .record()
+            .phase(),
+        PairingPhase::Available
+    );
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_restart_expires_due_claimed_enrollments() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, connections) = fixture.listener().await;
+    let mut claimed = Vec::new();
+    for name in ["first-private", "second-private"] {
+        let created = fixture
+            .gateway
+            .create(fixture.session.clone(), OsEntropy)
+            .await
+            .unwrap();
+        let (_, store) = pending(fixture.directory.path(), name);
+        let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+        let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+        let status = tokio::time::timeout(
+            WAIT,
+            client.enroll(TcpStream::connect(address).unwrap(), code, OsEntropy),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(status, NativePairingStatus::Claimed(_)));
+        claimed.push((created.record().expires_at_ms(), client));
+    }
+    let latest = claimed.iter().map(|(expires, _)| *expires).max().unwrap();
+    fixture.time.set(latest);
+    // A device's pinned status settles its own past-due claim.
+    let (_, first) = &claimed[0];
+    assert!(matches!(
+        tokio::time::timeout(
+            WAIT,
+            first.status(TcpStream::connect(address).unwrap(), None)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Terminal {
+            cause: TerminalCause::Expired,
+            ..
+        }
+    ));
+    let second = {
+        let (_, client) = &claimed[1];
+        client.shutdown().await;
+        let first = &claimed[0].1;
+        first.shutdown().await;
+        fixture.registry.pending_pairings().unwrap()
+    };
+    // The second claim is untouched until the gateway restarts.
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].phase(), PairingPhase::Claimed);
+    let id = second[0].id();
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    connections.shutdown().await;
+    drop(connections);
+    fixture.gateway.shutdown().await;
+    let fixture = fixture.reopen().await;
+    assert!(expired_by_system(
+        &fixture.registry.read_pairing(id).unwrap()
+    ));
+    assert!(fixture.registry.pending_pairings().unwrap().is_empty());
+    fixture.gateway.shutdown().await;
+}
+
+/// What a test device sends in place of its KE3, given the operation and the real KE3.
+type InsteadOfKe3 = fn(PublicIntent, Vec<u8>) -> NativePairingRequest;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_attempt_failures_record_their_cause() {
+    let fixture = Fixture::new().await;
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    // What the device sends where KE3 belongs, and the cause the gateway records.
+    let cases: [(u8, Option<InsteadOfKe3>, AttemptFailure); 3] = [
+        (61, None, AttemptFailure::ConnectionClosed),
+        (
+            67,
+            Some(|public, message| NativePairingRequest::Confirm {
+                public,
+                message: message.iter().map(|byte| byte ^ 0xff).collect(),
+            }),
+            AttemptFailure::InvalidProof,
+        ),
+        (
+            71,
+            Some(|public, _| NativePairingRequest::Status(public)),
+            AttemptFailure::InvalidProof,
+        ),
+    ];
+    for (attempt, instead, cause) in cases {
+        let connections = Arc::new(NativeEnrollmentConnections::new(
+            fixture.gateway.clone(),
+            RuntimeDependencies::default().clock,
+        ));
+        let (server, stream) = sockets();
+        let serving = connections.clone();
+        let served = tokio::spawn(async move { serving.serve(server, OsEntropy).await });
+        let (_, store) = pending(fixture.directory.path(), &format!("client-{attempt}"));
+        let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+        let device = tokio::task::spawn_blocking(move || {
+            let (mut channel, public, key, message) = ready_to_confirm(
+                stream,
+                AttemptId::new([attempt; AttemptId::LENGTH]),
+                &code,
+                &store,
+            );
+            if let Some(instead) = instead {
+                channel
+                    .send_envelope(&encode_request(&instead(public, message)).unwrap())
+                    .unwrap();
+                channel.receive_envelope().ok();
+            }
+            (public, key)
+        });
+        let (public, key) = tokio::time::timeout(WAIT, device).await.unwrap().unwrap();
+        let refusal = tokio::time::timeout(WAIT, served)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(refusal.settlement, None);
+        connections.shutdown().await;
+        let record = fixture.registry.read_pairing(id).unwrap();
+        assert_eq!(
+            record.attempt_status(public.attempt(), key).unwrap(),
+            AttemptOutcome::Failed(cause)
+        );
+        assert_eq!(record.phase(), PairingPhase::Available);
+    }
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_failed_store_writes_stay_visible() {
+    let store = std::sync::OnceLock::new();
+    let fixture = Fixture::with_store(|registry| {
+        let faulty = FaultyStore::new(registry);
+        store.set(faulty.clone()).ok();
+        faulty
+    })
+    .await;
+    let store = store.get().unwrap().clone();
+    let mut created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let mut id = created.record().id();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+
+    // Reserve refused: no PAKE runs and nothing is charged.
+    store.refuse(Some(Fault::Reserve));
+    let (_, request) = ClientAttempt::start(&mut OsEntropy, &code).unwrap();
+    let public = fixture
+        .gateway
+        .hello(AttemptId::new([73; AttemptId::LENGTH]))
+        .await
+        .unwrap();
+    let (reply, served) = exchange_raw(
+        &fixture,
+        vec![
+            NativePairingRequest::Hello(public.attempt()),
+            NativePairingRequest::Begin { public, request },
+        ],
+    )
+    .await;
+    assert!(matches!(reply.unwrap(), NativePairingReply::Refused));
+    assert_eq!(
+        served.unwrap_err().failure,
+        NativeConnectionFailure::Runtime(PairingRuntimeError::Enrollment(
+            PairingStoreError::Unavailable
+        ))
+    );
+    assert_eq!(
+        fixture
+            .registry
+            .read_pairing(id)
+            .unwrap()
+            .charged_attempts(),
+        0
+    );
+
+    // Settlement refused, on both settlement paths: the primary failure and the
+    // settlement failure arrive together, and the attempt stays Pending.
+    store.refuse(Some(Fault::Settle));
+    for (attempt, garbage) in [(79u8, false), (83, true)] {
+        let connections = Arc::new(NativeEnrollmentConnections::new(
+            fixture.gateway.clone(),
+            RuntimeDependencies::default().clock,
+        ));
+        let (server, stream) = sockets();
+        let serving = connections.clone();
+        let served = tokio::spawn(async move { serving.serve(server, OsEntropy).await });
+        let (_, state) = pending(fixture.directory.path(), &format!("client-{attempt}"));
+        let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+        let device = tokio::task::spawn_blocking(move || {
+            let (mut channel, public, key, message) = ready_to_confirm(
+                stream,
+                AttemptId::new([attempt; AttemptId::LENGTH]),
+                &code,
+                &state,
+            );
+            if garbage {
+                let message = message.iter().map(|byte| byte ^ 0xff).collect();
+                channel
+                    .send_envelope(
+                        &encode_request(&NativePairingRequest::Confirm { public, message })
+                            .unwrap(),
+                    )
+                    .unwrap();
+                channel.receive_envelope().ok();
+            }
+            (public, key)
+        });
+        let (public, key) = tokio::time::timeout(WAIT, device).await.unwrap().unwrap();
+        let refusal = tokio::time::timeout(WAIT, served)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        connections.shutdown().await;
+        if garbage {
+            assert_eq!(
+                refusal.failure,
+                NativeConnectionFailure::Runtime(PairingRuntimeError::Handshake {
+                    failure: PairingCryptoError::InvalidProof,
+                    settlement: Some(PairingStoreError::Unavailable),
+                })
+            );
+        } else {
+            assert!(matches!(refusal.failure, NativeConnectionFailure::Io(_)));
+            assert_eq!(refusal.settlement, Some(PairingStoreError::Unavailable));
+        }
+        assert_eq!(
+            fixture
+                .registry
+                .read_pairing(id)
+                .unwrap()
+                .attempt_status(public.attempt(), key)
+                .unwrap(),
+            AttemptOutcome::Pending
+        );
+        // The owner cancels the stuck attempt so the next case can reserve.
+        store.refuse(None);
+        fixture
+            .gateway
+            .decide(&fixture.session, id, OwnerDecision::Cancel)
+            .await
+            .unwrap();
+        created = fixture
+            .gateway
+            .create(fixture.session.clone(), OsEntropy)
+            .await
+            .unwrap();
+        id = created.record().id();
+        store.refuse(Some(Fault::Settle));
+    }
+
+    // Claim refused: `Refused`; the attempt stays Pending and the device keeps
+    // its pending record for a later pinned status.
+    store.refuse(Some(Fault::Claim));
+    let (_, state) = pending(fixture.directory.path(), "client-claim");
+    let client = NativeEnrollmentClient::new(state.clone(), RuntimeDependencies::default().clock);
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let (enrolled, served) = one_exchange(&fixture, &client, code).await;
+    assert_eq!(enrolled.unwrap_err(), NativeClientError::Refused);
+    assert_eq!(
+        served.unwrap_err().failure,
+        NativeConnectionFailure::Runtime(PairingRuntimeError::Enrollment(
+            PairingStoreError::Unavailable
+        ))
+    );
+    let public = state.load_pending().unwrap().unwrap().intent();
+    let record = fixture.registry.read_pairing(id).unwrap();
+    assert_eq!(record.phase(), PairingPhase::Available);
+    assert_eq!(record.charged_attempts(), 1);
+    assert!(record.claim_binding().is_none());
+    assert_eq!(public.invitation(), id);
+    client.shutdown().await;
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_committed_claim_is_reported_without_a_later_read() {
+    let store = std::sync::OnceLock::new();
+    let fixture = Fixture::with_store(|registry| {
+        let faulty = FaultyStore::new(registry);
+        store.set(faulty.clone()).ok();
+        faulty
+    })
+    .await;
+    let store = store.get().unwrap().clone();
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    // Every store read after the claim commits fails.
+    store.refuse(Some(Fault::ReadsAfterClaim));
+    let (_, state) = pending(fixture.directory.path(), "client-private");
+    let client = NativeEnrollmentClient::new(state, RuntimeDependencies::default().clock);
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let (enrolled, served) = one_exchange(&fixture, &client, code).await;
+    let NativePairingStatus::Claimed(consent) = enrolled.unwrap() else {
+        panic!("the committed claim is reported")
+    };
+    served.unwrap();
+    store.refuse(None);
+    let record = fixture
+        .registry
+        .read_pairing(created.record().id())
+        .unwrap();
+    assert_eq!(record.phase(), PairingPhase::Claimed);
+    assert_eq!(
+        record.claim_binding().map(|(attempt, _)| attempt),
+        Some(consent.public().attempt())
+    );
+    client.shutdown().await;
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_client_refuses_a_gateway_that_changes_the_operation() {
+    let fixture = Fixture::new().await;
+    fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let genuine = fixture
+        .gateway
+        .hello(AttemptId::new([89; AttemptId::LENGTH]))
+        .await
+        .unwrap();
+    // true: Hello names another attempt. false: Hello is right, Challenge is not.
+    for wrong_hello in [true, false] {
+        let (gateway_socket, stream) = sockets();
+        // A first-contact device accepts any gateway key, so the fake has its own.
+        let gateway_identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        let fake = tokio::task::spawn_blocking(move || {
+            let transport = NativeTransport::accept(gateway_socket, &gateway_identity).unwrap();
+            let mut channel = EnrollmentChannel::new(transport);
+            let NativePairingRequest::Hello(attempt) =
+                decode_request(&channel.receive_envelope().unwrap()).unwrap()
+            else {
+                panic!("hello")
+            };
+            let other = AttemptId::new([97; AttemptId::LENGTH]);
+            let public = genuine.with_attempt(attempt);
+            if wrong_hello {
+                channel
+                    .send_envelope(&encode_hello(genuine.with_attempt(other)).unwrap())
+                    .unwrap();
+            } else {
+                channel
+                    .send_envelope(&encode_hello(public).unwrap())
+                    .unwrap();
+                decode_request(&channel.receive_envelope().unwrap()).unwrap();
+                channel
+                    .send_envelope(
+                        &encode_challenge(genuine.with_attempt(other), &[1, 2, 3]).unwrap(),
+                    )
+                    .unwrap();
+            }
+            // The device sends nothing further.
+            channel.receive_envelope().is_err()
+        });
+        let (_, state) = pending(fixture.directory.path(), &format!("client-{wrong_hello}"));
+        let client =
+            NativeEnrollmentClient::new(state.clone(), RuntimeDependencies::default().clock);
+        let code = ManualCode::generate(&mut OsEntropy);
+        assert_eq!(
+            tokio::time::timeout(WAIT, client.enroll(stream, code, OsEntropy))
+                .await
+                .unwrap()
+                .unwrap_err(),
+            NativeClientError::Phase
+        );
+        client.shutdown().await;
+        assert!(tokio::time::timeout(WAIT, fake).await.unwrap().unwrap());
+        assert!(state.load_pending().unwrap().is_none());
+    }
     fixture.gateway.shutdown().await;
 }

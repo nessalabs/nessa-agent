@@ -5,25 +5,22 @@ use crate::device_pairing::application::{
     DevicePairingStatus, OwnerError, PairingOwner, ReadDevicePairing,
 };
 use nessa_auth::{
-    adapters::{
-        local::LocalCredentialStore,
-        pairing::{
-            credential_request_fingerprint, CryptoRng, ManualCode, NativeIdentity, NativeTransport,
-            PairingCryptoError, RngCore, ServerAttempt, ServerInvitation,
-        },
+    adapters::pairing::{
+        credential_request_fingerprint, CryptoRng, ManualCode, NativeIdentity, NativeTransport,
+        PairingCryptoError, RngCore, ServerAttempt, ServerInvitation,
     },
     application::{
         pairing::{
             AttemptReservation, AuthorizePairing, GatewayKeyStore, OwnerDecision, PairingStore,
             PairingStoreError, PairingWorkerFault, RuntimeEnd,
         },
-        ports::{Clock, PolicyEvaluator},
+        ports::{AccessReader, Clock, PolicyEvaluator},
         session::AuthenticatedSession,
     },
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, ConsentIntentId, InvitationId, PairingPhase, PairingPolicy,
-            PairingRecord, PublicIntent,
+            AttemptFailure, AttemptId, ConsentIntentId, InvitationId, PairingError, PairingPhase,
+            PairingPolicy, PairingRecord, PublicIntent,
         },
         Resource,
     },
@@ -65,15 +62,21 @@ pub enum PairingRuntimeError {
 }
 /// Trusted composition inputs; native key is restored by its private storage owner.
 pub struct PairingRuntimeDependencies {
-    /// Existing credential registry, not another key/grant store.
-    pub registry: Arc<LocalCredentialStore>,
+    /// Enrollment store (the credential registry in real composition). Every
+    /// enrollment decision is Auth's, made through this port.
+    pub enrollments: Arc<dyn PairingStore>,
+    /// Current credential and membership reader for owner admission.
+    pub access: Arc<dyn AccessReader>,
     /// Existing current policy evaluator (Cedar in real composition).
     pub policy: Arc<dyn PolicyEvaluator>,
     /// Existing injected absolute clock.
     pub clock: Arc<dyn Clock>,
     /// Composition-resolved exact gateway read resource.
     pub gateway: Resource,
-    /// Original private key-store owner remains held through physical runtime drain.
+    /// The gateway's private key store. It is not read here: holding it keeps
+    /// its process lock for as long as the runtime or any of its workers lives,
+    /// so nothing else can open the gateway's private state meanwhile
+    /// (`native_create_observer_loss_keeps_original_owner_until_drain`).
     pub key_store: Arc<dyn GatewayKeyStore>,
     /// Durable gateway Ed25519 identity restored before this owner opens.
     pub identity: NativeIdentity,
@@ -131,27 +134,27 @@ pub struct GatewayPairing {
     available: Arc<Mutex<Option<AvailableSetup>>>,
 }
 impl GatewayPairing {
-    /// Startup invalidates only Available records whose volatile PAKE state was
-    /// lost. Claimed/Approved/Staging receipts remain durable; Active is not swept.
-    /// Composition calls this before accepting native or owner requests.
+    /// Settle this gateway's unfinished records before serving. An Available
+    /// record lost its volatile PAKE setup with the previous process, so it ends
+    /// Restarted. Every other unfinished record is offered to Auth's expiry, so
+    /// one past its deadline ends Expired. Composition calls this before
+    /// accepting native or owner requests.
     pub fn open(dependencies: PairingRuntimeDependencies) -> Result<Self, PairingRuntimeError> {
-        for record in dependencies
-            .registry
+        let enrollments = dependencies.enrollments.as_ref();
+        let clock = dependencies.clock.as_ref();
+        for record in enrollments
             .pending_pairings()
             .map_err(PairingRuntimeError::Enrollment)?
         {
-            if record.phase() == PairingPhase::Available
-                && record.intent().resource() == &dependencies.gateway
-            {
-                dependencies
-                    .registry
-                    .end_pairing(
-                        record.id(),
-                        RuntimeEnd::Restarted,
-                        dependencies.clock.as_ref(),
-                    )
-                    .map_err(PairingRuntimeError::Enrollment)?;
+            if record.intent().resource() != &dependencies.gateway {
+                continue;
             }
+            if record.phase() == PairingPhase::Available {
+                enrollments.end_pairing(record.id(), RuntimeEnd::Restarted, clock)
+            } else {
+                enrollments.expire_pairing_if_due(record.id(), clock)
+            }
+            .map_err(PairingRuntimeError::Enrollment)?;
         }
         Ok(Self {
             dependencies: Arc::new(dependencies),
@@ -164,11 +167,11 @@ impl GatewayPairing {
     fn owner_from(dependencies: &PairingRuntimeDependencies) -> PairingOwner<'_> {
         PairingOwner {
             authorization: AuthorizePairing {
-                access: dependencies.registry.as_ref(),
+                access: dependencies.access.as_ref(),
                 policy: dependencies.policy.as_ref(),
                 clock: dependencies.clock.as_ref(),
             },
-            enrollments: dependencies.registry.as_ref(),
+            enrollments: dependencies.enrollments.as_ref(),
             gateway: &dependencies.gateway,
             policy: PairingPolicy::initial(),
             clock: dependencies.clock.as_ref(),
@@ -196,14 +199,14 @@ impl GatewayPairing {
         &self,
         session: &AuthenticatedSession,
     ) -> Result<Box<[PairingRecord]>, PairingRuntimeError> {
+        self.expire_due().await?;
         let session = session.clone();
         self.owner_command(move |owner, handle| handle.block_on(owner.pending(&session)))
             .await
     }
     /// Create one code after current preparation and successful physical registration.
     /// Observer loss retains this admitted physical closure through registry publication.
-    /// The sole slot lock is acquired before registry publication; the concrete
-    /// registry create future commits synchronously in its poll, then this same
+    /// The slot lock is held across the whole registry create, then this same
     /// poll installs setup before exposing the local result. No await follows commit.
     pub async fn create<R: RngCore + CryptoRng + Send + 'static>(
         self: &Arc<Self>,
@@ -243,6 +246,8 @@ impl GatewayPairing {
         invite.copy_from_slice(&bytes[..16]);
         let mut consent = [0; 16];
         consent.copy_from_slice(&bytes[16..]);
+        // A past-due invitation would otherwise hold the slot and the live limit.
+        self.expire_due().await?;
         let session = session.clone();
         let prepared = self
             .owner_command(move |owner, handle| {
@@ -284,13 +289,8 @@ impl GatewayPairing {
             .as_ref()
             .map(|setup| setup.id)
             .ok_or(PairingRuntimeError::NoInvitation)?;
-        let record = self
-            .dependencies
-            .registry
-            .expire_pairing_if_due(id, self.dependencies.clock.as_ref())
-            .map_err(PairingRuntimeError::Enrollment)?;
+        let record = self.expire(id).await?;
         if record.phase() != PairingPhase::Available {
-            self.discard_if_ended(id).await?;
             return Err(PairingRuntimeError::NoInvitation);
         }
         PublicIntent::from_record(&record, attempt)
@@ -306,9 +306,11 @@ impl GatewayPairing {
         entropy: &mut (impl RngCore + CryptoRng),
     ) -> Result<BeginPairing, PairingRuntimeError> {
         self.verify_channel(channel)?;
+        // Expiry is decided by `reserve_attempt` below; a refusal for expiry is
+        // settled in `refused_by_store`.
         let record = self
             .dependencies
-            .registry
+            .enrollments
             .read_pairing(public.invitation())
             .map_err(PairingRuntimeError::Enrollment)?;
         if PublicIntent::from_record(&record, public.attempt())
@@ -320,19 +322,21 @@ impl GatewayPairing {
             ));
         }
         let input = credential_request_fingerprint(request).map_err(PairingRuntimeError::Crypto)?;
-        let reservation = self
-            .dependencies
-            .registry
-            .reserve_attempt(
-                public.invitation(),
-                public.attempt(),
-                channel.device_proof(),
-                input,
-                self.dependencies.clock.as_ref(),
-            )
-            .map_err(PairingRuntimeError::Enrollment)?;
+        let reservation = match self.dependencies.enrollments.reserve_attempt(
+            public.invitation(),
+            public.attempt(),
+            channel.device_proof(),
+            input,
+            self.dependencies.clock.as_ref(),
+        ) {
+            Ok(reservation) => reservation,
+            Err(error) => return Err(self.refused_by_store(public.invitation(), error).await),
+        };
         if matches!(reservation, AttemptReservation::Existing(_)) {
-            return self.status(channel, public).map(BeginPairing::Existing);
+            return self
+                .status(channel, public)
+                .await
+                .map(BeginPairing::Existing);
         }
         let slot = self.available.lock().await;
         let setup = slot
@@ -372,26 +376,31 @@ impl GatewayPairing {
             .state
             .finish(message)
             .map_err(|failure| self.settle_crypto_failure(channel, handshake.public, failure))?;
-        let record = self
+        let record = match self
             .dependencies
-            .registry
+            .enrollments
             .confirm_claim(confirmed.proof(), self.dependencies.clock.as_ref())
-            .map_err(PairingRuntimeError::Enrollment)?;
-        self.discard_if_ended(record.id()).await?;
+        {
+            Ok(record) => record,
+            Err(error) => {
+                return Err(self
+                    .refused_by_store(handshake.public.invitation(), error)
+                    .await)
+            }
+        };
+        // The commit's own record decides the discard: nothing that can fail
+        // runs between a committed claim and its reply.
+        self.discard_if_ended(&record).await;
         Ok(record)
     }
     /// Same-key exact-attempt receipt; Pending does not cancel its original worker.
-    pub fn status<S: Read + Write>(
+    pub async fn status<S: Read + Write>(
         &self,
         channel: &NativeTransport<S>,
         public: PublicIntent,
     ) -> Result<DevicePairingStatus, PairingRuntimeError> {
         self.verify_channel(channel)?;
-        let record = self
-            .dependencies
-            .registry
-            .read_pairing(public.invitation())
-            .map_err(PairingRuntimeError::Enrollment)?;
+        let record = self.expire(public.invitation()).await?;
         if PublicIntent::from_record(&record, public.attempt())
             .map_err(|error| PairingRuntimeError::Enrollment(PairingStoreError::Domain(error)))?
             != public
@@ -401,7 +410,7 @@ impl GatewayPairing {
             ));
         }
         ReadDevicePairing {
-            enrollments: self.dependencies.registry.as_ref(),
+            enrollments: self.dependencies.enrollments.as_ref(),
         }
         .execute(
             public.invitation(),
@@ -416,6 +425,7 @@ impl GatewayPairing {
         session: &AuthenticatedSession,
         id: InvitationId,
     ) -> Result<PairingRecord, PairingRuntimeError> {
+        self.expire(id).await?;
         let session = session.clone();
         self.owner_command(move |owner, handle| handle.block_on(owner.status(&session, id)))
             .await
@@ -428,13 +438,15 @@ impl GatewayPairing {
         id: InvitationId,
         decision: OwnerDecision,
     ) -> Result<PairingRecord, PairingRuntimeError> {
+        // Expiry first, so a past-due enrollment keeps Expired as its cause.
+        self.expire(id).await?;
         let session = session.clone();
         let record = self
             .owner_command(move |owner, handle| {
                 handle.block_on(owner.decide(&session, id, decision))
             })
             .await?;
-        self.discard_if_ended(id).await?;
+        self.discard_if_ended(&record).await;
         Ok(record)
     }
     fn verify_channel<S: Read + Write>(
@@ -458,7 +470,7 @@ impl GatewayPairing {
         cause: AttemptFailure,
     ) -> Result<(), PairingStoreError> {
         self.dependencies
-            .registry
+            .enrollments
             .fail_attempt(
                 public.invitation(),
                 public.attempt(),
@@ -481,7 +493,7 @@ impl GatewayPairing {
         };
         let settlement = self
             .dependencies
-            .registry
+            .enrollments
             .fail_attempt(
                 public.invitation(),
                 public.attempt(),
@@ -495,19 +507,52 @@ impl GatewayPairing {
             settlement,
         }
     }
-    async fn discard_if_ended(&self, id: InvitationId) -> Result<(), PairingRuntimeError> {
+    /// Ask Auth to expire this record if it is due, then drop the volatile setup
+    /// if the record has ended. Returns the record Auth returned.
+    async fn expire(&self, id: InvitationId) -> Result<PairingRecord, PairingRuntimeError> {
         let record = self
             .dependencies
-            .registry
-            .read_pairing(id)
+            .enrollments
+            .expire_pairing_if_due(id, self.dependencies.clock.as_ref())
             .map_err(PairingRuntimeError::Enrollment)?;
-        if record.phase() != PairingPhase::Available {
-            let mut slot = self.available.lock().await;
-            if slot.as_ref().is_some_and(|slot| slot.id == id) {
-                *slot = None;
+        self.discard_if_ended(&record).await;
+        Ok(record)
+    }
+    /// `expire` for every unfinished record of this gateway.
+    async fn expire_due(&self) -> Result<(), PairingRuntimeError> {
+        for record in self
+            .dependencies
+            .enrollments
+            .pending_pairings()
+            .map_err(PairingRuntimeError::Enrollment)?
+        {
+            if record.intent().resource() == &self.dependencies.gateway {
+                self.expire(record.id()).await?;
             }
         }
         Ok(())
+    }
+    /// A store refusal of a device step. When Auth refused because the invitation
+    /// is past due, settle the expiry so neither the record nor the setup stays
+    /// open. The original refusal is returned either way.
+    async fn refused_by_store(
+        &self,
+        id: InvitationId,
+        error: PairingStoreError,
+    ) -> PairingRuntimeError {
+        if error == PairingStoreError::Domain(PairingError::Expired) {
+            // A failed settlement leaves the record for the next path that reads it.
+            self.expire(id).await.ok();
+        }
+        PairingRuntimeError::Enrollment(error)
+    }
+    async fn discard_if_ended(&self, record: &PairingRecord) {
+        if record.phase() != PairingPhase::Available {
+            let mut slot = self.available.lock().await;
+            if slot.as_ref().is_some_and(|slot| slot.id == record.id()) {
+                *slot = None;
+            }
+        }
     }
     /// Exclude physical registration and wait for its actual worker to drain.
     pub async fn shutdown(&self) {

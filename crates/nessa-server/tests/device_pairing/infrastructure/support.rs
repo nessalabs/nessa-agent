@@ -10,10 +10,18 @@ use nessa_auth::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
         },
-        ports::Clock,
+        pairing::{
+            AttemptReservation, ConfirmedClaim, DeviceConnectionProof, GatewayKeyStore,
+            NoReceiverCleanupProof, OwnerDecision, PairingAdmission, PairingStore,
+            PairingStoreError, PrivateKeyMaterial, ReceiverOutcome, RuntimeEnd, StageOwnership,
+        },
+        ports::{Clock, PortFuture},
         session::{AuthenticateSession, AuthenticatedSession},
     },
-    domain::{AudienceId, OrganizationId, Resource, ResourceId},
+    domain::{
+        pairing::{AttemptFailure, AttemptId, InvitationId, PairingRecord},
+        AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
+    },
 };
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
@@ -27,8 +35,8 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -55,6 +63,8 @@ impl Clock for GatewayTime {
         self.0.load(Ordering::SeqCst)
     }
 }
+/// The owner's credential outlives every invitation a test creates.
+const OWNER_EXPIRES_S: u64 = 100_000;
 pub const WAIT: Duration = Duration::from_secs(30);
 
 pub fn private_root(parent: &Path, name: &str) -> PathBuf {
@@ -85,6 +95,23 @@ impl Fixture {
         Self::with_read(true).await
     }
     pub async fn with_read(read: bool) -> Self {
+        Self::build(read, OWNER_EXPIRES_S, |registry| registry).await
+    }
+    /// The owner's credential expires at 500 s, before an invitation created now.
+    pub async fn short_lived_owner() -> Self {
+        Self::build(true, 500, |registry| registry).await
+    }
+    /// A fixture whose runtime reaches the registry through `enrollments`.
+    pub async fn with_store(
+        enrollments: impl FnOnce(Arc<LocalCredentialStore>) -> Arc<dyn PairingStore>,
+    ) -> Self {
+        Self::build(true, OWNER_EXPIRES_S, enrollments).await
+    }
+    async fn build(
+        read: bool,
+        owner_expires_s: u64,
+        enrollments: impl FnOnce(Arc<LocalCredentialStore>) -> Arc<dyn PairingStore>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let registry = Arc::new(
             LocalCredentialStore::open(
@@ -110,7 +137,7 @@ impl Fixture {
                 },
                 credential_id: "credential".into(),
                 issued_at: 100,
-                expires_at: Some(500),
+                expires_at: Some(owner_expires_s),
                 grants: ["credential.manage", "conversation.read"]
                     .into_iter()
                     .filter(|action| read || *action != "conversation.read")
@@ -144,7 +171,8 @@ impl Fixture {
         let time = Arc::new(GatewayTime(AtomicU64::new(NOW_MS)));
         let gateway = Arc::new(
             GatewayPairing::open(PairingRuntimeDependencies {
-                registry: registry.clone(),
+                enrollments: enrollments(registry.clone()),
+                access: registry.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 clock: time.clone(),
                 gateway: resource,
@@ -169,7 +197,7 @@ impl Fixture {
             registry,
             session,
             gateway,
-            time: _,
+            time,
         } = self;
         drop(gateway);
         drop(registry);
@@ -191,10 +219,11 @@ impl Fixture {
             OrganizationId::new("org").unwrap(),
             ResourceId::new("gateway").unwrap(),
         );
-        let time = Arc::new(GatewayTime(AtomicU64::new(NOW_MS)));
+
         let gateway = Arc::new(
             GatewayPairing::open(PairingRuntimeDependencies {
-                registry: registry.clone(),
+                enrollments: registry.clone(),
+                access: registry.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 clock: time.clone(),
                 gateway: resource,
@@ -247,4 +276,178 @@ pub fn sockets() -> (TcpStream, TcpStream) {
         socket.set_write_timeout(Some(WAIT)).unwrap();
     }
     (server, client)
+}
+
+/// Store calls a `FaultyStore` can refuse, each with `Unavailable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    Reserve,
+    Settle,
+    Claim,
+    /// Every read after a claim commits.
+    ReadsAfterClaim,
+}
+/// The real registry behind the `PairingStore` port, refusing one chosen call.
+pub struct FaultyStore {
+    inner: Arc<LocalCredentialStore>,
+    fault: Mutex<Option<Fault>>,
+    claimed: AtomicBool,
+}
+impl FaultyStore {
+    pub fn new(inner: Arc<LocalCredentialStore>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            fault: Mutex::new(None),
+            claimed: AtomicBool::new(false),
+        })
+    }
+    pub fn refuse(&self, fault: Option<Fault>) {
+        *self.fault.lock().unwrap() = fault;
+    }
+    fn refuses(&self, fault: Fault) -> Result<(), PairingStoreError> {
+        if *self.fault.lock().unwrap() == Some(fault) {
+            Err(PairingStoreError::Unavailable)
+        } else {
+            Ok(())
+        }
+    }
+    fn read(&self) -> Result<(), PairingStoreError> {
+        if self.claimed.load(Ordering::SeqCst) {
+            self.refuses(Fault::ReadsAfterClaim)
+        } else {
+            Ok(())
+        }
+    }
+}
+impl PairingStore for FaultyStore {
+    fn publish_first_gateway_key(
+        &self,
+        keys: &dyn GatewayKeyStore,
+        key: &PrivateKeyMaterial,
+        clock: &dyn Clock,
+    ) -> Result<(), PairingStoreError> {
+        self.inner.publish_first_gateway_key(keys, key, clock)
+    }
+    fn acquire_stage(
+        self: Arc<Self>,
+        id: InvitationId,
+    ) -> Result<StageOwnership, PairingStoreError> {
+        self.inner.clone().acquire_stage(id)
+    }
+    fn finish_no_receiver(
+        &self,
+        proof: &NoReceiverCleanupProof,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.inner.finish_no_receiver(proof, clock)
+    }
+    fn pending_pairings(&self) -> Result<Box<[PairingRecord]>, PairingStoreError> {
+        self.read()?;
+        self.inner.pending_pairings()
+    }
+    fn expire_pairing_if_due(
+        &self,
+        id: InvitationId,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.read()?;
+        self.inner.expire_pairing_if_due(id, clock)
+    }
+    fn end_pairing(
+        &self,
+        id: InvitationId,
+        cause: RuntimeEnd,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.inner.end_pairing(id, cause, clock)
+    }
+    fn read_pairing(&self, id: InvitationId) -> Result<PairingRecord, PairingStoreError> {
+        self.read()?;
+        self.inner.read_pairing(id)
+    }
+    fn create_pairing<'a>(
+        &'a self,
+        record: &'a PairingRecord,
+        admission: &'a PairingAdmission,
+        clock: &'a dyn Clock,
+    ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
+        self.inner.create_pairing(record, admission, clock)
+    }
+    fn decide_pairing<'a>(
+        &'a self,
+        id: InvitationId,
+        decision: OwnerDecision,
+        admission: &'a PairingAdmission,
+        clock: &'a dyn Clock,
+    ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
+        self.inner.decide_pairing(id, decision, admission, clock)
+    }
+    fn reserve_attempt(
+        &self,
+        id: InvitationId,
+        attempt: AttemptId,
+        device: &DeviceConnectionProof,
+        input: [u8; 32],
+        clock: &dyn Clock,
+    ) -> Result<AttemptReservation, PairingStoreError> {
+        self.refuses(Fault::Reserve)?;
+        self.inner
+            .reserve_attempt(id, attempt, device, input, clock)
+    }
+    fn confirm_claim(
+        &self,
+        proof: &ConfirmedClaim,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.refuses(Fault::Claim)?;
+        let record = self.inner.confirm_claim(proof, clock)?;
+        self.claimed.store(true, Ordering::SeqCst);
+        Ok(record)
+    }
+    fn fail_attempt(
+        &self,
+        id: InvitationId,
+        attempt: AttemptId,
+        device: &DeviceConnectionProof,
+        cause: AttemptFailure,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.refuses(Fault::Settle)?;
+        self.inner.fail_attempt(id, attempt, device, cause, clock)
+    }
+    fn stage_pairing(
+        &self,
+        id: InvitationId,
+        credential: CredentialId,
+        request: AttemptId,
+        admission: &PairingAdmission,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.inner
+            .stage_pairing(id, credential, request, admission, clock)
+    }
+    fn remember_receiver(
+        &self,
+        id: InvitationId,
+        outcome: &ReceiverOutcome,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.inner.remember_receiver(id, outcome, clock)
+    }
+    fn publish_pairing(
+        &self,
+        id: InvitationId,
+        admission: &PairingAdmission,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.inner.publish_pairing(id, admission, clock)
+    }
+    fn finish_cleanup(
+        &self,
+        id: InvitationId,
+        outcome: &ReceiverOutcome,
+        clock: &dyn Clock,
+    ) -> Result<PairingRecord, PairingStoreError> {
+        self.inner.finish_cleanup(id, outcome, clock)
+    }
 }
