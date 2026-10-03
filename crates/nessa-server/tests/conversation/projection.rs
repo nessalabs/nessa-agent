@@ -233,7 +233,7 @@ async fn gateway_record_view_waits_for_message_commit() {
 fn said(text: &str) -> UserMessage {
     UserMessage::text_only(PromptText::new(text).unwrap())
 }
-fn projection() -> Projection {
+pub(super) fn projection() -> Projection {
     projection_for("conversation")
 }
 
@@ -383,7 +383,7 @@ fn capability_changes_advance_the_replacement_revision_once() {
     projection.capabilities(changed);
     assert_eq!(projection.read().revision, after.revision);
 }
-fn event(update: ExecutionUpdate) -> ExecutionEvent {
+pub(super) fn event(update: ExecutionUpdate) -> ExecutionEvent {
     ExecutionEvent::new(ExecutionId::new("execution").unwrap(), update)
 }
 
@@ -439,7 +439,7 @@ fn review(arguments: String) -> ExecutionEvent {
         .unwrap(),
     })
 }
-fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
+pub(super) fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
@@ -469,7 +469,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     }
 }
 
-fn completed_snapshot(id: &str, events: Vec<ExecutionEvent>) -> SessionSnapshot {
+pub(super) fn completed_snapshot(id: &str, events: Vec<ExecutionEvent>) -> SessionSnapshot {
     let mut snapshot = review_snapshot(events);
     snapshot.invocations[0].request.execution_id = ExecutionId::new(id).unwrap();
     snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
@@ -728,7 +728,7 @@ async fn protocol_failure_after_partial_tool_preserves_observation_across_termin
     .await;
 }
 
-fn committed_tool_view(events: &[ExecutionEvent]) -> ConversationView {
+pub(super) fn committed_tool_view(events: &[ExecutionEvent]) -> ConversationView {
     let snapshot = completed_snapshot("execution", events.to_vec());
     let capabilities = projection().read().capabilities;
     bound_view(Projection::new("conversation".into(), capabilities, Some(&snapshot)).read())
