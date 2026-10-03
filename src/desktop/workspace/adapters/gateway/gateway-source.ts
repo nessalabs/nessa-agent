@@ -365,13 +365,16 @@ export function gatewaySource(options: {
 
   /**
    * Lists in turn, applying the answer; the list's own failures are the
-   * caller's. One whose caller was answered while it waited its turn asks
-   * nothing (R10).
+   * caller's. One whose caller was answered — while it waited its turn, or
+   * while its list was on its way — asks nothing more, and applies nothing
+   * (R10).
    */
   const list = (caller: () => boolean = always): Promise<void> => {
-    const { turn, settled } = inTurn(listing, () => {
+    const { turn, settled } = inTurn(listing, async () => {
       if (!caller()) throw new WorkspaceSourceError("unavailable")
-      return within(async () => (await client()).conversation.list()).then(applyList)
+      const result = await within(async () => (await client()).conversation.list())
+      if (!caller()) throw new WorkspaceSourceError("unavailable")
+      applyList(result)
     })
     listing = settled
     return turn
@@ -431,7 +434,8 @@ export function gatewaySource(options: {
    * asked again, once. One still taken out answers `unknown-session`; one
    * held but crossed again answers `unavailable` — not done now, try again
    * (S3c, S8) — let go is not gone, and not forever. One whose caller was
-   * answered while it waited its turn asks nothing more (R10).
+   * answered — while it waited its turn, or while its read was on its way —
+   * asks nothing more, and applies nothing, not even a gone (R5, R10).
    */
   const read = (
     sessionId: string,
@@ -449,6 +453,7 @@ export function gatewaySource(options: {
           try {
             view = await within(async () => (await client()).conversation.read(sessionId))
           } catch (error) {
+            if (!caller()) throw new WorkspaceSourceError("unavailable")
             if (!gone(error)) throw error
             // The gateway's own word that the conversation is gone takes the
             // session out, even where no complete list would (R9) — unless it
@@ -458,6 +463,7 @@ export function gatewaySource(options: {
             remove(sessionId)
             throw error
           }
+          if (!caller()) throw new WorkspaceSourceError("unavailable")
           if ((removals.get(sessionId) ?? 0) === removed)
             return applyRead(sessionId, view, against)
         }

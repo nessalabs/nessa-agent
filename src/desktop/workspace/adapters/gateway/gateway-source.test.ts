@@ -1456,6 +1456,67 @@ describe("review after ready", () => {
     expect(gateway.count("list")).toBe(2)
   })
 
+  it("R10: a read sent while its caller waited, answered after the caller was answered, is let go", async () => {
+    const { gateway, source, advance } = started()
+    gateway.views.set("a", view("a", { revision: "now" }))
+    // The first read never answers; the second is sent when it times out,
+    // with its caller nearly out of time, and answers after that.
+    gateway.once("read", () => new Promise(() => {}))
+    const late = deferred<unknown>()
+    gateway.once("read", () => late.promise)
+    const first = source.transcript("a").catch((error: unknown) => error)
+    await advance(timing.callMs - 1)
+    const second = source.transcript("a").catch((error: unknown) => error)
+    await advance(1)
+    expect(gateway.count("read")).toBe(2)
+    await advance(timing.callMs - 1)
+    expect(await first).toMatchObject({ reason: "unavailable" })
+    expect(await second).toMatchObject({ reason: "unavailable" })
+    late.resolve(view("a", { revision: "late" }))
+    await flush()
+    // The late view moved nothing: the next read is the conversation's first count.
+    expect((await source.transcript("a")).revision).toBe(1)
+  })
+
+  it("R10: a gone read answered after its caller was answered takes nothing out", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    await source.index()
+    gateway.once("read", () => new Promise(() => {}))
+    const late = deferred<unknown>()
+    gateway.once("read", () => late.promise)
+    void source.transcript("a").catch(() => undefined)
+    await advance(timing.callMs - 1)
+    const second = source.transcript("a").catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await second).toMatchObject({ reason: "unavailable" })
+    late.reject(rpcCode("conversation_not_found"))
+    await flush()
+    // Still held: a session taken out would be refused unknown-session (R8).
+    await expect(source.transcript("a")).resolves.toMatchObject({ sessionId: "a" })
+  })
+
+  it("R10: a list sent while its caller waited, answered after the caller was answered, is let go", async () => {
+    const { gateway, source, advance } = started()
+    gateway.once("list", () => new Promise(() => {}))
+    const late = deferred<unknown>()
+    gateway.once("list", () => late.promise)
+    const first = source.index().catch((error: unknown) => error)
+    await advance(timing.callMs - 1)
+    const second = source.index().catch((error: unknown) => error)
+    await advance(1)
+    expect(gateway.count("list")).toBe(2)
+    await advance(timing.callMs - 1)
+    expect(await first).toMatchObject({ reason: "unavailable" })
+    expect(await second).toMatchObject({ reason: "unavailable" })
+    late.resolve({ conversations: [row("z")], complete: false })
+    await flush()
+    // An incomplete list removes nothing, so a "z" applied late would still be held.
+    gateway.complete = false
+    expect((await source.index()).sessions).toEqual([])
+  })
+
   it("R11: a watched conversation refused for good stops being read, is no gap, and Try Again watches it again", async () => {
     const { gateway, source, updates, follow, advance } = started()
     // Live, so it would be read every round (S7) if it stayed watched.
