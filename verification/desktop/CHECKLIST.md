@@ -600,9 +600,31 @@ says why where the conversations would be.
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a
   fake gateway socket that refuses the credential as `product/socket.rs` does).
-- [ ] **A gateway that answers shows its conversations and its servers' MCP
-  Apps in the main window.** _By hand:_ `pnpm app` against a gateway with
-  `scripts/mcp-test-server` configured; not scripted.
+- [ ] **A gateway that answers shows its conversations in the main window, and
+  a turn as it happens.** Over the host's endpoint and the panel's credential
+  (the file the gateway provisioned, which the native host reads), the window
+  lists the conversation by the title the gateway gives it, with no failure
+  status and no sample; its socket's handshake names client `nessa-panel` and
+  is answered with principal `surface:nessa-panel`; opened, its transcript
+  draws the person's message and then the agent's reply as the gateway's
+  `conversation.read` holds them, inside the chat area; and a turn sent from
+  another surface under the same credential appears in the open transcript,
+  in order, without a reload. In Chromium and WebKit.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
+  _Check:_ `gateway-window.mjs` (runs the real frontend as the desktop app —
+  `hostGateway`, `connectDevSession`, the gateway source — against a fake host
+  whose endpoint and credential commands answer with a real gateway's, started
+  by `lib/gateway-stack.mjs` with a real agent; needs the agent signed in).
+  _Not in a browser:_ the native host's side — readiness, endpoint discovery,
+  the credential file read and its refusals — is the Rust host tests'
+  (`src-tauri/src/surface_credential.rs`,
+  `src-tauri/src/gateway_endpoint/entrypoint/command.rs`,
+  `src-tauri/src/gateway/infrastructure/commands.rs`); WKWebView's own IPC and
+  the packaged app's `tauri://localhost` origin are the live `pnpm app` run's.
+- [ ] **A gateway that answers shows its servers' MCP Apps in the main
+  window.** _By hand:_ `pnpm app` against a gateway with
+  `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
+  #436 lands.
 
 ## Console errors
 

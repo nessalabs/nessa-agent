@@ -4,6 +4,9 @@
  * answers and what it makes of the ended turn (A1–A6), and which review is a
  * step's and when it has gone (R1–R5). When each step takes its baseline is
  * the check's own, and is exercised only by running it.
+ *
+ * And `gateway-window.mjs`'s: what a turn said, which its steps W2 and W3
+ * compare the window's transcript with (#419).
  */
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
@@ -11,6 +14,7 @@ import { describe, it } from "node:test"
 import {
   admitOnce,
   callsOf,
+  lastTurn,
   newReview,
   reviewKeys,
   setupOutcome,
@@ -181,5 +185,29 @@ describe("newReview", () => {
     const opened = review("new")
     assert.equal(stillPending([stale, opened], opened), true)
     assert.equal(stillPending([stale], opened), false)
+  })
+})
+
+describe("lastTurn", () => {
+  const turn = (userText, parts) => ({ executionId: "e", userText, parts })
+  it("reads the last turn's text, its text parts joined and folded", () => {
+    const view = {
+      messages: [
+        turn("first", [{ kind: "text", text: "old" }]),
+        turn("say  it\n", [
+          { kind: "text", text: "Wab" },
+          { kind: "tool", toolId: "t" },
+          { kind: "text", text: "c12\n" },
+        ]),
+      ],
+    }
+    assert.deepEqual(lastTurn(view), { user: "say it", reply: "Wabc12" })
+  })
+  it("says nothing for a turn not yet answered, or no turn", () => {
+    assert.deepEqual(lastTurn({ messages: [turn("asked", [])] }), {
+      user: "asked",
+      reply: "",
+    })
+    assert.deepEqual(lastTurn({ messages: [] }), { user: "", reply: "" })
   })
 })

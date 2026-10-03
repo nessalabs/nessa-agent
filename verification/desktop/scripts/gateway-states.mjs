@@ -16,11 +16,12 @@
  * where the browser's own line that the connection failed is the one console
  * error expected.
  *
- * What it does not show: a gateway that answers — that is the live run of the
- * packaged app, reported on the pull request.
+ * What it does not show: a gateway that answers — that is
+ * `gateway-window.mjs`'s, against a real one.
  */
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { attempt } from "./lib/cli.mjs"
+import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css } from "./lib/selectors.mjs"
 
@@ -66,39 +67,6 @@ const scenarios = [
     says: unread,
   },
 ]
-
-/**
- * Installed before the page's own scripts, as Tauri installs its IPC. The
- * endpoint and credential commands answer as the scenario says, and are
- * counted; every other command waits forever, as an unanswered host does.
- */
-function fakeHost({ endpoint, credential }) {
-  // The host's own sentences (`GatewayReader::ready`, `CredentialRefusal::NotProvisioned`).
-  const notReady = "The local server isn't ready yet"
-  const notProvisioned =
-    "No chat credential has been provisioned yet. Start the local server " +
-    "(`just start`, or `just server`), which creates one on first run."
-  let callbacks = 0
-  const asked = { load_gateway_endpoint: 0, load_surface_credential: 0 }
-  window.__fakeHostAsked = asked
-  window.__TAURI_INTERNALS__ = {
-    transformCallback: () => ++callbacks,
-    invoke(command) {
-      if (command === "load_gateway_endpoint") {
-        asked[command]++
-        window.__fakeHostLastAskAt = performance.now()
-        return endpoint === null ? Promise.reject(notReady) : Promise.resolve(endpoint)
-      }
-      if (command === "load_surface_credential") {
-        asked[command]++
-        return credential === null
-          ? Promise.reject(notProvisioned)
-          : Promise.resolve(credential)
-      }
-      return new Promise(() => {})
-    },
-  }
-}
 
 /**
  * A gateway refusing the credential it is shown, as `product/socket.rs` does:
@@ -229,7 +197,7 @@ await main(
         await attempt(rep, { name: scenario.name, engine, width: 1440 }, async () => {
           const opened = await openPage(browser, {
             url: `${origin}/desktop.html`,
-            initScripts: [[fakeHost, scenario]],
+            initScripts: [[gatewayHost, scenario]],
             // Either answer: the status this check is for, or a listed
             // session — the sample in disguise, which `check` fails.
             readySelector: `${css.workspaceEmpty}, ${css.sessionRow}`,

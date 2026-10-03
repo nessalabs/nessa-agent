@@ -36,6 +36,7 @@ verification/
       safe-area.mjs         nothing painted under the window controls, per frame
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
+      gateway-window.mjs    the desktop app's window over a real gateway (#419): its handshake, a conversation, a live turn (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths, a pane's home
@@ -53,8 +54,10 @@ verification/
         run.mjs             the main every check shares
         apps.mjs            an MCP App's documents, read through Playwright's frames
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
-        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs: setup's one admitted call, the review a step opened
-        gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table)
+        gateway-stack.mjs   a real gateway, the dev server before it and a client on it, for the real-gateway checks; the panel's credential
+        fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
+        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened, what a turn said
+        gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
 ```
 
 When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a

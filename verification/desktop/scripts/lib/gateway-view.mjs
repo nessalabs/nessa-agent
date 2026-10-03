@@ -1,7 +1,8 @@
 /**
- * Reading a real gateway's conversation view for `mcp-apps-gateway.mjs`:
- * which harness permission its setup answers, and which of the app's reviews
- * a step's own action opened. Pure, so both are tested without a gateway.
+ * Reading a real gateway's conversation view for `mcp-apps-gateway.mjs` and
+ * `gateway-window.mjs`: which harness permission its setup answers, which of
+ * the app's reviews a step's own action opened, and what a turn said. Pure, so
+ * each is tested without a gateway.
  */
 import { permissionKey } from "../../../../scripts/mcp-test-server/evidence.mjs"
 
@@ -90,3 +91,22 @@ export const newReview = (reviews, baseline) =>
 /** Whether `review` is still among the pending `reviews`. */
 export const stillPending = (reviews, review) =>
   reviews.some((each) => permissionKey(each) === permissionKey(review))
+
+/**
+ * What the view's last turn said: `{ user, reply }`, the person's text and the
+ * agent's text parts joined — as the window draws them (`gateway-views.ts`),
+ * with whitespace folded as the check reads the page's.
+ */
+export function lastTurn(view) {
+  const turn = view.messages.at(-1)
+  const fold = (text) => text.replace(/\s+/g, " ").trim()
+  return {
+    user: fold(turn?.userText ?? ""),
+    reply: fold(
+      (turn?.parts ?? [])
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text)
+        .join(""),
+    ),
+  }
+}

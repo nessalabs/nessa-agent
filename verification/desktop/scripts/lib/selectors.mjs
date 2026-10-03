@@ -50,6 +50,7 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
+  message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user or agent
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane

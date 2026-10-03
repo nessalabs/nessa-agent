@@ -28,16 +28,11 @@
  * leaves nothing waiting.
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync } from "node:fs"
+import { mkdirSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { join } from "node:path"
 
-import {
-  SERVER,
-  agentCommand,
-  serverScript,
-  startLocalGateway,
-} from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
@@ -50,9 +45,9 @@ import {
   setupOutcome,
   stillPending,
 } from "./lib/gateway-view.mjs"
+import { startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { css, names } from "./lib/selectors.mjs"
-import { freePort, startDevServer } from "./lib/server.mjs"
 import { paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
 /** The server's app tool, and the tools its app calls (`server.mjs`, `APP_CALLS`). */
@@ -107,79 +102,23 @@ the gateway shows its review first.`,
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
 async function startStack(options) {
-  const agent = options.agent
-  if (!["claude", "codex"].includes(agent))
-    throw new CannotRun(`--agent ${agent}: claude or codex`)
-  const command = agentCommand(agent)
-  const timings = {}
-  let started = Date.now()
-  const gateway = await startLocalGateway({
-    agent,
-    port: await freePort(),
-    instance: "mcp-apps-gateway",
-    agentArgv: command.argv,
-    model: command.model,
-    path: command.path,
-    mcpServer: { command: process.execPath, args: [serverScript] },
-  }).catch((error) => {
-    // What it said as it failed, on stderr; the result keeps one line.
-    if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
-    throw new CannotRun(`the gateway did not start: ${error.message.split("\n")[0]}`)
-  })
-  timings.gatewayMs = Date.now() - started
-  let dev = null
-  let client = null
-  const close = async () => {
-    client?.close()
-    await dev?.close()
-    if (!(await gateway.stop()))
-      log(`the gateway (pid ${gateway.server.pid}) did not exit`)
-  }
+  const stack = await startGatewayStack(options, "mcp-apps-gateway")
   try {
-    started = Date.now()
-    dev = await startDevServer(options, {
-      NESSA_STAGE: "ci",
-      VITE_NESSA_STAGE: "ci",
-      NESSA_BROWSER_GATEWAY_URL: gateway.url,
-    })
-    timings.devServerMs = Date.now() - started
-    // `@nessa/client` is TypeScript in this checkout.
-    const { register } = await import("tsx/esm/api")
-    register()
-    const { NessaClient } = await import("@nessa/client")
-    client = await NessaClient.connect({
-      stage: "ci",
-      url: gateway.url.replace(/^http/, "ws"),
-      role: "surface",
-      surface: { kind: "panel", instance: "mcp-apps-gateway" },
-      client: { id: "mcp-apps-gateway", version: "0.1.0", platform: "node" },
-      profile: "product",
-      auth: { credential: readFileSync(gateway.token, "utf8").trim() },
-    })
-    started = Date.now()
+    const started = Date.now()
     const conversationId = randomUUID()
-    const turn = await agentTurn(client, conversationId, agent)
-    timings.agentTurnMs = Date.now() - started
-    const { conversations } = await client.conversation.list({})
+    const turn = await agentTurn(stack.client, conversationId, options.agent)
+    stack.timings.agentTurnMs = Date.now() - started
+    const { conversations } = await stack.client.conversation.list({})
     const title = conversations.find(
       (each) => each.conversationId === conversationId,
     )?.title
     if (!title) throw new CannotRun("the conversation has no title to find it by")
     log(
-      `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${timings.agentTurnMs} ms`,
+      `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${stack.timings.agentTurnMs} ms`,
     )
-    return {
-      url: dev.url,
-      mode: "dev",
-      close,
-      client,
-      conversationId,
-      title,
-      timings,
-      token: () => readFileSync(gateway.token, "utf8").trim(),
-    }
+    return { ...stack, conversationId, title }
   } catch (error) {
-    await close()
+    await stack.close()
     throw error
   }
 }
@@ -258,18 +197,6 @@ async function agentTurn(client, conversationId, agent) {
 async function appReviews(client, conversationId) {
   const view = await client.conversation.read(conversationId)
   return view.permissions.filter((each) => each.origin.kind === "app")
-}
-
-/** Waits up to `ms` for `check()` to be truthy, and says what it last was. */
-async function waitFor(check, ms) {
-  const end = Date.now() + ms
-  let value
-  do {
-    value = await check()
-    if (value) return value
-    await sleep(250)
-  } while (Date.now() < end)
-  return value
 }
 
 /** What an output of the review app says, once it says anything but `pending`. */
