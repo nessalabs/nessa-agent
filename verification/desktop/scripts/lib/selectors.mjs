@@ -74,6 +74,8 @@ export const css = {
   widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
+  workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
+  workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id

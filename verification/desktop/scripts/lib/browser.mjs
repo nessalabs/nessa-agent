@@ -93,6 +93,8 @@ export async function openPage(browser, o) {
     if (Array.isArray(script)) await context.addInitScript(script[0], script[1])
     else await context.addInitScript(script)
   }
+  // What a check routes before the page loads, such as a socket it answers.
+  await o.beforeLoad?.(context)
   const page = await context.newPage()
   const errors = []
   const harmless = []

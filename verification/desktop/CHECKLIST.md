@@ -562,6 +562,28 @@ mounts, `index.html` shows the fallback on that stage.
   full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
+## The window's gateway
+
+The desktop app's window reads the local gateway over the credential its host
+hands a bundled surface (#419). When it cannot, it says why where the
+conversations would be.
+
+- [ ] **Signed out, the host refusing the credential, and no gateway
+  listening each say why in the chat area, with Try Again; never the sample
+  in its place.** A gateway refusing the credential says "This window isn’t
+  signed in to the local server."; a host refusal and no gateway say "Nessa
+  couldn’t read the local server’s conversations just now." The status sits
+  inside the chat area and the window, Try Again is at least 24px tall with
+  nothing over it, no session row or sample plugin is drawn, and Try Again
+  asks the host again and says the same while nothing changed.
+  _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
+  `gateway-states.mjs` (runs the real frontend as the desktop app, against a
+  fake host whose endpoint and credential commands answer per scenario, and a
+  fake gateway socket that refuses the credential as `product/socket.rs` does).
+- [ ] **A gateway that answers shows its conversations and its servers' MCP
+  Apps in the main window.** _By hand:_ `pnpm app` against a gateway with
+  `scripts/mcp-test-server` configured; not scripted.
+
 ## Console errors
 
 - [ ] **No console error, page error or failed request** while any script
