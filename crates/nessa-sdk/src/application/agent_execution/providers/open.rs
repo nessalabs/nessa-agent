@@ -2,6 +2,7 @@
 
 use super::{CleanupFuture, CleanupReport, OpenedProviderSession, SessionCloseRequest};
 use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use std::{error::Error, fmt, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::watch;
@@ -22,6 +23,10 @@ impl ProviderOpenRequest {
         restore: Option<ExecutionSessionId>,
         control: ProviderOpenControl,
     ) -> Self {
+        let control = ProviderOpenControl {
+            session: Some(session.clone()),
+            ..control
+        };
         Self {
             session: Some(session),
             restore,
@@ -68,11 +73,17 @@ impl ProviderOpenRequest {
 /// lifecycle owner disappeared without requesting a stop; providers should then
 /// disable this signal branch and continue their normally bounded open operation.
 pub struct ProviderOpenControl {
+    /// The SDK session being opened, for diagnostics; `None` until a request
+    /// names one.
+    session: Option<SessionId>,
     receiver: watch::Receiver<Option<SessionCloseRequest>>,
 }
 impl ProviderOpenControl {
     pub(crate) fn new(receiver: watch::Receiver<Option<SessionCloseRequest>>) -> Self {
-        Self { receiver }
+        Self {
+            session: None,
+            receiver,
+        }
     }
 
     /// Return a stop already published for this generation, if any.
@@ -81,18 +92,27 @@ impl ProviderOpenControl {
     }
 
     /// Wait for this generation's first stop request or for its owner to vanish.
+    ///
+    /// The stop is published by the Agent's close. A panic raised by the
+    /// polling task's `Waker` is logged and loses that one wake; it does not
+    /// interrupt the close. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn wait(&mut self) -> Option<SessionCloseRequest> {
-        if let Some(request) = self.requested() {
-            return Some(request);
-        }
-        loop {
-            if self.receiver.changed().await.is_err() {
-                return self.requested();
-            }
+        let waiter = CallerWaiter::ProviderOpenStop(self.session.clone());
+        contain_caller_wake(waiter, async {
             if let Some(request) = self.requested() {
                 return Some(request);
             }
-        }
+            loop {
+                if self.receiver.changed().await.is_err() {
+                    return self.requested();
+                }
+                if let Some(request) = self.requested() {
+                    return Some(request);
+                }
+            }
+        })
+        .await
     }
 }
 
