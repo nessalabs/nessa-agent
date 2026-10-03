@@ -1,6 +1,11 @@
 //! Original receipt visibility follows ownership retirement, not executor timing.
 use super::*;
-use nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock;
+use nessa_sdk::{
+    application::agent_execution::sessions::{
+        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    },
+    infrastructure::session_storage::RuntimeMessageCommitClock,
+};
 use std::{
     pin::Pin,
     task::{Context, Wake, Waker},
@@ -200,10 +205,15 @@ impl SessionStorage for ReceiptPanicStorage {
     }
 }
 impl SessionStorageLease for ReceiptPanicLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             let selected = matches!(self.fault, ReceiptFault::Selection)
                 && snapshot.queue_history.last().is_some_and(|entry| {
@@ -222,7 +232,7 @@ impl SessionStorageLease for ReceiptPanicLease {
             if (selected || scheduled) && !self.panicked.swap(true, Ordering::SeqCst) {
                 panic!("original queued receipt persistence panicked");
             }
-            self.backing.save(snapshot).await
+            self.backing.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
