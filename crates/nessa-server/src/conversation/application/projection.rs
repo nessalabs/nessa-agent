@@ -990,12 +990,28 @@ impl Projection {
     }
 }
 
+/// What a view bounded to its size says of the interactions it left out.
+const UNSHOWN_INTERACTIONS: &str =
+    "Some pending interactions exceed this display limit. Use Stop to cancel them.";
+
 /// Bound the complete service result after its metadata and authority additions.
-pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
+pub(super) fn bound_view(view: ConversationView) -> ConversationView {
+    bound_view_within(view, MAX_VIEW_BYTES, true)
+}
+
+/// As [`bound_view`], within `limit` bytes: the view that leaves room for
+/// what is added beside it after. Its interactions — the agent's reviews
+/// and questions — are given up for that room only when `interactions`
+/// says so; otherwise it stops short of them, over `limit` if need be.
+pub(super) fn bound_view_within(
+    mut view: ConversationView,
+    limit: usize,
+    interactions: bool,
+) -> ConversationView {
     // The binding bounds actual admitted ACP asks. Custom backends can
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
-    while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
+    while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > limit {
         // The structured result is optional display data. Preserve the history
         // and its text before giving up a message or interaction.
         if let Some(tool) = view
@@ -1005,6 +1021,11 @@ pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
         {
             tool.structured_content = None;
             continue;
+        }
+        // Only the interactions are left, and they are not to be given up:
+        // nothing is removed, so the view is not truncated either.
+        if !interactions && !gives_up_anything_but_interactions(&view) {
+            break;
         }
         view.truncated = true;
         if view.messages.len() > 1 {
@@ -1040,21 +1061,29 @@ pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
             view.queue_complete = false;
         } else if !view.permissions.is_empty() {
             view.permissions.pop();
-            view.interaction_view_error = Some(
-                "Some pending interactions exceed this display limit. Use Stop to cancel them."
-                    .into(),
-            );
+            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
         } else if !view.questions.is_empty() {
             view.questions.pop();
-            view.interaction_view_error = Some(
-                "Some pending interactions exceed this display limit. Use Stop to cancel them."
-                    .into(),
-            );
+            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
         } else {
             break;
         }
     }
     view
+}
+
+/// Whether `view` still has anything a bound may give up before its
+/// interactions: its transcript, tool calls or queue.
+fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
+    view.messages.len() > 1
+        || view.messages.first().is_some_and(|message| {
+            !message.parts.is_empty()
+                || !message.user_text.is_empty()
+                || !message.files.is_empty()
+                || !message.attachments.is_empty()
+        })
+        || !view.tools.is_empty()
+        || !view.pending.is_empty()
 }
 
 /// Whether `view` may offer an ask or review from `execution`: only while its

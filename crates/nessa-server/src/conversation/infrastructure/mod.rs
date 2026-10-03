@@ -33,7 +33,7 @@
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
-//! by the conversation, the app's mount, the app's request and the phase.
+//! by the conversation, the app's mount, the gateway's call id and the phase.
 mod receiver_authority;
 mod store;
 pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};

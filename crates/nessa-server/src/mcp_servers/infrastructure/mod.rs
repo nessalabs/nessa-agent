@@ -26,6 +26,6 @@ pub use relay::{
 pub use relay_command::run;
 pub use relay_command::{relay, RelayFailure};
 pub use resource_tickets::{
-    audit_ticket_ends, Redemption, ResourceTicketStore, TicketEnd, TicketEvent, TicketEvents,
+    audit_ticket_ends, Redemption, ResourceTicketStore, TicketEvent, TicketEvents,
 };
 pub use tool_uis::ListedToolUis;

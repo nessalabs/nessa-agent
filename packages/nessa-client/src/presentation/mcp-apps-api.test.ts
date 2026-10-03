@@ -422,13 +422,19 @@ it("reads a resource and returns what the gateway holds, ticket and all", async 
   const answer = await api(request).readResource(conversationId, app, "charts", uri, {
     requestId: "read",
   })
-  expect(request).toHaveBeenCalledExactlyOnceWith("mcp.readResource", {
-    conversationId,
-    requestId: "read",
-    app,
-    server: "charts",
-    uri,
-  })
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "mcp.readResource",
+    {
+      conversationId,
+      requestId: "read",
+      app,
+      server: "charts",
+      uri,
+    },
+    // The gateway may open the conversation first: no shorter wait than a
+    // call's.
+    { atLeastMs: MCP_APP_CALL_DEADLINE_MS },
+  )
   expect(answer).toEqual({ ...resource, domain: "app.example", prefersBorder: false })
   // Absent is absent: neither is invented when the app did not say.
   const plain = await api(async () => resource).readResource(
