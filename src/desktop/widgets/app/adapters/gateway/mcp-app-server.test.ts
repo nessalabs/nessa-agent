@@ -556,7 +556,7 @@ describe("the release", () => {
     ConversationErrorCode.ConversationNotFound,
     ConversationErrorCode.ConversationDeleted,
   ])(
-    "M5: a release refused %s — the conversation is gone — has nothing left to let go, and is no fault",
+    "M5b: a release refused %s — the conversation is gone — has nothing left to let go, and is no fault",
     async (code) => {
       const apps = fakeApps({
         releaseApp: vi.fn(() =>
@@ -641,7 +641,7 @@ describe("the release", () => {
     expect(waited).toEqual(releaseRetryMs.slice(0, 2))
   })
 
-  it("M5: a conversation gone on a later try ends the release, as on the first", async () => {
+  it("M5b: a conversation gone on a later try ends the release, as on the first", async () => {
     waited = []
     const lost = new NessaConversationControlError(
       conversationId,
@@ -665,7 +665,7 @@ describe("the release", () => {
     expect(releaseApp).toHaveBeenCalledTimes(2)
   })
 
-  it("M5: every try of one release carries the same request id", async () => {
+  it("M5c: every try of one release carries the same request id", async () => {
     const lost = new NessaConversationControlError(
       conversationId,
       "r",
@@ -683,7 +683,7 @@ describe("the release", () => {
     expect(ids[1]).toBe(ids[0])
   })
 
-  it("M5: a release the client could not send is not asked again", async () => {
+  it("M5a: a release the client could not send is not asked again", async () => {
     waited = []
     const releaseApp = vi.fn(() => Promise.reject(new TypeError("not an app reference")))
     await expect(
@@ -693,7 +693,61 @@ describe("the release", () => {
     expect(waited).toEqual([])
   })
 
-  it("M5: a release the gateway refused outright is not asked again", async () => {
+  it("M5c: a lost answer the gateway applied, then the next try also applied, withdraws each review once", async () => {
+    // An idempotent gateway, as `release_app` is: a release marks the mount
+    // released and withdraws only the reviews still open.
+    const open = new Set(["review-1", "review-2"])
+    const withdrawn: string[] = []
+    const apply = () => {
+      for (const review of open) withdrawn.push(review)
+      open.clear()
+    }
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("lost"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockImplementationOnce(async () => {
+        apply()
+        throw lost
+      })
+      .mockImplementation(async () => {
+        apply()
+        return { requestId: "r", applied: true }
+      })
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).resolves.toBeUndefined()
+    expect(releaseApp).toHaveBeenCalledTimes(2)
+    expect(withdrawn).toEqual(["review-1", "review-2"])
+    const ids = releaseApp.mock.calls.map((call) => call[2]?.requestId)
+    expect(ids[1]).toBe(ids[0])
+  })
+
+  it("M5d: a remount while the old mount's release is retried leaves the new mount alone", async () => {
+    const remounted = { ...app, instanceId: crypto.randomUUID() }
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("lost"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(lost)
+      .mockRejectedValueOnce(lost)
+      .mockResolvedValue({ requestId: "r", applied: true })
+    await gatewayAppServer(fakeApps({ releaseApp })).release(address)
+    expect(releaseApp.mock.calls.map((call) => call[1])).toEqual([app, app, app])
+    expect(
+      releaseApp.mock.calls.some((call) => call[1].instanceId === remounted.instanceId),
+    ).toBe(false)
+  })
+
+  it("M5a: a release the gateway refused outright is not asked again", async () => {
     waited = []
     const releaseApp = vi.fn(() =>
       Promise.reject(

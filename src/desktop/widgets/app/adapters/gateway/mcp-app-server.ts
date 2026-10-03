@@ -309,7 +309,8 @@ export function gatewayAppServer(
           )
             return
           // Until the gateway has taken it, the mount's reviews stay open,
-          // so a release that may not have landed is asked again (#384).
+          // so a release that may not have landed is asked again (#384's
+          // rows M5 to M5e).
           const wait = releaseRetryMs[tried]
           if (!releaseMayLand(error) || wait === undefined) throw error
           await new Promise<void>((resolve) => after(wait, resolve))
