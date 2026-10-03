@@ -23,6 +23,13 @@ recording can be compared with another.
 | `rows.get` | `{"id": 1 \| 2}` → text and `structuredContent`; any other id → `isError` | a dotted tool name, which some harnesses rewrite |
 | `always_fails` | a text block with `isError: true` | a tool error result |
 | `show_chart` | text and `structuredContent`; the tool declares `_meta.ui.resourceUri` | an MCP Apps tool: `ui://nessa-test/chart.html` is served by `resources/read` as `text/html;profile=mcp-app` |
+| `review_rows` | text and `structuredContent`; declares `_meta.ui.resourceUri` `ui://nessa-test/review.html` | an MCP App that calls tools itself: shown inline, once it has its tool result it calls `app_delete_row` and both `model_only_*` tools through the host's `tools/call`, and shows each answer; a button calls `app_delete_row` again, another asks for fullscreen |
+| `app_delete_row` | `{"id": 1 \| 2}` → "Deleted row N." (it deletes nothing); any other id → `isError` | a tool only an app may call (`_meta.ui.visibility: ["app"]`), destructive (`destructiveHint: true`), so a host asks the person first |
+| `model_only_note` | a text block | a tool hidden from apps (`visibility: ["model"]`) that declares no UI: `resourceUri` is optional in `_meta.ui` |
+| `model_only_chart` | a text block | a tool hidden from apps that declares a UI (the chart's) |
+
+The review app's own calls are what the desktop's real-gateway check
+(`verification/desktop/scripts/mcp-apps-gateway.mjs`) reads in the window.
 
 Arguments outside a tool's schema return an `isError` result and are never
 echoed back. The server's tests are `server.test.mjs`, run by

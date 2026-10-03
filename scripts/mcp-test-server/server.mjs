@@ -2,9 +2,11 @@
 /**
  * A stdio MCP server for testing what reaches Nessa from an MCP tool call:
  * structured results, resource links and embedded resources, a dotted tool
- * name, a tool error, and an MCP Apps tool with a `ui://` resource. It has no
- * side effects and no dependencies; every answer is fixed, so a recording of
- * one run can be compared with another.
+ * name, a tool error, and MCP Apps tools with `ui://` resources — one of them
+ * an app that calls, through its host, a destructive tool only apps may call
+ * and tools hidden from apps (#384). It has no side effects and no
+ * dependencies; every answer is fixed, so a recording of one run can be
+ * compared with another.
  *
  *   node scripts/mcp-test-server/server.mjs
  *
@@ -22,8 +24,131 @@ export const CHART_URI = "ui://nessa-test/chart.html"
 /** The MIME type MCP Apps gives an app's HTML. */
 export const APP_MIME_TYPE = "text/html;profile=mcp-app"
 
+/** The MCP Apps resource the `review_rows` tool declares as its UI. */
+export const REVIEW_URI = "ui://nessa-test/review.html"
+
+/**
+ * The tools the review app calls through its host's `tools/call`, by what
+ * each is for: a destructive tool only an app may call, and two tools hidden
+ * from apps — one declaring no UI (`resourceUri` is optional in `_meta.ui`),
+ * one declaring the chart's.
+ */
+export const APP_CALLS = {
+  destructive: "app_delete_row",
+  hiddenNoUi: "model_only_note",
+  hiddenWithUi: "model_only_chart",
+}
+
 const CHART_HTML =
   "<!doctype html><html><body><p id=chart>chart for nessa-test</p></body></html>"
+
+/**
+ * The review app: speaks the MCP Apps `ui/*` bridge by hand (2026-01-26), as
+ * the spec shows an app can without an SDK. Shown inline, once it has its
+ * tool result it calls, through the host's `tools/call`, the destructive tool
+ * (`#first`) and both hidden tools (`#hidden-no-ui`, `#hidden-with-ui`); its
+ * `delete` button calls the destructive tool again (`#again`), and its
+ * `fullscreen` button asks to be shown fullscreen. Each output says
+ * `pending` until it is answered, then `ok: <the result's text>` or
+ * `error: <the error's message>`. Its state and display mode are on its
+ * body (`data-review-state`, `data-review-mode`), for a browser to read.
+ */
+const REVIEW_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Review rows</title>
+<style>body { margin: 0; padding: 12px; font: 13px/1.4 system-ui, sans-serif; } output { display: block; min-height: 1.4em; }</style>
+</head>
+<body data-review-state="loading">
+<h1 style="font-size:14px;margin:0 0 8px">Review rows (nessa-test)</h1>
+<button data-review="delete">Delete row 2 again</button>
+<button data-review="fullscreen">Fullscreen</button>
+<output id="result"></output>
+<output id="first"></output>
+<output id="hidden-no-ui"></output>
+<output id="hidden-with-ui"></output>
+<output id="again"></output>
+<script>
+(function () {
+  var parentWindow = window.parent;
+  var body = document.body;
+  var next = 1;
+  var waiting = {};
+  var mode = null;
+  var called = false;
+  function post(message) { parentWindow.postMessage(message, "*"); }
+  function ask(method, params) {
+    var id = next++;
+    post({ jsonrpc: "2.0", id: id, method: method, params: params });
+    return new Promise(function (resolve) { waiting[id] = resolve; });
+  }
+  function tell(method, params) { post({ jsonrpc: "2.0", method: method, params: params }); }
+  function show(id, text) { document.getElementById(id).textContent = text; }
+  function outcome(message) {
+    if (message.error) return "error: " + message.error.message;
+    var text = (message.result && message.result.content || [])
+      .filter(function (block) { return block.type === "text"; })
+      .map(function (block) { return block.text; }).join(" ");
+    return (message.result && message.result.isError ? "isError: " : "ok: ") + text;
+  }
+  function call(output, name, args) {
+    show(output, "pending");
+    ask("tools/call", { name: name, arguments: args }).then(function (m) { show(output, outcome(m)); });
+  }
+  window.addEventListener("message", function (event) {
+    if (event.source !== parentWindow) return;
+    var message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.id !== undefined && !message.method) {
+      var resolve = waiting[message.id];
+      delete waiting[message.id];
+      if (resolve) resolve(message);
+      return;
+    }
+    if (message.method === "ui/notifications/host-context-changed" && message.params.displayMode) {
+      mode = message.params.displayMode;
+      body.setAttribute("data-review-mode", mode);
+    }
+    if (message.method === "ui/notifications/tool-result") {
+      show("result", JSON.stringify(message.params.structuredContent));
+      // Inline, once: the calls this app exists to make.
+      if (mode !== "inline" || called) return;
+      called = true;
+      call("first", ${JSON.stringify(APP_CALLS.destructive)}, { id: 2 });
+      call("hidden-no-ui", ${JSON.stringify(APP_CALLS.hiddenNoUi)}, {});
+      call("hidden-with-ui", ${JSON.stringify(APP_CALLS.hiddenWithUi)}, {});
+    }
+    if (message.method === "ui/resource-teardown") post({ jsonrpc: "2.0", id: message.id, result: {} });
+  });
+  function reportSize() {
+    tell("ui/notifications/size-changed", {
+      width: document.documentElement.scrollWidth,
+      height: document.documentElement.scrollHeight
+    });
+  }
+  ask("ui/initialize", {
+    appInfo: { name: "Review rows", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+    protocolVersion: "2026-01-26"
+  }).then(function (answer) {
+    if (answer.error) { body.setAttribute("data-review-state", "refused"); return; }
+    mode = answer.result.hostContext && answer.result.hostContext.displayMode || null;
+    if (mode) body.setAttribute("data-review-mode", mode);
+    body.setAttribute("data-review-state", "live");
+    tell("ui/notifications/initialized", {});
+    reportSize();
+    new ResizeObserver(reportSize).observe(body);
+  });
+  document.querySelector('[data-review="delete"]').addEventListener("click", function () {
+    call("again", ${JSON.stringify(APP_CALLS.destructive)}, { id: 2 });
+  });
+  document.querySelector('[data-review="fullscreen"]').addEventListener("click", function () {
+    ask("ui/request-display-mode", { mode: "fullscreen" });
+  });
+})();
+</script>
+</body>
+</html>
+`
 
 const ROWS = [
   { id: 1, name: "alpha", value: 10 },
@@ -110,6 +235,45 @@ export const TOOLS = {
       structuredContent: { series: ROWS.map(({ name, value }) => ({ name, value })) },
     }),
   },
+  review_rows: {
+    description:
+      "Show the test rows for review. Its UI is an MCP App that calls tools of its own. Takes no arguments.",
+    inputSchema: object({}),
+    annotations: { readOnlyHint: true },
+    _meta: { ui: { resourceUri: REVIEW_URI } },
+    call: () => ({
+      content: [{ type: "text", text: "Two rows to review." }],
+      structuredContent: { rows: ROWS.map(({ id }) => id) },
+    }),
+  },
+  // Only an app may call it, and it says it destroys: a host asks the person
+  // first. It deletes nothing; its answer is fixed.
+  [APP_CALLS.destructive]: {
+    description: "Delete one test row by id (1 or 2). For the review app only.",
+    inputSchema: object({ id: { type: "integer" } }),
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    _meta: { ui: { visibility: ["app"] } },
+    call: ({ id }) =>
+      ROWS.some((row) => row.id === id)
+        ? { content: [{ type: "text", text: `Deleted row ${id}.` }] }
+        : { content: [{ type: "text", text: `No row ${id}.` }], isError: true },
+  },
+  // Hidden from apps, declaring no UI: `visibility` alone.
+  [APP_CALLS.hiddenNoUi]: {
+    description: "Return a note for the model only. Takes no arguments.",
+    inputSchema: object({}),
+    annotations: { readOnlyHint: true },
+    _meta: { ui: { visibility: ["model"] } },
+    call: () => ({ content: [{ type: "text", text: "A note for the model only." }] }),
+  },
+  // Hidden from apps, declaring a UI of its own.
+  [APP_CALLS.hiddenWithUi]: {
+    description: "Show the chart, for the model only. Takes no arguments.",
+    inputSchema: object({}),
+    annotations: { readOnlyHint: true },
+    _meta: { ui: { resourceUri: CHART_URI, visibility: ["model"] } },
+    call: () => ({ content: [{ type: "text", text: "A chart for the model only." }] }),
+  },
 }
 
 const RESOURCES = {
@@ -117,6 +281,12 @@ const RESOURCES = {
     name: "chart",
     mimeType: APP_MIME_TYPE,
     text: CHART_HTML,
+    _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] } } },
+  },
+  [REVIEW_URI]: {
+    name: "review",
+    mimeType: APP_MIME_TYPE,
+    text: REVIEW_HTML,
     _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] } } },
   },
 }
