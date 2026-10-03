@@ -346,6 +346,9 @@ impl Files {
         };
         for organization in directories(&self.root.join(HOLDS))? {
             for conversation in directories(&organization)? {
+                // One sync covers every entry in the directory, so the first
+                // Retired record confirms the publication of all of them.
+                let mut synced = false;
                 for entry in fs::read_dir(&conversation)? {
                     let name = entry?.file_name();
                     if let Some(digest) = name.to_str().and_then(protected_digest) {
@@ -363,12 +366,15 @@ impl Files {
                             })) => {
                                 // Exclusion also confirms any prior uncertain
                                 // release publication before bytes can be purged.
-                                sync_directory_beneath(
-                                    &self.root,
-                                    relative
-                                        .parent()
-                                        .ok_or_else(|| corrupt("hold has no directory"))?,
-                                )?;
+                                if !synced {
+                                    sync_directory_beneath(
+                                        &self.root,
+                                        relative
+                                            .parent()
+                                            .ok_or_else(|| corrupt("hold has no directory"))?,
+                                    )?;
+                                    synced = true;
+                                }
                                 if release_target.is_some_and(|(organization, conversation)| {
                                     hold.organization_id() == organization
                                         && hold.conversation_id() == conversation
