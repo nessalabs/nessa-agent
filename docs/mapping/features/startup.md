@@ -1,6 +1,8 @@
 # User flow: launch Nessa, set up an agent, and recover a local connection
 
-This map describes implemented behavior at `52bc6cbc`. It follows the floating
+This map describes implemented behavior at `52bc6cbc`; passages marked #419
+describe the later change that admits the desktop window as a reader of the
+gateway (`GatewayReader`). It follows the floating
 panel and first-run setup through the native host, gateway, authentication, and
 provider readiness. It also covers browser sign-in and the CLI entry points that
 establish or diagnose local access. Diagrams describe code paths, not an executed
@@ -332,8 +334,12 @@ sequenceDiagram
 
 The owner exposes `starting`, `ready`, and `failed` snapshots; an unmanaged
 debug/browser path has no native service owner. `wait_ready` performs complete
-reconciliation on credential load, rather than trusting a cached initial
-success. Concurrent ordinary requests share one running receipt. The code also
+reconciliation on a bundled surface's credential load, rather than trusting a
+cached initial success. The desktop window is the one reader that does trust it
+(`GatewayReader`, #419): it is served once startup is `ready` and never
+reconciles, so a gateway that died after `ready` is found by its failed connect
+and brought back by launchd or the panel's next credential load, not by the
+window. Concurrent ordinary requests share one running receipt. The code also
 has one pending successor for configuration-change evidence, but its public
 `configuration_changed` method is currently test-only; do not read this as an
 implemented live settings subscription.
@@ -444,8 +450,9 @@ sequenceDiagram
 
 The native source only provides a credential to client ID `nessa-panel` at a
 loopback WebSocket destination, and the native command additionally only admits
-the bundled window labels `main` and `setup` through the shared native
-`bundled_window` authority. The assigned stage and endpoint are checked before reading
+the bundled window labels `main` and `setup`, and the desktop window as a reader,
+through the shared native `GatewayReader` authority (`bundled_window` for the
+bundled surfaces). The assigned stage and endpoint are checked before reading
 the private token. File permissions, owner, symlink/namespace safety, and size
 are enforced; absence, refusal, wrong stage, invalid token, and unopenable file
 remain distinct host errors. Dev without a managed gateway skips the gateway
@@ -616,9 +623,13 @@ and [process smoke script](../../../scripts/smoke-auth.mjs).
 
 The regression fix keeps the existing trusted bundled-window authority owned by
 `gateway::infrastructure::commands::bundled_window`: main and setup run the
-bundled application, while other labels cannot trigger discovery, reconciliation,
-or credential reads. Both admitted labels still use the configured local namespace,
-stage and verified endpoint; setup is recorded as the reconciliation initiator.
+bundled application. The desktop window (#419) is admitted by `GatewayReader` as
+a reader only: it is served once startup is ready, and its arm of
+`GatewayReader::ready` reads the startup snapshot and calls no reconciliation
+(native desktop-window credential and endpoint tests). Other labels cannot trigger discovery, reconciliation, or
+credential reads. All three admitted labels use the configured local namespace,
+stage and verified endpoint; main and setup are recorded as reconciliation
+initiators, and the desktop window never is.
 
 The frontend readiness request has a ten-second transport deadline: the server's
 five-second probe budget plus five seconds for transport and body delivery,
@@ -632,6 +643,7 @@ old answer independently of whether its transport has settled.
 | State / ordering | Result | Regression evidence |
 | --- | --- | --- |
 | Main or setup requests endpoint/credential | Admit the trusted bundled surface, wait for gateway with its own initiator, then validate stage/endpoint before reading credential | Native setup credential and endpoint tests |
+| Desktop window requests endpoint/credential | Served once startup is ready; refused before then without starting, joining or auditing a reconciliation (#419) | Native desktop-window credential and endpoint tests |
 | Unrelated window requests endpoint/credential | Refuse before gateway reconciliation, discovery or credential read | Native unrelated-window tests |
 | Setup uses another stage or a mismatched verified URL | Refuse without reading a credential | Native setup destination tests |
 | Fetch settles with a readable answer before deadline | Deliver answer and cancel deadline | HTTP adapter success/deadline cleanup test |
@@ -644,7 +656,7 @@ old answer independently of whether its transport has settled.
 
 | Classification | Trigger, trace, and expected/actual behavior | Evidence / next verification |
 | --- | --- | --- |
-| **Fixed defect, native boundary regressions reproduced** | Before the fix, first-run setup mounted its own authenticated download session but both native commands rejected label setup. Endpoint and credential commands now consume the existing shared bundled-window authority, which admits main/setup and refuses other labels before effects. Gateway readiness receives the actual caller identity, so setup initiates reconciliation as Setup. Credential release still validates the configured stage, verified endpoint and existing private namespace; no new credential or remote credential source is introduced. | [sole native caller authority](../../../src-tauri/src/gateway/infrastructure/commands.rs), [endpoint guard and tests](../../../src-tauri/src/gateway_endpoint/entrypoint/command.rs), [credential guard and tests](../../../src-tauri/src/surface_credential.rs), [setup session composition](../../../src/composition/dependencies.ts), [download consumer](../../../src/onboarding/adapters/agent-installations.ts). Three native Rust regressions failed against the original guards and passed after the fix, including Setup initiator, destination validation and unrelated-window denial. A real native first-run runtime download remains unverified. |
+| **Fixed defect, native boundary regressions reproduced** | Before the fix, first-run setup mounted its own authenticated download session but both native commands rejected label setup. Endpoint and credential commands now consume the existing shared bundled-window authority, which admits main/setup and refuses other labels before effects (#419 later added the desktop window to these two commands as a reader, through `GatewayReader`). Gateway readiness receives the actual caller identity, so setup initiates reconciliation as Setup. Credential release still validates the configured stage, verified endpoint and existing private namespace; no new credential or remote credential source is introduced. | [sole native caller authority](../../../src-tauri/src/gateway/infrastructure/commands.rs), [endpoint guard and tests](../../../src-tauri/src/gateway_endpoint/entrypoint/command.rs), [credential guard and tests](../../../src-tauri/src/surface_credential.rs), [setup session composition](../../../src/composition/dependencies.ts), [download consumer](../../../src/onboarding/adapters/agent-installations.ts). Three native Rust regressions failed against the original guards and passed after the fix, including Setup initiator, destination validation and unrelated-window denial. A real native first-run runtime download remains unverified. |
 | **Fixed defect, controlled frontend reproduction** | Before the fix, a stalled fetch or incomplete JSON body held Checking disabled indefinitely. The HTTP adapter now owns one ten-second deadline across both phases, aborts transport and returns unreachable; `createReadinessCheck` releases busy so Check again starts a fresh request. A retired deadline and a late old answer cannot change completed/newer state. | [request owner](../../../src/onboarding/adapters/agents.ts), [adapter regressions](../../../src/onboarding/adapters/agents.test.ts), [actual setup retry/generation regressions](../../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx), [server probe bounds](../../../crates/nessa-server/src/agents/application/shared_readiness.rs), [Chromium/WebKit verification](../../../verification/desktop/scripts/onboarding-readiness.mjs). Adapter and UI regressions failed before the fix, then passed; this does not claim a real network incident. |
 | **Designed limitation** | Linux packaged gateway startup is implemented, but entering a provider API key through the native host cannot save it because the non-macOS credential-store adapter is unavailable. | [platform store selection](../../../src-tauri/src/agent_credentials/infrastructure/mod.rs), [unsupported store](../../../src-tauri/src/agent_credentials/infrastructure/unsupported.rs), [save status UI](../../../src/onboarding/ui/agent-api-key-form.tsx). External sign-in/runtime configuration and API-key-save capability must be distinguished. |
 | **Designed limitation** | A conversation created while practising the summon shortcut can precede completion/choice persistence, use the gateway default, and retain that agent. Completing setup affects later creations, not the existing conversation's recorded agent. | [choice caching explanation and implementation](../../../src/composition/dependencies.ts), [handoff ordering](../../../src-tauri/src/panel.rs), [chat map](chat.md). |

@@ -562,6 +562,37 @@ mounts, `index.html` shows the fallback on that stage.
   full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
+## The window's gateway
+
+The desktop app's window reads the local gateway over the panel's credential,
+which its host serves it once the gateway is ready (#419). When it cannot, it
+says why where the conversations would be.
+
+- [ ] **Signed out, the host refusing the credential, the gateway not ready
+  yet, and no gateway listening each say why in the chat area, with Try
+  Again; never the sample in its place.** A gateway refusing the credential
+  says "This window isn’t signed in to the local server."; the rest say "Nessa
+  couldn’t read the local server’s conversations just now." While the gateway
+  is not ready the host refuses the endpoint and the credential is never asked
+  for. The status sits
+  inside the chat area and the window, Try Again is at least 24px tall with
+  nothing over it, and no session row or sample plugin is drawn. Try Again
+  reads the index again (the status goes while it reads, which no poll does)
+  and connects at once though the poller waits, and says the same while
+  nothing changed. While signed out, and while the
+  gateway is not ready, the window does not ask the host at all for four
+  seconds after its last ask, then asks exactly once by eight seconds: after a
+  failed connect it waits out several poll rounds rather than asking the host
+  every second, and then tries again on its own. (The script bounds the wait
+  to four to seven rounds; the unit tests pin the count, S10.)
+  _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
+  `gateway-states.mjs` (runs the real frontend as the desktop app, against a
+  fake host whose endpoint and credential commands answer per scenario, and a
+  fake gateway socket that refuses the credential as `product/socket.rs` does).
+- [ ] **A gateway that answers shows its conversations and its servers' MCP
+  Apps in the main window.** _By hand:_ `pnpm app` against a gateway with
+  `scripts/mcp-test-server` configured; not scripted.
+
 ## Console errors
 
 - [ ] **No console error, page error or failed request** while any script

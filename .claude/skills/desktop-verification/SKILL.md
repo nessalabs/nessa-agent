@@ -25,6 +25,7 @@ This skill is how to use them; it restates neither.
 | MCP Apps: `src/desktop/widgets/app/`, the sandbox proxy, `src-tauri/src/app_sandbox.rs` | `mcp-apps.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
+| where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the failure sentences (`workspace/ui/failure-copy.ts`), the empty workspace | `gateway-states.mjs` |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |
 | a UI branch before hand-off | `run-all.mjs` (all of the above) |
 

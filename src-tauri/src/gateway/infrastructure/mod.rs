@@ -18,6 +18,7 @@
 //!
 //! ```text
 //! bundled windows -> commands authorization -> Gateway startup / endpoint / credential access
+//! desktop window  -> commands authorization -> endpoint / credential access, once ready
 //! Gateway -> native manager -> staging -> verified immutable runtime
 //!                    -> control -> launchd / existing gateway
 //!                    -> systemd -> typed D-Bus jobs / pidfds
@@ -26,7 +27,9 @@
 //!         -> LoginShell -------> the account's login shell
 //! ```
 //! Arrows mean calls; commands translate the application-owned startup contract
-//! and verify bundled caller identity for native gateway access. Each native
+//! and verify the caller's window for native gateway access: the bundled
+//! surfaces may bring the gateway up, the desktop window only reads it once it
+//! is ready (`GatewayReader`). Each native
 //! manager adapter owns its background process lifetime.
 mod commands;
 #[cfg(target_os = "linux")]
@@ -42,7 +45,7 @@ mod retirement;
 mod selection;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
-pub(crate) use commands::bundled_window;
+pub(crate) use commands::GatewayReader;
 pub use commands::{
     __cmd__gateway_startup, __cmd__retry_gateway_startup, __tauri_command_name_gateway_startup,
     __tauri_command_name_retry_gateway_startup, gateway_startup, retry_gateway_startup,
