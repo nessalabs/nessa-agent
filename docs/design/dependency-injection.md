@@ -28,13 +28,15 @@ const store = makeStore(dependencies)
 
 The desktop window composes its own scope the same way.
 `src/desktop/dependencies.ts` builds `WorkspaceDependencies` — the
-`WorkspaceSource` port (the in-memory source until the gateway implements it),
-the clock, and an id generator — and `src/desktop/store.ts` hands them to the
+`WorkspaceSource` port (the gateway's, `gatewaySource`, when it is given a way
+to connect, and the in-memory sample otherwise), the clock, and an id
+generator — and `src/desktop/store.ts` hands them to the
 workspace's thunks as the extra argument and to its listener effects. Tests
 make a store over a source of their own (`src/desktop/workspace/testing.ts`).
 
 ```ts
-const dependencies = createDesktopDependencies({ workspace: myWorkspaceSource })
+// The gateway's conversations; or `{ workspace: myWorkspaceSource }` in a test.
+const dependencies = createDesktopDependencies({ gateway: () => connectClient() })
 const store = makeDesktopStore(dependencies)
 ```
 

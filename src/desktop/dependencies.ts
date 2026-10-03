@@ -3,11 +3,15 @@
  * workspace source, the clock, ids, the page's measure of the panes' room,
  * the storage that keeps the overview's filter — and the widget plugins it
  * draws with, built once and handed to the store (`store.ts`) and the views.
- * Overrides are explicit, never a service locator — a test or a future
- * gateway adapter passes its own `workspace`.
+ * Overrides are explicit, never a service locator — a test passes its own
+ * `workspace`.
+ *
+ * The workspace is the gateway's (`gatewaySource`) when the window is given
+ * a way to connect to one (`gateway`), and the in-memory sample otherwise —
+ * which is what the verification fixtures run on.
  *
  * ```ts
- * const dependencies = createDesktopDependencies({ workspace: gatewaySource })
+ * const dependencies = createDesktopDependencies({ gateway: () => connect() })
  * const store = makeDesktopStore(dependencies)
  * ```
  */
@@ -24,11 +28,13 @@ import {
   type WidgetPlugin,
 } from "./widgets"
 import {
+  gatewaySource,
   inMemorySource,
   measureWorkspace,
   rememberedFilter,
   sampleAppSession,
   sampleWidgetSession,
+  type GatewayClient,
   type WorkspaceDependencies,
   type WorkspaceSource,
 } from "./workspace"
@@ -41,6 +47,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
 export function createDesktopDependencies(
   options: {
     workspace?: WorkspaceSource
+    /** Connects to the gateway whose conversations the window shows; ignored beside `workspace`. */
+    gateway?: () => Promise<GatewayClient>
     now?: () => number
     newId?: () => string
     measure?: WorkspaceDependencies["measure"]
@@ -62,9 +70,13 @@ export function createDesktopDependencies(
     const timer = window.setTimeout(run, ms)
     return () => window.clearTimeout(timer)
   }
-  // With no source given, the window runs on the sample workspace.
-  const sample = options.workspace === undefined
-  const workspace = options.workspace ?? inMemorySource({ now, after })
+  // With no source given and no gateway, the window runs on the sample workspace.
+  const sample = options.workspace === undefined && options.gateway === undefined
+  const workspace =
+    options.workspace ??
+    (options.gateway
+      ? gatewaySource({ connect: options.gateway, clock: { now, after } })
+      : inMemorySource({ now, after }))
   return {
     workspace,
     now,

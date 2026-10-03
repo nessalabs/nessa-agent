@@ -22,6 +22,7 @@
 //!                                      |-> units + completion -> SQLite runtime
 //! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
 //! RecordStorage -> transcript fold -> committed gateway view
+//! RecordStorage -> bounded committed-change watches (no read or permission)
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete outer save publishes

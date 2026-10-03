@@ -1,378 +1,483 @@
-//! Pure envelope/publication checks; real writer/source/restart checks are separate.
-use super::*;
-use event_stream::{IncarnationId, StreamId};
-use nessa_sync::replication::domain::Id;
-use serde_json::Value;
+//! Public save publication, exact retry and serialized checkpoint contracts.
 
-fn stream() -> StreamKey {
-    StreamKey {
-        id: StreamId::new("conversation").unwrap(),
-        incarnation: IncarnationId([7; 16]),
-    }
+use super::opened;
+use nessa_sdk::{
+    application::agent_execution::sessions::{
+        ChangeWatchState, SessionChange, SessionLoadState, SessionSaveUnit, SessionStorage,
+        StorageError,
+    },
+    domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
+    infrastructure::session_storage::{
+        RecordStorage, TranscriptCheckpoint, TranscriptError, TranscriptFold,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    },
+};
+use nessa_sync::replication::{
+    application::RecordSource,
+    domain::{Id, PageRequest, Record, Scope},
+    infrastructure::MAX_PAGE_PAYLOAD,
+};
+use rusqlite::Connection;
+use serde_json::{json, Value};
+use std::{
+    future::Future,
+    path::Path,
+    task::{Context, Poll, Waker},
+};
+
+fn sql(root: &Path, statement: &str) {
+    Connection::open(root.join("records.sqlite3"))
+        .unwrap()
+        .execute_batch(statement)
+        .unwrap();
 }
-fn identity(base: u64, generation: u64) -> SaveIdentity {
-    SaveIdentity::binding(&SessionSaveGeneration::new(
-        SessionSaveBackend::Record {
-            stream: Id::new("conversation").unwrap(),
-            incarnation: [7; 16],
-        },
-        base,
-        generation,
-    ))
+fn rows(root: &Path) -> i64 {
+    Connection::open(root.join("records.sqlite3"))
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+        .unwrap()
+}
+async fn emitted_records(storage: &RecordStorage, id: &SessionId) -> (Scope, Vec<Record>) {
+    let source = storage
+        .record_source(id, Id::new("origin").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::task::spawn_blocking(move || {
+        let mut source = source;
+        let scope = source.scope(Id::new("receiver").unwrap(), Id::new("epoch").unwrap());
+        let head = source.head(&scope).unwrap();
+        let mut records = Vec::new();
+        let mut after = 0;
+        while after < head {
+            let page = source
+                .page(&PageRequest {
+                    scope: scope.clone(),
+                    after,
+                    target: head,
+                    max_records: 64,
+                    max_payload_bytes: MAX_PAGE_PAYLOAD,
+                    max_record_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                })
+                .unwrap();
+            assert!(!page.records.is_empty(), "published suffix must advance");
+            after = page.records.last().unwrap().position;
+            records.extend(page.records);
+        }
+        // The final source handle joins its physical worker on this blocking thread.
+        drop(source);
+        (scope, records)
+    })
+    .await
     .unwrap()
 }
-fn accept(
-    progress: &mut GroupProgress,
-    kind: FactKind,
-    header: &Header,
-    payload: &[u8],
-    position: u64,
-) -> Result<Header, StorageError> {
-    let bytes = header.encode(payload);
-    // Exercise a header crossing physical-piece boundaries rather than an inline-only decoder.
-    for piece in bytes.chunks(13) {
-        progress.piece(piece)?;
-    }
-    progress.complete(&FactKey::new(kind, None, header.ordinal).unwrap(), position)
-}
-
-#[test]
-fn units_and_aborts_do_not_publish_and_only_exact_completion_advances() {
-    let mut progress = GroupProgress::after(0);
-    let unit = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"first");
-    assert!(unit.identity.matches_stream(&stream()));
-    accept(&mut progress, FactKind::SaveUnit, &unit, b"first", 3).unwrap();
-    assert!(progress.is_unfinished());
-    assert_eq!(progress.published(), 0);
-    assert!(progress.checkpoint().is_none());
-    progress.piece(b"partial next frame").unwrap();
-    progress.reset_frame();
-    assert!(progress.is_unfinished());
-    assert_eq!(progress.published(), 0);
-    let complete = Header::unit(identity(0, 0), 1, unit.chain(5), b"");
-    accept(&mut progress, FactKind::SaveComplete, &complete, b"", 7).unwrap();
-    assert!(!progress.is_unfinished());
-    assert_eq!(progress.published(), 7);
-    assert!(accept(&mut progress, FactKind::SaveComplete, &complete, b"", 8).is_err());
-}
-
-#[test]
-fn completed_prefix_stays_published_during_same_generation_extension_and_checkpoint_restage() {
-    let mut progress = GroupProgress::after(0);
-    let first = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"P");
-    accept(&mut progress, FactKind::SaveUnit, &first, b"P", 1).unwrap();
-    let p_complete = Header::unit(identity(0, 0), 1, first.chain(1), b"");
-    accept(&mut progress, FactKind::SaveComplete, &p_complete, b"", 2).unwrap();
-    let p_checkpoint = progress.checkpoint();
-    let second = Header::unit(identity(0, 0), 1, first.chain(1), b"Q");
-    accept(&mut progress, FactKind::SaveUnit, &second, b"Q", 3).unwrap();
-    assert_eq!(progress.published(), 2);
-    let incarnation = Uuid::from_bytes([7; 16]).simple().to_string();
-    let mut reopened =
-        GroupProgress::restore(2, progress.checkpoint(), "conversation", &incarnation, 1).unwrap();
-    // The checkpoint represents P, so Q's actual downloaded journal is restaged once.
-    accept(&mut reopened, FactKind::SaveUnit, &second, b"Q", 3).unwrap();
-    let q_complete = Header::unit(identity(0, 0), 2, second.chain(1), b"");
-    accept(&mut reopened, FactKind::SaveComplete, &q_complete, b"", 4).unwrap();
-    assert_eq!(reopened.published(), 4);
-    assert!(GroupProgress::restore(2, p_checkpoint.clone(), "other", &incarnation, 1).is_err());
-    assert!(
-        GroupProgress::restore(2, p_checkpoint.clone(), "conversation", &incarnation, 0).is_err()
-    );
-    assert!(GroupProgress::restore(2, p_checkpoint, "conversation", &incarnation, 2).is_err());
-    // Reopened Q retains two original-generation unit facts, including P's prefix.
-    let mut q_reopened =
-        GroupProgress::restore(4, reopened.checkpoint(), "conversation", &incarnation, 2).unwrap();
-    let third = Header::unit(identity(4, 1), 0, EMPTY_CHAIN, b"R");
-    accept(&mut q_reopened, FactKind::SaveUnit, &third, b"R", 5).unwrap();
-    let r_complete = Header::unit(identity(4, 1), 1, third.chain(1), b"");
-    accept(&mut q_reopened, FactKind::SaveComplete, &r_complete, b"", 6).unwrap();
-    // Last-completion metadata owns R's one unit, not P/Q's cumulative total.
-    let r_checkpoint = q_reopened.checkpoint();
-    assert!(
-        GroupProgress::restore(6, r_checkpoint.clone(), "conversation", &incarnation, 3).is_ok()
-    );
-    let mut wrong_base = r_checkpoint.clone().unwrap();
-    wrong_base.identity.base = 0;
-    assert!(GroupProgress::restore(6, Some(wrong_base), "conversation", &incarnation, 3).is_err());
-    let mut wrong_generation = r_checkpoint.unwrap();
-    wrong_generation.identity.generation = 0;
-    assert!(
-        GroupProgress::restore(6, Some(wrong_generation), "conversation", &incarnation, 3).is_err()
-    );
-}
-
-#[test]
-fn changed_payload_boundary_scope_base_generation_and_count_refuse() {
-    let unit = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"original");
-    let mut changed = GroupProgress::after(0);
-    assert!(accept(&mut changed, FactKind::SaveUnit, &unit, b"changed", 1).is_err());
-    for header in [
-        Header::unit(identity(1, 0), 0, EMPTY_CHAIN, b"original"),
-        Header::unit(identity(0, 1), 0, EMPTY_CHAIN, b"original"),
-        Header::unit(identity(0, 0), 1, EMPTY_CHAIN, b"original"),
-    ] {
-        assert!(accept(
-            &mut GroupProgress::after(0),
-            FactKind::SaveUnit,
-            &header,
-            b"original",
-            1
+async fn checkpoint_fixture() -> TranscriptFold {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opening, mut snapshot) = opened(&id);
+    let first = lease.load().await.unwrap().binding().clone();
+    let receipt = lease
+        .save_changes(
+            first.clone(),
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
-        .is_err());
-    }
-    let mut progress = GroupProgress::after(0);
-    accept(&mut progress, FactKind::SaveUnit, &unit, b"original", 1).unwrap();
-    let bad = Header::unit(identity(0, 0), 2, unit.chain(8), b"");
-    assert!(accept(&mut progress, FactKind::SaveComplete, &bad, b"", 2).is_err());
-    let foreign = StreamKey {
-        id: stream().id,
-        incarnation: IncarnationId([8; 16]),
+        .await
+        .unwrap();
+    let next = receipt.next_for(&first, 1).unwrap();
+    let context = ProviderContext::Recorded(ExecutionSessionId::new("next-context").unwrap());
+    let change = SessionChange::ProviderContext {
+        before: ProviderContext::Absent,
+        after: context.clone(),
     };
-    assert!(!unit.identity.matches_stream(&foreign));
+    snapshot.provider_context = context;
+    lease
+        .save_changes(
+            next,
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
+        .await
+        .unwrap();
+    let (scope, records) = emitted_records(&storage, &id).await;
+    let mut fold = TranscriptFold::new(scope).unwrap();
+    fold.apply(&records).unwrap();
+    assert_eq!(fold.snapshot(), Some(&snapshot));
+    drop(lease);
+    storage.shutdown().await.unwrap();
+    fold
 }
-
-fn push_actual_key(
-    progress: &mut GroupProgress,
-    header: &Header,
-    payload: &[u8],
-    kind: FactKind,
-    ordinal: u64,
-    position: u64,
-) -> Result<Header, StorageError> {
-    progress.piece(&header.encode(payload))?;
-    progress.complete(&FactKey::new(kind, None, ordinal).unwrap(), position)
+fn checkpoint_json(checkpoint: &TranscriptCheckpoint) -> Value {
+    let bytes: Vec<u8> = checkpoint.chunks().flatten().copied().collect();
+    serde_json::from_slice(&bytes).unwrap()
 }
-fn completed_progress() -> GroupProgress {
-    let mut progress = GroupProgress::after(0);
-    let unit = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"unit");
-    push_actual_key(&mut progress, &unit, b"unit", FactKind::SaveUnit, 0, 1).unwrap();
-    let complete = Header::unit(identity(0, 0), 1, unit.chain(4), &[]);
-    push_actual_key(&mut progress, &complete, &[], FactKind::SaveComplete, 1, 2).unwrap();
-    assert_eq!(progress.published(), 2);
-    progress
+fn changed_checkpoint(value: &Value) -> Result<TranscriptCheckpoint, TranscriptError> {
+    TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(value).unwrap()])
 }
-#[test]
-fn save_envelope_refuses_independent_digest_ordinal_chain_and_identity_contradictions() {
-    let valid = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"unit");
-    let cases = [
-        (valid.clone(), 1),
-        (
-            Header {
-                previous: [2; 32],
-                ..valid.clone()
-            },
-            0,
+fn assert_refused(fold: &TranscriptFold, saved: &Value, path: &str, replacement: Value) {
+    let baseline = fold.checkpoint().unwrap();
+    assert!(TranscriptFold::restore(fold.scope().clone(), fold.applied(), &baseline).is_ok());
+    let mut changed = saved.clone();
+    *changed
+        .pointer_mut(path)
+        .expect("field emitted by the actual checkpoint") = replacement;
+    assert!(
+        matches!(
+            changed_checkpoint(&changed).and_then(|checkpoint| {
+                TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint)
+            }),
+            Err(TranscriptError::Checkpoint)
         ),
-    ];
-    for (header, ordinal) in cases {
-        let mut progress = GroupProgress::after(0);
-        assert!(push_actual_key(
-            &mut progress,
-            &header,
-            b"unit",
-            FactKind::SaveUnit,
-            ordinal,
-            1
-        )
-        .is_err());
-        assert_eq!(progress.published(), 0);
-    }
-    for foreign in [
-        identity(1, 1),
-        identity(2, 2),
-        SaveIdentity {
-            stream: [2; 32],
-            ..identity(2, 1)
-        },
-        SaveIdentity {
-            incarnation: [2; 16],
-            ..identity(2, 1)
-        },
+        "accepted serialized contradiction at {path}"
+    );
+    assert!(TranscriptFold::restore(fold.scope().clone(), fold.applied(), &baseline).is_ok());
+}
+
+#[tokio::test]
+async fn checkpoint_refuses_lower_prior_base_with_other_completion_fields_unchanged() {
+    let fold = checkpoint_fixture().await;
+    let saved = checkpoint_json(&fold.checkpoint().unwrap());
+    assert_eq!(saved["group"]["identity"]["base"], json!(2));
+    assert_refused(&fold, &saved, "/group/identity/base", json!(1));
+}
+#[tokio::test]
+async fn checkpoint_refuses_higher_prior_base_with_other_completion_fields_unchanged() {
+    let fold = checkpoint_fixture().await;
+    let saved = checkpoint_json(&fold.checkpoint().unwrap());
+    assert_eq!(saved["group"]["identity"]["base"], json!(2));
+    assert_refused(&fold, &saved, "/group/identity/base", json!(3));
+}
+#[tokio::test]
+async fn checkpoint_refuses_changed_final_unit_preimage_and_completion_chain() {
+    let fold = checkpoint_fixture().await;
+    let saved = checkpoint_json(&fold.checkpoint().unwrap());
+    for path in [
+        "/group/unit_previous/0",
+        "/group/unit_payload/0",
+        "/group/chain/0",
+        "/group/unit_length",
+        "/group/count",
+        "/group/identity/generation",
     ] {
-        let mut progress = completed_progress();
-        let header = Header::unit(foreign, 0, EMPTY_CHAIN, b"unit");
-        assert!(
-            push_actual_key(&mut progress, &header, b"unit", FactKind::SaveUnit, 0, 3).is_err()
+        let value = saved.pointer(path).unwrap().as_u64().unwrap();
+        assert_refused(
+            &fold,
+            &saved,
+            path,
+            json!(if path.ends_with("/0") {
+                (value + 1) % 256
+            } else {
+                value + 1
+            }),
         );
-        assert_eq!(progress.published(), 2);
     }
-    let mut good = completed_progress();
-    let header = Header::unit(identity(2, 1), 0, EMPTY_CHAIN, b"unit");
-    push_actual_key(&mut good, &header, b"unit", FactKind::SaveUnit, 0, 3).unwrap();
-    assert_eq!(good.published(), 2);
-    for bad in [
-        Header::unit(identity(2, 1), 2, header.chain(4), b"next"),
-        Header::unit(identity(2, 1), 1, [2; 32], b"next"),
+}
+#[tokio::test]
+async fn checkpoint_rejects_each_independent_completion_binding_contradiction() {
+    let fold = checkpoint_fixture().await;
+    let saved = checkpoint_json(&fold.checkpoint().unwrap());
+    assert_eq!(saved["group"]["count"], json!(1));
+    assert_eq!(saved["facts"], json!(2));
+    for (path, replacement) in [
+        ("/group/count", json!(0)),
+        ("/group/count", json!(3)),
+        ("/group/identity/base", json!(0)),
+        ("/group/identity/base", json!(4)),
+        ("/group/identity/stream", json!(vec![2; 32])),
+        ("/group/identity/incarnation", json!(vec![2; 16])),
+        ("/group", Value::Null),
     ] {
-        let mut progress = good.clone();
-        assert!(push_actual_key(
-            &mut progress,
-            &bad,
-            b"next",
-            FactKind::SaveUnit,
-            bad.ordinal,
-            4
+        assert_refused(&fold, &saved, path, replacement);
+    }
+}
+#[tokio::test]
+async fn checkpoint_restore_refuses_independent_group_representation_contradictions() {
+    let fold = checkpoint_fixture().await;
+    let checkpoint = fold.checkpoint().unwrap();
+    let valid = checkpoint_json(&checkpoint);
+    let mut cases: Vec<(&str, Value)> = Vec::new();
+    for path in [
+        "/group",
+        "/group/identity",
+        "/group/chain",
+        "/group/unit_previous",
+        "/group/unit_payload",
+        "/group/identity/stream",
+        "/group/identity/incarnation",
+        "/group/count",
+        "/group/unit_length",
+        "/group/identity/base",
+        "/group/identity/generation",
+    ] {
+        cases.push((path, json!("unexpected-string")));
+    }
+    for path in [
+        "/group",
+        "/group/identity",
+        "/group/count",
+        "/group/unit_length",
+        "/group/identity/base",
+        "/group/identity/generation",
+    ] {
+        cases.push((path, json!([0])));
+    }
+    for path in [
+        "/group/chain",
+        "/group/unit_previous",
+        "/group/unit_payload",
+        "/group/identity/stream",
+    ] {
+        cases.push((path, json!(vec![0; 33])));
+    }
+    cases.push(("/group/identity/incarnation", json!(vec![0; 17])));
+    for path in [
+        "/group/chain",
+        "/group/unit_previous",
+        "/group/unit_payload",
+        "/group/identity/stream",
+        "/group/identity/incarnation",
+    ] {
+        cases.push((path, json!(["unexpected-string"])));
+    }
+    for path in [
+        "/group/chain",
+        "/group/unit_previous",
+        "/group/unit_payload",
+        "/group/identity/stream",
+        "/group/identity/incarnation",
+        "/group/count",
+        "/group/unit_length",
+        "/group/identity/base",
+        "/group/identity/generation",
+    ] {
+        cases.push((path, json!({"unexpected": 0})));
+    }
+    for (path, replacement) in cases {
+        assert_refused(&fold, &valid, path, replacement);
+    }
+    for path in ["/group", "/group/identity"] {
+        let mut malformed = valid.clone();
+        malformed
+            .pointer_mut(path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), json!(0));
+        assert!(matches!(
+            changed_checkpoint(&malformed).and_then(|checkpoint| {
+                TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint)
+            }),
+            Err(TranscriptError::Checkpoint)
+        ));
+    }
+    assert!(TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint).is_ok());
+}
+
+#[tokio::test]
+async fn completed_prefix_stays_published_during_same_generation_extension_and_checkpoint_restage()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opening, snapshot) = opened(&id);
+    let original = lease.load().await.unwrap().binding().clone();
+    let receipt = lease
+        .save_changes(
+            original.clone(),
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
-        .is_err());
-        assert_eq!(progress.published(), 2);
-    }
-    let complete = Header::unit(identity(2, 1), 1, header.chain(4), &[]);
-    push_actual_key(&mut good, &complete, &[], FactKind::SaveComplete, 1, 4).unwrap();
-    assert_eq!(good.published(), 4);
-}
-
-#[test]
-fn metadata_declaration_keeps_wire_and_preflight_field_authority_in_agreement() {
-    let identity = identity(0, 0);
-    let value = serde_json::to_value(&identity).unwrap();
+        .await
+        .unwrap();
+    let original = receipt.next_for(&original, 1).unwrap();
+    let mut watch = storage.watch_committed(&id).unwrap();
+    let context = ProviderContext::Recorded(ExecutionSessionId::new("first-context").unwrap());
+    let first = SessionChange::ProviderContext {
+        before: ProviderContext::Absent,
+        after: context.clone(),
+    };
+    let mut candidate = snapshot.clone();
+    candidate.provider_context = context.clone();
+    // Refuse the actual next completion insertion after the small Unit is durable.
+    sql(&root, "CREATE TRIGGER refuse_completion BEFORE INSERT ON event_records WHEN NEW.offset=X'0000000000000004' BEGIN SELECT RAISE(ABORT, 'fixture completion refusal'); END;");
+    assert!(matches!(
+        lease
+            .save_changes(
+                original.clone(),
+                candidate,
+                vec![SessionSaveUnit::new(vec![first.clone()]).unwrap()]
+            )
+            .await,
+        Err(StorageError::Io(_))
+    ));
+    assert_eq!(rows(&root), 3);
     assert_eq!(
-        serde_json::from_value::<SaveIdentity>(value.clone()).unwrap(),
-        identity
+        lease.load().await.unwrap().state(),
+        SessionLoadState::Unfinished
     );
-    let mut identity_keys = value
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    identity_keys.sort_unstable();
+    let prior = storage.read_committed(id.clone()).await.unwrap().unwrap();
+    assert_eq!(prior.position(), 2);
+    assert_eq!(prior.snapshot(), Some(&snapshot));
+    let mut wait = Box::pin(watch.changed());
+    assert!(matches!(
+        wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    drop(wait);
+    sql(&root, "DROP TRIGGER refuse_completion;");
+    drop(lease);
+    let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+    let loaded = lease.load().await.unwrap();
+    assert_eq!(loaded.binding(), &original);
+    assert_eq!(loaded.snapshot(), Some(&snapshot));
+    let final_context =
+        ProviderContext::Recorded(ExecutionSessionId::new("extended-context").unwrap());
+    let second = SessionChange::ProviderContext {
+        before: context,
+        after: final_context.clone(),
+    };
+    let mut extended = snapshot;
+    extended.provider_context = final_context;
+    let units = vec![
+        SessionSaveUnit::new(vec![first]).unwrap(),
+        SessionSaveUnit::new(vec![second]).unwrap(),
+    ];
+    let receipt = lease
+        .save_changes(original.clone(), extended.clone(), units.clone())
+        .await
+        .unwrap();
+    assert_eq!(rows(&root), 5);
+    let mut wait = Box::pin(watch.changed());
     assert_eq!(
-        identity_keys,
-        vec!["base", "generation", "incarnation", "stream"]
+        wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(ChangeWatchState::Dirty)
     );
-    for (field, value) in value.as_object().unwrap() {
-        match (SaveIdentity::field_kind(field).unwrap(), value) {
-            (MetadataValueKind::FixedBytes(width), Value::Array(bytes)) => {
-                assert_eq!(width, bytes.len())
-            }
-            (MetadataValueKind::Number, Value::Number(_)) => (),
-            _ => panic!("metadata field kind disagrees with typed identity"),
-        }
-    }
-    let mut progress = GroupProgress::after(0);
-    let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, b"unit");
-    accept(&mut progress, FactKind::SaveUnit, &unit, b"unit", 1).unwrap();
-    let complete = Header::unit(identity, 1, unit.chain(4), b"");
-    accept(&mut progress, FactKind::SaveComplete, &complete, b"", 2).unwrap();
-    let checkpoint = serde_json::to_value(progress.checkpoint().unwrap()).unwrap();
-    let mut checkpoint_keys = checkpoint
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    checkpoint_keys.sort_unstable();
+    drop(wait);
     assert_eq!(
-        checkpoint_keys,
-        vec![
-            "chain",
-            "count",
-            "identity",
-            "unit_length",
-            "unit_payload",
-            "unit_previous"
-        ]
+        lease
+            .save_changes(original, extended.clone(), units)
+            .await
+            .unwrap(),
+        receipt
     );
-    let roundtrip: GroupCheckpoint = serde_json::from_value(checkpoint.clone()).unwrap();
-    assert_eq!(serde_json::to_value(roundtrip).unwrap(), checkpoint);
-    for (field, value) in checkpoint.as_object().unwrap() {
-        match (GroupCheckpoint::field_kind(field).unwrap(), value) {
-            (MetadataValueKind::Identity, Value::Object(_)) => (),
-            (MetadataValueKind::FixedBytes(width), Value::Array(bytes)) => {
-                assert_eq!(width, bytes.len())
-            }
-            (MetadataValueKind::Number, Value::Number(_)) => (),
-            _ => panic!("metadata field kind disagrees with typed checkpoint"),
-        }
-    }
-    assert!(SaveIdentity::field_kind("unexpected").is_none());
-    assert!(GroupCheckpoint::field_kind("unexpected").is_none());
-    let mut foreign_identity = value;
-    foreign_identity
-        .as_object_mut()
-        .unwrap()
-        .insert("unexpected".into(), serde_json::json!(0));
-    assert!(serde_json::from_value::<SaveIdentity>(foreign_identity).is_err());
-    let mut foreign_checkpoint = checkpoint;
-    foreign_checkpoint
-        .as_object_mut()
-        .unwrap()
-        .insert("unexpected".into(), serde_json::json!(0));
-    assert!(serde_json::from_value::<GroupCheckpoint>(foreign_checkpoint).is_err());
+    assert_eq!(rows(&root), 5);
+    let (scope, records) = emitted_records(&storage, &id).await;
+    let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+    fold.apply(&records).unwrap();
+    assert_eq!(fold.snapshot(), Some(&extended));
+    let restored =
+        TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+    assert_eq!(restored.snapshot(), Some(&extended));
+    drop(lease);
+    storage.shutdown().await.unwrap();
 }
 
-#[test]
-fn short_header_refuses_without_partial_decode_and_exact_header_accepts() {
-    let header = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"unit");
-    let encoded = header.encode(&[]);
-    for length in [0, 31, 47, 55, 63, 71, 103, HEADER_BYTES - 1] {
-        assert!(Header::decode(&encoded[..length]).is_err());
-    }
-    assert_eq!(Header::decode(&encoded).unwrap(), header);
+#[tokio::test]
+async fn physical_conflict_fences_live_load_and_later_saves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (change, candidate) = opened(&id);
+    let binding = lease.load().await.unwrap().binding().clone();
+    let units = vec![SessionSaveUnit::new(vec![change]).unwrap()];
+    let receipt = lease
+        .save_changes(binding.clone(), candidate.clone(), units.clone())
+        .await
+        .unwrap();
+    let database = Connection::open(root.join("records.sqlite3")).unwrap();
+    let actual: Vec<u8> = database
+        .query_row(
+            "SELECT payload FROM event_records WHERE offset=?1",
+            [1u64.to_be_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        database
+            .execute(
+                "UPDATE event_records SET payload=?1 WHERE offset=?2",
+                rusqlite::params![&[99u8][..], 1u64.to_be_bytes().as_slice()]
+            )
+            .unwrap(),
+        1
+    );
+    assert!(matches!(
+        lease
+            .save_changes(binding.clone(), candidate.clone(), units.clone())
+            .await,
+        Err(StorageError::Corrupt(_))
+    ));
+    assert_eq!(rows(&root), 2);
+    assert!(matches!(lease.load().await, Err(StorageError::Corrupt(_))));
+    assert_eq!(
+        database
+            .execute(
+                "UPDATE event_records SET payload=?1 WHERE offset=?2",
+                rusqlite::params![actual, 1u64.to_be_bytes().as_slice()]
+            )
+            .unwrap(),
+        1
+    );
+    assert!(matches!(
+        lease
+            .save_changes(binding.clone(), candidate.clone(), units.clone())
+            .await,
+        Err(StorageError::Corrupt(_))
+    ));
+    assert!(matches!(lease.load().await, Err(StorageError::Corrupt(_))));
+    drop(database);
+    drop(lease);
+    let lease = storage.open_existing(id).await.unwrap().unwrap();
+    assert_eq!(lease.load().await.unwrap().snapshot(), Some(&candidate));
+    assert_eq!(
+        lease.save_changes(binding, candidate, units).await.unwrap(),
+        receipt
+    );
+    assert_eq!(rows(&root), 2);
+    drop(lease);
+    storage.shutdown().await.unwrap();
 }
 
-#[test]
-fn empty_unit_and_completion_without_original_unit_refuse() {
-    for kind in [FactKind::SaveUnit, FactKind::SaveComplete] {
-        let mut progress = GroupProgress::after(0);
-        let empty = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, &[]);
-        assert!(accept(&mut progress, kind, &empty, &[], 1).is_err());
-        assert_eq!(progress.published(), 0);
-        assert!(progress.checkpoint().is_none());
-    }
-    assert_eq!(completed_progress().published(), 2);
-}
-
-#[test]
-fn completion_payload_refuses_and_exact_empty_completion_accepts() {
-    let mut progress = GroupProgress::after(0);
-    let unit = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"unit");
-    accept(&mut progress, FactKind::SaveUnit, &unit, b"unit", 1).unwrap();
-    let carrying = Header::unit(identity(0, 0), 1, unit.chain(4), b"extra");
-    assert!(accept(
-        &mut progress,
-        FactKind::SaveComplete,
-        &carrying,
-        b"extra",
-        2
-    )
-    .is_err());
-    assert_eq!(progress.published(), 0);
-    progress.reset_frame();
-    let exact = Header::unit(identity(0, 0), 1, unit.chain(4), &[]);
-    accept(&mut progress, FactKind::SaveComplete, &exact, &[], 2).unwrap();
-    assert_eq!(progress.published(), 2);
-}
-
-#[test]
-fn unfinished_identity_switch_refuses_then_original_completion_accepts() {
-    let mut progress = GroupProgress::after(0);
-    let unit = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"unit");
-    accept(&mut progress, FactKind::SaveUnit, &unit, b"unit", 1).unwrap();
-    // Same stream/incarnation, current published base and exact next generation;
-    // only the prior group's unfinished ownership prevents this switch.
-    let next = Header::unit(identity(0, 1), 0, EMPTY_CHAIN, b"next");
-    assert!(accept(&mut progress, FactKind::SaveUnit, &next, b"next", 2).is_err());
-    assert_eq!(progress.published(), 0);
-    progress.reset_frame();
-    let exact = Header::unit(identity(0, 0), 1, unit.chain(4), &[]);
-    accept(&mut progress, FactKind::SaveComplete, &exact, &[], 2).unwrap();
-    assert_eq!(progress.published(), 2);
-}
-
-#[test]
-fn repeated_exact_completion_refuses_without_advancing_publication() {
-    let mut progress = completed_progress();
-    let unit = Header::unit(identity(0, 0), 0, EMPTY_CHAIN, b"unit");
-    let complete = Header::unit(identity(0, 0), 1, unit.chain(4), &[]);
-    assert!(accept(&mut progress, FactKind::SaveComplete, &complete, &[], 3).is_err());
-    assert_eq!(progress.published(), 2);
-    assert!(!progress.is_unfinished());
-    progress.reset_frame();
-    let next = Header::unit(identity(2, 1), 0, EMPTY_CHAIN, b"next");
-    accept(&mut progress, FactKind::SaveUnit, &next, b"next", 3).unwrap();
-    let exact = Header::unit(identity(2, 1), 1, next.chain(4), &[]);
-    accept(&mut progress, FactKind::SaveComplete, &exact, &[], 4).unwrap();
-    assert_eq!(progress.published(), 4);
+#[tokio::test]
+async fn emitted_record_rejection_preserves_public_projection_and_valid_completion() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opening, snapshot) = opened(&id);
+    let binding = lease.load().await.unwrap().binding().clone();
+    lease
+        .save_changes(
+            binding,
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
+        )
+        .await
+        .unwrap();
+    let (scope, records) = emitted_records(&storage, &id).await;
+    assert_eq!(records.len(), 2);
+    let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+    fold.apply(&records[..1]).unwrap();
+    assert_eq!(fold.applied(), 0);
+    assert!(fold.snapshot().is_none());
+    let before = fold.checkpoint().unwrap();
+    let downloaded = fold.downloaded();
+    let mut malformed = records[1].clone();
+    malformed.payload.truncate(1);
+    assert_eq!(fold.apply(&[malformed]), Err(TranscriptError::Frame));
+    assert_eq!(fold.checkpoint().unwrap(), before);
+    assert_eq!(fold.downloaded(), downloaded);
+    fold.apply(&records[1..]).unwrap();
+    assert_eq!(fold.snapshot(), Some(&snapshot));
+    let before = fold.checkpoint().unwrap();
+    assert_eq!(fold.apply(&records[1..]), Err(TranscriptError::Position));
+    assert_eq!(fold.checkpoint().unwrap(), before);
+    drop(lease);
+    storage.shutdown().await.unwrap();
 }

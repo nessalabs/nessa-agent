@@ -88,11 +88,12 @@ The completion-proof retention moves from the source's existing64-entry policy
 to this one cache owner. A historical miss costs O(T) total returned validation
 frames over bounded calls. Repeated eviction/churn can repeat that cost; no global
 zero-replay or O(H) full-session claim follows. Counts exclude SQLite decoding,
-lookahead, disk I/O, allocator overhead and whole-process memory. The proposed
-retained framing/group states and proof allocation are reported by D3's
-`NESSA_401_DISCOVERY_METADATA` output after real saves and a historical miss.
-The pending root run supplies measured sizes/capacities; no measured-byte result
-is claimed before it runs. The drop guard moves original allocations back into
+lookahead, disk I/O, allocator overhead and whole-process memory. Exact private proof-ring capacity and inline/dynamic cache allocation measurements
+are withdrawn as current public acceptance evidence. Earlier frozen-source
+metadata logs remain historical; the competing-query regression retains public
+Preparing/Ready/InvalidRequest outcomes and actual returned-record counts.
+No public test accessor or private state-layout assertion substitutes for them.
+The drop guard moves original allocations back into
 the idle cache instead of cloning both scans. A cache slot's inline storage and
 an active Owner's inline storage coexist during checkout; the transferred dynamic
 proof and framing/group allocations have one owner. Key text, cache spare

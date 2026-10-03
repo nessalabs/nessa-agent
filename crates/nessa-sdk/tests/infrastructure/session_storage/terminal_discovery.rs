@@ -1,7 +1,7 @@
 //! Real SQLite bounded discovery, lifetime, refusal and work-accounting evidence.
 
 use super::super::{
-    save_group::{Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
+    save_group::{Header, SaveIdentity, EMPTY_CHAIN},
     stream_fact::{self, FramedFact},
 };
 use super::*;
@@ -264,12 +264,6 @@ async fn competing_historical_query_advances_original_scan_and_preserves_forward
         let scope = original.scope(sid("original"), sid("epoch"));
         assert_eq!(original.head(&scope), Ok(192));
         let before = cache.returned_records.load(Ordering::SeqCst);
-        {
-            let entries = cache.entries.lock().unwrap();
-            let progress = entries.front().unwrap().state.as_ref().unwrap();
-            assert_eq!(progress.proven.len(), PROVEN_COMPLETIONS, "shared completion evidence retains its published64-entry bound");
-            assert_eq!(progress.proven.capacity(), PROVEN_COMPLETIONS);
-        }
         let request = PageRequest {
             scope,
             after: 0,
@@ -283,23 +277,6 @@ async fn competing_historical_query_advances_original_scan_and_preserves_forward
             Ok(RecordReadStatus::Preparing)
         );
         assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 16);
-        {
-            let entries = cache.entries.lock().unwrap();
-            let progress = entries.front().unwrap().state.as_ref().unwrap();
-            let historical = progress.historical.as_ref().unwrap();
-            assert_eq!(progress.proven.len(), PROVEN_COMPLETIONS, "shared completion evidence retains its published64-entry bound");
-            assert_eq!(progress.proven.capacity(), PROVEN_COMPLETIONS);
-            let scan_allocations = progress.forward.validator.allocation_bytes()
-                + progress.forward.groups.allocation_bytes()
-                + historical.scan.validator.allocation_bytes()
-                + historical.scan.groups.allocation_bytes();
-            eprintln!("NESSA_401_DISCOVERY_METADATA progress_inline={} scan_inline={} historical_box={} entry_inline={} owner_inline={} proofs_len={} proofs_capacity={} proofs_bytes={} scan_dynamic={} cache_len={} cache_capacity={}",
-                std::mem::size_of::<Progress>(), std::mem::size_of::<Scan>(),
-                std::mem::size_of::<Historical>(), std::mem::size_of::<Entry>(),
-                std::mem::size_of::<Owner>(), progress.proven.len(), progress.proven.capacity(),
-                progress.proven.capacity() * std::mem::size_of::<u64>(), scan_allocations,
-                entries.len(), entries.capacity());
-        }
         let mut other = request.clone();
         other.scope = competing.scope(sid("competing"), sid("epoch"));
         other.target = 11;
@@ -1060,25 +1037,76 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let id = SessionId::new("conversation").unwrap();
-    let runtime = storage.runtime().await.unwrap();
-    let stream = runtime
-        .create_stream(&StreamId::new(id.as_str()).unwrap())
-        .await
-        .unwrap();
-    let [unit, _] = save_facts(&stream, 0, 0, 8);
-    let header = Header::decode(&unit.body).unwrap();
-    let chain = header.chain((unit.body.len() - HEADER_BYTES) as u64);
-    let sealed = stream_fact::commit_fact(runtime, &stream, &Cursor::new(stream.clone(), 0), &unit)
-        .await
-        .unwrap();
-    let invalid = FramedFact {
-        key: FactKey::new(FactKind::SaveComplete, None, 2).unwrap(),
-        body: Header::unit(header.identity, 2, chain, &[]).encode(&[]),
+    let lease = storage.open(id.clone()).await.unwrap();
+    let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+    let opening = SessionChange::Opened {
+        id: id.clone(),
+        provider: provider.clone(),
+        context: ProviderContext::Absent,
     };
-    let tail = stream_fact::commit_fact(runtime, &stream, &sealed, &invalid)
+    let snapshot = SessionSnapshot {
+        id: id.clone(),
+        provider,
+        provider_context: ProviderContext::Absent,
+        invocations: Vec::new(),
+        queue_history: Vec::new(),
+    };
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            snapshot,
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
+        )
         .await
         .unwrap();
-    assert_eq!(tail.offset, 2);
+    drop(lease);
+    let donor_root = directory.path().join("donor");
+    let donor = RecordStorage::new(&donor_root).unwrap();
+    let foreign = SessionId::new("foreign").unwrap();
+    let donor_lease = donor.open(foreign.clone()).await.unwrap();
+    let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+    let opening = SessionChange::Opened {
+        id: foreign.clone(),
+        provider: provider.clone(),
+        context: ProviderContext::Absent,
+    };
+    let snapshot = SessionSnapshot {
+        id: foreign,
+        provider,
+        provider_context: ProviderContext::Absent,
+        invocations: Vec::new(),
+        queue_history: Vec::new(),
+    };
+    donor_lease
+        .save_changes(
+            donor_lease.load().await.unwrap().binding().clone(),
+            snapshot,
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(donor_lease);
+    donor.shutdown().await.unwrap();
+    let foreign_completion: Vec<u8> = Connection::open(donor_root.join("records.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT payload FROM event_records WHERE offset=?1",
+            [2u64.to_be_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // Keep the actual complete physical envelope at its generated position2.
+    // Its foreign semantic save identity disagrees with this stream's original Unit.
+    assert_eq!(
+        Connection::open(directory.path().join("records/records.sqlite3"))
+            .unwrap()
+            .execute(
+                "UPDATE event_records SET payload=?1 WHERE offset=?2",
+                rusqlite::params![foreign_completion, 2u64.to_be_bytes().as_slice()],
+            )
+            .unwrap(),
+        1
+    );
     for attempt in 0..2 {
         let mut source = storage
             .record_source(&id, sid("origin"))
@@ -1094,15 +1122,6 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         .await
         .unwrap();
         assert_eq!(result, Err(SourceError::Unavailable), "attempt={attempt}");
-        let cache = storage.terminal_cache.entries.lock().unwrap();
-        let saved = cache.front().unwrap().state.as_ref().unwrap();
-        assert_eq!(
-            (
-                saved.forward.validator.offset(),
-                saved.forward.groups.published()
-            ),
-            (2, 0)
-        );
         assert_eq!(
             storage
                 .terminal_cache

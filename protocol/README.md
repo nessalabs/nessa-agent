@@ -87,17 +87,24 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   does not fit beside those open is refused `temporarily_unavailable`.
   Allowed, the call is made only if the tool is still listed as it was.
 - **A waiting call stays pending** until the person answers, or the review
-  expires after 5 minutes (`mcp_approval_expired`), or it is withdrawn
-  (`mcp_cancelled`). It is withdrawn when the request is cancelled — its
-  socket closes — the app is torn down (`mcp.releaseApp`), or the
+  expires (`reviewDeadlineMs`, below; `mcp_approval_expired`), or it is
+  withdrawn (`mcp_cancelled`). It is withdrawn when the request is cancelled —
+  its socket closes — the app is torn down (`mcp.releaseApp`), or the
   conversation ends. A client that stops waiting withdraws nothing: the
   review stays open, and the call is still made if the person allows it.
-- **How long a call can take** is published as `x-mcpAppCallTiming`:
-  `reviewDeadlineMs` (300000) for a review to be answered, then
-  `callTimeoutMs` (60000) for the server to answer (`mcp_timed_out`). A
-  client waits at least their sum, plus its own margin — for opening the
-  conversation and for recording each step — before giving up on
-  `mcp.callTool`.
+- **How long a call can take is published once**, as `x-mcpAppCallTiming`:
+  `reviewDeadlineMs` for a review to be answered, then `callTimeoutMs` for
+  the server to answer a call (`mcp_timed_out`); `readTimeoutMs` for it to
+  answer a resource read; and `clientAllowanceMs` for opening the
+  conversation and recording each step. The schema holds their values;
+  nothing here repeats them. A client waits at least
+  `reviewDeadlineMs + callTimeoutMs + clientAllowanceMs` (`callDeadlineMs`)
+  before giving up on `mcp.callTool`, and as long on `mcp.readResource`,
+  which may open the conversation first and never outlasts a call. The
+  gateway, the SDK's caller and the client read the generated values
+  (`MCP_APP_REVIEW_DEADLINE_MS`, `MCP_APP_CALL_TIMEOUT_MS` and
+  `MCP_APP_READ_TIMEOUT_MS` in Rust, `mcpAppCallTiming` in TypeScript); no
+  layer writes its own.
 - **`mcp.readResource`** reads a resource of the app's server once and holds
   exactly those bytes. Its answer says what they are (`mimeType`, `size`,
   `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and
@@ -143,7 +150,7 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 as `PUT /attachments` takes an upload:
 - **Redeeming.** The ticket goes in the `x-nessa-resource-ticket` header,
   never in the URL, and is the whole authority: 256 random bits, single use,
-  valid for at most 60 s from its issue, bound to its conversation and app, and issued only after
+  valid for at most `expiresInMs` from its issue, bound to its conversation and app, and issued only after
   the socket's policy and audit. The route authenticates nobody else, and has
   the same origin checks and CORS as `/attachments`.
 - **Refusals.** An unknown, used, expired or wrong-credential ticket gets the

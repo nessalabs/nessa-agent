@@ -79,9 +79,6 @@
 //! issued past once a mount is released or the conversation ended — are
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
-// For the agreement test, which holds it to the published `x-mcpAppCallTiming`.
-#[cfg(test)]
-pub(crate) use app_reviews::APP_REVIEW_DEADLINE;
 mod catalogue;
 pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{
@@ -154,8 +151,8 @@ pub use view::{
     ConversationLifecyclePhase, ConversationLinkedFile, ConversationList, ConversationListEntry,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPending,
     ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationPermissionOrigin, ConversationReorderOutcome, ConversationStartupFailure,
-    ConversationStartupFailureCode, ConversationTool, ConversationView,
+    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationReorderOutcome,
+    ConversationStartupFailure, ConversationStartupFailureCode, ConversationTool, ConversationView,
     ElicitationForwardingSupport, IncomingElicitationSupport, ModelSwitchReportingSupport,
     NativeHookSuppressionSupport, PermissionDeferralSupport, PermissionDenialSupport,
     PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport, SubmissionReceipt,

@@ -796,28 +796,3 @@ impl continuation::Continuation {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn current_unit_key_retains_ordinal_and_refuses_foreign_execution_scope() {
-        let first = FactKey::new(FactKind::SaveUnit, None, 0).unwrap();
-        assert_eq!(first, FactKey::new(FactKind::SaveUnit, None, 0).unwrap());
-        assert_ne!(first, FactKey::new(FactKind::SaveUnit, None, 1).unwrap());
-        assert_ne!(
-            first,
-            FactKey::new(FactKind::SaveComplete, None, 0).unwrap()
-        );
-        assert!(FactKey::new(
-            FactKind::SaveUnit,
-            Some(ExecutionId::new("execution").unwrap()),
-            0
-        )
-        .is_none());
-        for old_code in 1..=11 {
-            assert!(FactKind::from_code(old_code).is_none());
-        }
-    }
-}

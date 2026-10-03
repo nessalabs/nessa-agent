@@ -646,27 +646,4 @@ mod tests {
             Err(StorageError::Corrupt(_))
         ));
     }
-
-    #[test]
-    fn one_explicit_change_is_a_unit_and_empty_units_are_refused() {
-        assert!(matches!(encode_batch(&[]), Err(StorageError::Corrupt(_))));
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "changes": [{"Opened": {
-                "id": "conversation",
-                "provider": {"name": "fixture", "model_id": "model", "context": "workspace"},
-                "context": null
-            }}]
-        }))
-        .unwrap();
-        assert_eq!(
-            decode_batch(&bytes, &ProviderContext::Absent)
-                .unwrap()
-                .len(),
-            1
-        );
-        assert!(matches!(
-            decode_batch(br#"{"changes":[]}"#, &ProviderContext::Absent),
-            Err(StorageError::Corrupt(_))
-        ));
-    }
 }

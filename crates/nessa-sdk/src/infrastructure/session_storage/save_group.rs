@@ -337,7 +337,3 @@ impl GroupProgress {
 fn invalid() -> StorageError {
     StorageError::Corrupt("semantic save envelope disagrees with its lineage".into())
 }
-
-#[cfg(test)]
-#[path = "../../../tests/infrastructure/session_storage/save_group.rs"]
-mod tests;

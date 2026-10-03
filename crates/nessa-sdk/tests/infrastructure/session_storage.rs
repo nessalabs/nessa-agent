@@ -1,4 +1,9 @@
 //! Public record-storage contract exercised through the SDK port.
+//! session_storage -> memory public bindings / receipts / reset
+//!                 -> save_group public leases / emitted records / checkpoints
+
+mod memory;
+mod save_group;
 
 use nessa_sdk::{
     application::agent_execution::{

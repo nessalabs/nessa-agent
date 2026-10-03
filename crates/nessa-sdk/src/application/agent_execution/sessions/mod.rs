@@ -1,4 +1,6 @@
-//! `committed_changes` owns payloadless interest independent of save bindings and receiver progress.
+//! `committed_changes` owns payloadless interest independent of save bindings,
+//! writer leases and receiver progress. RecordStorage closes interest before
+//! shutdown joins.
 //! Queue evidence follows the same consistency boundary as pending dispatch:
 //! ```text
 //! Agent scheduler -> InvocationQueue -> actual membership/order changes

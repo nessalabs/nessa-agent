@@ -198,6 +198,8 @@ impl RecordStorage {
 impl SessionStorage for RecordStorage {
     fn shutdown(&self) -> StorageFuture<'_, ()> {
         Box::pin(async move {
+            // Close interest before storage admission closes; actual writers and
+            // reads retain their existing owners through physical completion.
             self.changes.close();
             let (completion, work) = self.owner.close()?;
             if let Some(work) = work {
@@ -337,7 +339,8 @@ impl LeaseState {
             .change_lifecycle(request)
             .await
             .map_err(store_error)?;
-        // Reset is already durable even if its reply/replay/cleanup fails.
+        // Publication follows the durable lifecycle receipt, before replay or
+        // cleanup can fail and before caller acknowledgement is observed.
         inner.changes.publish(self.writer.id());
         #[cfg(test)]
         if inner.lose_reset_reply.swap(false, Ordering::SeqCst) {

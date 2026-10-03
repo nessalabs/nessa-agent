@@ -219,7 +219,8 @@ writing the full defaults on first launch is buying.
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
-  the split panes' source in `store/`; the in-memory source in `in-memory/`;
+  the split panes' source in `store/`; the gateway's source and its mapping
+  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
@@ -352,7 +353,7 @@ own current lifecycle and API contracts.
 | `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; save-group publication and emitted checkpoint contradictions live in `tests/infrastructure/session_storage/save_group.rs`. Both are rooted from the public storage integration module. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
