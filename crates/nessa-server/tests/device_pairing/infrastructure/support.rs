@@ -27,7 +27,7 @@ use nessa_server::{
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
         restore_gateway_identity, GatewayPairing, NativeEnrollmentConnections,
-        NativeEnrollmentListener, PairingRuntimeDependencies,
+        NativeEnrollmentListener, PairingRuntimeDependencies, TcpEnrollmentAccept,
     },
 };
 use std::{
@@ -249,13 +249,13 @@ impl Fixture {
         JoinHandle<IoResult<()>>,
         Arc<NativeEnrollmentConnections>,
     ) {
-        let socket = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = TcpEnrollmentAccept::new(TokioTcpListener::bind("127.0.0.1:0").await.unwrap());
         let connections = Arc::new(NativeEnrollmentConnections::new(
             self.gateway.clone(),
             RuntimeDependencies::default().clock,
         ));
+        let address = socket.local_address().unwrap();
         let listener = NativeEnrollmentListener::new(socket, connections.clone());
-        let address = listener.local_address().unwrap();
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(listener.run(
             OsEntropy::default,

@@ -18,7 +18,7 @@ use nessa_server::{
     device_pairing::infrastructure::{
         wire::NativePairingStatus, NativeClientError, NativeConnectionFailure,
         NativeEnrollmentClient, NativeEnrollmentConnections, PairingRuntimeError,
-        RegistrationError, RegistrationWorker,
+        RegisteredInvitation, RegistrationError, RegistrationWorker,
     },
 };
 use std::{
@@ -30,39 +30,41 @@ use std::{
     },
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_registration_output_retains_original_capacity() {
-    let fixture = Fixture::new().await;
-    let worker = RegistrationWorker::new();
-    let output = tokio::time::timeout(
+/// Run one synchronous registration on a blocking worker, as create does.
+async fn register<R: RngCore + CryptoRng + Send + 'static>(
+    worker: &Arc<RegistrationWorker>,
+    fixture: &Fixture,
+    entropy: R,
+    id: u8,
+) -> Result<Result<RegisteredInvitation, RegistrationError>, tokio::task::JoinError> {
+    let worker = worker.clone();
+    let gateway = fixture.gateway.clone();
+    tokio::time::timeout(
         WAIT,
-        worker.register(
-            OsEntropy,
-            InvitationId::new([1; 16]),
-            fixture.gateway.identity(),
-        ),
+        tokio::task::spawn_blocking(move || {
+            worker.register(entropy, InvitationId::new([id; 16]), gateway.identity())
+        }),
     )
     .await
     .unwrap()
-    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_registration_output_retains_original_capacity() {
+    let fixture = Fixture::new().await;
+    let worker = Arc::new(RegistrationWorker::new());
+    let output = register(&worker, &fixture, OsEntropy, 1)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(
-        worker
-            .register(
-                OsEntropy,
-                InvitationId::new([2; 16]),
-                fixture.gateway.identity()
-            )
-            .await,
+        register(&worker, &fixture, OsEntropy, 2).await.unwrap(),
         Err(RegistrationError::Busy)
     ));
     drop(output);
-    let neighbor = worker
-        .register(
-            OsEntropy,
-            InvitationId::new([2; 16]),
-            fixture.gateway.identity(),
-        )
+    let neighbor = register(&worker, &fixture, OsEntropy, 2)
         .await
+        .unwrap()
         .unwrap();
     drop(neighbor);
     worker.shutdown().await;
@@ -400,6 +402,26 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     fixture.gateway.shutdown().await;
 }
 
+/// Fills once, then panics: create's identifiers succeed, registration panics.
+struct PanicAfterFirstFill(bool);
+impl RngCore for PanicAfterFirstFill {
+    fn next_u32(&mut self) -> u32 {
+        panic!("external entropy fault")
+    }
+    fn next_u64(&mut self) -> u64 {
+        panic!("external entropy fault")
+    }
+    fn fill_bytes(&mut self, bytes: &mut [u8]) {
+        self.try_fill_bytes(bytes).unwrap();
+    }
+    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), EntropyError> {
+        assert!(!self.0, "external entropy fault");
+        self.0 = true;
+        OsEntropy.try_fill_bytes(bytes)
+    }
+}
+impl CryptoRng for PanicAfterFirstFill {}
+
 struct PanicEntropy;
 impl RngCore for PanicEntropy {
     fn next_u32(&mut self) -> u32 {
@@ -428,24 +450,24 @@ async fn native_worker_faults_preserve_type_and_allow_new_work() {
         Err(PairingRuntimeError::WorkerFault(PairingWorkerFault::Panic))
     ));
     assert!(fixture.registry.pending_pairings().unwrap().is_empty());
-    let worker = RegistrationWorker::new();
+    // A panic inside create's registration stage is the create's worker fault.
     assert!(matches!(
-        worker
-            .register(
-                PanicEntropy,
-                InvitationId::new([25; 16]),
-                fixture.gateway.identity()
-            )
+        fixture
+            .gateway
+            .create(fixture.session.clone(), PanicAfterFirstFill(false))
             .await,
-        Err(RegistrationError::WorkerFault(PairingWorkerFault::Panic))
+        Err(PairingRuntimeError::WorkerFault(PairingWorkerFault::Panic))
     ));
-    let output = worker
-        .register(
-            OsEntropy,
-            InvitationId::new([25; 16]),
-            fixture.gateway.identity(),
-        )
+    assert!(fixture.registry.pending_pairings().unwrap().is_empty());
+    // A panicking registration releases its slot on unwind.
+    let worker = Arc::new(RegistrationWorker::new());
+    assert!(matches!(
+        register(&worker, &fixture, PanicEntropy, 25).await,
+        Err(error) if error.is_panic()
+    ));
+    let output = register(&worker, &fixture, OsEntropy, 25)
         .await
+        .unwrap()
         .unwrap();
     drop(output);
     worker.shutdown().await;

@@ -189,15 +189,10 @@ impl GatewayPairing {
         // Owner commands, including any expiry they settle, do store work, so
         // they run on a blocking worker
         // (`native_owner_store_work_runs_off_the_async_thread`).
-        tokio::task::spawn_blocking(move || {
-            let result = command(&Self::owner_from(&dependencies), &handle);
-            // The command may have ended the open invitation; drop its setup.
-            discard_ended(&mut available.blocking_lock(), dependencies.as_ref());
-            result
-        })
-        .await
-        .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
-        .map_err(PairingRuntimeError::Owner)
+        tokio::task::spawn_blocking(move || run_owner(&dependencies, &available, &handle, command))
+            .await
+            .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
+            .map_err(PairingRuntimeError::Owner)
     }
     /// Read the permanent gateway key only for the native TLS composition owner.
     pub fn identity(&self) -> &NativeIdentity {
@@ -238,13 +233,17 @@ impl GatewayPairing {
             let _lease = lease;
             // Reverse local drop order releases the runtime/private owner before capacity.
             let runtime = owner;
-            handle.block_on(runtime.create_owned(&session, entropy))
+            runtime.create_blocking(&handle, &session, entropy)
         })
         .await
         .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
     }
-    async fn create_owned<R: RngCore + CryptoRng + Send + 'static>(
+    /// Runs on create's one blocking job. Every stage runs inline in it, never
+    /// as a second blocking job, so a one-thread blocking pool cannot deadlock
+    /// (`native_gateway_runs_on_a_one_thread_blocking_pool`).
+    fn create_blocking<R: RngCore + CryptoRng>(
         &self,
+        handle: &Handle,
         session: &AuthenticatedSession,
         mut entropy: R,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
@@ -256,35 +255,41 @@ impl GatewayPairing {
         invite.copy_from_slice(&bytes[..16]);
         let mut consent = [0; 16];
         consent.copy_from_slice(&bytes[16..]);
-        let session = session.clone();
-        let prepared = self
-            .owner_command(move |owner, handle| {
+        let prepared = run_owner(
+            &self.dependencies,
+            &self.available,
+            handle,
+            |owner, handle| {
                 handle.block_on(owner.prepare(
-                    &session,
+                    session,
                     InvitationId::new(invite),
                     ConsentIntentId::new(consent),
                 ))
-            })
-            .await?;
+            },
+        )
+        .map_err(PairingRuntimeError::Owner)?;
         let registered = self
             .registration
             .register(entropy, prepared.record().id(), &self.dependencies.identity)
-            .await
             .map_err(PairingRuntimeError::Registration)?;
-        let available = self.available.clone();
-        self.owner_command(move |owner, handle| {
-            let mut slot = available.blocking_lock();
-            let record = handle.block_on(owner.create(prepared))?;
-            *slot = Some(AvailableSetup {
-                id: record.id(),
-                setup: Arc::new(registered.setup),
-            });
-            Ok(CreatedInvitation {
-                record,
-                code: registered.code,
-            })
-        })
-        .await
+        run_owner(
+            &self.dependencies,
+            &self.available,
+            handle,
+            |owner, handle| {
+                let mut slot = self.available.blocking_lock();
+                let record = handle.block_on(owner.create(prepared))?;
+                *slot = Some(AvailableSetup {
+                    id: record.id(),
+                    setup: Arc::new(registered.setup),
+                });
+                Ok(CreatedInvitation {
+                    record,
+                    code: registered.code,
+                })
+            },
+        )
+        .map_err(PairingRuntimeError::Owner)
     }
     /// Disclose the open invitation's public metadata: no owner identity, code,
     /// other invitations or grant selectors. Auth decides expiry here, through
@@ -619,4 +624,17 @@ fn discard_ended(slot: &mut Option<AvailableSetup>, dependencies: &PairingRuntim
     if ended {
         *slot = None;
     }
+}
+/// One owner command on the current blocking thread, then drop the open
+/// invitation's setup if the command ended it. Callers are already on a
+/// blocking worker; this starts no other.
+fn run_owner<T>(
+    dependencies: &PairingRuntimeDependencies,
+    available: &Mutex<Option<AvailableSetup>>,
+    handle: &Handle,
+    command: impl FnOnce(&PairingOwner<'_>, &Handle) -> Result<T, OwnerError>,
+) -> Result<T, OwnerError> {
+    let result = command(&GatewayPairing::owner_from(dependencies), handle);
+    discard_ended(&mut available.blocking_lock(), dependencies);
+    result
 }

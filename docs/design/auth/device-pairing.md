@@ -1717,7 +1717,11 @@ slice.
 | P55 | Entropy panics inside create, registration or client work | Typed `WorkerFault(Panic)`; capacity released; nothing published; the next operation succeeds. | `native_worker_faults_preserve_type_and_allow_new_work` |
 | P61 | Retry while the original attempt is Claimed | Refused (`OriginalNotRetryable`) before a new attempt. | `native_create_claim_approve_and_reopen_status` |
 | P62 | Retry after Unclaimed, same invitation; retry when Hello names a different invitation | Same invitation: new attempt, pending record replaced only with the attempt changed. Different invitation: refused (Phase) before Begin; pending record and new invitation unchanged. | `native_client_observer_loss_keeps_pending_save_and_operation_owned`; `native_retry_refuses_another_invitation_before_a_new_attempt` |
-| P67 | Listener stopped with peers in flight; one peer fails | Admission stops, every admitted result is collected, then drain. A failed peer does not end service. An accept error ends service and is reported to the `failed` callback. | `native_create_claim_approve_and_reopen_status` (failed peer then enrollment on one listener). The accept-error path has no test: no public seam induces an accept failure. |
+| P67 | Listener stopped with peers in flight; one peer fails | Admission stops, every admitted result is collected, then drain. A failed peer does not end service. | `native_create_claim_approve_and_reopen_status` (failed peer then enrollment on one listener) |
+| P67 | `accept` fails for one connection (connection aborted or reset before it was accepted, interrupted), or an accepted socket cannot be prepared for the worker | Logged at debug and skipped; the listener keeps serving. A remote peer cannot end enrollment this way. | `native_listener_skips_connection_failures_and_backs_off_on_exhaustion` |
+| P67 | `accept` fails because the process or system is out of file descriptors (EMFILE, ENFILE; WSAEMFILE on Windows) | Logged at warn; the listener pauses, 50 ms after the first failure and doubling to at most 1 s, then accepts again. A successful accept resets the pause. Stop wins during a pause. | `native_listener_skips_connection_failures_and_backs_off_on_exhaustion` |
+| P67 | `accept` fails for any other reason: the listening socket itself has failed | Admission stops, the `failed` callback receives the error kind before the drain, every admitted result is collected, and `run` returns the error. | `native_listener_stops_on_a_listening_socket_failure` |
+| P55, P66 | The gateway runs on a runtime whose blocking pool has one thread | Each owner command, each create and each connection is one blocking job that never waits for a second one: create runs its owner stages and the code registration inline in its own job. A pool of one cannot deadlock them. | `native_gateway_runs_on_a_one_thread_blocking_pool` |
 | P68 | Registration finishes before create publishes | The registration permit stays with its output until commit or refusal. | `native_registration_output_retains_original_capacity` |
 | P77, P83 | Create waiter or client waiter dropped mid-operation | The worker keeps the runtime, private store lock and permit until it ends; shutdown waits for it; reopen succeeds after. | `native_create_observer_loss_keeps_original_owner_until_drain`; `native_client_observer_loss_keeps_pending_save_and_operation_owned` |
 | O2, O3 | Owner lists unfinished enrollments and reads one; the session has expired | Each listed record and each status read asks current session and policy; an expired session is refused and the record is unchanged. Terminal records are not listed. | `native_owner_discovers_unfinished_enrollments_through_current_policy` |
@@ -1729,11 +1733,6 @@ not by a timer), O1/O4–O9 as product routes, and S1–S5, S7, S8, S10, S12.
 
 ### Open design items for mounting
 
-- **Accept failures (P67).** P67 ends service when `accept` fails. On
-  BSD-derived systems, including macOS, `accept` can return `ECONNABORTED` when
-  a peer resets before it is accepted, so a remote peer can end enrollment. The
-  MCP relay listener instead logs and retries after 100 ms. The path has no test:
-  there is no seam that makes `accept` fail. Decide when the listener is mounted.
 - **Who closed the connection.** When the gateway's own shutdown wakes a
   connection waiting for KE3, the attempt is settled ConnectionClosed with the
   device as actor, because Auth accepts only the device as the actor of a failed

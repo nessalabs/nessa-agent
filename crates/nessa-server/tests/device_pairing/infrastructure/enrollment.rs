@@ -2243,3 +2243,87 @@ async fn native_ended_invitation_setup_is_discarded() {
     connections.shutdown().await;
     fixture.gateway.shutdown().await;
 }
+
+/// A runtime whose blocking pool has one thread: a blocking job that waits for
+/// a second one would never finish. The device runs on its own OS thread.
+#[test]
+fn native_gateway_runs_on_a_one_thread_blocking_pool() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let fixture = Fixture::new().await;
+            let created = fixture
+                .gateway
+                .create(fixture.session.clone(), OsEntropy)
+                .await
+                .unwrap();
+            let id = created.record().id();
+            assert_eq!(
+                fixture
+                    .gateway
+                    .pending(&fixture.session)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            let (address, stop, listener, connections) = fixture.listener().await;
+            let (_, store) = pending(fixture.directory.path(), "client-private");
+            let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+            let (reply, replied) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let stream = TcpStream::connect(address).unwrap();
+                stream.set_read_timeout(Some(WAIT)).unwrap();
+                let (mut channel, public, key, message) = ready_to_confirm(
+                    stream,
+                    AttemptId::new([109; AttemptId::LENGTH]),
+                    &code,
+                    &store,
+                );
+                channel
+                    .send_envelope(
+                        &encode_request(&NativePairingRequest::Confirm { public, message })
+                            .unwrap(),
+                    )
+                    .unwrap();
+                let status = decode_reply(&channel.receive_envelope().unwrap()).unwrap();
+                reply.send((status, key)).ok();
+            });
+            let (status, key) = replied.await.unwrap();
+            assert!(matches!(
+                status,
+                NativePairingReply::Status(NativePairingStatus::Claimed(_))
+            ));
+            stop.send(()).unwrap();
+            listener.await.unwrap().unwrap();
+            connections.shutdown().await;
+            assert_eq!(
+                fixture
+                    .gateway
+                    .owner_status(&fixture.session, id)
+                    .await
+                    .unwrap()
+                    .phase(),
+                PairingPhase::Claimed
+            );
+            assert_eq!(
+                fixture
+                    .gateway
+                    .decide(&fixture.session, id, OwnerDecision::Approve(key))
+                    .await
+                    .unwrap()
+                    .phase(),
+                PairingPhase::Approved
+            );
+            fixture.gateway.shutdown().await;
+        })
+        .await
+    });
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    outcome.expect("gateway work finished on a one-thread blocking pool");
+}

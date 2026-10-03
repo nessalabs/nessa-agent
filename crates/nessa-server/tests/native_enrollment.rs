@@ -5,5 +5,7 @@ mod enrollment;
 mod framing;
 #[path = "device_pairing/infrastructure/lifecycle.rs"]
 mod lifecycle;
+#[path = "device_pairing/infrastructure/listener.rs"]
+mod listener;
 #[path = "device_pairing/infrastructure/support.rs"]
 mod support;
