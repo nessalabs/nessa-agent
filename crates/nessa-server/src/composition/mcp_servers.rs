@@ -56,6 +56,31 @@ pub(super) struct McpComposition {
     /// store reports it. Composition takes it once, for `audit_ticket_ends`,
     /// beside the conversation service that audits an app's calls.
     pub(super) ticket_events: Option<UnboundedReceiver<TicketEvent>>,
+    /// The task recording those ends, once started: the server lifecycle
+    /// stops it last, after the conversations whose ends it records.
+    pub(super) ticket_recorder: Option<TicketRecorder>,
+}
+
+/// The task recording each ticket's unredeemed end.
+pub(super) struct TicketRecorder {
+    pub(super) stop: tokio::sync::oneshot::Sender<()>,
+    pub(super) task: tokio::task::JoinHandle<()>,
+}
+impl TicketRecorder {
+    /// Record every end already reported, then stop: called once the
+    /// conversations, and their apps, have ended.
+    pub(super) async fn finish(self) {
+        let _ = self.stop.send(());
+        // Bounded, as the app calls' own records are: a record that hangs
+        // must not hold the gateway's exit.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), self.task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "the MCP App ticket recorder failed"),
+            Err(_) => tracing::warn!(
+                "MCP App ticket ends were still being recorded when the gateway stopped"
+            ),
+        }
+    }
 }
 
 /// Where the relay socket of the namespace at `namespace` is, for the user
@@ -184,6 +209,7 @@ pub(super) async fn compose(
             Arc::new(ticket_ends),
         )),
         ticket_events: Some(ticket_events),
+        ticket_recorder: None,
     }))
 }
 

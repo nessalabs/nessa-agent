@@ -258,8 +258,13 @@ export function createMcpAppsApi(
           ? mcpAppRequestProblem.uri(uri)
           : "Resource URI must be a string"
       if (uriProblem) throw new TypeError(uriProblem)
-      return call(ProductMethod.McpReadResource, { ...command, server, uri }, (value) =>
-        mcpReadResourceResult(value, uri),
+      // The gateway may open the conversation first, and records each step:
+      // no shorter wait than a call's, which a read never outlasts.
+      return call(
+        ProductMethod.McpReadResource,
+        { ...command, server, uri },
+        (value) => mcpReadResourceResult(value, uri),
+        callDeadline,
       )
     },
     async fetchResource(ticket, expected, options = {}) {

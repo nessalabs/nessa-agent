@@ -824,12 +824,12 @@ export interface McpCallToolParams {
   server: string
   /** The tool to call on that server. */
   tool: string
-  /** The tool's arguments: one JSON object, encoded, at most 32 KiB, the most a review shows (mcp_request_too_large past it, invalid_request if it is not an object). Absent is none. */
+  /** The tool's arguments: one JSON object, encoded, at most 32 KiB (mcp_request_too_large past it, invalid_request if it is not an object), sent as parsed — re-encoded, a duplicate key's last value kept — and shown so in a destructive tool's review, which may take at most 16 000 bytes of the view (mcp_request_too_large past it). Absent is none. */
   argumentsJson?: string
 }
 /** The tool's answer. */
 export interface McpCallToolResult {
-  /** The MCP CallToolResult exactly as the server answered it — content, structuredContent, isError, _meta — encoded as one JSON object, at most 56 KiB (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal. */
+  /** The MCP CallToolResult the server answered — content, structuredContent, isError, _meta — re-encoded as one JSON object, at most 56 KiB measured as the JSON string this field is (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal. */
   resultJson: string
 }
 /** An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources, the ticket in the x-nessa-resource-ticket header): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's. */
@@ -1313,6 +1313,11 @@ export const passiveReadTiming = {
   deliveryTimeoutMs: 30000,
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
+} as const
+/** How long an MCP App's call can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs. */
+export const mcpAppCallTiming = {
+  reviewDeadlineMs: 300000,
+  callTimeoutMs: 60000,
 } as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
