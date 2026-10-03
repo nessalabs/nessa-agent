@@ -84,6 +84,12 @@ pub struct ReviewAnswerer {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReviewEnd {
     Allowed(ReviewAnswerer),
+    /// Allowed by the person's answer to another review, `review`: one that
+    /// allowed its mount to send messages, which this one asked too.
+    AllowedWith {
+        by: ReviewAnswerer,
+        review: String,
+    },
     Denied(ReviewAnswerer),
     Expired,
     /// Withdrawn, `by` whom: `None` is the app itself, its request gone.
@@ -131,6 +137,10 @@ struct Pending {
 #[derive(Default)]
 pub struct AppReviews {
     state: Mutex<Reviews>,
+    /// Held across one context update — room checked, recorded, held — so
+    /// the conversation's updates are recorded in the order they were
+    /// given, and none is held out of turn.
+    updates: tokio::sync::Mutex<()>,
 }
 #[derive(Default)]
 struct Reviews {
@@ -152,12 +162,12 @@ struct Reviews {
     /// The mounts the person allowed to send messages in this opening,
     /// longest allowed first, at most [`MAX_CONSENTED_MOUNTS`].
     consented: VecDeque<McpAppRef>,
-    /// The context each mount last gave, in the order they were given, from at most
-    /// [`MAX_HELD_CONTEXTS`] mounts: held until a message takes it. A mount
-    /// may have one pending beside it, not yet on record.
+    /// The context each mount last gave, in the order they were given, from
+    /// at most [`MAX_HELD_CONTEXTS`] mounts: held until a message takes it.
     contexts: Vec<HeldContext>,
-    /// What the next held context is numbered: a message takes a context
-    /// only if it is still the one it read.
+    /// The number of the last update given: the `sequence` its record
+    /// carries, and how a message takes a context only if it is still the
+    /// one it read.
     next_context: u64,
 }
 /// One mount's context, as it gave it.
@@ -165,9 +175,6 @@ struct HeldContext {
     app: McpAppRef,
     number: u64,
     context: AppModelContext,
-    /// Its update is on record, so a message may take it. Until then it is
-    /// pending: it holds its mount's place, and no message sees it.
-    recorded: bool,
 }
 
 /// Why a context was not held.
@@ -289,103 +296,60 @@ impl AppReviews {
         Ok(())
     }
 
-    /// Hold `context` pending, as what `app` gives the model next, in the
-    /// opening `epoch`: its number, for [`Self::recorded_context`] once its
-    /// update is on record, or [`Self::discard_context`] if it cannot be.
-    /// Until then what the mount held before is what a message takes.
-    pub fn stage_context(
+    /// One context update of the conversation at a time: held across its
+    /// room check, its record and its hold.
+    pub async fn one_update(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.updates.lock().await
+    }
+
+    /// The number of an update of `app` in the opening `epoch` — the
+    /// `sequence` of its record — when it may be given: its mount not
+    /// released, the opening not ended, and, when it is to hold a context
+    /// (`holds`), room for it beside [`MAX_HELD_CONTEXTS`] other mounts'.
+    /// Taken under [`Self::one_update`].
+    pub fn number_update(
         &self,
         epoch: u64,
         app: &McpAppRef,
-        context: AppModelContext,
+        holds: bool,
     ) -> Result<u64, ContextRefusal> {
         let mut state = self.state.lock().expect("app reviews");
         state.live(epoch, app).map_err(ContextRefusal::Gone)?;
-        let mut mounts: Vec<&McpAppRef> = Vec::new();
-        for held in &state.contexts {
-            if &held.app != app && !mounts.contains(&&held.app) {
-                mounts.push(&held.app);
-            }
-        }
-        if mounts.len() >= MAX_HELD_CONTEXTS {
+        let others = state
+            .contexts
+            .iter()
+            .filter(|held| &held.app != app)
+            .count();
+        if holds && others >= MAX_HELD_CONTEXTS {
             return Err(ContextRefusal::Full);
         }
-        state.next_context += 1;
-        let number = state.next_context;
-        state.contexts.push(HeldContext {
-            app: app.clone(),
-            number,
-            context,
-            recorded: false,
-        });
-        Ok(number)
-    }
-
-    /// The update that staged context `number` is on record: it replaces
-    /// what its mount held, unless a later one of the mount's already did.
-    /// One let go of meanwhile — its mount released, its opening ended —
-    /// stays let go of: the release came after it.
-    pub fn recorded_context(&self, number: u64) {
-        let mut state = self.state.lock().expect("app reviews");
-        let Some(app) = state
-            .contexts
-            .iter()
-            .find(|held| held.number == number)
-            .map(|held| held.app.clone())
-        else {
-            return;
-        };
-        let newer = state
-            .contexts
-            .iter()
-            .any(|held| held.app == app && held.recorded && held.number > number);
-        state.contexts.retain(|held| {
-            held.app != app
-                || if newer {
-                    held.number != number
-                } else {
-                    held.number >= number || !held.recorded
-                }
-        });
-        if let Some(held) = state.contexts.iter_mut().find(|held| held.number == number) {
-            held.recorded = true;
-        }
-    }
-
-    /// Let go of the pending context `number`: its update could not be
-    /// recorded, so it was never given.
-    pub fn discard_context(&self, number: u64) {
-        let mut state = self.state.lock().expect("app reviews");
-        state
-            .contexts
-            .retain(|held| held.recorded || held.number != number);
-    }
-
-    /// `app` asks to give the model nothing, in the opening `epoch`: its
-    /// number, for [`Self::recorded_clear`] once that is on record. Nothing
-    /// is let go of until then.
-    pub fn stage_clear(&self, epoch: u64, app: &McpAppRef) -> Result<u64, ReviewRefusal> {
-        let mut state = self.state.lock().expect("app reviews");
-        state.live(epoch, app)?;
         state.next_context += 1;
         Ok(state.next_context)
     }
 
-    /// The clear `number` of `app` is on record: let go of what the mount
-    /// gave before it, held or pending. An update given after it stands,
-    /// whichever was recorded first.
-    pub fn recorded_clear(&self, app: &McpAppRef, number: u64) {
+    /// The update `number` of `app`, on record, is what it gives the model
+    /// now: `context`, in place of what it gave, or nothing. A release or
+    /// an end since its number was taken came after it, and it is not held.
+    pub fn give(&self, epoch: u64, app: &McpAppRef, number: u64, context: Option<AppModelContext>) {
         let mut state = self.state.lock().expect("app reviews");
-        state
-            .contexts
-            .retain(|held| &held.app != app || held.number > number);
+        if state.live(epoch, app).is_err() {
+            return;
+        }
+        state.contexts.retain(|held| &held.app != app);
+        if let Some(context) = context {
+            state.contexts.push(HeldContext {
+                app: app.clone(),
+                number,
+                context,
+            });
+        }
     }
 
     /// The contexts held now, in the order they were given, for a message
-    /// to carry: those on record, never one pending.
+    /// to carry.
     pub fn held_contexts(&self) -> HeldContexts {
         let state = self.state.lock().expect("app reviews");
-        let held = state.contexts.iter().filter(|held| held.recorded);
+        let held = state.contexts.iter();
         HeldContexts {
             contexts: held.clone().map(|held| held.context.clone()).collect(),
             taken: held.map(|held| (held.app.clone(), held.number)).collect(),
@@ -508,7 +472,7 @@ impl AppReviews {
         // opening: its other first messages, waiting on reviews of their
         // own, are allowed with it, by the same answer — as they would be,
         // unasked, had they come a moment later.
-        if matches!(end, ReviewEnd::Allowed(_)) && open.ask == ReviewAsk::SendMessage {
+        if let (ReviewEnd::Allowed(by), ReviewAsk::SendMessage) = (&end, open.ask) {
             let epoch = state.epoch;
             if state.live(epoch, &open.app).is_ok() {
                 state.allow(&open.app);
@@ -521,7 +485,10 @@ impl AppReviews {
                 .collect();
             for key in siblings {
                 if let Some(other) = state.remove(key) {
-                    let _ = other.end.send(end.clone());
+                    let _ = other.end.send(ReviewEnd::AllowedWith {
+                        by: by.clone(),
+                        review: permission.to_owned(),
+                    });
                 }
             }
         }

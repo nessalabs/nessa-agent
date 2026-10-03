@@ -453,8 +453,8 @@ mod mcp_app_lane {
             .unwrap()
             .to_owned();
 
-        // A part past the schema's own bound is refused before anything
-        // parses it, and before the service: nothing is on record of it.
+        // A part past the schema's own bound is too large, as a message past
+        // its bound is, before anything parses it; and on record.
         let records = fixture.audit.phases().len();
         let mut long = context("long");
         long["structuredContentJson"] = json!(format!("{{\"a\":{}1}}", " ".repeat(8192)));
@@ -465,8 +465,13 @@ mod mcp_app_lane {
                 break reply;
             }
         };
-        assert_eq!(refused["error"]["code"], "invalid_request");
-        assert_eq!(fixture.audit.phases().len(), records);
+        assert_eq!(refused["error"]["code"], "mcp_request_too_large");
+        assert_eq!(
+            fixture.audit.phases()[records..],
+            [crate::conversation::application::McpAppAuditPhase::Refused(
+                crate::conversation::application::McpAppCode::RequestTooLarge
+            )]
+        );
 
         // The context now has room, and is applied.
         send_command(&peer, "ctx2", "mcp.updateModelContext", context("ctx2"));

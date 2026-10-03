@@ -125,13 +125,18 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   again until it is released or the opening ends. Text is at most what
   `conversation.send` takes. While a turn runs or input waits it is refused
   `turn_running`: an app's message is not queued behind the person's. Any other refusal
-  of the message is its own conversation code.
+  of the message is its own conversation code. Its turn is derived from the
+  conversation, the mount and `requestId`: the same request again is the same
+  turn, which the agent settles without asking anyone again.
 - **`mcp.updateModelContext`** (MCP Apps `ui/update-model-context`) holds
   what a mount gives the model, in place of what it gave; an update with
-  neither part clears it. The next message admitted into the conversation — the person's or an
-  app's, queued or steered — takes every context held, and the agent is
-  given them once, with that turn, ahead of its text: one text block, the
-  contexts JSON-encoded. They are not part of the transcript. A release of
+  neither part clears it. The next message admitted into the conversation
+  while nothing runs or waits — the person's or an app's — takes every
+  context held, and the agent is given them once, with that turn, ahead of
+  its text: one text block, the contexts JSON-encoded. A message queued
+  behind a turn, or steered into one, carries none and leaves them held. A
+  conversation's updates are taken one at a time, each on record
+  (`sequence`) before it is held. They are not part of the transcript. A release of
   the mount, or the end of the opening, lets go of a context unsent. The
   schema states its bounds (`McpUpdateModelContextParams`).
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app

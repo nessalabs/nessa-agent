@@ -8,7 +8,7 @@ use crate::application::agent_execution::sessions::{QueueHistoryRecord, SessionS
 use crate::domain::agent_execution::{
     executions::{ExecutionId, QueueOrderChange},
     permissions::PermissionOption,
-    prompts::{AppModelContext as DomainAppModelContext, LinkedFile, UserMessage},
+    prompts::{AppModelContext as DomainAppModelContext, LinkedFile, McpAppSource, UserMessage},
     questions::{
         MAX_KEY_BYTES as MAX_QUESTION_KEY_BYTES, MAX_OPTIONS as MAX_QUESTION_OPTIONS,
         MAX_QUESTIONS, MAX_TEXT_BYTES as MAX_QUESTION_TEXT_BYTES,
@@ -163,7 +163,8 @@ impl Shape {
             (Metadata, "user_files") => Files,
             (Metadata, "user_app") | (AppModelContext, "app") => App,
             (Metadata, "user_app_model_context") => AppModelContexts,
-            (App, "execution_id" | "tool_id") => Text(ExecutionId::MAX_BYTES),
+            (App, "execution_id") => Text(ExecutionId::MAX_BYTES),
+            (App, "tool_id") => Text(McpAppSource::MAX_TOOL_ID_BYTES),
             (App, "server" | "tool") => Text(MAX_MCP_NAME_BYTES),
             (AppModelContext, "text" | "structured_content") => {
                 Text(DomainAppModelContext::MAX_BYTES)

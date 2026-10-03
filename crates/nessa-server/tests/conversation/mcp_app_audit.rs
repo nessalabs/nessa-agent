@@ -161,6 +161,7 @@ async fn every_phase_of_one_request_is_its_own_record() {
         (
             McpAppAuditPhase::Approved {
                 permission_id: review(),
+                with: None,
             },
             person_initiator(),
             json!({"kind": "approved", "permissionId": "permission-1"}),
@@ -368,6 +369,7 @@ async fn contradictory_evidence_for_the_same_step_is_refused() {
         call(
             McpAppAuditPhase::Approved {
                 permission_id: "permission-1".into(),
+                with: None,
             },
             person_initiator(),
         )
@@ -378,6 +380,7 @@ async fn contradictory_evidence_for_the_same_step_is_refused() {
     let mut other_permission = approved();
     other_permission.phase = McpAppAuditPhase::Approved {
         permission_id: "permission-2".into(),
+        with: None,
     };
     let mut other_ask = approved();
     other_ask.ask = McpAppAsk::CallTool {
@@ -565,4 +568,25 @@ async fn no_argument_result_or_resource_content_is_stored() {
             assert!(!text.contains(forbidden), "{forbidden} in {text}");
         }
     }
+}
+
+#[tokio::test]
+async fn an_approval_by_another_reviews_answer_names_that_review() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("mcp-apps");
+    let audit = audit_at(&directory, 1);
+    audit
+        .record(call(
+            McpAppAuditPhase::Approved {
+                permission_id: "permission-2".into(),
+                with: Some("permission-1".into()),
+            },
+            person_initiator(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        sole_record(&directory)["phase"],
+        json!({"kind": "approved", "permissionId": "permission-2", "withReview": "permission-1"})
+    );
 }

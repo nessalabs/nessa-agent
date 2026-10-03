@@ -36,8 +36,13 @@ export const Message = memo(function Message({
         data-sending={message.delivery?.state === "sending" || undefined}
       >
         {message.app ? (
-          <p className="workspace-message-author" data-message-app={message.app.tool}>
-            Sent by the {message.app.tool} app
+          <p
+            className="workspace-message-author"
+            data-message-app={message.app.tool}
+            // The whole name, when the line is too narrow to show it.
+            title={`Sent by ${message.app.tool}, from ${message.app.server}`}
+          >
+            Sent by {message.app.tool}, from {message.app.server}
           </p>
         ) : null}
         <div className="workspace-bubble">

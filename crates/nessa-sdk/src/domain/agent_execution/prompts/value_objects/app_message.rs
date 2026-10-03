@@ -10,7 +10,9 @@ use crate::domain::agent_execution::{
 /// call that drew it, and the MCP server and tool that call was to.
 ///
 /// The tool call is the app's identity; the server and tool are kept beside it
-/// because they never change for that call and are what a reader is shown.
+/// because a tool call names one MCP tool for good (an update naming another
+/// is [`ExecutionError::DifferentMcpTool`]) and they are what a reader is
+/// shown.
 /// Nothing here is authenticated: an app speaks on the person's behalf, under
 /// their credential, and this says which app it was.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,12 +109,13 @@ impl AppModelContext {
     /// identity for that update, which its records of it carry, so the turn
     /// that carried a context and the record of its update are one join —
     /// with `text`, and `structured_content` as the JSON text of one object.
-    /// An empty text is none.
+    /// An empty text is none. Neither part is no context: `Ok(None)`, which
+    /// a host reads as the app giving the model nothing.
     ///
     /// # Errors
     ///
-    /// [`ExecutionError::EmptyValue`] for a blank `update`, or when there is
-    /// neither part; [`ExecutionError::ValueTooLong`] for an `update` past
+    /// [`ExecutionError::EmptyValue`] for a blank `update`;
+    /// [`ExecutionError::ValueTooLong`] for an `update` past
     /// [`Self::MAX_UPDATE_BYTES`];
     /// [`ExecutionError::ValueTooLong`] past [`Self::MAX_BYTES`] together;
     /// [`ExecutionError::InvalidStructuredContent`] for structured content
@@ -122,7 +125,7 @@ impl AppModelContext {
         update: impl Into<String>,
         text: Option<String>,
         structured_content: Option<String>,
-    ) -> Result<Self, ExecutionError> {
+    ) -> Result<Option<Self>, ExecutionError> {
         let update = update.into();
         if update.trim().is_empty() {
             return Err(ExecutionError::EmptyValue("app context update"));
@@ -135,7 +138,7 @@ impl AppModelContext {
         }
         let text = text.filter(|text| !text.is_empty());
         if text.is_none() && structured_content.is_none() {
-            return Err(ExecutionError::EmptyValue("app context"));
+            return Ok(None);
         }
         let bytes = text
             .as_ref()
@@ -154,12 +157,12 @@ impl AppModelContext {
                 return Err(ExecutionError::InvalidStructuredContent);
             }
         }
-        Ok(Self {
+        Ok(Some(Self {
             app,
             update: update.into_boxed_str(),
             text: text.map(String::into_boxed_str),
             structured_content: structured_content.map(String::into_boxed_str),
-        })
+        }))
     }
     /// The app that gave it.
     pub fn app(&self) -> &McpAppSource {
@@ -176,6 +179,14 @@ impl AppModelContext {
     /// Its structured content, the JSON text of one object, when it gave any.
     pub fn structured_content(&self) -> Option<&str> {
         self.structured_content.as_deref()
+    }
+    /// The bytes of what it says: its text and its structured content,
+    /// together — what [`Self::MAX_BYTES`] bounds.
+    pub fn content_bytes(&self) -> usize {
+        self.text
+            .as_deref()
+            .map_or(0, str::len)
+            .saturating_add(self.structured_content.as_deref().map_or(0, str::len))
     }
     /// Retained variable payload bytes: the app and both parts.
     pub fn payload_bytes(&self) -> usize {

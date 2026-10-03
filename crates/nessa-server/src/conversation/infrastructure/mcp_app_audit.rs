@@ -252,9 +252,14 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
         McpAppAuditPhase::ApprovalRequested { permission_id } => {
             json!({"kind": "approval_requested", "permissionId": permission_id})
         }
-        McpAppAuditPhase::Approved { permission_id } => {
-            json!({"kind": "approved", "permissionId": permission_id})
-        }
+        McpAppAuditPhase::Approved {
+            permission_id,
+            with: None,
+        } => json!({"kind": "approved", "permissionId": permission_id}),
+        McpAppAuditPhase::Approved {
+            permission_id,
+            with: Some(review),
+        } => json!({"kind": "approved", "permissionId": permission_id, "withReview": review}),
         McpAppAuditPhase::Denied { permission_id } => {
             json!({"kind": "denied", "permissionId": permission_id})
         }

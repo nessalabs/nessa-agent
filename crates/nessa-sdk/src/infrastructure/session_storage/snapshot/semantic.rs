@@ -563,6 +563,7 @@ mod tests {
             .sent_by(MessageSender::App(app("call-1")))
             .with_app_model_context(vec![
                 AppModelContext::new(app("call-1"), "update-1", Some("zoomed".into()), None)
+                    .unwrap()
                     .unwrap(),
                 AppModelContext::new(
                     app("call-2"),
@@ -570,6 +571,7 @@ mod tests {
                     None,
                     Some(r#"{"month":5}"#.into()),
                 )
+                .unwrap()
                 .unwrap(),
             ])
             .unwrap();
@@ -665,24 +667,39 @@ mod tests {
             ),
             Err(StorageError::Corrupt(_))
         ));
-        // A record from before apps could write or give context: the person
-        // wrote it, and it carries none.
-        let mut older = valid;
-        let metadata = older["InputAccepted"]["metadata"].as_object_mut().unwrap();
-        metadata.remove("user_app");
-        metadata.remove("user_app_model_context");
-        let SessionChange::InputAccepted(restored) = decode_change(
-            &serde_json::to_vec(&older).unwrap(),
-            &ProviderContext::Absent,
-        )
-        .unwrap() else {
-            panic!("an admission");
-        };
+        // A record without either field is not of this shape: corrupt, not
+        // read as the person's with nothing given (no older reader is kept).
+        for field in ["user_app", "user_app_model_context"] {
+            let mut older = valid.clone();
+            older["InputAccepted"]["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                matches!(
+                    decode_change(
+                        &serde_json::to_vec(&older).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{field}"
+            );
+        }
+        // A person's message says so: `user_app` is null.
+        let person = UserMessage::text_only(PromptText::new("mine").unwrap());
+        let mut record = record;
+        record.request.user_message = person;
+        let bytes = encode_change(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
-            restored.request.user_message.sender(),
-            &MessageSender::Person
+            saved["InputAccepted"]["metadata"]["user_app"],
+            serde_json::Value::Null
         );
-        assert!(restored.request.user_message.app_model_context().is_empty());
+        assert!(matches!(
+            decode_change(&bytes, &ProviderContext::Absent).unwrap(),
+            SessionChange::InputAccepted(next) if *next == record
+        ));
     }
 
     #[test]

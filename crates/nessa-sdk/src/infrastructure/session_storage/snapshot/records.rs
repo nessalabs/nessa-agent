@@ -155,7 +155,8 @@ impl AppModelContext {
             self.text,
             self.structured_content,
         )
-        .map_err(corrupt)
+        .map_err(corrupt)?
+        .ok_or_else(|| corrupt("an app context saved with neither part"))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -169,17 +170,13 @@ pub(super) struct Metadata {
     pub(super) user_images: Vec<Image>,
     /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
-    /// The app that wrote the message on the person's behalf; `None` when
-    /// the person did.
+    /// The app that wrote the message on the person's behalf; `null` when
+    /// the person did. Required, as every field here is: a record without it
+    /// is not of this shape (`deserialize_with` keeps serde from reading its
+    /// absence as `None`).
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(super) user_app: Option<App>,
     /// What apps gave the model with this message; empty when none did.
-    ///
-    /// Absent in a record written before an app could give any, and empty
-    /// is what such a record meant: no message could carry one. This is the
-    /// reading `user_app`'s absence takes too, as an `Option`; it invents
-    /// nothing a record could have meant otherwise, which is why a context's
-    /// own `app` has no default.
-    #[serde(default)]
     pub(super) user_app_model_context: Vec<AppModelContext>,
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,

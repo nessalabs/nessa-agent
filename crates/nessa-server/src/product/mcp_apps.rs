@@ -22,7 +22,6 @@ use crate::conversation::application::{
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
 use crate::protocol::{OutgoingMessage, RequestFrame};
 use nessa_auth::application::session::AuthenticatedSession;
-use nessa_sdk::domain::agent_execution::prompts::AppModelContext;
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 
@@ -137,15 +136,6 @@ pub(super) async fn dispatch(
             "mcp.updateModelContext" => {
                 let params = params!(McpUpdateModelContextParams);
                 name(&params.server)?;
-                // Each part to the schema's own bound, before anything parses
-                // it; whether they fit together, as held, is the context's to say.
-                let parts = [&params.text, &params.structured_content_json];
-                if parts.iter().any(|part| {
-                    part.as_ref()
-                        .is_some_and(|part| part.len() > AppModelContext::MAX_BYTES)
-                }) {
-                    return Err(ConversationError::InvalidInput);
-                }
                 service
                     .update_app_model_context(
                         conversation_id(&params.conversation_id)?,

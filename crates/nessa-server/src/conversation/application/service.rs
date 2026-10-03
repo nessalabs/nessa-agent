@@ -403,18 +403,17 @@ impl Writer {
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
-    /// Whether an app's message may still go: its mount not released, the
-    /// opening it was admitted in not ended — and, given the live
-    /// conversation, that opening the live one. The person's always may.
-    fn still_admitted(&self, live: Option<&LiveConversation>) -> Result<(), ConversationError> {
+    /// Whether an app's message may still go into `live`: its mount not
+    /// released, the opening it was admitted in not ended, and that opening
+    /// the live one. The person's always may.
+    fn still_admitted(&self, live: &LiveConversation) -> Result<(), ConversationError> {
         let Self::App {
             apps, epoch, mount, ..
         } = self
         else {
             return Ok(());
         };
-        let reopened = live
-            .is_some_and(|live| !Arc::ptr_eq(&live.app_reviews, apps) || live.app_epoch != *epoch);
+        let reopened = !Arc::ptr_eq(&live.app_reviews, apps) || live.app_epoch != *epoch;
         if reopened || apps.admit(*epoch, mount).is_err() {
             return Err(ConversationError::McpApp(McpAppError::Cancelled));
         }
@@ -1014,15 +1013,33 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
+        self.resolve_opening(id, caller, true).await
+    }
+    /// [`Self::resolve`]; with `open` false, only a conversation live now:
+    /// one with none is refused `mcp_cancelled`, and not opened.
+    async fn resolve_opening(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        open: bool,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
         if self.inner.metadata.pending_mode_change(id).await?.is_some() {
             return Err(ConversationError::ApprovalModeUncertain);
         }
-        self.resolve_unchecked(id, caller).await
+        self.resolve_unchecked_opening(id, caller, open).await
     }
     async fn resolve_unchecked(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
+        self.resolve_unchecked_opening(id, caller, true).await
+    }
+    async fn resolve_unchecked_opening(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        open: bool,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
         let actor = caller.actor()?;
         let record = self
@@ -1039,6 +1056,8 @@ impl ConversationService {
             }
             if let Some(slot) = owners.get(id) {
                 slot.clone()
+            } else if !open {
+                return Err(ConversationError::McpApp(McpAppError::Cancelled));
             } else {
                 if owners.len() >= self.inner.limits.max_conversations {
                     return Err(ConversationError::Capacity);
@@ -1766,10 +1785,6 @@ impl ConversationService {
             } = message;
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
-            // An app's message, under the lock a close takes too: one that
-            // ended its opening while this waited refuses it here, before
-            // the conversation could be opened again for it.
-            writer.still_admitted(None)?;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
             if text.len() > service.inner.limits.max_input_bytes {
@@ -1809,7 +1824,12 @@ impl ConversationService {
                 .collect::<Result<Vec<_>, _>>()?;
             let message = UserMessage::new(prompt, images, files)
                 .map_err(|_| ConversationError::InvalidInput)?;
-            let live = service.resolve(&id, &caller).await?;
+            // An app's message is for a live opening, and opens none: one
+            // ended without this lock — the desktop stopping the agent — is
+            // refused below, not opened again for it.
+            let live = service
+                .resolve_opening(&id, &caller, !writer.is_app())
+                .await?;
             let non_default_mode = live
                 .projection
                 .lock()
@@ -1935,18 +1955,28 @@ impl ConversationService {
             // not released; and it waits for nobody, so no other submission
             // through this service comes between this and the enqueue
             // (`m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`).
-            writer.still_admitted(Some(&live))?;
-            if writer.is_app() && !known && !live.agent.idle_for_approval_change().await {
+            writer.still_admitted(&live)?;
+            let idle = !known && live.agent.idle_for_approval_change().await;
+            if writer.is_app() && !known && !idle {
                 return Err(ConversationError::TurnRunning);
             }
-            // What apps gave the model goes with the next message, once, read
-            // as late as it can be. A retry carries what its first attempt
-            // took — the agent compares it with what it has — and takes
-            // nothing more.
-            let held = live.app_reviews.held_contexts();
+            // What apps gave the model goes with the next message admitted
+            // while nothing runs or waits, once: that turn starts now, so it
+            // is never removed or reordered with them in it. A message queued
+            // behind a turn, or steered into one, carries none, and leaves
+            // them for the next (`c8_a_message_queued_behind_a_turn_carries_no_context`).
+            // A retry carries what its first attempt took — the agent
+            // compares it with what it has — and takes nothing more.
+            let held = (idle && matches!(mode, SubmissionMode::Queue))
+                .then(|| live.app_reviews.held_contexts());
+            let carried = match (original, &held) {
+                (Some(original), _) => original,
+                (None, Some(held)) => held.contexts.clone(),
+                (None, None) => Vec::new(),
+            };
             let message = message
                 .sent_by(writer.sender())
-                .with_app_model_context(original.unwrap_or_else(|| held.contexts.clone()))
+                .with_app_model_context(carried)
                 .map_err(|_| ConversationError::InvalidInput)?;
             let request = ExecutionRequest {
                 execution_id: execution,
@@ -1982,8 +2012,8 @@ impl ConversationService {
             };
             let delivery = delivery.map_err(ConversationError::Agent)?;
             // The agent has it, and what it carries: those contexts are sent.
-            if !known {
-                live.app_reviews.took(&held);
+            if let Some(held) = &held {
+                live.app_reviews.took(held);
             }
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A

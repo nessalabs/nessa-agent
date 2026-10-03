@@ -156,7 +156,11 @@ describe("a transcript", () => {
     }
     await shown(fakeSource(), written)
     const authors = [...host.querySelectorAll(".workspace-message-author")]
-    expect(authors.map((author) => author.textContent)).toEqual(["Sent by the show app"])
+    // Named as the app's own view names it: its tool, from its server.
+    expect(authors.map((author) => author.textContent)).toEqual([
+      "Sent by show, from charts",
+    ])
+    expect(authors[0]?.getAttribute("title")).toBe("Sent by show, from charts")
     expect(authors[0]?.closest(".workspace-message")?.getAttribute("data-role")).toBe(
       "user",
     )

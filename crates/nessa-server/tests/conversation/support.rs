@@ -75,6 +75,9 @@ pub(crate) struct MemoryRepository {
     /// When set, the next such read says it began and waits until the test
     /// lets it go: a submission held under its lock, past its resolve.
     pub(crate) verification_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
+    /// The same, for the read of a pending mode change: a submission held
+    /// under its lock, before its resolve.
+    pub(crate) pending_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
@@ -193,7 +196,14 @@ impl ConversationRepository for MemoryRepository {
                     && request.state == ConversationModeRequestState::Pending
             })
             .cloned();
-        Box::pin(async move { Ok(found) })
+        let gate = self.pending_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((began, open)) = gate {
+                began.notify_one();
+                let _ = open.await;
+            }
+            Ok(found)
+        })
     }
     fn mode_change(
         &self,

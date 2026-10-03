@@ -213,8 +213,13 @@ pub enum McpAppAuditPhase {
     Admitted,
     /// A destructive tool: the person is asked first.
     ApprovalRequested { permission_id: String },
-    /// The person allowed it; sent next.
-    Approved { permission_id: String },
+    /// The person allowed it; sent next. `with` names the review whose
+    /// answer allowed it, when the person answered another: the first
+    /// message of the same mount, which allowed the mount.
+    Approved {
+        permission_id: String,
+        with: Option<String>,
+    },
     /// The person denied it.
     Denied { permission_id: String },
     /// Nobody answered within the review's deadline.

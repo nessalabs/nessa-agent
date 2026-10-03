@@ -365,6 +365,12 @@ const bounds = {
     schema.$defs.ConversationSendParams.properties.text["x-utf8MaxBytes"],
   ]),
   // An app's context: its text and its structured content, together.
+  // The turn an app's message became is a turn like any other.
+  maxExecutionIdBytes: agreeing("execution identity bytes", [
+    schema.$defs.McpSendMessageResult.properties.executionId["x-utf8MaxBytes"],
+    schema.$defs.ConversationMessage.properties.executionId["x-utf8MaxBytes"],
+    messageApp.executionId["x-utf8MaxBytes"],
+  ]),
   maxMcpContextBytes: agreeing("app context bytes", [
     mcpContext.text["x-utf8MaxBytes"],
     mcpContext.structuredContentJson["x-utf8MaxBytes"],

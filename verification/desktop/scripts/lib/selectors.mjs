@@ -326,6 +326,7 @@ export const names = {
   hiddenToolRefused: "fixture_secret is not available to apps",
   /** The tool whose UI the fixture app is, and the message it sends (`fixture-app.ts`). */
   fixtureTool: "show_fixture",
+  fixtureServer: "nessa-fixture",
   fixtureMessage: "Plot May next to April",
   /** What the fixture app says on its body (`fixture-app.ts`), by the field it says it in. */
   fixtureSays: {

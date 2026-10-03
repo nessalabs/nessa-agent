@@ -523,6 +523,7 @@ fn context(text: &str) -> AppModelContext {
         None,
     )
     .unwrap()
+    .unwrap()
 }
 
 fn held(reviews: &AppReviews) -> Vec<String> {
@@ -575,136 +576,82 @@ fn a_mount_allowed_longest_ago_is_forgotten_past_the_bound_and_asks_again() {
     );
 }
 
-#[test]
-fn a_context_is_given_only_once_its_update_is_on_record() {
-    let reviews = reviews();
-    let old = reviews
-        .stage_context(EPOCH, &app("i1"), context("old"))
+/// `app`'s update in the opening, as the service gives one: numbered, then
+/// given — `None` clears.
+fn give(reviews: &AppReviews, mount: &str, context: Option<AppModelContext>) -> u64 {
+    let number = reviews
+        .number_update(EPOCH, &app(mount), context.is_some())
         .unwrap();
-    assert!(held(&reviews).is_empty());
-    reviews.recorded_context(old);
-    let new = reviews
-        .stage_context(EPOCH, &app("i1"), context("new"))
-        .unwrap();
-    // Pending: what was on record stands.
-    assert_eq!(held(&reviews), ["old"]);
-    reviews.recorded_context(new);
-    assert_eq!(held(&reviews), ["new"]);
-    // An update that could not be recorded is let go of, and replaces nothing.
-    let lost = reviews
-        .stage_context(EPOCH, &app("i1"), context("lost"))
-        .unwrap();
-    reviews.discard_context(lost);
-    reviews.recorded_context(lost);
-    assert_eq!(held(&reviews), ["new"]);
+    reviews.give(EPOCH, &app(mount), number, context);
+    number
 }
 
 #[test]
-fn two_updates_of_one_mount_recorded_out_of_order_leave_the_later_given() {
+fn each_update_replaces_its_mounts_context_and_a_clear_lets_go_of_it() {
     let reviews = reviews();
-    let first = reviews
-        .stage_context(EPOCH, &app("i1"), context("first"))
-        .unwrap();
-    let second = reviews
-        .stage_context(EPOCH, &app("i1"), context("second"))
-        .unwrap();
-    reviews.recorded_context(second);
-    assert_eq!(held(&reviews), ["second"]);
-    reviews.recorded_context(first);
-    assert_eq!(held(&reviews), ["second"]);
-    // And in order, the same.
-    let third = reviews
-        .stage_context(EPOCH, &app("i1"), context("third"))
-        .unwrap();
-    let fourth = reviews
-        .stage_context(EPOCH, &app("i1"), context("fourth"))
-        .unwrap();
-    reviews.recorded_context(third);
-    reviews.recorded_context(fourth);
-    assert_eq!(held(&reviews), ["fourth"]);
+    let first = give(&reviews, "i1", Some(context("old")));
+    let second = give(&reviews, "i1", Some(context("new")));
+    // Numbered in the order given: the record's sequence.
+    assert!(second > first);
+    assert_eq!(held(&reviews), ["new"]);
+    give(&reviews, "i2", Some(context("other")));
+    give(&reviews, "i1", None);
+    assert_eq!(held(&reviews), ["other"]);
 }
 
 #[test]
-fn a_pending_update_holds_its_mounts_place_and_a_clear_lets_go_of_it() {
+fn a_mount_holds_a_place_only_while_it_holds_a_context() {
     let reviews = reviews();
     for n in 0..MAX_HELD_CONTEXTS {
-        reviews
-            .stage_context(EPOCH, &app(&format!("i{n}")), context("x"))
-            .unwrap();
+        give(&reviews, &format!("i{n}"), Some(context("x")));
     }
     assert_eq!(
-        reviews
-            .stage_context(EPOCH, &app("other"), context("x"))
-            .map(|_| ()),
+        reviews.number_update(EPOCH, &app("other"), true),
         Err(ContextRefusal::Full)
     );
-    // The same mount may stage another beside its own; a clear given after
-    // it lets go of both, and its place.
-    let again = reviews
-        .stage_context(EPOCH, &app("i0"), context("y"))
-        .unwrap();
-    let clear = reviews.stage_clear(EPOCH, &app("i0")).unwrap();
-    reviews.recorded_clear(&app("i0"), clear);
-    reviews.recorded_context(again);
-    assert!(!held(&reviews).contains(&"y".to_owned()));
-    reviews
-        .stage_context(EPOCH, &app("other"), context("x"))
-        .unwrap();
+    // A mount that holds one may replace it, and anyone may clear.
+    give(&reviews, "i0", Some(context("y")));
+    assert!(reviews.number_update(EPOCH, &app("other"), false).is_ok());
+    // Cleared, its place is free.
+    give(&reviews, "i0", None);
+    give(&reviews, "other", Some(context("x")));
 }
 
 #[test]
-fn a_clear_lets_go_of_what_came_before_it_and_of_nothing_given_after_it() {
-    // Given before the clear, recorded after it: let go of.
+fn an_update_whose_mount_was_released_or_whose_opening_ended_after_its_number_is_not_held() {
     let reviews = reviews();
-    let before = reviews
-        .stage_context(EPOCH, &app("i1"), context("before"))
-        .unwrap();
-    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
-    reviews.recorded_clear(&app("i1"), clear);
-    reviews.recorded_context(before);
-    assert!(held(&reviews).is_empty());
-    // Given after the clear, recorded before it: it stands.
-    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
-    let after = reviews
-        .stage_context(EPOCH, &app("i1"), context("after"))
-        .unwrap();
-    reviews.recorded_context(after);
-    reviews.recorded_clear(&app("i1"), clear);
-    assert_eq!(held(&reviews), ["after"]);
-    // Recorded after it: it stands, too.
-    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
-    let later = reviews
-        .stage_context(EPOCH, &app("i1"), context("later"))
-        .unwrap();
-    reviews.recorded_clear(&app("i1"), clear);
-    assert!(held(&reviews).is_empty());
-    reviews.recorded_context(later);
-    assert_eq!(held(&reviews), ["later"]);
-    // Another mount's is nothing of its.
-    let other = reviews
-        .stage_context(EPOCH, &app("i2"), context("other"))
-        .unwrap();
-    reviews.recorded_context(other);
-    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
-    reviews.recorded_clear(&app("i1"), clear);
-    assert_eq!(held(&reviews), ["other"]);
-    // Released or ended: nothing staged.
+    let number = reviews.number_update(EPOCH, &app("i1"), true).unwrap();
     reviews.release_app(&app("i1"), &releaser(), || {});
+    reviews.give(EPOCH, &app("i1"), number, Some(context("late")));
+    assert!(held(&reviews).is_empty());
     assert_eq!(
-        reviews.stage_clear(EPOCH, &app("i1")),
-        Err(ReviewRefusal::Released)
+        reviews.number_update(EPOCH, &app("i1"), true),
+        Err(ContextRefusal::Gone(ReviewRefusal::Released))
     );
+    let number = reviews.number_update(EPOCH, &app("i2"), true).unwrap();
     reviews.end(EPOCH, &releaser(), || {});
+    reviews.give(EPOCH, &app("i2"), number, Some(context("late")));
+    assert!(held(&reviews).is_empty());
     assert_eq!(
-        reviews.stage_clear(EPOCH, &app("i2")),
-        Err(ReviewRefusal::Ended)
-    );
-    assert_eq!(
-        reviews
-            .stage_context(EPOCH, &app("i2"), context("x"))
-            .map(|_| ()),
+        reviews.number_update(EPOCH, &app("i2"), false),
         Err(ContextRefusal::Gone(ReviewRefusal::Ended))
     );
+}
+
+#[tokio::test]
+async fn one_context_update_of_a_conversation_runs_at_a_time() {
+    let reviews = Arc::new(AppReviews::default());
+    let first = reviews.one_update().await;
+    let waiting = {
+        let reviews = reviews.clone();
+        tokio::spawn(async move {
+            let _second = reviews.one_update().await;
+        })
+    };
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    drop(first);
+    waiting.await.unwrap();
 }
 
 #[test]
@@ -746,9 +693,13 @@ fn allowing_one_first_message_allows_the_mount_and_its_others_waiting() {
             first.ended(Duration::from_secs(1)).await,
             ReviewEnd::Allowed(person())
         );
+        // Allowed by the answer to the first, and said so.
         assert_eq!(
             second.ended(Duration::from_secs(1)).await,
-            ReviewEnd::Allowed(person())
+            ReviewEnd::AllowedWith {
+                by: person(),
+                review: answered.permission_id.clone(),
+            }
         );
     });
     assert_eq!(reviews.consented(EPOCH, &app("i1")), Ok(true));
@@ -761,20 +712,11 @@ fn allowing_one_first_message_allows_the_mount_and_its_others_waiting() {
 #[test]
 fn a_message_takes_what_it_read_and_never_a_replacement_given_since() {
     let reviews = reviews();
-    let one = reviews
-        .stage_context(EPOCH, &app("i1"), context("one"))
-        .unwrap();
-    reviews.recorded_context(one);
-    let two = reviews
-        .stage_context(EPOCH, &app("i2"), context("two"))
-        .unwrap();
-    reviews.recorded_context(two);
+    give(&reviews, "i1", Some(context("one")));
+    give(&reviews, "i2", Some(context("two")));
     let read = reviews.held_contexts();
     // Replaced after the message read it, before it was taken.
-    let newer = reviews
-        .stage_context(EPOCH, &app("i1"), context("newer"))
-        .unwrap();
-    reviews.recorded_context(newer);
+    give(&reviews, "i1", Some(context("newer")));
     reviews.took(&read);
     assert_eq!(held(&reviews), ["newer"]);
 }
@@ -782,32 +724,16 @@ fn a_message_takes_what_it_read_and_never_a_replacement_given_since() {
 #[test]
 fn contexts_are_let_go_of_with_their_mount_the_openings_end_and_a_delete() {
     let reviews = reviews();
-    for mount in ["i1", "i2"] {
-        let number = reviews
-            .stage_context(EPOCH, &app(mount), context(mount))
-            .unwrap();
-        reviews.recorded_context(number);
-    }
+    give(&reviews, "i1", Some(context("i1")));
+    give(&reviews, "i2", Some(context("i2")));
     reviews.release_app(&app("i1"), &releaser(), || {});
     assert_eq!(held(&reviews), ["i2"]);
-    assert_eq!(
-        reviews
-            .stage_context(EPOCH, &app("i1"), context("i1"))
-            .map(|_| ()),
-        Err(ContextRefusal::Gone(ReviewRefusal::Released))
-    );
-    // Pending when the opening ends: let go of, and its record comes later.
-    let pending = reviews
-        .stage_context(EPOCH, &app("i3"), context("i3"))
-        .unwrap();
     reviews.end(EPOCH, &releaser(), || {});
-    reviews.recorded_context(pending);
     assert!(held(&reviews).is_empty());
     let next = reviews.begin();
-    let number = reviews
-        .stage_context(next, &app("i2"), context("again"))
-        .unwrap();
-    reviews.recorded_context(number);
+    let number = reviews.number_update(next, &app("i2"), true).unwrap();
+    reviews.give(next, &app("i2"), number, Some(context("again")));
+    assert_eq!(held(&reviews), ["again"]);
     reviews.delete(|| {});
     assert!(held(&reviews).is_empty());
 }

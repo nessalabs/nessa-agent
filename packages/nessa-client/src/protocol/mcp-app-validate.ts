@@ -102,7 +102,8 @@ export interface McpAppModelContext {
 /** The answer to `mcp.sendMessage`: the turn the message became. */
 export function mcpSendMessageResult(value: unknown): McpSendMessageResult {
   const item = object(value, ["executionId"], "message result")
-  if (!boundedName(item.executionId, 256)) throw new Error("Invalid message executionId")
+  if (!boundedName(item.executionId, bounds.maxExecutionIdBytes))
+    throw new Error("Invalid message executionId")
   return { executionId: item.executionId }
 }
 

@@ -174,7 +174,9 @@ export type McpAppsApi = {
    * The first message from a mount in an opening of the conversation waits
    * for the person's approval, as a review in the conversation's
    * `permissions` with `origin: {kind: "app"}`; allowed, the mount sends
-   * without asking again until it is released or the conversation ends. This
+   * without asking again until it is released or the conversation's opening
+   * ends (a close, and the conversation opened again, asks again). The same
+   * request again is the same turn, settled by the agent without asking. This
    * client waits for it (`mcpAppDeadlines.sendMessageMs`).
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app sending it: its tool call and this mount of it.
@@ -204,8 +206,10 @@ export type McpAppsApi = {
   /**
    * Give the model context from the app (MCP Apps `ui/update-model-context`),
    * in place of what this mount gave before; an update with neither part
-   * clears it. It is held until the next message into the conversation — the person's or an
-   * app's — takes it, and goes to the agent once, with that turn, ahead of
+   * clears it. It is held until the next message admitted while nothing runs
+   * or waits in the conversation — the person's or an app's; one queued
+   * behind a turn carries none — takes it, and goes to the agent once, with
+   * that turn, ahead of
    * what the message says, and is not part of the transcript. A release of
    * the mount, or the end of the conversation's opening, lets go of it
    * unsent.

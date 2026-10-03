@@ -384,6 +384,7 @@ fn apps_contexts_go_first_as_one_text_block_of_json() {
                 Some("zoomed to May".into()),
                 None,
             )
+            .unwrap()
             .unwrap(),
             AppModelContext::new(
                 app("maps", "route", "call-2"),
@@ -391,6 +392,7 @@ fn apps_contexts_go_first_as_one_text_block_of_json() {
                 None,
                 Some(r#"{"from":"Oslo","stops":[1,2]}"#.into()),
             )
+            .unwrap()
             .unwrap(),
         ])
         .unwrap();
@@ -432,6 +434,7 @@ fn an_apps_context_cannot_close_its_block_or_pass_for_another() {
             Some(forged.clone()),
             None,
         )
+        .unwrap()
         .unwrap()])
         .unwrap();
     let blocks = content_blocks(&sent, ImageBlocks::none()).unwrap();
@@ -458,6 +461,7 @@ fn structured_content_goes_as_the_value_object_holds_it_with_no_second_judge_of_
                 None,
                 Some(structured.clone()),
             )
+            .unwrap()
             .unwrap()])
             .unwrap();
         assert!(fits_one_frame(&sent, 1024 * 1024).is_ok(), "{structured}");
@@ -479,6 +483,7 @@ fn an_apps_context_is_counted_against_the_frame() {
         Some("\"".repeat(AppModelContext::MAX_BYTES)),
         None,
     )
+    .unwrap()
     .unwrap();
     let carrying = plain.clone().with_app_model_context(vec![context]).unwrap();
     // Every quote in it is escaped to two bytes, and each is counted.

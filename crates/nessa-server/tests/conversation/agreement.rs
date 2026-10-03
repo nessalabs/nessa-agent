@@ -147,6 +147,19 @@ fn an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps() {
         bytes(text),
         bytes(&defs["ConversationSendParams"]["properties"]["text"])
     );
+    // What the description says of a first message's review is the room an
+    // app's review has, as the gateway keeps it.
+    let described = text["description"].as_str().unwrap();
+    assert!(described.contains(&format!(
+        "at most {} UTF-8 bytes",
+        ConversationLimits::default().max_input_bytes
+    )));
+    let room = crate::conversation::application::MAX_APP_REVIEW_BYTES;
+    let spelled = format!("{} {:03}", room / 1000, room % 1000);
+    assert!(
+        described.contains(&format!("the {spelled} bytes")),
+        "{described}"
+    );
     let context = &defs["McpUpdateModelContextParams"];
     assert_eq!(
         bytes(&context["properties"]["text"]),

@@ -142,10 +142,12 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
       return false
-    // An MCP App's call (mcp.callTool, mcp.readResource) refused before
-    // anything reached its server: the app, its server or its tool is not
-    // one it may call, its request is too large, or the review it needed was
-    // denied, expired, or withdrawn while it waited.
+    // An MCP App's request refused before it took effect: for a call
+    // (mcp.callTool, mcp.readResource), before anything reached its server;
+    // for a message (mcp.sendMessage), before it became a turn; for a
+    // context (mcp.updateModelContext), before it was held. The app, its
+    // server or its tool is not one it may use, its request is too large, or
+    // the review it needed was denied, expired, or withdrawn while it waited.
     case ConversationErrorCode.McpAppUnknown:
     case ConversationErrorCode.McpServerMismatch:
     case ConversationErrorCode.McpToolNotForApp:

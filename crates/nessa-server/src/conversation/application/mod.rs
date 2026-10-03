@@ -79,6 +79,9 @@
 //! issued past once a mount is released or the conversation ended — are
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
+/// The room an app's review takes of a view, which the schema states too.
+#[cfg(test)]
+pub(crate) use app_reviews::MAX_APP_REVIEW_BYTES;
 mod catalogue;
 pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{

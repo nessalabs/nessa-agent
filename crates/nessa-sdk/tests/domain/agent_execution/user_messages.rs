@@ -311,12 +311,12 @@ fn an_apps_tool_call_identity_is_bounded_as_an_executions_is() {
 fn an_apps_context_holds_text_or_one_json_object_within_its_bound() {
     assert_eq!(
         AppModelContext::new(app("call-1"), "update-1", None, None),
-        Err(ExecutionError::EmptyValue("app context"))
+        Ok(None)
     );
     // An empty text is none, so it alone is no context.
     assert_eq!(
         AppModelContext::new(app("call-1"), "update-1", Some(String::new()), None),
-        Err(ExecutionError::EmptyValue("app context"))
+        Ok(None)
     );
     let both = AppModelContext::new(
         app("call-1"),
@@ -324,6 +324,7 @@ fn an_apps_context_holds_text_or_one_json_object_within_its_bound() {
         Some("May".into()),
         Some(r#" {"month":5}"#.into()),
     )
+    .unwrap()
     .unwrap();
     assert_eq!(both.text(), Some("May"));
     assert_eq!(both.structured_content(), Some(r#" {"month":5}"#));
@@ -375,8 +376,11 @@ fn a_message_is_the_persons_until_said_otherwise_and_carries_at_most_four_contex
     // another message, so a retry that changed it is a conflict.
     assert_ne!(sent, message);
 
-    let context =
-        |id: &str| AppModelContext::new(app(id), "update-1", Some("ctx".into()), None).unwrap();
+    let context = |id: &str| {
+        AppModelContext::new(app(id), "update-1", Some("ctx".into()), None)
+            .unwrap()
+            .unwrap()
+    };
     let four: Vec<_> = ["a", "b", "c", "d"].into_iter().map(context).collect();
     let carrying = message
         .clone()
@@ -411,7 +415,7 @@ fn an_apps_context_names_the_update_that_gave_it_by_a_bounded_identity() {
         })
     );
     let exact = "u".repeat(AppModelContext::MAX_UPDATE_BYTES);
-    assert_eq!(context(exact.clone()).unwrap().update(), exact);
+    assert_eq!(context(exact.clone()).unwrap().unwrap().update(), exact);
     // Which update gave it is part of it: the same words from another update
     // are another context.
     assert_ne!(context("a".into()), context("b".into()));
@@ -436,20 +440,24 @@ fn an_app_and_its_context_count_every_byte_they_hold() {
         Some("May".into()),
         Some(r#"{"m":5}"#.into()),
     )
+    .unwrap()
     .unwrap();
     assert_eq!(context.app(), &source);
     assert_eq!(
         context.payload_bytes(),
         source.payload_bytes() + "update-1".len() + "May".len() + r#"{"m":5}"#.len()
     );
-    let structure_only =
-        AppModelContext::new(source.clone(), "update-2", None, Some("{}".into())).unwrap();
+    let structure_only = AppModelContext::new(source.clone(), "update-2", None, Some("{}".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(structure_only.text(), None);
     assert_eq!(
         structure_only.payload_bytes(),
         source.payload_bytes() + "update-2".len() + 2
     );
-    let text_only = AppModelContext::new(source, "update-3", Some("x".into()), None).unwrap();
+    let text_only = AppModelContext::new(source, "update-3", Some("x".into()), None)
+        .unwrap()
+        .unwrap();
     assert_eq!(text_only.structured_content(), None);
     assert_eq!(MessageSender::default(), MessageSender::Person);
 }

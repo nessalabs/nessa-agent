@@ -854,7 +854,7 @@ export interface McpSendMessageResult {
   /** The turn the message became, as the transcript names it. */
   executionId: string
 }
-/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson clears it. It is held for the mount until the next message admitted into the conversation, the person's or an app's, takes it: sent once, with that turn, ahead of what the message says, and not shown in the transcript. A release of the mount (mcp.releaseApp) or the end of the conversation's opening lets go of it unsent. Text and structured content together, the structure as held — re-encoded — take at most 8192 UTF-8 bytes (mcp_request_too_large past it), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
+/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson clears it. It is held for the mount until the next message admitted into the conversation while nothing runs or waits, the person's or an app's, takes it: sent once, with that turn, ahead of what the message says, and not shown in the transcript; a message queued behind a turn carries none. A release of the mount (mcp.releaseApp) or the end of the conversation's opening lets go of it unsent. Text and structured content together, the structure as held — re-encoded — take at most 8192 UTF-8 bytes, as each part does on its own (mcp_request_too_large past either), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
 export interface McpUpdateModelContextParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -1424,6 +1424,7 @@ export const bounds = {
   maxMcpArgumentsBytes: 32768,
   maxMcpResultBytes: 57344,
   maxMcpMessageBytes: 8192,
+  maxExecutionIdBytes: 256,
   maxMcpContextBytes: 8192,
   maxMcpResourceUriBytes: 2048,
   mcpAppMimeType: "text/html;profile=mcp-app",

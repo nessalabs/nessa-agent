@@ -771,7 +771,7 @@ const checks = {
       failures.push(`${count - before} app labels appeared, not 1`)
     const author = authors.last()
     const label = (await author.textContent().catch(() => null)) ?? ""
-    if (label !== `Sent by the ${names.fixtureTool} app`)
+    if (label !== `Sent by ${names.fixtureTool}, from ${names.fixtureServer}`)
       failures.push(`the label says "${label}"`)
     // The label sits over its own message: the person's, with the app's words.
     const message = author.locator("xpath=..")

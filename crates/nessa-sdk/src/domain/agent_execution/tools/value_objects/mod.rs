@@ -11,6 +11,8 @@
 //!
 //! Arrows mean the update produces observed data composed from these values.
 mod identity;
+/// Whether text is one JSON value; also the one judge of an app's structured
+/// context (`prompts::AppModelContext`), so it is shared within the context.
 pub(in crate::domain::agent_execution) mod json;
 mod mcp;
 mod tool;

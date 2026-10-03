@@ -379,17 +379,26 @@ const { executionId } = await client.mcpApps.sendMessage(
 as the app's; the first from a mount waits on the person's review, so it waits
 as long as a call (`mcpAppDeadlines.sendMessageMs`), and one while a turn runs
 fails `turn_running`. `updateModelContext` holds the context until the next
-message takes it to the agent, once; an update with neither part clears it. Their bounds are
+message admitted while nothing runs or waits takes it to the agent, once (a
+message queued behind a turn carries none); an update with neither part clears
+it. Their bounds are
 `MAX_MCP_MESSAGE_BYTES` and `MAX_MCP_CONTEXT_BYTES` (each part; whether they
 fit together, as held, is the gateway's to say: `mcp_request_too_large`),
 asked of `mcpAppRequestProblem.message` and `.context`.
 
 `callTool`, `readResource`, `sendMessage` and `updateModelContext` fail with `NessaMcpAppError`. Its `uncertain` is
-`false` when nothing reached the app's server — `mcp_app_unknown`,
-`mcp_server_mismatch`, `mcp_tool_not_for_app`, `mcp_request_too_large`,
-`mcp_approval_denied`, `mcp_approval_expired`, `mcp_cancelled` — and `true`
-when it may have: `mcp_session_unavailable`, `mcp_timed_out`,
-`mcp_remote_error`, `mcp_result_too_large`, or no trustworthy answer. With
+`false` when the request certainly took no effect, and `true` when it may
+have. For `callTool` and `readResource` the effect is reaching the app's
+server: certain for `mcp_app_unknown`, `mcp_server_mismatch`,
+`mcp_tool_not_for_app`, `mcp_request_too_large`, `mcp_approval_denied`,
+`mcp_approval_expired`, `mcp_cancelled`; uncertain for
+`mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error`,
+`mcp_result_too_large`, or no trustworthy answer. For `sendMessage` it is the
+message becoming a turn: certain for those refusals and `turn_running`, and
+the same request may simply be sent again — the same request is the same
+turn. For `updateModelContext` it is the context being held: certain for
+those refusals; `temporarily_unavailable` (no room for another mount's) is
+reported uncertain, as it is for every method, though nothing was held. With
 `mcp_remote_error`, `remoteError` is the server's own JSON-RPC error
 `{code, message}` when it sent one. `releaseApp` is a control and fails with
 `NessaConversationControlError`. `fetchResource` fails with

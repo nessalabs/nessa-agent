@@ -42,7 +42,7 @@ fn refused(result: Result<impl std::fmt::Debug, ConversationError>) -> McpAppErr
 fn is_permission(phase: &McpAppAuditPhase) -> Option<&str> {
     match phase {
         McpAppAuditPhase::ApprovalRequested { permission_id }
-        | McpAppAuditPhase::Approved { permission_id }
+        | McpAppAuditPhase::Approved { permission_id, .. }
         | McpAppAuditPhase::Denied { permission_id }
         | McpAppAuditPhase::Expired { permission_id }
         | McpAppAuditPhase::Withdrawn { permission_id, .. } => Some(permission_id),

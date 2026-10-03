@@ -276,7 +276,8 @@ async fn m6_m7_m12_the_first_message_asks_and_allowed_lands_as_the_persons_turn_
             ),
             (
                 McpAppAuditPhase::Approved {
-                    permission_id: review.permission_id.clone()
+                    permission_id: review.permission_id.clone(),
+                    with: None,
                 },
                 person_by("answer")
             ),
@@ -942,49 +943,6 @@ async fn c14_a_context_whose_update_cannot_be_recorded_is_never_given() {
     );
 }
 
-#[tokio::test]
-async fn a_context_not_yet_on_record_goes_with_no_message() {
-    let fixture = Fixture::new().await;
-    fixture
-        .update_context(INSTANCE, Some("old"), None)
-        .await
-        .unwrap();
-    *fixture.audit.slow.lock().unwrap() = Some(Duration::from_millis(1000));
-    let pending = {
-        let service = fixture.service.clone();
-        let id = fixture.id.clone();
-        let app = fixture.app(INSTANCE);
-        tokio::spawn(async move {
-            service
-                .update_app_model_context(
-                    id,
-                    caller("app-context"),
-                    McpAppModelContext {
-                        app,
-                        server: SERVER.into(),
-                        text: Some("new".into()),
-                        structured_content_json: None,
-                    },
-                )
-                .await
-        })
-    };
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    // While "new" is being recorded the message takes what is on record.
-    fixture.person_turn("during").await;
-    assert_eq!(
-        fixture.contexts_given("during").await,
-        [Some("old".to_owned())]
-    );
-    pending.await.unwrap().unwrap();
-    *fixture.audit.slow.lock().unwrap() = None;
-    fixture.person_turn("after").await;
-    assert_eq!(
-        fixture.contexts_given("after").await,
-        [Some("new".to_owned())]
-    );
-}
-
 /// Waits until `phase` is on record, past the first `from` records.
 async fn on_record(fixture: &Fixture, from: usize, phase: McpAppAuditPhase) {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -1139,16 +1097,29 @@ async fn m7b_allowing_one_first_message_sends_the_mounts_others_waiting() {
         "{second:?}"
     );
     assert!(fixture.app_reviews().await.is_empty());
-    let approved = fixture
+    // Both by the person's one answer; the one it did not answer says which
+    // review's answer allowed it.
+    let mut approved = fixture
         .audit
         .records
         .lock()
         .unwrap()
         .iter()
-        .filter(|record| matches!(record.phase, McpAppAuditPhase::Approved { .. }))
-        .map(|record| record.initiator.clone())
+        .filter_map(|record| match &record.phase {
+            McpAppAuditPhase::Approved { with, .. } => {
+                Some((with.clone(), record.initiator.clone()))
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
-    assert_eq!(approved, [person_by("answer"), person_by("answer")]);
+    approved.sort_by_key(|(with, _)| with.is_some());
+    assert_eq!(
+        approved,
+        [
+            (None, person_by("answer")),
+            (Some(review.permission_id.clone()), person_by("answer")),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1286,8 +1257,30 @@ async fn c9_a_message_refused_after_it_read_the_contexts_takes_none() {
     );
 }
 
+/// The update from the mount `instance` of `fixture`'s conversation, in the
+/// background.
+fn updating(
+    fixture: &Fixture,
+    instance: &str,
+    text: Option<&str>,
+) -> tokio::task::JoinHandle<Result<(), ConversationError>> {
+    let service = fixture.service.clone();
+    let id = fixture.id.clone();
+    let update = McpAppModelContext {
+        app: fixture.app(instance),
+        server: SERVER.into(),
+        text: text.map(str::to_owned),
+        structured_content_json: None,
+    };
+    tokio::spawn(async move {
+        service
+            .update_app_model_context(id, caller("app-context"), update)
+            .await
+    })
+}
+
 #[tokio::test]
-async fn c13_a_context_whose_update_is_still_being_recorded_goes_with_no_message() {
+async fn c5_a_context_whose_update_is_still_being_recorded_goes_with_no_message() {
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("old"), None)
@@ -1295,27 +1288,9 @@ async fn c13_a_context_whose_update_is_still_being_recorded_goes_with_no_message
         .unwrap();
     let hold = Hold::default();
     *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
-    let pending = {
-        let service = fixture.service.clone();
-        let id = fixture.id.clone();
-        let app = fixture.app(INSTANCE);
-        tokio::spawn(async move {
-            service
-                .update_app_model_context(
-                    id,
-                    caller("app-context"),
-                    McpAppModelContext {
-                        app,
-                        server: SERVER.into(),
-                        text: Some("new".into()),
-                        structured_content_json: None,
-                    },
-                )
-                .await
-        })
-    };
-    // Staged, and its record waiting to commit.
+    let pending = updating(&fixture, INSTANCE, Some("new"));
     hold.waiting.notified().await;
+    // While "new" is being recorded the message takes what is held.
     fixture.person_turn("during").await;
     assert_eq!(
         fixture.contexts_given("during").await,
@@ -1331,77 +1306,134 @@ async fn c13_a_context_whose_update_is_still_being_recorded_goes_with_no_message
 }
 
 #[tokio::test]
-async fn c7_a_clear_and_an_update_of_one_mount_leave_the_later_given_whichever_is_recorded_first() {
-    // The update given first, its record held; the clear given after it.
-    let fixture = Fixture::new().await;
-    let hold = Hold::default();
-    *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
-    let update = {
-        let service = fixture.service.clone();
-        let id = fixture.id.clone();
-        let app = fixture.app(INSTANCE);
-        tokio::spawn(async move {
-            service
-                .update_app_model_context(
-                    id,
-                    caller("set"),
-                    McpAppModelContext {
-                        app,
-                        server: SERVER.into(),
-                        text: Some("A".into()),
-                        structured_content_json: None,
-                    },
-                )
-                .await
-        })
-    };
-    hold.waiting.notified().await;
-    fixture.update_context(INSTANCE, None, None).await.unwrap();
-    hold.go.add_permits(1);
-    update.await.unwrap().unwrap();
-    fixture.person_turn("one").await;
-    assert!(fixture.contexts_given("one").await.is_empty());
-    // The records say so: the clear's number is the higher.
-    let phases = fixture.audit.phases();
-    let sequence = |phase: &McpAppAuditPhase| match phase {
-        McpAppAuditPhase::ContextHeld { sequence, .. }
-        | McpAppAuditPhase::ContextCleared { sequence } => *sequence,
-        other => panic!("{other:?}"),
-    };
-    assert!(sequence(&phases[0]) > sequence(&phases[1]), "{phases:?}");
+async fn c7_a_conversations_updates_are_recorded_in_the_order_given_and_the_later_stands() {
+    for (first, second, carried) in [
+        (Some("A"), None, Vec::new()),
+        (None, Some("B"), vec![Some("B".to_owned())]),
+    ] {
+        let fixture = Fixture::new().await;
+        let hold = Hold::default();
+        *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
+        let earlier = updating(&fixture, INSTANCE, first);
+        hold.waiting.notified().await;
+        // Given while the first is being recorded: it waits its turn.
+        let later = updating(&fixture, INSTANCE, second);
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert!(fixture.audit.phases().is_empty());
+        hold.go.add_permits(1);
+        earlier.await.unwrap().unwrap();
+        later.await.unwrap().unwrap();
+        // On record in that order, numbered so.
+        let sequences: Vec<u64> = fixture
+            .audit
+            .phases()
+            .iter()
+            .map(|phase| match phase {
+                McpAppAuditPhase::ContextHeld { sequence, .. }
+                | McpAppAuditPhase::ContextCleared { sequence } => *sequence,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert!(sequences[0] < sequences[1], "{sequences:?}");
+        assert_eq!(
+            matches!(
+                fixture.audit.phases()[0],
+                McpAppAuditPhase::ContextHeld { .. }
+            ),
+            first.is_some()
+        );
+        fixture.person_turn("next").await;
+        assert_eq!(fixture.contexts_given("next").await, carried);
+    }
+}
 
-    // The clear given first, its record held; the update given after it.
+#[tokio::test]
+async fn c8_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held() {
     let fixture = Fixture::new().await;
-    let hold = Hold::default();
-    *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
-    let clear = {
-        let service = fixture.service.clone();
-        let id = fixture.id.clone();
-        let app = fixture.app(INSTANCE);
-        tokio::spawn(async move {
-            service
-                .update_app_model_context(
-                    id,
-                    caller("clear"),
-                    McpAppModelContext {
-                        app,
-                        server: SERVER.into(),
-                        text: None,
-                        structured_content_json: None,
-                    },
-                )
-                .await
-        })
-    };
-    hold.waiting.notified().await;
+    // A turn runs, held.
+    let (finish, gate) = oneshot::channel();
+    *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
+    fixture.person_sends("running", "think").await;
     fixture
-        .update_context(INSTANCE, Some("B"), None)
+        .update_context(INSTANCE, Some("kept"), None)
         .await
         .unwrap();
-    hold.go.add_permits(1);
-    clear.await.unwrap().unwrap();
-    fixture.person_turn("two").await;
-    assert_eq!(fixture.contexts_given("two").await, [Some("B".to_owned())]);
+    // Queued behind it: it carries none, so its removal or a reordering
+    // can lose or invert nothing.
+    fixture.person_sends("queued", "and then").await;
+    let _ = finish.send(());
+    fixture.idle().await;
+    assert!(fixture.given("queued").await.app_model_context().is_empty());
+    // The next message admitted with nothing running takes it.
+    fixture.person_turn("next").await;
+    assert_eq!(
+        fixture.contexts_given("next").await,
+        [Some("kept".to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn m10c_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing() {
+    let fixture = Fixture::new().await;
+    fixture.allowed(INSTANCE).await;
+    let executions = fixture.provider.executions.lock().unwrap().len();
+    // The message, admitted, waits for the submission lock; then holds it
+    // past its first check, before its resolve, where pending mode changes
+    // are read.
+    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let from = fixture.audit.phases().len();
+    let message = sending(&fixture, INSTANCE, "late", "after the stop");
+    on_record(&fixture, from, McpAppAuditPhase::Admitted).await;
+    let began = Arc::new(tokio::sync::Notify::new());
+    let (open, gate) = oneshot::channel();
+    *fixture.repository.pending_gate.lock().unwrap() = Some((began.clone(), gate));
+    drop(held);
+    began.notified().await;
+    // The desktop stops every agent: no lock taken.
+    fixture.service.stop_active_agents().await.unwrap();
+    let opened = fixture
+        .provider
+        .open_calls
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let _ = open.send(());
+    assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
+    assert_eq!(
+        fixture.provider.executions.lock().unwrap().len(),
+        executions
+    );
+    assert_eq!(
+        fixture
+            .provider
+            .open_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        opened
+    );
+}
+
+#[tokio::test]
+async fn m17b_a_retry_of_a_sent_message_after_a_reopening_is_not_asked_again() {
+    let fixture = Fixture::new().await;
+    fixture.allowed(INSTANCE).await;
+    let first = sending(&fixture, INSTANCE, "request-1", "hello")
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.idle().await;
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    // Opened again, the mount is not allowed in this opening; the retry is
+    // a turn the agent has, so nobody is asked.
+    let again = sending(&fixture, INSTANCE, "request-1", "hello")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again, first);
+    assert!(fixture.app_reviews().await.is_empty());
 }
 
 #[tokio::test]

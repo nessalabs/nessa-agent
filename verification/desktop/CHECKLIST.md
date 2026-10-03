@@ -371,7 +371,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **An app's message lands in its conversation, as the person's, saying
   which app wrote it** (#390): `ui/message` is answered `{}`, the transcript
   gains exactly one message of the person's with the app's words, labelled
-  "Sent by the show_fixture app" above its bubble, right-aligned with it
+  "Sent by show_fixture, from nessa-fixture" above its bubble, right-aligned with it
   (within 6 px) and inside the column; another while the reply runs is
   refused (`isError: true`) and adds nothing; `ui/update-model-context` is
   answered `{}`. The gateway's own path is `crates/nessa-server/tests/conversation/app_messages.rs`
