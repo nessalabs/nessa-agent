@@ -340,6 +340,8 @@ test("the frontend job owns top-level script tests and their just dependency", (
     "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs",
   )
   assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
+  // The verification scripts' own tests, which hold #384's design table.
+  assert.ok(root.scripts["frontend:check"].includes("pnpm verify:desktop:test"))
   assert.doesNotMatch(workflow, /run: node --test scripts\/\*\.test\.mjs/)
   assert.doesNotMatch(gateway, /node --test scripts\/\*\.test\.mjs/)
   assert.doesNotMatch(gateway, /install-action@just/)

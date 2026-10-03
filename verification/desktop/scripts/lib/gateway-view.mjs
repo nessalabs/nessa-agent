@@ -3,10 +3,9 @@
  * which harness permission its setup answers, and which of the app's reviews
  * a step's own action opened. Pure, so both are tested without a gateway.
  */
+import { permissionKey } from "../../../../scripts/mcp-test-server/evidence.mjs"
 
-/** A pending permission's identity in the view. */
-export const permissionKey = ({ executionId, permissionId }) =>
-  `${executionId}:${permissionId}`
+export { permissionKey }
 
 /** A tool call's identity in the view. */
 export const callKey = ({ executionId, toolId }) => `${executionId}:${toolId}`

@@ -99,11 +99,15 @@ export function allowOnce(view, permission, server) {
  * each with its allow-once option, and the ones declined because they are not
  * a call to `server`'s tools — which the run reports rather than answers.
  */
+/** A pending permission's identity in a view. */
+export const permissionKey = ({ executionId, permissionId }) =>
+  `${executionId}:${permissionId}`
+
 export function permissionDecisions(view, answered, server) {
   const allow = []
   const declined = []
   for (const permission of view?.permissions ?? []) {
-    const key = `${permission.executionId}:${permission.permissionId}`
+    const key = permissionKey(permission)
     if (answered.has(key)) continue
     const option = allowOnce(view, permission, server)
     if (option) allow.push({ key, permission, option })

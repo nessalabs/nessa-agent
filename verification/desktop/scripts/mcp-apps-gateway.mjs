@@ -43,6 +43,7 @@ import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
   admitOnce,
+  callKey,
   newReview,
   permissionKey,
   reviewKeys,
@@ -217,7 +218,7 @@ async function agentTurn(client, conversationId, agent) {
     // stays unanswered.
     for (;;) {
       const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)
-      if (extra) throw once(`${admitted} and ${extra}`)
+      if (extra) throw once(`${admitted}, ${extra}`)
       if (!allow) break
       admitted = allow.call
       answered.add(permissionKey(allow.permission))
@@ -231,8 +232,7 @@ async function agentTurn(client, conversationId, agent) {
     const last = view.messages.at(-1)
     if (last && !["running", "queued"].includes(last.status)) {
       const outcome = setupOutcome(view, SERVER, APP_TOOL)
-      if (outcome.kind === "repeated")
-        throw once(outcome.calls.map((each) => each.toolId).join(", "))
+      if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
       const tool = outcome.call
       if (outcome.kind !== "ready")
         throw new CannotRun(

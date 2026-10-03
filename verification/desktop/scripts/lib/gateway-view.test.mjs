@@ -47,18 +47,23 @@ describe("admitOnce", () => {
     assert.equal(extra, null)
   })
 
-  it("A2: leaves a permission it already answered alone, and allows another of the same call", () => {
-    const view = {
-      tools: [call("t1", "review_rows")],
-      permissions: [asks("p1", "t1"), asks("p2", "t1")],
-    }
-    const { allow: allowed, extra } = admit(view, "e:t1", new Set(["e:p1"]))
-    assert.equal(allowed.permission.permissionId, "p2")
-    assert.equal(extra, null)
-    assert.deepEqual(admit(view, "e:t1", new Set(["e:p1", "e:p2"])), {
+  const twice = {
+    tools: [call("t1", "review_rows")],
+    permissions: [asks("p1", "t1"), asks("p2", "t1")],
+  }
+
+  it("A2: leaves a permission it already answered alone", () => {
+    assert.deepEqual(admit(twice, "e:t1", new Set(["e:p1", "e:p2"])), {
       allow: null,
       extra: null,
     })
+  })
+
+  it("A2b: allows another permission of the admitted call: it is the same one call", () => {
+    const { allow: allowed, extra } = admit(twice, "e:t1", new Set(["e:p1"]))
+    assert.equal(allowed.permission.permissionId, "p2")
+    assert.equal(allowed.call, "e:t1")
+    assert.equal(extra, null)
   })
 
   it("A3: a second call of the app tool, once one is admitted, is not allowed but reported", () => {
