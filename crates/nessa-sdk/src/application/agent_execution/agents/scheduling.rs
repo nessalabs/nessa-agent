@@ -5,6 +5,7 @@ use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
 use super::{Agent, AgentError, AttachmentPhase, AttachmentRequest};
 use crate::application::agent_execution::{
+    caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
         ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord, QueueOrderRecord,
         QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode,
@@ -25,8 +26,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::Poll,
     time::Duration,
 };
 use tokio::{
@@ -163,40 +163,22 @@ impl QueuedInvocation {
     /// A panic raised by the polling task's `Waker` when the result is published
     /// stays with this wait: it is logged, that one wake is lost, and the result
     /// stays retained for the next poll. The publisher, other waiters on the same
-    /// receipt, and other queued work are unaffected. A panic from dropping the
-    /// waker is not contained.
-    pub async fn wait(mut self) -> Result<ExecutionOutcome, AgentError> {
-        loop {
-            if let Some(result) = self.result.borrow_and_update().clone() {
-                return result;
+    /// receipt, and other queued work are unaffected. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md for what is not contained.
+    pub async fn wait(self) -> Result<ExecutionOutcome, AgentError> {
+        let Self { id, mut result } = self;
+        contain_caller_wake(CallerWaiter::Receipt(id), async move {
+            loop {
+                if let Some(settled) = result.borrow_and_update().clone() {
+                    return settled;
+                }
+                result
+                    .changed()
+                    .await
+                    .map_err(|_| AgentError::SubmissionUnresolved)?;
             }
-            let mut changed = std::pin::pin!(self.result.changed());
-            poll_fn(|context| {
-                let contained = Waker::from(Arc::new(ContainedWake {
-                    caller: context.waker().clone(),
-                }));
-                changed.as_mut().poll(&mut Context::from_waker(&contained))
-            })
-            .await
-            .map_err(|_| AgentError::SubmissionUnresolved)?;
-        }
-    }
-}
-
-/// The waker a receipt registers with its result channel in place of the
-/// caller's. Publication wakes it on the publisher's task; see "Receipt
-/// notification faults" in docs/agent_execution/scheduling.md.
-struct ContainedWake {
-    caller: Waker,
-}
-impl Wake for ContainedWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        if catch_unwind(AssertUnwindSafe(|| self.caller.wake_by_ref())).is_err() {
-            tracing::warn!("a queued receipt's waker panicked; its result stays retained");
-        }
+        })
+        .await
     }
 }
 
@@ -429,15 +411,19 @@ impl Agent {
     /// Copy pending IDs in dispatch order under the scheduler's admission lock.
     /// Running/injected/removed inputs are excluded; the copy grants no authority.
     pub async fn queued_ids(&self) -> Vec<ExecutionId> {
-        self.inner
-            .scheduler
-            .lock()
-            .await
-            .queue
-            .pending()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
+        let waiter = CallerWaiter::QueuedIds(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, async {
+            self.inner
+                .scheduler
+                .lock()
+                .await
+                .queue
+                .pending()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .await
     }
     /// Atomically replace the complete pending order requested by verified `actor`.
     /// Steering retains priority; identities, requests, receipts and kinds remain

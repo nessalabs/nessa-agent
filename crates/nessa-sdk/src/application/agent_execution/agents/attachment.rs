@@ -1,6 +1,7 @@
 //! Public provider-attachment commands and read-only lifecycle projections.
 
 use super::{lifecycle::SessionLifecycle, AgentError};
+use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::sessions::AttachmentCause;
 use std::sync::Weak;
@@ -140,6 +141,7 @@ impl AttachmentAuthorization {
     /// when readiness wins. Closing another lifecycle generation cannot wake it.
     pub fn cancellation(&self) -> AttachmentCancellation {
         AttachmentCancellation {
+            generation: self.attachment_generation,
             cancelled: self.cancelled.clone(),
         }
     }
@@ -156,16 +158,30 @@ impl Drop for AttachmentAuthorization {
 
 /// Generation-bound invalidation wait for an attachment authorization.
 pub struct AttachmentCancellation {
+    generation: u64,
     cancelled: watch::Receiver<bool>,
 }
 impl AttachmentCancellation {
     /// Complete when the exact authorization is fenced by close or abandonment.
-    pub async fn wait(mut self) {
-        while !*self.cancelled.borrow() {
-            if self.cancelled.changed().await.is_err() {
-                break;
+    ///
+    /// The fence is published by the close or abandonment itself. A panic
+    /// raised by the polling task's `Waker` is logged and loses that one wake;
+    /// it does not interrupt that close. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
+    pub async fn wait(self) {
+        let Self {
+            generation,
+            mut cancelled,
+        } = self;
+        let waiter = CallerWaiter::AttachmentCancellation { generation };
+        contain_caller_wake(waiter, async move {
+            while !*cancelled.borrow() {
+                if cancelled.changed().await.is_err() {
+                    break;
+                }
             }
-        }
+        })
+        .await
     }
 }
 

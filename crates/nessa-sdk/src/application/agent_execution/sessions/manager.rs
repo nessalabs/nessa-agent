@@ -6,6 +6,7 @@ use super::{
 };
 use crate::application::agent_execution::{
     agents::AgentError,
+    caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
         limits::{reserve_observation_slot, ObservationUsage},
         ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode,
@@ -202,8 +203,17 @@ impl SessionManager {
     }
     /// Last snapshot acknowledged by storage. None until Agent initialization.
     /// Failed writes never appear here as committed evidence.
+    ///
+    /// Waiting for the evidence lock registers the polling task's `Waker`
+    /// with it; a panic from that waker when a save releases the lock is
+    /// logged and does not fail the save. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn snapshot(&self) -> Option<SessionSnapshot> {
-        self.evidence.lock().await.committed.clone()
+        let waiter = CallerWaiter::CommittedSnapshot(self.id.clone());
+        contain_caller_wake(waiter, async {
+            self.evidence.lock().await.committed.clone()
+        })
+        .await
     }
     #[cfg(test)]
     pub(crate) async fn pending_message_deadline(

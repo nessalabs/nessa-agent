@@ -14,6 +14,7 @@ use super::{
 use crate::application::agent_execution::agents::{
     AgentError, AgentFuture, AgentInitializationError,
 };
+use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
     limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
     AttachmentAuditStage, EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord,
@@ -40,7 +41,10 @@ use crate::application::agent_execution::sessions::{
 use crate::domain::agent_execution::permissions::{PermissionAuthorityError, PermissionId};
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
-    agent_execution::executions::{ExecutionId, ExecutionOutcome},
+    agent_execution::{
+        executions::{ExecutionId, ExecutionOutcome},
+        sessions::SessionId,
+    },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
 use std::{
@@ -150,8 +154,12 @@ impl Agent {
     /// snapshot does not reserve admission; a host must serialize subsequent
     /// mode changes with its own turn-admission owner.
     pub async fn idle_for_approval_change(&self) -> bool {
-        let scheduler = self.inner.scheduler.lock().await;
-        scheduler.is_idle() && self.inner.lifecycle.active().is_none()
+        let waiter = CallerWaiter::IdleForApprovalChange(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, async {
+            let scheduler = self.inner.scheduler.lock().await;
+            scheduler.is_idle() && self.inner.lifecycle.active().is_none()
+        })
+        .await
     }
     /// The preset this agent generation was configured with or last verified
     /// through a live mode change. `None` means this provider makes no claim.
@@ -164,6 +172,10 @@ impl Agent {
     /// session status; callers must retire an uncertain generation before
     /// admitting another turn.
     pub async fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
+        let waiter = CallerWaiter::ApprovalModeChange(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, self.apply_approval_mode(mode)).await
+    }
+    async fn apply_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
         let scheduler = self.inner.scheduler.lock().await;
         if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
             return Err(ProviderOperationFailure::new(
@@ -789,6 +801,7 @@ impl Agent {
     /// Storage and execution do not depend on a UI reader.
     pub fn subscribe(&self) -> AgentEvents {
         AgentEvents {
+            session: self.inner.manager.id().clone(),
             receiver: self.inner.updates.subscribe(),
         }
     }
@@ -1654,13 +1667,21 @@ impl Agent {
 /// This is a lossy projection; committed snapshots remain available via the manager.
 /// Streaming text can precede its next save boundary and be lost on process failure.
 pub struct AgentEvents {
+    session: SessionId,
     receiver: broadcast::Receiver<ExecutionEvent>,
 }
 impl AgentEvents {
     /// Wait for the next update. Returns Backpressure after subscriber lag, or None
     /// when all Agent senders are dropped. Cancelling this wait loses no queued update.
+    ///
+    /// Updates are published on the Agent's own tasks. A panic raised by the
+    /// polling task's `Waker` is logged and loses that one wake; it does not
+    /// stop the invocation that published, and the update stays queued for
+    /// the next poll. See "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn next(&mut self) -> Result<Option<ExecutionEvent>, AgentError> {
-        match self.receiver.recv().await {
+        let waiter = CallerWaiter::Events(self.session.clone());
+        let received = contain_caller_wake(waiter, self.receiver.recv()).await;
+        match received {
             Ok(event) => Ok(Some(event)),
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(AgentError::Backpressure),

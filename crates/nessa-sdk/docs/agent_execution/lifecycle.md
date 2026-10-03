@@ -225,3 +225,65 @@ Known tool content, location and permission-option arrays are also limited by
 how many domain element slots fit within the live 32 MiB payload allowance.
 Unrecognized shapes have finite fallback string, object, array and recursion
 bounds and are subsequently rejected by the typed schema.
+
+## Caller wakers
+
+A public future polled on the caller's task registers the caller's `Waker`
+with whatever it waits on: a receipt's result channel, the event broadcast, an
+attachment's cancellation or stop channel, or a Tokio mutex the Agent's own
+tasks also take. The task that publishes or releases (the queue runner, an
+invocation, a withdrawal, a close, an admission) then calls that waker
+synchronously. The safe `std::task::Wake` trait does not forbid a waker to
+panic. Before #431 such a panic unwound into the Agent's task. A queue runner
+died with `running` still set, so queued work never dispatched. An invocation
+failed with `invocation task panicked` and dropped its attachment. A close
+stopped part-way and poisoned the lifecycle lock, so every later lifecycle call
+panicked. Tokio also drops the wakers it has not reached yet when one unwinds,
+so other tasks waiting on the same receipt could sleep forever.
+
+**Owner.** One primitive, `contain_caller_wake` in
+`application/agent_execution/caller_wake.rs`, owns caller-waker faults. A
+public wait passes it the caller's waker and its own identity. It polls the
+wait with a waker of its own, which calls the caller's waker inside
+`catch_unwind`. A panic is logged with the wait's identity (the receipt's
+execution ID, or the session or attachment generation) and goes no further. A
+second panic from dropping the panic payload is also caught; that payload is
+leaked rather than dropped. No publisher catches a notification panic itself,
+and nothing resets `running` or repairs lifecycle state after one.
+
+A public operation that spawns its owner and only awaits the `JoinHandle` needs
+no wrapper: Tokio wakes a `JoinHandle` waiter inside its own `catch_unwind`.
+This covers `invoke`, `enqueue`, `enqueue_steering`, `steer`, `reorder_queued`,
+`remove_queued`, `close`, `set_effort_level`, `answer_permission`,
+`cancel_permission` and `answer_question`.
+
+Tests are in the public `application` test binary, under
+`application::agent_execution::agents::review_regressions::caller_wakers`.
+Each one runs its journey first with a waker that does not panic.
+
+| Public wait | Published or released by | What each owner keeps when the caller's waker panics | Test |
+| --- | --- | --- | --- |
+| `QueuedInvocation::wait` (and `QueueAdmission::wait`), after normal completion | The queue runner | The stored result, scheduling evidence and slot/work retirement are unchanged. The runner continues to the next queued item | `panicking_receipt_consumer_preserves_independent_queued_work`: the independent tail dispatches (two dispatches) and settles `Completed`, and both stored records end `Settled` |
+| Other waiters on the same receipt (same-submission retries) | The queue runner | All sixteen are woken and read the retained result | Same test. Which waiters Tokio would drop without the wrapper depends on its randomly chosen notification bucket, so this assertion detects sibling loss with high probability, not on every run. The tail-dispatch assertion fails on every run |
+| The same receipt wait, panicking with a payload whose drop also panics | The queue runner | As above | Same test, third pass |
+| `QueuedInvocation::wait`, after withdrawal | `remove_queued`'s task | The withdrawal still returns `Removed` and keeps its `Withdrawn` evidence; the receipt resolves `Closed` | `panicking_receipt_consumer_does_not_fail_its_withdrawal` |
+| `AgentEvents::next` | The invocation that publishes the update | The invocation settles `Completed`, the attachment stays attached and later queued work runs. The update stays queued for the next poll | `panicking_event_subscriber_does_not_stop_the_invocation_that_published` |
+| `AttachmentCancellation::wait` | `close`, while it holds the lifecycle lock | Close returns normally, the lifecycle lock is not poisoned, and the Agent can attach and invoke again | `panicking_attachment_cancellation_waiter_does_not_interrupt_close` |
+| `ProviderOpenControl::wait`, polled by a provider during open | `close`, while it holds the lifecycle lock | Close returns normally and the lifecycle lock is not poisoned | `panicking_provider_open_stop_waiter_does_not_interrupt_close` |
+| `Agent::queued_ids`, `Agent::idle_for_approval_change`, `Agent::set_approval_mode` | Any task releasing the scheduler lock; the test uses an admission | The admission returns its receipt and the input runs | `panicking_lock_waiter_does_not_fail_the_admission_that_released_it`, one case each |
+| `SessionManager::snapshot` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot` case |
+| `AttachmentWait::wait` (not wrapped) | The attachment task, as its last action, holding no lock | The panic ends only that finished task. The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached` |
+| `close` and the other spawn-and-join operations (not wrapped) | Tokio's task completion, inside its own `catch_unwind` | Close completes; the Agent can attach and invoke again | `panicking_close_waiter_does_not_interrupt_close` |
+
+The panicking wait itself loses that one wake; the SDK does not retry it.
+Polling it again returns the retained result.
+
+Not covered:
+
+- A panic from *dropping* the caller's waker. The wrapper owns a clone of it,
+  and that clone can be dropped on the publisher's task.
+- `CommittedChanges::changed` keeps its own boundary, which predates this one:
+  its publisher catches the notification panic and moves the watch to
+  `ChangeWatchState::NotificationFailed`.
+- Public futures in `infrastructure` (MCP servers, the record storage adapter,
+  process cleanup), which wait on their own adapters' worker tasks.
