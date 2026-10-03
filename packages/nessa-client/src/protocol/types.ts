@@ -35,4 +35,6 @@ export { ProductEvent, ProductMethod } from "./product-types.js"
 /** Server push events the client understands today. */
 export type ClientEventMap = {
   "session.challenge": import("./product-types.js").SessionChallenge
+  "conversation.changed": import("../generated/product.js").ConversationChanged
+  "conversation.watchEnded": import("../generated/product.js").ConversationWatchEnded
 }

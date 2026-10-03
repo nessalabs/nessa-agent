@@ -29,7 +29,7 @@ pub struct NessaRecordReadSource {
 }
 
 #[cfg(test)]
-struct TestReadGate {
+pub(crate) struct TestReadGate {
     entered: Notify,
     panic_after_release: bool,
     open: Mutex<bool>,
@@ -38,16 +38,21 @@ struct TestReadGate {
 
 #[cfg(test)]
 impl TestReadGate {
+    pub(crate) async fn entered(&self) {
+        self.entered.notified().await;
+    }
     fn wait(&self) {
         self.entered.notify_one();
         let mut open = self.open.lock().unwrap();
         while !*open {
             open = self.released.wait(open).unwrap();
         }
+        // Model physical work failure without poisoning the fixture release gate.
+        drop(open);
         assert!(!self.panic_after_release, "injected read worker panic");
     }
 
-    fn release(&self) {
+    pub(crate) fn release(&self) {
         *self.open.lock().unwrap() = true;
         self.released.notify_all();
     }
@@ -63,6 +68,24 @@ impl NessaRecordReadSource {
             #[cfg(test)]
             before_identity: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held_for_host_shutdown(
+        storage: Arc<RecordStorage>,
+        origin: Id,
+        runtime: Handle,
+        panic_after_release: bool,
+    ) -> (Self, Arc<TestReadGate>) {
+        let gate = Arc::new(TestReadGate {
+            entered: Notify::new(),
+            panic_after_release,
+            open: Mutex::new(false),
+            released: Condvar::new(),
+        });
+        let mut source = Self::new(storage, origin, runtime);
+        source.before_identity = Some(gate.clone());
+        (source, gate)
     }
 
     /// Fence new reads, then join identity lookup and physical source work before

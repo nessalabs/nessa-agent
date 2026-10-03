@@ -3,6 +3,7 @@ use crate::conversation::application::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadScope,
     CatalogueReadSource, RecordHead, RecordReadValue,
 };
+use crate::product::change_watch::{Notice, WatchOwners};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::Value;
 use std::{
@@ -143,6 +144,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
             ordinary,
             records,
             Duration::from_secs(60),
+            Arc::new(WatchDeliveries::new()),
         )));
         ready.notified().await;
         assert!(writes.load(Ordering::SeqCst) >= 64);
@@ -234,6 +236,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
         ordinary,
         records,
         Duration::from_secs(60),
+        Arc::new(WatchDeliveries::new()),
     ));
     peer.writing.recv().await.unwrap();
     record_send
@@ -319,6 +322,9 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         }))
         .await
         .unwrap();
+    let deliveries = Arc::new(WatchDeliveries::new());
+    // Close the same delivery interest as the production connection owner.
+    deliveries.close();
     drop((control_send, refusal_send, ordinary_send, record_send));
     let writer = tokio::spawn(write_authenticated(
         sink,
@@ -327,6 +333,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         ordinary,
         records,
         Duration::from_secs(5),
+        deliveries.clone(),
     ));
     for expected in ["control", "refusal", "ordinary", "record"] {
         let Message::Text(text) = peer.message().await else {
@@ -1335,6 +1342,7 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
         ordinary,
         records,
         Duration::from_secs(60),
+        Arc::new(WatchDeliveries::new()),
     ));
     ready.notified().await;
     assert!(writes.load(Ordering::SeqCst) >= 64);
@@ -1353,4 +1361,118 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
         "continuously ready controls must not starve slotless passive refusal expiry"
     );
     assert_eq!(records_written.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn original_pending_watch_deadline_expires_during_another_physical_frame() {
+    let owners = Arc::new(WatchOwners::new(1));
+    let deliveries = Arc::new(WatchDeliveries::new());
+    let original = Arc::new(owners.try_acquire().unwrap());
+    assert!(deliveries.reserve(
+        "watch".into(),
+        original.clone(),
+        Instant::now() + RECORD_SEND_TIMEOUT
+    ));
+    drop(original);
+    deliveries.activate("watch");
+    assert!(deliveries.notice("watch", Notice::Changed)); // Authority remains pending.
+    let deadline = deliveries.deadline().unwrap();
+    tokio::time::advance(Duration::from_secs(20)).await;
+    let (_release, gate) = tokio::sync::oneshot::channel();
+    let (socket, mut peer) = test_socket(Some(gate));
+    let (sink, _incoming) = socket.split();
+    let (_control_send, controls) = mpsc::channel(4);
+    let (_refusal_send, refusals) = mpsc::channel(1);
+    let (ordinary_send, ordinary) = mpsc::channel(16);
+    let (_record_send, records) = mpsc::channel(1);
+    let slots = Arc::new(Semaphore::new(1));
+    ordinary_send
+        .send(QueuedResponse {
+            message: WireResponse::ordinary(success("ordinary-in-flight", &json!({}))),
+            _slot: slots.clone().try_acquire_owned().unwrap().into(),
+            _record_work: None,
+        })
+        .await
+        .unwrap();
+    let writer = tokio::spawn(write_authenticated(
+        sink,
+        controls,
+        refusals,
+        ordinary,
+        records,
+        Duration::from_secs(60),
+        deliveries.clone(),
+    ));
+    peer.writing.recv().await.unwrap(); // Ordinary physical flush has a later own budget.
+    assert!(peer.output.try_recv().is_err());
+    assert_eq!(deliveries.deadline(), Some(deadline));
+    assert_eq!(owners.available_permits(), 0);
+    tokio::time::advance(Duration::from_secs(10)).await;
+    timeout(Duration::from_secs(1), writer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(peer.output.try_recv().is_err()); // Abandoned frame never physically flushed.
+    assert!(peer.writing.try_recv().is_err()); // No hint or later error send.
+    assert_eq!(slots.available_permits(), 1);
+    assert_eq!(owners.available_permits(), 0); // Pending authority/source interest is separately owned.
+    deliveries.close();
+    assert_eq!(owners.available_permits(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls() {
+    let owners = Arc::new(WatchOwners::new(1));
+    let deliveries = Arc::new(WatchDeliveries::new());
+    assert!(deliveries.reserve(
+        "watch".into(),
+        Arc::new(owners.try_acquire().unwrap()),
+        Instant::now() + RECORD_SEND_TIMEOUT
+    ));
+    deliveries.activate("watch");
+    assert!(deliveries.notice("watch", Notice::Changed)); // No fabricated allowed authority snapshot.
+    let (control_send, controls) = mpsc::channel(4);
+    let (_refusal_send, refusals) = mpsc::channel(1);
+    let (_ordinary_send, ordinary) = mpsc::channel(16);
+    let (_record_send, records) = mpsc::channel(1);
+    let lane = ReadyLane::Control(control_send, Arc::new(Semaphore::new(2)));
+    lane.refill();
+    let ready = Arc::new(Notify::new());
+    let writes = Arc::new(AtomicUsize::new(0));
+    let records_written = Arc::new(AtomicUsize::new(0));
+    let socket = ReadySocket {
+        lane,
+        writes: writes.clone(),
+        records_written: records_written.clone(),
+        ready: ready.clone(),
+    };
+    let (sink, _incoming) = socket.split();
+    let writer = tokio::spawn(write_authenticated(
+        sink,
+        controls,
+        refusals,
+        ordinary,
+        records,
+        Duration::from_secs(60),
+        deliveries.clone(),
+    ));
+    ready.notified().await;
+    assert!(writes.load(Ordering::SeqCst) >= 64); // Traffic genuinely remains ready.
+    tokio::time::advance(RECORD_SEND_TIMEOUT).await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    let completed = writer.is_finished();
+    if !completed {
+        writer.abort();
+    } // Bound a failing removal probe without concealing failure.
+    let _ = writer.await;
+    assert!(
+        completed,
+        "continuously ready controls must not starve the original watch deadline"
+    );
+    assert_eq!(records_written.load(Ordering::SeqCst), 0);
+    assert_eq!(owners.available_permits(), 0);
+    deliveries.close();
+    assert_eq!(owners.available_permits(), 1);
 }

@@ -6,6 +6,7 @@ use crate::desktop_runtime::{
     infrastructure::{ConversationDirectory, RetirementFiles},
 };
 use crate::env::Environment;
+use crate::product::{ProductRouteState, WatchTaskFault};
 use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
@@ -228,6 +229,7 @@ impl CompositionRoot {
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
         .map_err(RunError::Serve)?;
 
+        let shutdown_product = product.clone();
         let mut router = http::router(product).layer(Extension(endpoint_identity));
         if let Some(identity) = &desktop_identity {
             router = router.layer(Extension(identity.clone()));
@@ -343,8 +345,9 @@ impl CompositionRoot {
         let slot = report.clone();
         let (served, cleanup) =
             serve_with_cleanup(listener, router, shutdown_signal(), async move {
-                passive_cleanup(
+                cleanup_product(
                     &slot,
+                    &shutdown_product,
                     async {
                         match record_reader {
                             Some(reader) => reader.shutdown().await,
@@ -429,18 +432,47 @@ enum ShutdownReport {
     /// Callback has not yet published reader evidence.
     Unreported,
     /// The report retains each result as it is observed, including deadline evidence.
-    ReadersPending(PassiveReaderOutcomes),
+    DrainsPending {
+        readers: PassiveReaderOutcomes,
+        watches: Option<Result<(), WatchTaskFault>>,
+    },
     /// Both physical drains completed; conversation cleanup has not returned.
     ConversationsPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchTaskFault>,
     },
     /// Reader and conversation outcomes are known; MCP stop has not returned.
     ServersPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchTaskFault>,
         conversations: Result<(), ConversationError>,
     },
     /// All cleanup owners returned; at least one failed.
     Failed(ShutdownFailure),
+}
+
+/// Normal host consumer: close watch admission before polling physical cleanup.
+/// ProductRouteState retains the original WatchOwners throughout this owned future.
+async fn cleanup_product(
+    slot: &Mutex<ShutdownReport>,
+    product: &ProductRouteState,
+    record: impl Future<Output = Result<(), RecordReadError>>,
+    catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
+    conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
+    servers: impl Future<Output = ()>,
+    deadline: Duration,
+) {
+    product.close_watch_admission();
+    passive_cleanup(
+        slot,
+        product.drain_watches(),
+        record,
+        catalogue,
+        conversations,
+        servers,
+        deadline,
+    )
+    .await;
 }
 
 /// Own reader drain, conversation/MCP cleanup, and their report together.
@@ -448,6 +480,7 @@ enum ShutdownReport {
 /// synchronous publication consumes that evidence rather than cloning errors.
 async fn passive_cleanup(
     slot: &Mutex<ShutdownReport>,
+    watches: impl Future<Output = Result<(), WatchTaskFault>>,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
     conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
@@ -456,24 +489,32 @@ async fn passive_cleanup(
 ) {
     record_shutdown(
         slot,
-        ShutdownReport::ReadersPending(PassiveReaderOutcomes::default()),
+        ShutdownReport::DrainsPending {
+            readers: PassiveReaderOutcomes::default(),
+            watches: None,
+        },
     );
-    tokio::pin!(record, catalogue);
+    tokio::pin!(record, catalogue, watches);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
     loop {
-        let (record_pending, catalogue_pending, deadline_pending) = {
+        let (record_pending, catalogue_pending, watch_pending, deadline_pending) = {
             let report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            let ShutdownReport::ReadersPending(outcomes) = &*report else {
+            let ShutdownReport::DrainsPending {
+                readers: outcomes,
+                watches,
+            } = &*report
+            else {
                 unreachable!()
             };
             (
                 outcomes.record().is_none(),
                 outcomes.catalogue().is_none(),
-                !outcomes.deadline_exceeded(),
+                watches.is_none(),
+                !outcomes.deadline_exceeded() && !outcomes.complete(),
             )
         };
-        if !record_pending && !catalogue_pending {
+        if !record_pending && !catalogue_pending && !watch_pending {
             break;
         }
         // Ready completions win over a simultaneous deadline, including zero.
@@ -482,6 +523,11 @@ async fn passive_cleanup(
             biased;
             result = &mut record, if record_pending => update_reader_report(slot, |outcomes| outcomes.observe_record(result)),
             result = &mut catalogue, if catalogue_pending => update_reader_report(slot, |outcomes| outcomes.observe_catalogue(result)),
+            result = &mut watches, if watch_pending => {
+                let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                let ShutdownReport::DrainsPending { watches, .. } = &mut *report else { unreachable!() };
+                *watches = Some(result);
+            },
             _ = &mut timeout, if deadline_pending => {
                 update_reader_report(slot, PassiveReaderOutcomes::observe_deadline);
                 tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
@@ -490,13 +536,16 @@ async fn passive_cleanup(
     }
     {
         let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::ReadersPending(outcomes) =
-            std::mem::replace(&mut *report, ShutdownReport::Unreported)
+        let ShutdownReport::DrainsPending {
+            readers: outcomes,
+            watches,
+        } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
         else {
             unreachable!()
         };
         *report = ShutdownReport::ConversationsPending {
             readers: outcomes.into_result(),
+            watches: watches.expect("original watch drain returned"),
         };
     }
     let conversations = match conversations {
@@ -505,13 +554,14 @@ async fn passive_cleanup(
     };
     {
         let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::ConversationsPending { readers } =
+        let ShutdownReport::ConversationsPending { readers, watches } =
             std::mem::replace(&mut *report, ShutdownReport::Unreported)
         else {
             unreachable!()
         };
         *report = ShutdownReport::ServersPending {
             readers,
+            watches,
             conversations,
         };
     }
@@ -519,21 +569,31 @@ async fn passive_cleanup(
     let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
     let ShutdownReport::ServersPending {
         readers,
+        watches,
         conversations,
     } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
     else {
         unreachable!()
     };
-    *report = match (readers, conversations) {
-        (Ok(()), Ok(())) => ShutdownReport::Confirmed,
-        (Err(readers), Ok(())) => ShutdownReport::Failed(ShutdownFailure::Readers(readers)),
-        (Ok(()), Err(conversations)) => {
+    *report = match (watches, readers, conversations) {
+        (Err(watches), readers, conversations) => {
+            ShutdownReport::Failed(ShutdownFailure::Watches {
+                watches,
+                readers,
+                conversations,
+            })
+        }
+        (Ok(()), Ok(()), Ok(())) => ShutdownReport::Confirmed,
+        (Ok(()), Err(readers), Ok(())) => ShutdownReport::Failed(ShutdownFailure::Readers(readers)),
+        (Ok(()), Ok(()), Err(conversations)) => {
             ShutdownReport::Failed(ShutdownFailure::Conversations(conversations))
         }
-        (Err(readers), Err(conversations)) => ShutdownReport::Failed(ShutdownFailure::Both {
-            readers,
-            conversations,
-        }),
+        (Ok(()), Err(readers), Err(conversations)) => {
+            ShutdownReport::Failed(ShutdownFailure::Both {
+                readers,
+                conversations,
+            })
+        }
     };
     if let ShutdownReport::Failed(error) = &*report {
         tracing::error!(%error, "gateway shutdown did not confirm all cleanup");
@@ -545,7 +605,10 @@ fn update_reader_report(
     update: impl FnOnce(&mut PassiveReaderOutcomes),
 ) {
     let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    let ShutdownReport::ReadersPending(outcomes) = &mut *report else {
+    let ShutdownReport::DrainsPending {
+        readers: outcomes, ..
+    } = &mut *report
+    else {
         unreachable!()
     };
     update(outcomes);
@@ -574,17 +637,20 @@ fn shutdown_result(report: &Mutex<ShutdownReport>) -> Result<(), RunError> {
     }
     let unconfirmed = match std::mem::replace(&mut *slot, ShutdownReport::Unreported) {
         ShutdownReport::Failed(error) => Some(error),
-        ShutdownReport::ReadersPending(outcomes) => {
-            Some(ShutdownFailure::ReadersUnreported { outcomes })
-        }
-        ShutdownReport::ConversationsPending { readers } => {
-            Some(ShutdownFailure::ConversationsUnreported { readers })
+        ShutdownReport::DrainsPending {
+            readers: outcomes,
+            watches,
+        } => Some(ShutdownFailure::DrainsUnreported { outcomes, watches }),
+        ShutdownReport::ConversationsPending { readers, watches } => {
+            Some(ShutdownFailure::ConversationsUnreported { readers, watches })
         }
         ShutdownReport::ServersPending {
             readers,
+            watches,
             conversations,
         } => Some(ShutdownFailure::ServersUnreported {
             readers,
+            watches,
             conversations,
         }),
         // `Confirmed` returned above; named rather than wildcarded so a new
@@ -659,6 +725,7 @@ mod tests {
             };
             passive_cleanup(
                 &task_report,
+                std::future::ready(Ok(())),
                 async { Ok(()) },
                 async { Ok(()) },
                 conversations,
@@ -676,6 +743,7 @@ mod tests {
         let pending = match &*report.lock().unwrap() {
             ShutdownReport::ServersPending {
                 readers: Ok(()),
+                watches: Ok(()),
                 conversations,
             } => {
                 if conversation_failure {
@@ -730,6 +798,7 @@ mod tests {
     ) {
         let Err(RunError::Shutdown(Some(ShutdownFailure::ServersUnreported {
             readers,
+            watches: Ok(()),
             conversations,
         }))) = shutdown_result(report)
         else {
@@ -759,6 +828,7 @@ mod tests {
                 let task = tokio::spawn(async move {
                     passive_cleanup(
                         &task_report,
+                        std::future::ready(Ok(())),
                         async {
                             if reader_failure {
                                 Err(RecordReadError::WorkerPanicked)
@@ -793,6 +863,7 @@ mod tests {
                 {
                     let stop = passive_cleanup(
                         &report,
+                        std::future::ready(Ok(())),
                         async {
                             if reader_failure {
                                 Err(RecordReadError::WorkerPanicked)
@@ -869,6 +940,7 @@ mod tests {
             async move {
                 passive_cleanup(
                     &slot,
+                    std::future::ready(Ok(())),
                     async {
                         started.notify_one();
                         reader.await.unwrap();
@@ -923,6 +995,7 @@ mod tests {
             serve_with_cleanup(listener, Router::new(), async {}, async move {
                 passive_cleanup(
                     &slot,
+                    std::future::ready(Ok(())),
                     async { Ok(()) },
                     async { Ok(()) },
                     Some(async { Ok(()) }),
@@ -959,6 +1032,7 @@ mod tests {
                     let cleaned = AtomicBool::new(false);
                     passive_cleanup(
                         &report,
+                        std::future::ready(Ok(())),
                         std::future::ready(record),
                         std::future::ready(catalogue.clone()),
                         Some(async {
@@ -1011,6 +1085,7 @@ mod tests {
         let task = tokio::spawn(async move {
             passive_cleanup(
                 &output,
+                std::future::ready(Ok(())),
                 std::future::ready(Err(RecordReadError::WorkerPanicked)),
                 async {
                     waiting.await.unwrap();
@@ -1059,6 +1134,7 @@ mod tests {
                 {
                     let stop = passive_cleanup(
                         &report,
+                        std::future::ready(Ok(())),
                         std::future::ready(result),
                         std::future::pending(),
                         Some(async {
@@ -1083,8 +1159,10 @@ mod tests {
                         );
                     }
                 }
-                let Err(RunError::Shutdown(Some(ShutdownFailure::ReadersUnreported { outcomes }))) =
-                    shutdown_result(&report)
+                let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
+                    outcomes,
+                    ..
+                }))) = shutdown_result(&report)
                 else {
                     panic!("pending reader evidence must survive")
                 };
@@ -1103,6 +1181,7 @@ mod tests {
             {
                 let stop = passive_cleanup(
                     &report,
+                    std::future::ready(Ok(())),
                     std::future::pending(),
                     std::future::pending(),
                     Some(std::future::ready(Ok(()))),
@@ -1122,8 +1201,9 @@ mod tests {
                     );
                 }
             }
-            let Err(RunError::Shutdown(Some(ShutdownFailure::ReadersUnreported { outcomes }))) =
-                shutdown_result(&report)
+            let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
+                outcomes, ..
+            }))) = shutdown_result(&report)
             else {
                 panic!("unknown is not successful")
             };
@@ -1140,6 +1220,7 @@ mod tests {
             {
                 let stop = passive_cleanup(
                     &report,
+                    std::future::ready(Ok(())),
                     std::future::ready(result),
                     std::future::ready(Ok(())),
                     Some(std::future::pending()),
@@ -1152,8 +1233,10 @@ mod tests {
                         .await
                 );
             }
-            let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported { readers }))) =
-                shutdown_result(&report)
+            let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
+                readers,
+                watches: Ok(()),
+            }))) = shutdown_result(&report)
             else {
                 panic!("conversation completion remains unknown")
             };
@@ -1173,6 +1256,7 @@ mod tests {
         let report = Mutex::new(ShutdownReport::Confirmed);
         passive_cleanup(
             &report,
+            std::future::ready(Ok(())),
             async {
                 tokio::time::sleep(Duration::from_secs(31)).await;
                 Ok(())
@@ -1201,6 +1285,7 @@ mod tests {
             let stop = passive_cleanup(
                 &report,
                 std::future::ready(Ok(())),
+                std::future::ready(Ok(())),
                 async {
                     waiting.await.unwrap();
                     Err(CatalogueReadError::OperationAndWorkerPanicked(Box::new(
@@ -1225,6 +1310,7 @@ mod tests {
             );
         }
         let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
+            watches: Ok(()),
             readers: Err(readers),
         }))) = shutdown_result(&report)
         else {
@@ -1245,6 +1331,7 @@ mod tests {
         let report = Mutex::new(ShutdownReport::Confirmed);
         passive_cleanup(
             &report,
+            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
@@ -1365,6 +1452,7 @@ mod tests {
             &confirmed,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
             async {},
             Duration::from_secs(30),
@@ -1375,6 +1463,7 @@ mod tests {
         let failed = Mutex::new(ShutdownReport::Confirmed);
         passive_cleanup(
             &failed,
+            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Err(ConversationError::Audit))),
@@ -1422,3 +1511,7 @@ mod tests {
         assert_eq!(config.stage, Stage::Ci);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/composition/watch_shutdown.rs"]
+mod watch_shutdown_tests;

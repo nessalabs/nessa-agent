@@ -1316,6 +1316,79 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement. */
+export type ChangeWatchId = string
+/** Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed. */
+export interface ConversationWatchCatalogueParams {
+  /** Server-bound receiver identity requesting this owner catalogue. */
+  receiverId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** Register stable conversation interest before final head recheck. Reset notices do not carry a source incarnation. */
+export interface ConversationWatchRecordsParams {
+  /** Conversation selected under authenticated ownership. */
+  conversationId: string
+  /** Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read. */
+  receiverId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** A physically delivered acknowledgement activates this connection-local registration. */
+export interface ConversationWatchResult {
+  /** Opaque identity minted for this physical connection after producer installation; retain it only for this connection. */
+  watchId: ChangeWatchId
+}
+/** Remove only this connection’s watch interest. Repeating an allocated identity is idempotent. */
+export interface ConversationUnwatchParams {
+  /** Exact identity minted on this connection whose source interest is to be removed. */
+  watchId: ChangeWatchId
+}
+/** Removal acknowledgement. An already-started frame may finish before this response; no subsequent hint is admitted. */
+export interface ConversationUnwatchResult {
+  /** Original connection identity echoed after interest removal; previously admitted authority or physical frame work may remain. */
+  watchId: ChangeWatchId
+}
+/** Advisory payloadless dirty notice. Reauthorize and recheck heads; never advance progress from this event. */
+export interface ConversationChanged {
+  /** Opaque connection identity of the advisory hint; this field carries no source progress or authority. */
+  watchId: ChangeWatchId
+}
+/** Terminal advisory producer state. Neither outcome proves current source freshness or lost permission. */
+export const ChangeWatchEndReason = {
+  Closed: "closed",
+  NotificationFailed: "notification_failed",
+} as const
+export type ChangeWatchEndReason =
+  (typeof ChangeWatchEndReason)[keyof typeof ChangeWatchEndReason]
+/** Terminal producer notice under the same bounded delivery owner as changed notices. Recover with explicit reads/fallback. */
+export interface ConversationWatchEnded {
+  /** Opaque connection identity of the producer interest that ended. */
+  watchId: ChangeWatchId
+  /** Typed terminal producer outcome; neither value proves source freshness or permission revocation. */
+  reason: ChangeWatchEndReason
+}
+/** Typed watch admission/refusal. Watch state never changes downloaded/applied progress. */
+export const ChangeWatchErrorCode = {
+  InvalidRequest: "invalid_request",
+  Unauthorized: "unauthorized",
+  Forbidden: "forbidden",
+  WrongOwner: "wrong_owner",
+  WrongReceiver: "wrong_receiver",
+  StaleEpoch: "stale_epoch",
+  Unverifiable: "unverifiable",
+  TemporarilyUnavailable: "temporarily_unavailable",
+  WatchDuplicate: "watch_duplicate",
+  WatchCapacity: "watch_capacity",
+  WatchClosed: "watch_closed",
+  InvalidWatch: "invalid_watch",
+} as const
+export type ChangeWatchErrorCode =
+  (typeof ChangeWatchErrorCode)[keyof typeof ChangeWatchErrorCode]
+export const maxChangeWatchIdBytes = 57 as const
+export const changeWatchIdPattern =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
+export const changeWatchLimits = { globalOwners: 64, connectionTargets: 2 } as const
 /** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
 export const passiveReadTiming = {
   readTimeoutMs: 10000,
@@ -1335,7 +1408,7 @@ export const mcpAppCallTiming = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 32,
+  maxReadyMethods: 35,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1420,8 +1493,15 @@ export const ProductMethod = {
   McpCallTool: "mcp.callTool",
   McpReadResource: "mcp.readResource",
   McpReleaseApp: "mcp.releaseApp",
+  ConversationWatchRecords: "conversation.watchRecords",
+  ConversationWatchCatalogue: "conversation.watchCatalogue",
+  ConversationUnwatch: "conversation.unwatch",
 } as const
-export const ProductEvent = { SessionChallenge: "session.challenge" } as const
+export const ProductEvent = {
+  SessionChallenge: "session.challenge",
+  ConversationChanged: "conversation.changed",
+  ConversationWatchEnded: "conversation.watchEnded",
+} as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
   "auth.session",
@@ -1456,6 +1536,9 @@ export const productReadyMethods = [
   "mcp.callTool",
   "mcp.readResource",
   "mcp.releaseApp",
+  "conversation.watchRecords",
+  "conversation.watchCatalogue",
+  "conversation.unwatch",
 ] as const
 export const catalogueWireSchemas = {
   RecordScope: {

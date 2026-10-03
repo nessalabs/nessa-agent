@@ -11,9 +11,12 @@
 //! response <- writer <- passive_read writer <- record_read codec <- page
 //! ```
 //! Arrows show calls and returned data, not shared ownership of the source.
+//! `change_watch` owns original watch permits and first task faults; normal host
+//! cleanup in composition consumes its close/drain through ProductRouteState.
 
 mod attachment;
 pub(crate) mod catalogue_read;
+mod change_watch;
 pub(crate) mod generated;
 pub(crate) mod passive_read;
 pub(crate) mod record_read;
@@ -29,3 +32,8 @@ mod conversation;
 mod mcp_apps;
 
 mod agent_install;
+
+pub use change_watch::WatchTaskFault;
+
+#[cfg(test)]
+pub(crate) use socket::HostWatchFixture;

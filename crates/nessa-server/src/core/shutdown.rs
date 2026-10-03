@@ -1,5 +1,6 @@
 //! Typed cleanup evidence preserved by process composition.
 use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
+use crate::product::WatchTaskFault;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -65,17 +66,29 @@ impl PassiveReaderShutdownFailure {
     }
 }
 
-/// Cleanup failures retain each reader's operation and cause.
+/// Cleanup failures retain reader, original watch and conversation outcomes.
+/// Reader/conversation-only final variants establish successful watch drain.
 #[derive(Debug)]
 pub enum ShutdownFailure {
-    /// Cleanup owner ended while physical drain remained unknown. Conversation cleanup had not started.
-    ReadersUnreported { outcomes: PassiveReaderOutcomes },
+    /// Cleanup owner ended while a reader or watch drain remained unknown. Conversation cleanup had not started.
+    DrainsUnreported {
+        outcomes: PassiveReaderOutcomes,
+        watches: Option<Result<(), WatchTaskFault>>,
+    },
     /// Both readers drained; conversation cleanup remains unknown.
     ConversationsUnreported {
         readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchTaskFault>,
     },
     /// Reader and conversation outcomes are known; MCP stop remains unknown.
     ServersUnreported {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchTaskFault>,
+        conversations: Result<(), ConversationError>,
+    },
+    /// Original watch resources returned with a retained fault; other results remain independent.
+    Watches {
+        watches: WatchTaskFault,
         readers: Result<(), PassiveReaderShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },
@@ -92,9 +105,10 @@ pub enum ShutdownFailure {
 impl Display for ShutdownFailure {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            Self::ReadersUnreported { outcomes } => write!(f, "passive reader physical drain unreported: {outcomes:?}; conversation cleanup not started"),
-            Self::ConversationsUnreported { readers } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup unreported"),
-            Self::ServersUnreported { readers, conversations } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations:?}; MCP stop unreported"),
+            Self::DrainsUnreported { outcomes, watches } => write!(f, "physical reader/watch drain unreported; reader outcomes: {outcomes:?}; watch drain: {watches:?}; conversation cleanup not started"),
+            Self::ConversationsUnreported { readers, watches } => write!(f, "passive reader cleanup: {readers:?}; watch drain: {watches:?}; conversation cleanup unreported"),
+            Self::ServersUnreported { readers, watches, conversations } => write!(f, "passive reader cleanup: {readers:?}; watch drain: {watches:?}; conversation cleanup: {conversations:?}; MCP stop unreported"),
+            Self::Watches { watches, readers, conversations } => write!(f, "watch drain: {watches:?}; passive reader cleanup: {readers:?}; conversation cleanup: {conversations:?}"),
             Self::Readers(error) => write!(f, "passive reader cleanup: {error:?}"),
             Self::Conversations(error) => write!(f, "conversation cleanup: {error}"),
             Self::Both { readers, conversations } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations}"),
