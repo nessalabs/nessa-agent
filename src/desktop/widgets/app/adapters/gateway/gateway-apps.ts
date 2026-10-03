@@ -31,7 +31,11 @@ export function gatewayApps(options: {
   readonly ports: SharedAppPorts
 }): GatewayApps {
   const calls = gatewayAppCalls()
-  const server = gatewayAppServer(options.mcpApps, options.ports.timers.after)
+  const server = gatewayAppServer(
+    options.mcpApps,
+    options.ports.timers.after,
+    options.ports.newId,
+  )
   return {
     observe(view) {
       for (const name of calls.observe(view)) {

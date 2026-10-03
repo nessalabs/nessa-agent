@@ -223,11 +223,13 @@ export const releaseRetryMs: readonly number[] = Object.freeze([500, 2_000, 8_00
 
 /**
  * The app's own server, through the gateway's `client.mcpApps`. `after` is
- * the clock a release that did not land waits on before it is tried again.
+ * the clock a release that did not land waits on before it is tried again,
+ * and `newId` mints the one request id every try of a release carries.
  */
 export function gatewayAppServer(
   mcpApps: McpAppsApi,
   after: (ms: number, run: () => void) => () => void,
+  newId: () => string,
 ): McpAppServer {
   return {
     // The longest the client waits for `mcp.callTool`: a review, then the call.
@@ -295,7 +297,7 @@ export function gatewayAppServer(
 
     async release(address: AppAddress) {
       // One teardown, one action: every try carries the same request id.
-      const requestId = crypto.randomUUID()
+      const requestId = newId()
       for (let tried = 0; ; tried++) {
         try {
           await mcpApps.releaseApp(address.sessionId, address.app, { requestId })

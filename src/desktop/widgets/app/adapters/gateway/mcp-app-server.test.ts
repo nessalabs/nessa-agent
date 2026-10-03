@@ -38,8 +38,14 @@ const immediately = (ms: number, run: () => void) => {
   run()
   return () => {}
 }
-/** The adapter, on a clock that runs every wait at once and records it. */
-const gatewayAppServer = (apps: McpAppsApi) => serverOver(apps, immediately)
+/**
+ * The adapter, on a clock that runs every wait at once and records it, minting
+ * request ids `release-1`, `release-2`, ... in order, one count per server.
+ */
+const gatewayAppServer = (apps: McpAppsApi) => {
+  let minted = 0
+  return serverOver(apps, immediately, () => `release-${++minted}`)
+}
 
 const conversationId = "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d"
 const app: McpAppReference = {
@@ -548,7 +554,7 @@ describe("the release", () => {
     const apps = fakeApps()
     await gatewayAppServer(apps).release(address)
     expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, app, {
-      requestId: expect.any(String),
+      requestId: "release-1",
     })
   })
 
@@ -678,9 +684,7 @@ describe("the release", () => {
       .mockResolvedValue({ requestId: "r", applied: true })
     await gatewayAppServer(fakeApps({ releaseApp })).release(address)
     const ids = releaseApp.mock.calls.map((call) => call[2]?.requestId)
-    expect(ids).toHaveLength(2)
-    expect(ids[0]).toBeTypeOf("string")
-    expect(ids[1]).toBe(ids[0])
+    expect(ids).toEqual(["release-1", "release-1"])
   })
 
   it("M5a: a release the client could not send is not asked again", async () => {
@@ -724,7 +728,7 @@ describe("the release", () => {
     expect(releaseApp).toHaveBeenCalledTimes(2)
     expect(withdrawn).toEqual(["review-1", "review-2"])
     const ids = releaseApp.mock.calls.map((call) => call[2]?.requestId)
-    expect(ids[1]).toBe(ids[0])
+    expect(ids).toEqual(["release-1", "release-1"])
   })
 
   it("M5d: a remount while the old mount's release is retried leaves the new mount alone", async () => {
@@ -897,7 +901,7 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     await flush()
     expect(apps.releaseApp).toHaveBeenCalledTimes(1)
     expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp, {
-      requestId: expect.any(String),
+      requestId: "release-1",
     })
     // The gateway answers the withdrawn review's call; the view is gone.
     answer(refusal(ConversationErrorCode.McpCancelled))
@@ -918,7 +922,7 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     answer(described)
     await flush()
     expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp, {
-      requestId: expect.any(String),
+      requestId: "release-1",
     })
     expect(apps.fetchResource).not.toHaveBeenCalled()
   })
@@ -939,7 +943,7 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     expect(view.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
     expect(apps.releaseApp).toHaveBeenCalledTimes(1)
     expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp, {
-      requestId: expect.any(String),
+      requestId: "release-1",
     })
     view.bridge.remove()
     await flush()
