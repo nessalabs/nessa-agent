@@ -1,5 +1,5 @@
 //! One volatile setup slot around canonical invitation and authentication owners.
-use super::owner_admission::{OwnerAdmission, OwnerLease};
+use super::owner_admission::{OwnerAdmission, OwnerAdmissionRefusal, OwnerLease};
 use super::worker::worker_fault;
 use super::{RegistrationError, RegistrationWorker};
 use crate::device_pairing::application::{
@@ -54,7 +54,8 @@ pub enum PairingRuntimeError {
     },
     /// The original owned create worker ended unexpectedly.
     WorkerFault(PairingWorkerFault),
-    /// Another local create owns preparation/publication; no queue is retained.
+    /// Another local create owns preparation/publication, or every owner
+    /// command lease is held; no queue is retained and nothing was done.
     Busy,
     /// Fallible entropy for new public identities is unavailable.
     Entropy,
@@ -597,7 +598,10 @@ impl GatewayPairing {
     /// closed owner admission (design rows S12, S19). Every owner command takes
     /// one before any store work.
     fn admit_owner(&self) -> Result<OwnerLease, PairingRuntimeError> {
-        self.owners.admit().ok_or(PairingRuntimeError::ShuttingDown)
+        self.owners.admit().map_err(|refusal| match refusal {
+            OwnerAdmissionRefusal::Closed => PairingRuntimeError::ShuttingDown,
+            OwnerAdmissionRefusal::Full => PairingRuntimeError::Busy,
+        })
     }
     /// Close owner-command admission, then physical registration (so an
     /// admitted create that has not registered yet publishes nothing), then wait

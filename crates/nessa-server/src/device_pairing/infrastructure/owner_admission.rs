@@ -9,12 +9,22 @@
 //! the one owner of "no owner command is running"; every owner command of
 //! `GatewayPairing` is admitted here.
 use std::sync::Arc;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 /// How many owner commands may hold a lease at once. Owner commands are
 /// already bounded by the product socket's request and control capacity; this
 /// bound only has to be above that, never a second queue.
 const OWNER_COMMAND_CAPACITY: usize = 1024;
+
+/// Why a command was not admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerAdmissionRefusal {
+    /// Shutdown has closed admission.
+    Closed,
+    /// Every lease is held, for example by commands whose callers left while
+    /// their store work is still running.
+    Full,
+}
 
 /// Owner-command admission for one gateway.
 pub(crate) struct OwnerAdmission {
@@ -37,10 +47,17 @@ impl OwnerAdmission {
         }
     }
 
-    /// A lease for one command, or `None` once admission is closed or full.
-    pub(crate) fn admit(&self) -> Option<OwnerLease> {
-        let permit = self.leases.clone().try_acquire_owned().ok()?;
-        Some(OwnerLease {
+    /// A lease for one command, or why none is given.
+    pub(crate) fn admit(&self) -> Result<OwnerLease, OwnerAdmissionRefusal> {
+        let permit = self
+            .leases
+            .clone()
+            .try_acquire_owned()
+            .map_err(|error| match error {
+                TryAcquireError::Closed => OwnerAdmissionRefusal::Closed,
+                TryAcquireError::NoPermits => OwnerAdmissionRefusal::Full,
+            })?;
+        Ok(OwnerLease {
             permit: Some(permit),
             drained: self.drained.clone(),
         })
@@ -72,3 +89,7 @@ impl Drop for OwnerLease {
         self.drained.notify_waiters();
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/device_pairing/infrastructure/owner_admission.rs"]
+mod tests;
