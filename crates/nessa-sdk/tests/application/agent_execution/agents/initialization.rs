@@ -1216,6 +1216,12 @@ async fn records_restore_queue_changes_published_during_gated_open() {
     );
 }
 
+/// Hang bound for the original's completion signal in the restart test.
+const ORIGINAL_COMPLETION_HANG_BOUND: Duration = Duration::from_secs(60);
+/// Bound on the committed-snapshot read reported after a hang. A save that
+/// still owns the evidence lock delays the read behind its own commits.
+const DIAGNOSTIC_SNAPSHOT_BOUND: Duration = Duration::from_secs(5);
+
 #[tokio::test]
 async fn child_process_recovers_original_receipt_without_dispatching_again() {
     let root = tempdir().unwrap();
@@ -1263,7 +1269,13 @@ async fn child_process_recovers_original_receipt_without_dispatching_again() {
     // Observe the original supervised invocation without submitting again. The
     // after hook follows local settlement persistence; close still joins the
     // queue's final scheduling evidence before the child restores its receipt.
-    let completion = tokio::time::timeout(Duration::from_secs(2), async {
+    // The hook is the completion signal and carries the typed result, so a
+    // failed or cancelled original reports as soon as it settles. The bound
+    // only turns a hang into a failure. It covers about a dozen durable SQLite
+    // commits (FULL sync, DELETE journal) that share disk flushes with every
+    // other storage test in this binary; a 2s bound expired on Windows CI and
+    // under local fsync load while the original was still completing (#406).
+    let completion = tokio::time::timeout(ORIGINAL_COMPLETION_HANG_BOUND, async {
         let (id, result, elapsed) = observation.await.unwrap();
         eprintln!("original after hook at {elapsed:?}: {result:?}");
         assert_eq!(id, original_id);
@@ -1285,7 +1297,7 @@ async fn child_process_recovers_original_receipt_without_dispatching_again() {
         // A stalled save can own the evidence lock, so diagnostics need their
         // own bound too. This does not extend the original completion watchdog.
         let snapshot = tokio::time::timeout(
-            Duration::from_millis(100),
+            DIAGNOSTIC_SNAPSHOT_BOUND,
             agent.session_manager().snapshot(),
         )
         .await;
