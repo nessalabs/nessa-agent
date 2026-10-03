@@ -77,7 +77,7 @@ describe("a conversation view as a transcript", () => {
     const reply = transcript.messages.find((message) => message.role === "agent")
     expect(reply?.parts).toEqual([
       { kind: "step", step: "run", label: "Draw a chart" },
-      { kind: "widget", widget: appWidget("charts", "e1", "t1") },
+      { kind: "widget", widget: appWidget("charts", "c", "e1", "t1") },
       { kind: "step", step: "run", label: "List rows" },
     ])
   })

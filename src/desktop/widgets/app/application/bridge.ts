@@ -9,8 +9,10 @@
  * It knows nothing of the DOM: what reaches it is already a typed message
  * (`model/messages.ts`) read from a frame the transport vouched for
  * (`adapters/dom/frame-transport.ts`), and what it sends goes to `post`. The
- * address its server calls go to — the session and the server — is the
- * view's own, never anything the app says.
+ * address its server calls go to — the conversation, the server, the call and
+ * this mount of it — is the view's own, never anything the app says. Each
+ * bridge is one mount: it mints its `instanceId` when it is made, and releases
+ * that mount once, the first time the view fails or ends (#384, M1–M7).
  */
 import { appDocument, approvedDomains, cspPolicy } from "../model/csp"
 import { sandboxMethods } from "../model/sandbox-methods"
@@ -19,6 +21,7 @@ import {
   errorCodes,
   notify,
   refuse,
+  relayError,
   reply,
   request,
   type JsonObject,
@@ -42,6 +45,7 @@ import {
 import { requestMode } from "../model/places"
 import { uiResource, type UiResource } from "../model/resource"
 import {
+  callView,
   nothingTold,
   toolNotifications,
   type AppCall,
@@ -49,7 +53,7 @@ import {
 } from "../model/tool-call"
 import { blockedOrigins, firstView, type AppViewState } from "../model/app-view"
 import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-state"
-import type { McpAppPorts, ServerAddress, ServerAnswer } from "./ports"
+import type { AppAddress, McpAppPorts, ServerAnswer } from "./ports"
 
 /** The protocol version this host speaks. */
 export const protocolVersion = "2026-01-26"
@@ -62,12 +66,20 @@ export const deadlines = {
   initialize: 15_000,
   /** For the app to answer `ui/resource-teardown`. */
   teardown: 3_000,
-  /** For a port to answer one of the app's requests. */
+  /** Before the app's resource is read again, when the gateway was too busy to read it (L1b). */
+  retryRead: 1_000,
+  /** For a port to answer one of the app's requests; `tools/call` waits the server's `callWithin`. */
   request: 60_000,
 } as const
 
 /** At most this many of an app's requests wait on the host at once. */
 export const pendingLimit = 16
+
+/**
+ * How many times the app's resource is read while the gateway answers that it
+ * is busy, `deadlines.retryRead` apart, before the view fails (L1b).
+ */
+export const busyReads = 15
 
 /** The id of the host's one request to a view: its teardown. */
 export const teardownId = "nessa-teardown"
@@ -116,8 +128,33 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   const pending = new Map<RequestId, () => void>()
   let logged = 0
 
-  const address: ServerAddress = { sessionId: call.sessionId, server: options.server }
+  const address: AppAddress = {
+    sessionId: call.sessionId,
+    server: options.server,
+    app: {
+      executionId: call.executionId,
+      toolId: call.toolId,
+      instanceId: ports.newId(),
+    },
+  }
   const gone = () => lifecycle.kind === "gone"
+  // Aborted when the mount is released: a read in flight fetches nothing more.
+  const mount = new AbortController()
+  // Whether this mount asked the server anything: one that never did has
+  // nothing to release (M2).
+  let asked = false
+  // This mount's requests to its server, each at its own address.
+  const toServer = {
+    readResource(uri: string) {
+      asked = true
+      return ports.server.readResource(address, uri, mount.signal)
+    },
+    callTool(tool: string, args: JsonObject) {
+      asked = true
+      return ports.server.callTool(address, tool, args)
+    },
+  }
+  let cancelReadAgain: (() => void) | undefined
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
   const show = (next: Partial<AppViewState>) => {
@@ -219,6 +256,20 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     if (lifecycle.kind === "gone") {
       for (const cancel of pending.values()) cancel()
       pending.clear()
+      cancelReadAgain?.()
+    }
+    // The mount ends the first time the view fails or goes: neither state is
+    // ever left but for `gone`, and the signal is aborted once, so this is the
+    // one release (M2, M3). The reviews it has open are withdrawn with it.
+    if (
+      (lifecycle.kind === "failed" || lifecycle.kind === "gone") &&
+      !mount.signal.aborted
+    ) {
+      mount.abort()
+      if (asked)
+        ports.server.release(address).catch((error: unknown) => {
+          console.error("An MCP App's release failed", error)
+        })
     }
     show({})
     for (const effect of next.effects) run(effect, answering)
@@ -233,8 +284,12 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       case "server-gone":
         if (!view.serverGone) show({ serverGone: true })
         return send(refuse(id, errorCodes.refused, "The app's server has stopped"))
+      case "busy":
+        return send(refuse(id, errorCodes.refused, "Too many requests at once"))
       case "failed":
-        return send(refuse(id, errorCodes.internal, "The request failed"))
+        return answer.error
+          ? send(relayError(id, answer.error))
+          : send(refuse(id, errorCodes.internal, "The request failed"))
     }
   }
 
@@ -244,7 +299,12 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
    * port's answer after that is dropped. `send` posts nothing once the view
    * is gone.
    */
-  function settle<T>(id: RequestId, work: Promise<T>, answer: (value: T) => void) {
+  function settle<T>(
+    id: RequestId,
+    work: Promise<T>,
+    answer: (value: T) => void,
+    within: number = deadlines.request,
+  ) {
     const settled = () => {
       if (!pending.has(id)) return false
       pending.get(id)?.()
@@ -253,7 +313,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     }
     pending.set(
       id,
-      ports.timers.after(deadlines.request, () => {
+      ports.timers.after(within, () => {
         if (settled()) send(refuse(id, errorCodes.internal, "The request timed out"))
       }),
     )
@@ -284,11 +344,12 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       case "tools/call":
         return settle(
           id,
-          ports.server.callTool(address, message.tool, message.arguments),
+          toServer.callTool(message.tool, message.arguments),
           (answer) => answerServer(id, answer),
+          ports.server.callWithin,
         )
       case "resources/read":
-        return settle(id, ports.server.readResource(address, message.uri), (answer) =>
+        return settle(id, toServer.readResource(message.uri), (answer) =>
           answerServer(id, answer),
         )
       case "ui/message": {
@@ -414,19 +475,27 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   }
 
   options.onView(view)
-  // Read the app's resource, once, over its session's connection. A window
-  // with no sandbox can show no app, and reads nothing for one.
-  if (ports.sandbox) readResource()
+  // Read the app's resource over its session's connection: once, or again
+  // while the gateway answers that it is busy (L1b). A window with no sandbox
+  // can show no app, and reads nothing for one.
+  if (ports.sandbox) readResource(busyReads)
   else step({ kind: "read", outcome: "unloadable" })
-  function readResource() {
-    ports.server
-      .readResource(address, call.resourceUri)
+  function readResource(reads: number) {
+    toServer
+      .readResource(call.resourceUri)
       .catch((error: unknown) => {
         console.error("An MCP App port failed", error)
         return { kind: "failed" } as const
       })
       .then((answer) => {
         if (gone()) return
+        if (answer.kind === "busy" && reads > 1) {
+          cancelReadAgain = ports.timers.after(deadlines.retryRead, () => {
+            cancelReadAgain = undefined
+            readResource(reads - 1)
+          })
+          return
+        }
         if (answer.kind === "ok") resource = uiResource(answer.result, call.resourceUri)
         step({
           kind: "read",
@@ -443,9 +512,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   return {
     receive,
     setCall(next) {
-      // One view is one call, at one address: a call of another session or
-      // resource is not this view's, and is not told to it.
-      if (next.sessionId !== address.sessionId || next.resourceUri !== call.resourceUri)
+      // One view is one call, at one address: a call of another session,
+      // identity or resource is not this view's, and is not told to it.
+      if (callView(next) !== callView(call))
         return console.warn(`[mcp app ${options.server}] another call for this view`)
       call = next
       tellCall()

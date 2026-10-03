@@ -247,6 +247,7 @@ describe("plugins registered while the window runs", () => {
               sessionId: "a",
               sandbox: undefined,
               timers: { after: () => () => {} },
+              newId: () => crypto.randomUUID(),
               page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
             }).ports,
           }),

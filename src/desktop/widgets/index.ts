@@ -41,11 +41,14 @@
  *                                                    │ the app's requests, by port
  *                                                    ▼
  *   app/application/ports.ts: the server (#348), the calls, the conversation, links, downloads, timers
+ *                                                    │ implemented, for a real server, by
+ *                                                    ▼
+ *   app/adapters/gateway/: the server over client.mcpApps, the calls from a view's tools (#384)
  * ```
  *
  * The first arrow is what draws what; the rest point the way a message
- * travels. The proxy is
- * `app/sandbox/proxy.html`; `app/fixture/` is a fixture server's app,
+ * travels, but the last, which points from a port to what implements it. The
+ * proxy is `app/sandbox/proxy.html`; `app/fixture/` is a fixture server's app,
  * registered beside the sample workspace.
  */
 export type { WidgetRef } from "./model/widget-ref"
@@ -85,6 +88,7 @@ export type { McpAppPorts, SandboxOrigin, Timers } from "./app/application/ports
 export { readPageContext } from "./app/adapters/dom/page-context"
 export { platformFor, sandboxFor } from "./app/adapters/dom/sandbox-origin"
 export { fixtureAppPlugin } from "./app/fixture/fixture-plugin"
+export { gatewayApps, type GatewayApps } from "./app/adapters/gateway/gateway-apps"
 export { fixtureServer } from "./app/fixture/fixture-widgets"
 export { appPluginId } from "./app/model/app-ref"
 export { samplePlugin } from "./fixture/sample-plugin"

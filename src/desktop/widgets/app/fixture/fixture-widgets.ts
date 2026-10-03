@@ -12,5 +12,18 @@ export const fixtureServer = "nessa-fixture"
 /** The UI resource its tool declares. */
 export const fixtureResourceUri = "ui://nessa-fixture/app.html"
 
-/** The widget its one call is drawn as. */
-export const fixtureWidget = appWidget(fixtureServer, "fixture-execution", "fixture-call")
+/** Its one call's identity: the execution and the tool call. */
+export const fixtureCallIdentity = {
+  executionId: "fixture-execution",
+  toolId: "fixture-call",
+} as const
+
+/** The widget its one call is drawn as, in session `sessionId`. */
+export function fixtureWidget(sessionId: string) {
+  return appWidget(
+    fixtureServer,
+    sessionId,
+    fixtureCallIdentity.executionId,
+    fixtureCallIdentity.toolId,
+  )
+}

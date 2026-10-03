@@ -14,7 +14,7 @@ import { InlineWidget } from "../../ui/inline-widget"
 import type { AppWidgetPlugin, WidgetHost, WidgetPlugin } from "../../ui/plugin"
 import { WidgetAnswerOf } from "../../ui/widget-answer"
 import { WidgetBody } from "../../ui/widget-body"
-import type { McpAppServer } from "../application/ports"
+import type { CallRead, McpAppServer } from "../application/ports"
 import { fixtureAppPlugin, fixtureServerPort } from "../fixture/fixture-plugin"
 import { fixtureWidget } from "../fixture/fixture-widgets"
 import { appLines } from "../model/app-view"
@@ -45,6 +45,7 @@ function app(
     sessionId: "session-a",
     sandbox: "sandbox" in options ? options.sandbox : sandbox,
     timers: { after: () => () => {} },
+    newId: () => crypto.randomUUID(),
     page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
   })
   return options.server
@@ -64,7 +65,7 @@ function fakeHost(): WidgetHost & { opened: OpenPlace[]; closed: number } {
   return fake
 }
 
-const widget = fixtureWidget
+const widget = fixtureWidget("session-a")
 
 async function draw(
   plugin: AppWidgetPlugin,
@@ -263,5 +264,64 @@ describe("an app in a pane", () => {
       ),
     )
     expect(posted.length).toBe(before)
+  })
+
+  it("releases each mount once, under StrictMode's second mount too (M2, M3, M6)", async () => {
+    const released: string[] = []
+    const read: string[] = []
+    const server: McpAppServer = {
+      ...fixtureServerPort(),
+      readResource: (address, uri, signal) => {
+        read.push(address.app.instanceId)
+        return fixtureServerPort().readResource(address, uri, signal)
+      },
+      release: async (address) => void released.push(address.app.instanceId),
+    }
+    await draw(app({ server }), "pane")
+    await act(async () => root.render(<></>))
+    // StrictMode mounts twice; every mount that read was released, each once.
+    expect(read.length).toBeGreaterThanOrEqual(2)
+    expect(new Set(read).size).toBe(read.length)
+    expect([...released].sort()).toEqual([...read].sort())
+  })
+
+  it("draws a new mount, and releases the old, when the call it reads becomes another view's (callView)", async () => {
+    const released: string[] = []
+    const read: string[] = []
+    const base = app()
+    let current: CallRead = base.ports.calls.read(widget.id)
+    const listeners = new Set<() => void>()
+    const plugin: AppWidgetPlugin = {
+      ...base,
+      ports: {
+        ...base.ports,
+        server: {
+          ...fixtureServerPort(),
+          readResource: (address, uri, signal) => {
+            read.push(address.app.instanceId)
+            return fixtureServerPort().readResource(address, uri, signal)
+          },
+          release: async (address) => void released.push(address.app.instanceId),
+        },
+        calls: {
+          read: () => current,
+          subscribe: (_id, listener) => {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+          },
+        },
+      },
+    }
+    await draw(plugin, "pane")
+    const before = read.length
+    expect(released).toEqual(read.slice(0, -1))
+    if (current.kind !== "known") throw new Error("the fixture's call is known")
+    current = { kind: "known", call: { ...current.call, toolId: "another-call" } }
+    await act(async () => {
+      for (const listener of listeners) listener()
+    })
+    // A new mount read; the one before it was released.
+    expect(read.length).toBe(before + 1)
+    expect(released).toEqual(read.slice(0, -1))
   })
 })

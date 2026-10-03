@@ -34,6 +34,9 @@ export type CallPhase =
 export interface AppCall {
   /** The session the call was made in: the widget's origin, and where its app's calls go. */
   readonly sessionId: string
+  /** The execution the call belongs to, and the call itself: the app's identity (`app-ref.ts`). */
+  readonly executionId: string
+  readonly toolId: string
   /** The tool's name: what the widget is called. */
   readonly tool: string
   /** The tool as the server described it (`Tool`), when known: the app's `toolInfo`. */
@@ -41,6 +44,16 @@ export interface AppCall {
   /** The `ui://` resource the tool declared. */
   readonly resourceUri: string
   readonly phase: CallPhase
+}
+
+/**
+ * Which view a call is drawn in: its session, its execution and tool ids, and
+ * its resource. A call that differs in any of these is another view's — the
+ * bridge does not tell it (`setCall`) and its place draws a new view
+ * (`app-view.tsx`) — the one statement of it.
+ */
+export function callView(call: AppCall): string {
+  return JSON.stringify([call.sessionId, call.executionId, call.toolId, call.resourceUri])
 }
 
 /** What the view has been told of its call. */
