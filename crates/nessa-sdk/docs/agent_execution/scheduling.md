@@ -145,7 +145,7 @@ stateDiagram-v2
         state "Accepted work" as Work {
             [*] --> Waiting
             Waiting --> Active: selected
-            Waiting --> Settling: stop / attachment failure
+            Waiting --> Settling: withdrawal / stop / close / attachment or admission failure
             Active --> Executing: invocation entered
             Executing --> Settling: result / Stop / panic
             Settling --> Retired: original persistence and recovery finish
