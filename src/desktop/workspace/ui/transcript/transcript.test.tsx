@@ -69,11 +69,16 @@ const conversation: TranscriptValue = {
       ],
     },
   ],
-  approval: { id: "ap", command: "cargo test", reason: "Runs the tests." },
+  approval: {
+    id: "ap",
+    command: "cargo test",
+    reason: "Runs the tests.",
+    origin: { kind: "agent" },
+  },
 }
 
-async function shown(source = fakeSource()) {
-  source.transcripts.set("b", conversation)
+async function shown(source = fakeSource(), shownConversation = conversation) {
+  source.transcripts.set("b", shownConversation)
   const store = testStore(source)
   await store.dispatch(loadWorkspace())
   store.dispatch(openSession({ sessionId: "b" }))
@@ -257,6 +262,28 @@ describe("a transcript", () => {
     expect(source.calls.filter((call) => call[0] === "approve")).toEqual([
       ["approve", "b", "ap", "once", "person"],
     ])
+  })
+
+  it("O1, O2 (#436): names who asks — the agent by its name, an app by its server and the tool it named, never the agent for an app", async () => {
+    await shown()
+    const head = () => host.querySelector(".workspace-approval-head")?.textContent ?? ""
+    const card = () => host.querySelector<HTMLElement>(".workspace-approval")
+    expect(head()).toMatch(/^\S.* wants to run a command$/)
+    expect(card()?.dataset.origin).toBe("agent")
+    const agent = head().replace(/ wants to run a command$/, "")
+    await act(async () => root.render(<></>))
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: {
+        id: "app-ap",
+        command: "app_delete_row {}",
+        reason: "An app asks to run app_delete_row on mcptest",
+        origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+      },
+    })
+    expect(head()).toBe("The mcptest app wants to run app_delete_row")
+    expect(head()).not.toContain(agent)
+    expect(card()?.dataset.origin).toBe("app")
   })
 
   it("asks again, saying why, when an answer does not reach the agent", async () => {

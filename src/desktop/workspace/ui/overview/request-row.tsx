@@ -22,6 +22,7 @@ import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy } from "../failure-copy"
+import { approvalAsker } from "../transcript/approval-request"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
@@ -137,7 +138,7 @@ export const RequestRow = memo(function RequestRow({
         data-answer={settling?.choice}
         role="group"
         tabIndex={current ? 0 : -1}
-        aria-label={`${summary.title}. ${agent} ${approval ? `wants to run ${approval.command}` : "is waiting for you"}.`}
+        aria-label={`${summary.title}. ${approval ? `${approvalAsker(approval.origin, agent)} wants to run ${approval.command}` : `${agent} is waiting for you`}.`}
         data-selected={selected || undefined}
         aria-expanded={expanded}
         onFocus={() => onFocus(sessionId)}

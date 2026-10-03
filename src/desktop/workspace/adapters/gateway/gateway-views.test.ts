@@ -1,4 +1,8 @@
-import type { ConversationMessage, ConversationTool } from "@nessa/client"
+import type {
+  ConversationMessage,
+  ConversationPermission,
+  ConversationTool,
+} from "@nessa/client"
 import { describe, expect, it } from "vitest"
 import { appWidget } from "../../../widgets/app/model/app-ref"
 import { composerModels } from "../../../model/composer-options"
@@ -261,11 +265,45 @@ describe("a conversation view as a transcript", () => {
       // The exact input approved, whatever the provider titles the review.
       command: 'bash {"command":"rm -rf build"}',
       reason: "Tool permission",
+      origin: { kind: "agent" },
     })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",
       permissionId: "p%2",
     })
+  })
+})
+
+describe("who asks for an approval (#436)", () => {
+  const asked = (origin: ConversationPermission["origin"]) =>
+    transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "completed" })],
+        permissions: [
+          {
+            executionId: "e1",
+            permissionId: "app-1",
+            toolId: "t1",
+            title: "An app asks to run app_delete_row on mcptest",
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+            toolName: "app_delete_row",
+            origin,
+            argumentsJson: "{}",
+          },
+        ],
+      }),
+      1,
+      at,
+    ).approval
+
+  it("O1: a review the agent's harness asked for is the agent's", () => {
+    expect(asked({ kind: "harness" })?.origin).toEqual({ kind: "agent" })
+  })
+
+  it("O2: a review an app asked for is the app's, naming its server and the tool", () => {
+    expect(
+      asked({ kind: "app", server: "mcptest", tool: "app_delete_row" })?.origin,
+    ).toEqual({ kind: "app", server: "mcptest", tool: "app_delete_row" })
   })
 })
 

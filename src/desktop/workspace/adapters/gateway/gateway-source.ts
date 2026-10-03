@@ -8,7 +8,8 @@
  * - **No push stream.** The gateway sends no conversation events, so the
  *   stream is a poller, running while anyone listens: `conversation.list`
  *   for summaries, then `conversation.read` for each conversation the window
- *   has read (`transcript`) that runs, waits on the person, or changed since.
+ *   has read (`transcript`) that runs, waits on the person, has an app's
+ *   call unanswered (`appCall`, #436), or changed since.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
  *   its list rows carry none, so this adapter counts: one counter per
  *   session's summary, one per conversation, each from 1, moved on when what
@@ -49,7 +50,9 @@
  *   there — and a read the gateway refuses as `conversation_deleted` to
  *   `apps.forget`. Not a removal: a conversation missing from a complete list
  *   is archived or deleted, which a list cannot tell apart, and a closed one
- *   reopens under its id (the plan is on #248).
+ *   reopens under its id (the plan is on #248). An app's call goes through
+ *   `appCall`, so the review it may wait on is read even after the turn
+ *   ended: a review an app opens changes nothing in the list row.
  *
  * It owns the client it connects (`connect`), and `dispose` closes it; an
  * app's calls go on that client too (`connected`).
@@ -130,6 +133,15 @@ export interface GatewaySource<
    * rejects `unavailable` once disposed or when none connects in time.
    */
   connected(): Promise<C>
+  /**
+   * Makes one of an app's calls in conversation `conversationId`, and reads
+   * that conversation each round until the call is answered. The call may
+   * wait on a review the gateway opens for it, which changes nothing a list
+   * row says: without this, a conversation whose turn has ended is not read
+   * again, and its review is not drawn (#436). The call settles as `call`
+   * does.
+   */
+  appCall<T>(conversationId: string, call: () => Promise<T>): Promise<T>
   /** Stops polling, refuses every later call, and closes the client it connected. */
   dispose(): void
 }
@@ -182,6 +194,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // ends in two places only: `remove`, and a read the gateway answers with no
   // such conversation (S8) or a refusal for good (R11) — until Try Again.
   const watched = new Set<string>()
+  // Each conversation's app calls not yet answered (`appCall`): while there
+  // is one, the conversation is read each round (#436, P2–P7).
+  const appCalls = new Map<string, number>()
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -520,7 +535,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const last = reads.get(sessionId)
     const row = rows.get(sessionId)
     if (!last) return true
-    const live = Boolean(last.transcript.approval || last.transcript.activity)
+    const live = Boolean(
+      last.transcript.approval || last.transcript.activity || appCalls.has(sessionId),
+    )
     // Not listed — just begun, or past an incomplete list: read while it is live (S7).
     if (!row) return live
     if (row.running || live) return true
@@ -722,6 +739,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     // The gateway keeps no unread mark: every summary is read already.
     markRead: () => within(() => Promise.resolve()),
     connected: () => within(() => client()),
+    appCall(conversationId, call) {
+      appCalls.set(conversationId, (appCalls.get(conversationId) ?? 0) + 1)
+      // However it settles — answered, refused, or not sent at all — it is no longer asked.
+      return Promise.resolve()
+        .then(call)
+        .finally(() => {
+          const left = (appCalls.get(conversationId) ?? 1) - 1
+          if (left > 0) appCalls.set(conversationId, left)
+          else appCalls.delete(conversationId)
+        })
+    },
     dispose() {
       disposed = true
       stopPolling()

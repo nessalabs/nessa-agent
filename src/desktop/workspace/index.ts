@@ -58,7 +58,11 @@ export { ClockProvider } from "./adapters/dom/clock"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
 export { inMemorySource } from "./adapters/in-memory/in-memory-source"
-export { gatewaySource, type GatewayClient } from "./adapters/gateway/gateway-source"
+export {
+  gatewaySource,
+  type GatewayClient,
+  type GatewaySource,
+} from "./adapters/gateway/gateway-source"
 export { sampleAppSession, sampleWidgetSession } from "./adapters/in-memory/sample-labs"
 export { workspaceEffects } from "./adapters/store/effects"
 export { initialWorkspaceFrom, workspaceReducer } from "./adapters/store/slice"

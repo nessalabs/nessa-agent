@@ -26,6 +26,7 @@ import {
 import { selectFocusedSessionId } from "../../adapters/store/selectors"
 import { fakeSource, keptFilter, settle, summary, testStore } from "../../testing"
 import { selectOverviewOpen } from "../../adapters/store/selectors"
+import type { ApprovalOrigin } from "../../model/transcript"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { OverviewRow } from "../source-list/overview-row"
 import { answerPause } from "../../model/overview/walk"
@@ -76,10 +77,13 @@ async function mount({
   strict = false,
   wrap = (tree: ReactNode) => tree,
   index = sampleIndex(),
+  secondAsker = { kind: "agent" },
 }: {
   strict?: boolean
   wrap?: (tree: ReactNode) => ReactNode
   index?: WorkspaceIndex
+  /** Who asks the second session's approval. */
+  secondAsker?: ApprovalOrigin
 } = {}) {
   const source = fakeSource(index)
   for (const [sessionId, command] of [
@@ -90,7 +94,12 @@ async function mount({
     if (held)
       source.transcripts.set(sessionId, {
         ...held,
-        approval: { id: `${sessionId}-ask`, command, reason: `Why ${sessionId}.` },
+        approval: {
+          id: `${sessionId}-ask`,
+          command,
+          reason: `Why ${sessionId}.`,
+          origin: sessionId === "second" ? secondAsker : { kind: "agent" },
+        },
       })
   }
   const running = source.transcripts.get("run")
@@ -244,6 +253,22 @@ describe("the agents overview", () => {
     )
     // The panes are kept, laid out, under the overview.
     expect(host.querySelector('textarea[aria-label="Message"]')).not.toBeNull()
+  })
+
+  it("O3 (#436): a row says who asks — an app's request names the app, not the agent", async () => {
+    await mount({
+      secondAsker: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+    })
+    await open()
+    const label = (id: string) => card(id)?.getAttribute("aria-label") ?? ""
+    const agent = /\. (.*) wants to run security import build\.p12\.$/.exec(
+      label("first"),
+    )?.[1]
+    expect(agent).toBeTruthy()
+    expect(label("second")).toMatch(
+      /\. The mcptest app wants to run xcrun notarytool submit build\.dmg\.$/,
+    )
+    expect(label("second")).not.toContain(`${agent} wants`)
   })
 
   it("answers from the keyboard as the person, and moves on to the next request", async () => {

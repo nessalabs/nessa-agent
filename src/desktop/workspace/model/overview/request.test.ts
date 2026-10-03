@@ -6,6 +6,7 @@ const approval: Approval = {
   id: "run-tests",
   command: "cargo test",
   reason: "Runs the tests.",
+  origin: { kind: "agent" },
 }
 
 describe("requestOf", () => {
