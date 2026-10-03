@@ -288,7 +288,14 @@ impl GatewayPairing {
     }
     /// Disclose the open invitation's public metadata: no owner identity, code,
     /// other invitations or grant selectors. Auth decides expiry here, through
-    /// `expire_pairing_if_due`, and again when `begin` charges the attempt.
+    /// `expire_pairing_if_due`; `begin` and `finish` settle expiry after Auth
+    /// refuses them.
+    ///
+    /// Blocking: it makes synchronous store calls, including an expiry write when the invitation is due. Drive it from a blocking worker, as
+    /// `NativeEnrollmentConnections` does with `Handle::block_on` inside
+    /// `spawn_blocking`, never directly on an async worker thread. The device
+    /// steps are blocking because their TLS transport is a synchronous
+    /// `Read + Write` stream; they are async only to share the setup lock.
     pub async fn hello(&self, attempt: AttemptId) -> Result<PublicIntent, PairingRuntimeError> {
         let id = self
             .available
@@ -306,6 +313,12 @@ impl GatewayPairing {
     }
     /// Charge before ServerLogin, binding proof and exporter from this actual
     /// channel. Public metadata is compared with its canonical record before charge.
+    ///
+    /// Blocking: it makes synchronous store calls (the reservation is a durable write) and runs the CPU-bound OPAQUE ServerLogin. Drive it from a blocking worker, as
+    /// `NativeEnrollmentConnections` does with `Handle::block_on` inside
+    /// `spawn_blocking`, never directly on an async worker thread. The device
+    /// steps are blocking because their TLS transport is a synchronous
+    /// `Read + Write` stream; they are async only to share the setup lock.
     pub async fn begin<S: Read + Write>(
         &self,
         channel: &NativeTransport<S>,
@@ -365,6 +378,12 @@ impl GatewayPairing {
         }
     }
     /// Validate the original KE3 then commit claim before secret erasure/receipt.
+    ///
+    /// Blocking: it runs OPAQUE's KE3 check and makes synchronous store writes (the claim, or the settlement of a failed attempt). Drive it from a blocking worker, as
+    /// `NativeEnrollmentConnections` does with `Handle::block_on` inside
+    /// `spawn_blocking`, never directly on an async worker thread. The device
+    /// steps are blocking because their TLS transport is a synchronous
+    /// `Read + Write` stream; they are async only to share the setup lock.
     pub async fn finish<S: Read + Write>(
         &self,
         channel: &NativeTransport<S>,
@@ -402,6 +421,12 @@ impl GatewayPairing {
         Ok(record)
     }
     /// Same-key exact-attempt receipt; Pending does not cancel its original worker.
+    ///
+    /// Blocking: it makes synchronous store calls, including an expiry write when the record is due, and reads the store while holding the setup lock. Drive it from a blocking worker, as
+    /// `NativeEnrollmentConnections` does with `Handle::block_on` inside
+    /// `spawn_blocking`, never directly on an async worker thread. The device
+    /// steps are blocking because their TLS transport is a synchronous
+    /// `Read + Write` stream; they are async only to share the setup lock.
     pub async fn status<S: Read + Write>(
         &self,
         channel: &NativeTransport<S>,

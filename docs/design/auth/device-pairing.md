@@ -1739,6 +1739,15 @@ not by a timer), O1/O4–O9 as product routes, and S1–S5, S7, S8, S10, S12.
   device as actor, because Auth accepts only the device as the actor of a failed
   attempt. The gateway caused it. Recording a System cause needs an Auth
   producer change.
+- **Blocking device steps.** `GatewayPairing::hello`, `begin`, `finish` and
+  `status` are async but do synchronous store work, `begin` and `finish` also
+  run OPAQUE, and `status` reads the store while holding the setup lock. They
+  must be driven from a blocking worker, as `NativeEnrollmentConnections` does
+  (`Handle::block_on` inside `spawn_blocking`), because the TLS transport they
+  take is a synchronous `Read + Write` stream. Their rustdoc says so; nothing
+  enforces it for another caller. Owner commands are not affected: their store
+  work runs in the owner worker
+  (`native_owner_store_work_runs_off_the_async_thread`).
 - **One connection owner per gateway.** The eight-connection limit belongs to a
   `NativeEnrollmentConnections`; nothing stops composition building two for one
   `GatewayPairing`. Mounting composition must build exactly one.

@@ -35,10 +35,10 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{sync_channel, Receiver, SyncSender},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    thread::{self, ThreadId},
     time::Duration,
 };
 use tempfile::TempDir;
@@ -295,8 +295,8 @@ pub struct FaultyStore {
     inner: Arc<LocalCredentialStore>,
     fault: Mutex<Option<Fault>>,
     claimed: AtomicBool,
-    gate: Mutex<Option<Receiver<()>>>,
-    gate_timed_out: AtomicBool,
+    async_thread: Mutex<Option<ThreadId>>,
+    calls_on_async_thread: AtomicUsize,
 }
 impl FaultyStore {
     pub fn new(inner: Arc<LocalCredentialStore>) -> Arc<Self> {
@@ -304,26 +304,30 @@ impl FaultyStore {
             inner,
             fault: Mutex::new(None),
             claimed: AtomicBool::new(false),
-            gate: Mutex::new(None),
-            gate_timed_out: AtomicBool::new(false),
+            async_thread: Mutex::new(None),
+            calls_on_async_thread: AtomicUsize::new(0),
         })
     }
-    /// The next store read waits until the returned sender fires, for at most
-    /// two seconds. On a current-thread runtime, a read made on the async
-    /// thread cannot be released by a task on that thread, so it times out.
-    pub fn gate_next_read(&self) -> SyncSender<()> {
-        let (release, gate) = sync_channel(1);
-        *self.gate.lock().unwrap() = Some(gate);
-        release
+    /// Count every later store call made on `thread`. On a current-thread
+    /// runtime every async task runs on the thread that drives it, and blocking
+    /// workers run elsewhere, so a call on that thread is async-thread work.
+    pub fn count_calls_on(&self, thread: ThreadId) {
+        *self.async_thread.lock().unwrap() = Some(thread);
     }
-    /// Whether a gated read timed out.
-    pub fn gate_timed_out(&self) -> bool {
-        self.gate_timed_out.load(Ordering::SeqCst)
+    /// Store calls made on the counted thread so far.
+    pub fn calls_on_async_thread(&self) -> usize {
+        self.calls_on_async_thread.load(Ordering::SeqCst)
+    }
+    fn call(&self) {
+        if *self.async_thread.lock().unwrap() == Some(thread::current().id()) {
+            self.calls_on_async_thread.fetch_add(1, Ordering::SeqCst);
+        }
     }
     pub fn refuse(&self, fault: Option<Fault>) {
         *self.fault.lock().unwrap() = fault;
     }
     fn refuses(&self, fault: Fault) -> Result<(), PairingStoreError> {
+        self.call();
         if *self.fault.lock().unwrap() == Some(fault) {
             Err(PairingStoreError::Unavailable)
         } else {
@@ -331,12 +335,6 @@ impl FaultyStore {
         }
     }
     fn read(&self) -> Result<(), PairingStoreError> {
-        let gate = self.gate.lock().unwrap().take();
-        if let Some(gate) = gate {
-            if gate.recv_timeout(Duration::from_secs(2)).is_err() {
-                self.gate_timed_out.store(true, Ordering::SeqCst);
-            }
-        }
         self.refuses(Fault::Reads)?;
         if self.claimed.load(Ordering::SeqCst) {
             self.refuses(Fault::ReadsAfterClaim)
@@ -352,12 +350,14 @@ impl PairingStore for FaultyStore {
         key: &PrivateKeyMaterial,
         clock: &dyn Clock,
     ) -> Result<(), PairingStoreError> {
+        self.call();
         self.inner.publish_first_gateway_key(keys, key, clock)
     }
     fn acquire_stage(
         self: Arc<Self>,
         id: InvitationId,
     ) -> Result<StageOwnership, PairingStoreError> {
+        self.call();
         self.inner.clone().acquire_stage(id)
     }
     fn finish_no_receiver(
@@ -365,6 +365,7 @@ impl PairingStore for FaultyStore {
         proof: &NoReceiverCleanupProof,
         clock: &dyn Clock,
     ) -> Result<PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.finish_no_receiver(proof, clock)
     }
     fn pending_pairings(&self) -> Result<Box<[PairingRecord]>, PairingStoreError> {
@@ -385,6 +386,7 @@ impl PairingStore for FaultyStore {
         cause: RuntimeEnd,
         clock: &dyn Clock,
     ) -> Result<PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.end_pairing(id, cause, clock)
     }
     fn read_pairing(&self, id: InvitationId) -> Result<PairingRecord, PairingStoreError> {
@@ -397,6 +399,7 @@ impl PairingStore for FaultyStore {
         admission: &'a PairingAdmission,
         clock: &'a dyn Clock,
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.create_pairing(record, admission, clock)
     }
     fn decide_pairing<'a>(
@@ -406,6 +409,7 @@ impl PairingStore for FaultyStore {
         admission: &'a PairingAdmission,
         clock: &'a dyn Clock,
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.decide_pairing(id, decision, admission, clock)
     }
     fn reserve_attempt(
@@ -449,6 +453,7 @@ impl PairingStore for FaultyStore {
         admission: &PairingAdmission,
         clock: &dyn Clock,
     ) -> Result<PairingRecord, PairingStoreError> {
+        self.call();
         self.inner
             .stage_pairing(id, credential, request, admission, clock)
     }
@@ -458,6 +463,7 @@ impl PairingStore for FaultyStore {
         outcome: &ReceiverOutcome,
         clock: &dyn Clock,
     ) -> Result<PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.remember_receiver(id, outcome, clock)
     }
     fn publish_pairing(
@@ -466,6 +472,7 @@ impl PairingStore for FaultyStore {
         admission: &PairingAdmission,
         clock: &dyn Clock,
     ) -> Result<PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.publish_pairing(id, admission, clock)
     }
     fn finish_cleanup(
@@ -474,6 +481,7 @@ impl PairingStore for FaultyStore {
         outcome: &ReceiverOutcome,
         clock: &dyn Clock,
     ) -> Result<PairingRecord, PairingStoreError> {
+        self.call();
         self.inner.finish_cleanup(id, outcome, clock)
     }
 }

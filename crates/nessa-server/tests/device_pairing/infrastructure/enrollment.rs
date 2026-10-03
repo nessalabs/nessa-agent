@@ -1873,8 +1873,9 @@ async fn native_client_refuses_a_gateway_that_changes_the_operation() {
     fixture.gateway.shutdown().await;
 }
 
-/// The default `#[tokio::test]` runtime has one thread, so a store call made on
-/// the async thread would hold the task that releases the gate.
+/// The default `#[tokio::test]` runtime has one thread, which drives every
+/// async task; blocking workers run on other threads. Every store call is
+/// counted if it runs on the test's thread.
 #[tokio::test]
 async fn native_owner_store_work_runs_off_the_async_thread() {
     let store = std::sync::OnceLock::new();
@@ -1885,19 +1886,16 @@ async fn native_owner_store_work_runs_off_the_async_thread() {
     })
     .await;
     let store = store.get().unwrap().clone();
-    let created = fixture
-        .gateway
-        .create(fixture.session.clone(), OsEntropy)
-        .await
-        .unwrap();
-    let id = created.record().id();
-    // Past due, so each command settles an expiry as well as reading.
-    fixture.time.set(created.record().expires_at_ms());
+    store.count_calls_on(std::thread::current().id());
     for command in 0..4 {
-        let release = store.gate_next_read();
-        let releaser = tokio::spawn(async move {
-            release.send(()).ok();
-        });
+        // Each command meets its own past-due invitation, so it settles an expiry.
+        let created = fixture
+            .gateway
+            .create(fixture.session.clone(), OsEntropy)
+            .await
+            .unwrap();
+        let id = created.record().id();
+        fixture.time.set(created.record().expires_at_ms());
         match command {
             0 => {
                 fixture.gateway.pending(&fixture.session).await.unwrap();
@@ -1924,15 +1922,16 @@ async fn native_owner_store_work_runs_off_the_async_thread() {
                     .unwrap();
             }
         }
-        releaser.await.unwrap();
         assert!(
-            !store.gate_timed_out(),
-            "command {command} read on the async thread"
+            expired_by_system(&fixture.registry.read_pairing(id).unwrap()),
+            "command {command} settled no expiry"
+        );
+        assert_eq!(
+            store.calls_on_async_thread(),
+            0,
+            "command {command} used the store on the async thread"
         );
     }
-    assert!(expired_by_system(
-        &fixture.registry.read_pairing(id).unwrap()
-    ));
     fixture.gateway.shutdown().await;
 }
 
