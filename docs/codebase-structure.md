@@ -549,6 +549,14 @@ The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
+`application/catalogue_watch.rs` owns payloadless owner-scoped watch interest;
+`infrastructure/catalogue_changes.rs` bounds and coalesces actual registrations.
+`LocalConversationStore` publishes after visible metadata transaction commits,
+inside the retained blocking owner. SDK `sessions/committed_changes.rs` and
+`session_storage/record_changes.rs` separately own record interest and publish
+complete reconciled semantic facts and reset receipts. Neither producer starts
+a read or changes receiver progress. [Committed change watches](design/committed-change-watches.md)
+owns their registration/recheck and accounting contract; wire activation remains #298.
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
 `CatalogueSource` through a bounded blocking worker bound to one authenticated
 caller and exact scope. The worker owns a Tokio runtime so metadata reads can

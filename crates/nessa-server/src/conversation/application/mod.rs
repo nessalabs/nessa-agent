@@ -80,6 +80,10 @@
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
 mod catalogue;
+pub(crate) mod catalogue_watch;
+pub use catalogue_watch::{
+    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
+};
 mod catalogue_read;
 mod error;
 mod locks;

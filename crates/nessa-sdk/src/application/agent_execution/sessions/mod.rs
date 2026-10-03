@@ -1,3 +1,5 @@
+//! `committed_changes` owns payloadless interest, independent of writer leases
+//! and receiver progress. RecordStorage closes interest before shutdown joins.
 //! Queue evidence follows the same consistency boundary as pending dispatch:
 //! ```text
 //! Agent scheduler -> InvocationQueue -> actual membership/order changes
@@ -55,7 +57,9 @@ pub(crate) mod records;
 mod retained;
 mod retention;
 // Queue membership is replayed separately from provider/lifecycle scheduling.
+pub(crate) mod committed_changes;
 mod queue_validation;
+pub use committed_changes::{ChangeWatchError, ChangeWatchState, CommittedChangeWatch};
 pub mod storage;
 mod transcript;
 pub use transcript::{
