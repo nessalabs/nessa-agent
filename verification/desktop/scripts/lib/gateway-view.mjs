@@ -92,8 +92,11 @@ export const stillPending = (reviews, review) =>
   reviews.some((each) => permissionKey(each) === permissionKey(review))
 
 /**
- * Whether a turn read as `status` has ended. `unresolved` has not: a read
- * while a committed snapshot replaces the view can show a live turn as
- * unresolved, and the next read shows it running or ended (#448).
+ * Whether setup's turn, read as `status`, has ended. `unresolved` is not an
+ * end there: setup reads the turn it has just sent, never a restored one, and
+ * a read while a committed snapshot replaces the view can show that live turn
+ * as unresolved before it reads running or ended again (#448). A turn that
+ * stays unresolved runs into setup's own 300 s limit.
  */
-export const turnEnded = (status) => !["running", "queued", "unresolved"].includes(status)
+export const setupTurnEnded = (status) =>
+  !["running", "queued", "unresolved"].includes(status)

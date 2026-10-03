@@ -31,7 +31,7 @@ export const SERVER = "mcptest"
 /** The test MCP server itself. */
 export const serverScript = join(here, "server.mjs")
 
-/** The model each agent runs in a live check, by agent. */
+/** The model each agent runs in a check against a local gateway, by agent. */
 export const MODELS = {
   claude: "claude-sonnet-5",
   codex: "gpt-5.6-terra",
@@ -85,6 +85,30 @@ export function agentCommand(agent) {
   }
 }
 
+/**
+ * What a signed-out gateway is started with, over `NESSA_*`: this process's
+ * `PATH` (`path` first, when given), `TMPDIR` and `RUST_LOG`, and a `HOME` of
+ * its own under `directory`, so neither a credential variable nor a sign-in
+ * kept under the real home reaches it or the agent it starts. Built from
+ * what it needs rather than by removing the credentials it might find.
+ * `ANTHROPIC_API_KEY` is a placeholder: with no credential in the
+ * environment, the gateway reads Claude's from the login keychain
+ * (`crates/nessa-server/src/agents/infrastructure/agent_credentials.rs`).
+ */
+export function signedOutEnvironment(directory, path) {
+  const kept = Object.fromEntries(
+    ["TMPDIR", "RUST_LOG"]
+      .filter((name) => process.env[name] !== undefined)
+      .map((name) => [name, process.env[name]]),
+  )
+  return {
+    ...kept,
+    PATH: path ? `${path}:${process.env.PATH}` : process.env.PATH,
+    HOME: join(directory, "home"),
+    ANTHROPIC_API_KEY: "signed-out-gateway-placeholder",
+  }
+}
+
 /** Wait up to `ms` for `child` to exit; whether it did. */
 export async function exited(child, ms) {
   if (child.exitCode !== null || child.signalCode !== null) return true
@@ -107,8 +131,8 @@ export async function exited(child, ms) {
  * @param {string} o.model the agent's model
  * @param {string|null} [o.path] a directory to put first on the gateway's `PATH`
  * @param {{ command: string, args: string[] }} o.mcpServer how the gateway starts `mcptest`
- * @param {Record<string, string|undefined>} [o.env] the gateway's environment
- *   over this process's: a name set to `undefined` is left out
+ * @param {boolean} [o.signedOut] start the gateway with no sign-in to hand an
+ *   agent (`signedOutEnvironment`), for an agent that needs none
  * @returns the gateway: `{ directory, token, url, log, server, stop }`. `token`
  *   is the owner token file's path; `log()` the gateway's output so far; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
@@ -147,17 +171,19 @@ export async function startLocalGateway(o) {
   try {
     const workspace = join(directory, "workspace")
     mkdirSync(workspace)
+    if (o.signedOut) mkdirSync(join(directory, "home"))
     const env = {
-      ...process.env,
+      ...(o.signedOut
+        ? signedOutEnvironment(directory, o.path)
+        : {
+            ...process.env,
+            ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
+          }),
       NESSA_STAGE: "ci",
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: o.instance,
-      ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
-      ...o.env,
     }
-    for (const [name, value] of Object.entries(env))
-      if (value === undefined) delete env[name]
     const token = join(directory, "owner.token")
     const init = spawnSync(
       nessa,

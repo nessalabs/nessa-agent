@@ -3,11 +3,11 @@
  * A stdio ACP agent with no model, standing in for a harness under a real
  * gateway:
  *
- *   node scripted-agent.mjs codex|claude
+ *   node scripted-agent.mjs codex|claude <tool>
  *
  * It answers the gateway's handshake as the harness pinned for `<agent>`
- * would, and to each prompt makes one real call of the test server's app
- * tool (`review_rows`) through the stand-in the gateway gave it for
+ * would, and to each prompt makes one real call of the test server's
+ * `<tool>`, with no arguments, through the stand-in the gateway gave it for
  * `mcptest`, then reports that call in the frames the harness was recorded
  * sending (`scripted-frames.mjs`), says DONE, and ends the turn. The
  * desktop's real-gateway check runs it with `--scripted`
@@ -16,9 +16,13 @@
  *
  * It keeps every stand-in it started for the session: the gateway's own
  * connection to the server, which the view's `resourceUri` and the app's
- * calls use, lives as long as the stand-in does. Its design table is on
- * #418. It reads no credential; the check starts the gateway without any for
- * it to be handed.
+ * calls use, lives as long as the stand-in does. A stand-in that does not
+ * answer within `MCP_DEADLINE_MS` fails what was waiting on it. Its design
+ * table is on #418. It reads no credential; the check starts the gateway
+ * signed out (`startLocalGateway`'s `signedOut`).
+ *
+ * Not replayed: a harness's permission request for the call. The recordings
+ * hold only `session/update` frames, so the scripted agent asks for none.
  */
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -35,12 +39,12 @@ import {
 } from "./scripted-frames.mjs"
 import { SERVER } from "./local-gateway.mjs"
 
-/** The app tool every prompt calls. */
-const TOOL = "review_rows"
+/** How long an MCP request waits for its stand-in's answer. */
+const MCP_DEADLINE_MS = 10_000
 
-const agent = process.argv[2]
-if (!AGENTS.includes(agent)) {
-  process.stderr.write(`usage: scripted-agent.mjs ${AGENTS.join("|")}\n`)
+const [agent, tool] = process.argv.slice(2)
+if (!AGENTS.includes(agent) || !tool) {
+  process.stderr.write(`usage: scripted-agent.mjs ${AGENTS.join("|")} <tool>\n`)
   process.exit(2)
 }
 const recorded = recording(agent)
@@ -88,7 +92,19 @@ function mcpClient({ command, args, env }) {
       new Promise((resolve, reject) => {
         if (ended) return reject(new Error(ended))
         const id = next++
-        waiting.set(id, { resolve, reject })
+        const timer = setTimeout(() => {
+          waiting.delete(id)
+          reject(
+            new Error(
+              `the stand-in did not answer ${method} within ${MCP_DEADLINE_MS} ms`,
+            ),
+          )
+        }, MCP_DEADLINE_MS)
+        const settle = (then) => (value) => {
+          clearTimeout(timer)
+          then(value)
+        }
+        waiting.set(id, { resolve: settle(resolve), reject: settle(reject) })
         write({ id, method, params })
       }),
     notify: (method, params) => write({ method, params }),
@@ -96,20 +112,32 @@ function mcpClient({ command, args, env }) {
   }
 }
 
-/** Starts and initializes the MCP server `server` (a `session/new` entry). */
+/** Starts and initializes the MCP server `server` (a `session/new` entry); stops it again if it does not initialize. */
 async function connect(server) {
   const client = mcpClient(server)
-  await client.request("initialize", {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "scripted-agent", version: "0.1.0" },
-  })
+  try {
+    await client.request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "scripted-agent", version: "0.1.0" },
+    })
+  } catch (error) {
+    client.close()
+    throw error
+  }
   client.notify("notifications/initialized", {})
   return client
 }
 
-/** The one session: its id, its options' values, and its MCP servers by name. */
-let session = null
+/** The sessions by id: each one's options' values, and its MCP servers by name. */
+const sessions = new Map()
+
+/** The session `sessionId` names; throws for one this agent did not open. */
+function sessionOf(sessionId) {
+  const session = sessions.get(sessionId)
+  if (!session) throw new Error(`no session ${sessionId}`)
+  return session
+}
 
 const handlers = {
   initialize: () => initializeResult(agent),
@@ -124,36 +152,28 @@ const handlers = {
       for (const client of servers.values()) client.close()
       throw error
     }
-    session = { id: randomUUID(), values, servers }
-    return { sessionId: session.id, configOptions: configOptions(values) }
+    const sessionId = randomUUID()
+    sessions.set(sessionId, { values, servers })
+    return { sessionId, configOptions: configOptions(agent, values) }
   },
 
   "session/set_config_option": ({ sessionId, configId, value }) => {
-    if (sessionId !== session?.id) throw new Error(`no session ${sessionId}`)
-    const values = setOption(session.values, configId, value)
+    const session = sessionOf(sessionId)
+    const values = setOption(agent, session.values, configId, value)
     if (!values) throw new Error(`no config option ${configId}`)
     session.values = values
-    return { configOptions: configOptions(values) }
+    return { configOptions: configOptions(agent, values) }
   },
 
   "session/prompt": async ({ sessionId }) => {
-    if (sessionId !== session?.id) throw new Error(`no session ${sessionId}`)
-    const server = session.servers.get(SERVER)
+    const server = sessionOf(sessionId).servers.get(SERVER)
     if (!server) throw new Error(`the session has no ${SERVER} server`)
-    const args = {}
-    const result = await server.request("tools/call", { name: TOOL, arguments: args })
+    const result = await server.request("tools/call", { name: tool, arguments: {} })
     const id =
       agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`
     const update = (update) =>
       send({ method: "session/update", params: { sessionId, update } })
-    for (const frame of callFrames(agent, recorded, {
-      id,
-      server: SERVER,
-      tool: TOOL,
-      args,
-      result,
-    }))
-      update(frame)
+    for (const frame of callFrames(agent, recorded, { id, tool, result })) update(frame)
     update({
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "DONE" },
@@ -184,6 +204,7 @@ createInterface({ input: process.stdin })
     }
   })
   .on("close", () => {
-    for (const client of session?.servers.values() ?? []) client.close()
+    for (const { servers } of sessions.values())
+      for (const client of servers.values()) client.close()
     process.exit(0)
   })

@@ -15,6 +15,7 @@ import {
   initialOptions,
   initializeResult,
   recordedCall,
+  RECORDED_TOOL,
   recording,
   setOption,
 } from "./scripted-frames.mjs"
@@ -22,54 +23,66 @@ import { TOOLS } from "./server.mjs"
 
 const result = TOOLS.review_rows.call({})
 const call = (agent) =>
-  callFrames(agent, recording(agent), {
-    id: "call-1",
-    server: "mcptest",
-    tool: "review_rows",
-    args: {},
-    result,
-  })
-const shape = (frame) => ({
-  sessionUpdate: frame.sessionUpdate,
-  status: frame.status,
-  fields: Object.keys(frame).sort(),
-  meta: Object.keys(frame._meta?.claudeCode ?? {}).sort(),
-})
+  callFrames(agent, recording(agent), { id: "call-1", tool: "review_rows", result })
 
 describe("callFrames", () => {
   for (const agent of AGENTS) {
-    it(`${agent}: the recorded call's frames, field for field, each with the new id`, () => {
+    it(`${agent}: replaying the recorded call reproduces the recording, value for value`, () => {
       const recorded = recordedCall(agent, recording(agent))
-      const frames = call(agent)
       assert.ok(recorded.length >= 3, "a recording of one frame replays nothing")
-      assert.deepEqual(frames.map(shape), recorded.map(shape))
+      const replayed = callFrames(agent, recording(agent), {
+        id: recorded[0].toolCallId,
+        tool: RECORDED_TOOL,
+        result: TOOLS[RECORDED_TOOL].call({}),
+      })
+      assert.deepEqual(replayed, recorded)
+    })
+
+    it(`${agent}: another call keeps every recorded value but its id, its tool and its result`, () => {
+      const frames = call(agent)
+      const text = JSON.stringify(frames)
       for (const frame of frames) assert.equal(frame.toolCallId, "call-1")
+      assert.doesNotMatch(text, /show_chart|series|Chart of two rows/)
+    })
+
+    it(`${agent}: a recording that does not hold the result where ${agent} puts it is refused`, () => {
+      const recorded = recording(agent)
+      const frames = recordedCall(agent, recorded).map((frame) =>
+        "rawOutput" in frame ? { ...frame, rawOutput: "something else" } : frame,
+      )
+      const call = recordedCall(agent, recorded)
+      const name = Object.keys(recorded.calls).find((key) => recorded.calls[key] === call)
+      const altered = { ...recorded, calls: { ...recorded.calls, [name]: frames } }
+      if (agent === "claude") {
+        // Claude also says it in toolResponse and content: take those away too.
+        altered.calls[name] = frames.map((frame) => {
+          const { content, ...rest } = frame
+          const claudeCode = { ...frame._meta.claudeCode }
+          delete claudeCode.toolResponse
+          return { ...rest, _meta: { ...frame._meta, claudeCode } }
+        })
+      }
+      assert.throws(
+        () => callFrames(agent, altered, { id: "x", tool: "review_rows", result }),
+        /does not hold show_chart's result/,
+      )
     })
   }
 
-  it("codex: every frame the recording marked as MCP names the server and tool", () => {
+  it("codex: the frames name the server and tool, and carry the server's result", () => {
     const frames = call("codex")
     assert.equal(frames[0]._meta.is_mcp_tool_call, true)
+    assert.equal(frames[0].title, "mcp.mcptest.review_rows")
     for (const frame of frames.filter((each) => "rawInput" in each))
       assert.deepEqual(frame.rawInput, {
         server: "mcptest",
         tool: "review_rows",
         arguments: {},
       })
-    assert.equal(frames[0].title, "mcp.mcptest.review_rows")
-  })
-
-  it("codex: the completion carries the server's result as rawOutput.result", () => {
-    const last = call("codex").at(-1)
+    const last = frames.at(-1)
     assert.equal(last.status, "completed")
-    assert.deepEqual(last.rawOutput, {
-      result: {
-        content: result.content,
-        structuredContent: result.structuredContent,
-        _meta: null,
-      },
-      error: null,
-    })
+    assert.deepEqual(last.rawOutput.result.content, result.content)
+    assert.deepEqual(last.rawOutput.result.structuredContent, result.structuredContent)
   })
 
   it("claude: every frame names mcp__mcptest__review_rows, and the result is its structured JSON", () => {
@@ -93,9 +106,7 @@ describe("callFrames", () => {
   it("claude: a result with no structured content is reported as its text", () => {
     const frames = callFrames("claude", recording("claude"), {
       id: "call-2",
-      server: "mcptest",
       tool: "always_fails",
-      args: {},
       result: {
         content: [
           { type: "text", text: "a" },
@@ -138,18 +149,24 @@ describe("the handshake", () => {
   })
 
   it("a set option is answered at its new value; an unknown one is refused", () => {
-    const values = setOption({ model: "m", mode: "default" }, "mode", "agent")
+    const values = setOption("codex", { model: "m", mode: "default" }, "mode", "agent")
     assert.deepEqual(
-      configOptions(values).map(({ id, currentValue }) => [id, currentValue]),
+      configOptions("codex", values).map(({ id, currentValue }) => [id, currentValue]),
       [
         ["model", "m"],
         ["mode", "agent"],
       ],
     )
-    assert.equal(
-      configOptions(setOption(values, "effort", "high")).at(-1).category,
-      "thought_level",
-    )
-    assert.equal(setOption(values, "colour", "red"), null)
+    assert.equal(setOption("codex", values, "colour", "red"), null)
+  })
+
+  it("each harness has its own effort option, and not the other's", () => {
+    const values = { model: "m", mode: "default" }
+    const codex = setOption("codex", values, "reasoning_effort", "high")
+    assert.equal(configOptions("codex", codex).at(-1).category, "thought_level")
+    assert.equal(setOption("codex", values, "effort", "high"), null)
+    const claude = setOption("claude", values, "effort", "high")
+    assert.equal(configOptions("claude", claude).at(-1).category, "thought_level")
+    assert.equal(setOption("claude", values, "reasoning_effort", "high"), null)
   })
 })

@@ -93,15 +93,23 @@ default 300) adjust the run.
 
 ## The scripted agent
 
-`scripted-agent.mjs codex|claude` is a stdio ACP agent with no model, which
-a gateway can run as that agent's runtime (an explicit `command`). It answers
-the handshake as the harness pinned in
+`scripted-agent.mjs codex|claude <tool>` is a stdio ACP agent with no model,
+which a gateway can run as that agent's runtime (an explicit `command`). It
+answers the handshake as the harness pinned in
 `crates/nessa-sdk/harnesses/<agent>-acp/package.json`, and to each prompt makes
-one real `review_rows` call through the stand-in the gateway gave it for
-`mcptest`, reports that call in the frames the harness was recorded sending,
-says DONE, and ends the turn. The frames are the recorded `show_chart` call
-from the parser fixtures above, frame for frame, with only the call's id,
-its tool and the server's result put in (`scripted-frames.mjs`), so a new
-recording changes what it replays. It reads no credential. The desktop's
-real-gateway check runs it with `--scripted`; its design table is on #418, and
-its tests are `scripted-frames.test.mjs` and `scripted-agent.test.mjs`.
+one real call of `<tool>`, with no arguments, through the stand-in the gateway
+gave it for `mcptest`. It then reports that call in the frames the harness was
+recorded sending, says DONE, and ends the turn. The frames are the recorded
+`show_chart` call from the parser fixtures above, value for value, with only
+the call's id, its tool's name and the server's result put in where the
+recording has its own (`scripted-frames.mjs`). A recording that holds the
+result where that harness is not known to put it is refused rather than
+replayed. It does not ask permission for the call, as a harness does: the
+recordings hold no permission request.
+
+It reads no credential: `startLocalGateway({ signedOut: true })` starts the
+gateway from `PATH`, `TMPDIR` and `RUST_LOG` alone, with a home of its own and
+a placeholder `ANTHROPIC_API_KEY` (which keeps the gateway from reading
+Claude's from the keychain). The desktop's real-gateway check runs it with
+`--scripted`. Its design table is on #418, and its tests are
+`scripted-frames.test.mjs` and `scripted-agent.test.mjs`.

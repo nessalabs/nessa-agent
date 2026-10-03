@@ -4,22 +4,26 @@
  * harness was recorded sending. Pure, so `scripted-frames.test.mjs` checks
  * them without a gateway.
  *
- * The frames' shape is the recording's, not this module's: the SDK's parser
+ * The frames are the recording's, not this module's: the SDK's parser
  * fixtures hold each harness's live run, and a call is reported as the
  * recorded `show_chart` call was — the same frames, in the same order, each
- * carrying the same fields — with only the call's identity and its result put
- * in. A new recording changes what this replays without an edit here.
+ * value as recorded — with only the call's id, its tool's name and its result
+ * put in where the recording has its own. What this knows of a harness is how
+ * it renders a result, to find the recorded one; a recording that renders it
+ * otherwise is refused (`callFrames`), and replaying the recorded call
+ * reproduces the recording exactly (`scripted-frames.test.mjs`).
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import { repoRoot } from "./local-gateway.mjs"
+import { TOOLS } from "./server.mjs"
 
 /** The harnesses a scripted agent can stand in for. */
 export const AGENTS = ["codex", "claude"]
 
-/** The recorded call every reported call is shaped as. */
-const RECORDED_TOOL = "show_chart"
+/** The recorded call every reported call is shaped as. It took no arguments, and so does every call replayed. */
+export const RECORDED_TOOL = "show_chart"
 
 /** `agent`'s recorded frames, as the SDK's parser fixtures hold them. */
 export function recording(agent) {
@@ -62,28 +66,26 @@ export const initializeResult = (agent) => ({
 })
 
 /**
- * The config options a session has, by id, with the ACP category each is
- * listed under (`null`: none). The SDK sets `model` and `mode`, and an effort
- * level under Codex's or Claude's id when one is chosen.
+ * The config options a session of each harness has, by id, with the ACP
+ * category each is listed under (`null`: none): `model` and `mode`, and the
+ * harness's own effort option.
  */
 const OPTIONS = {
-  model: null,
-  mode: null,
-  effort: "thought_level",
-  reasoning_effort: "thought_level",
+  codex: { model: null, mode: null, reasoning_effort: "thought_level" },
+  claude: { model: null, mode: null, effort: "thought_level" },
 }
 
 /**
- * The session's config options as ACP lists them, from `values` (option id →
- * current value). Each option offers only its current value: nothing here
- * chooses among models or modes, it reports what it was told.
+ * `agent`'s session's config options as ACP lists them, from `values` (option
+ * id → current value). Each option offers only its current value: nothing
+ * here chooses among models or modes, it reports what it was told.
  */
-export const configOptions = (values) =>
+export const configOptions = (agent, values) =>
   Object.entries(values).map(([id, value]) => ({
     id,
     name: id,
     type: "select",
-    ...(OPTIONS[id] ? { category: OPTIONS[id] } : {}),
+    ...(OPTIONS[agent][id] ? { category: OPTIONS[agent][id] } : {}),
     currentValue: value,
     options: [{ value, name: value }],
   }))
@@ -105,67 +107,77 @@ export function initialOptions(agent, env, params) {
   return { model: options.model, mode: options.permissionMode ?? "default" }
 }
 
-/** Options `values` with `configId` set to `value`; `null` for an option the session does not have. */
-export function setOption(values, configId, value) {
-  if (!Object.hasOwn(OPTIONS, configId)) return null
+/** `agent`'s options `values` with `configId` set to `value`; `null` for an option its session does not have. */
+export function setOption(agent, values, configId, value) {
+  if (!Object.hasOwn(OPTIONS[agent], configId)) return null
   return { ...values, [configId]: value }
 }
 
 /**
- * The frames reporting one call of `tool` of MCP server `server`, with id
- * `id` and arguments `args`, which returned `result` (an MCP `CallToolResult`):
- * the recorded call's frames, each with this call put in where the
- * recording had its own. Which fields a frame carries is the recording's.
+ * Claude's rendering of a tool result, as its recording shows: the JSON of
+ * its `structuredContent` (its text blocks, when it has none), which it sends
+ * as `toolResponse`, `rawOutput` and the text of `content`.
  */
-export function callFrames(agent, recorded, { id, server, tool, args, result }) {
-  return recordedCall(agent, recorded).map((frame) =>
-    agent === "claude"
-      ? claudeFrame(frame, { id, name: `mcp__${server}__${tool}`, args, result })
-      : codexFrame(frame, { id, server, tool, args, result }),
-  )
-}
-
-/** Codex: `rawInput` names the server and tool; `rawOutput.result` is the MCP result. */
-function codexFrame(frame, { id, server, tool, args, result }) {
-  const out = { ...frame, toolCallId: id }
-  if ("title" in frame) out.title = `mcp.${server}.${tool}`
-  if ("rawInput" in frame) out.rawInput = { server, tool, arguments: args }
-  if ("rawOutput" in frame)
-    out.rawOutput = {
-      result: {
-        content: result.content,
-        structuredContent: result.structuredContent ?? null,
-        _meta: null,
-      },
-      error: null,
-    }
-  return out
-}
+const claudeSays = (result) =>
+  result.structuredContent !== undefined
+    ? JSON.stringify(result.structuredContent)
+    : result.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
 
 /**
- * Claude: `_meta.claudeCode.toolName` and the title are `mcp__<server>__<tool>`;
- * the result is reported as the recording reports it — the JSON of its
- * `structuredContent` (its text, when it has none) as `toolResponse`,
- * `rawOutput` and the one text block of `content`.
+ * Where each harness's recording holds a result, as `[recorded, replayed]`
+ * pairs: a value in a frame equal to `recorded` is replaced, whole, by
+ * `replayed`. Codex sends the MCP result's `content` and `structuredContent`
+ * (`null` when it has none) in `rawOutput.result`.
  */
-function claudeFrame(frame, { id, name, args, result }) {
-  const said =
-    result.structuredContent !== undefined
-      ? JSON.stringify(result.structuredContent)
-      : result.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("\n")
-  const out = { ...frame, toolCallId: id }
-  const claudeCode = { ...frame._meta.claudeCode, toolName: name }
-  if ("toolResponse" in claudeCode) claudeCode.toolResponse = said
-  out._meta = { ...frame._meta, claudeCode }
-  if ("title" in frame) out.title = name
-  // The announcement's input is the recording's (`{}`, before the model's
-  // arguments stream in); later frames carry the arguments.
-  if ("rawInput" in frame && frame.sessionUpdate !== "tool_call") out.rawInput = args
-  if ("rawOutput" in frame) out.rawOutput = said
-  if ("content" in frame && frame.content.length > 0)
-    out.content = [{ type: "content", content: { type: "text", text: said } }]
-  return out
+const resultValues = {
+  codex: (recorded, result) => [
+    [recorded.content, result.content],
+    [recorded.structuredContent ?? null, result.structuredContent ?? null],
+  ],
+  claude: (recorded, result) => [[claudeSays(recorded), claudeSays(result)]],
+}
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
+/**
+ * The frames reporting one call of `tool`, with id `id`, which returned
+ * `result` (an MCP `CallToolResult`): the recorded call's frames, with the
+ * recorded call's id and tool name replaced wherever a string holds them, and
+ * its result wherever the harness put it (`resultValues`). The recorded
+ * result is the test server's own answer for the recorded tool. Throws when
+ * the recording does not hold that result where the harness is known to put
+ * it: the replay would carry the recorded result.
+ */
+export function callFrames(agent, recorded, { id, tool, result }) {
+  const frames = recordedCall(agent, recorded)
+  const recordedId = frames[0].toolCallId
+  // A recorded value that is absent marks no place in the frames.
+  const pairs = resultValues[agent](TOOLS[RECORDED_TOOL].call({}), result).filter(
+    ([from]) => from !== null,
+  )
+  const used = new Set()
+  const put = (value) => {
+    const pair = pairs.findIndex(([from]) => same(value, from))
+    if (pair !== -1) {
+      used.add(pair)
+      return pairs[pair][1]
+    }
+    if (typeof value === "string")
+      return value.replaceAll(recordedId, id).replaceAll(RECORDED_TOOL, tool)
+    if (Array.isArray(value)) return value.map(put)
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, each]) => [key, put(each)]),
+      )
+    return value
+  }
+  const replayed = frames.map(put)
+  if (used.size !== pairs.length)
+    throw new Error(
+      `the ${agent} recording does not hold ${RECORDED_TOOL}'s result where ${agent} puts it`,
+    )
+  return replayed
 }

@@ -4,9 +4,12 @@
  * row of its design table (#418).
  */
 import { strict as assert } from "node:assert"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { dirname, join } from "node:path"
+import { existsSync, mkdtempSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { createInterface } from "node:readline"
+import { setTimeout as sleep } from "node:timers/promises"
 import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
@@ -21,13 +24,27 @@ const mcptest = {
 }
 
 const started = []
+/** Whether process `pid` is still running. */
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
 after(() => {
   for (const child of started) if (child.exitCode === null) child.kill("SIGKILL")
 })
 
-/** The agent as `agent`, with a `request` that resolves with the answer and the notifications before it. */
+/**
+ * The agent as `agent`, calling `review_rows`, with a `request` that resolves
+ * with the answer and the notifications before it, or rejects after 20 s: an
+ * agent that never answers fails its test rather than hanging the suite.
+ */
 function start(agent, env = {}) {
-  const child = spawn(process.execPath, [join(here, "scripted-agent.mjs"), agent], {
+  const script = join(here, "scripted-agent.mjs")
+  const child = spawn(process.execPath, [script, agent, "review_rows"], {
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "inherit"],
   })
@@ -44,9 +61,13 @@ function start(agent, env = {}) {
   return {
     child,
     request: (method, params) =>
-      new Promise((done) => {
+      new Promise((done, fail) => {
         const id = next++
-        waiting.set(id, done)
+        const timer = setTimeout(() => fail(new Error(`no answer to ${method}`)), 20_000)
+        waiting.set(id, (answer) => {
+          clearTimeout(timer)
+          done(answer)
+        })
         child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
       }),
     notify: (method, params) =>
@@ -193,4 +214,77 @@ test("a call the server refuses fails the turn, and nothing is reported", async 
   assert.equal(turn.notes.length, 0)
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a stand-in that never answers initialize fails session/new within the deadline, and is stopped", async (t) => {
+  // It says nothing, and its stdio is the agent's: it writes its pid where
+  // the test can see whether it is still running.
+  const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
+  const silent = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000)`
+  // Stopped after the test whatever it saw, so a failure here hangs nothing.
+  t.after(() => {
+    const left = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null
+    if (left !== null && alive(left)) process.kill(left, "SIGKILL")
+  })
+  const agent = start("codex", codexEnv)
+  const started = Date.now()
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [{ ...mcptest, args: ["-e", silent] }],
+  })
+  assert.match(opened.error.message, /did not answer initialize within/)
+  assert.ok(Date.now() - started < 15_000)
+  const pid = Number(readFileSync(pidFile, "utf8"))
+  const end = Date.now() + 5000
+  while (alive(pid) && Date.now() < end) await sleep(100)
+  assert.equal(alive(pid), false, "the stand-in that never answered is still running")
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("two sessions in one agent: each keeps its own options and servers", async () => {
+  const agent = start("codex", codexEnv)
+  const one = (await agent.request("session/new", { cwd: here, mcpServers: [mcptest] }))
+    .result
+  const two = (await agent.request("session/new", { cwd: here, mcpServers: [] })).result
+  assert.notEqual(one.sessionId, two.sessionId)
+  await agent.request("session/set_config_option", {
+    sessionId: one.sessionId,
+    configId: "mode",
+    value: "agent",
+  })
+  const set = await agent.request("session/set_config_option", {
+    sessionId: two.sessionId,
+    configId: "reasoning_effort",
+    value: "low",
+  })
+  assert.equal(
+    set.result.configOptions.find((each) => each.id === "mode").currentValue,
+    "read-only",
+  )
+  const first = await agent.request("session/prompt", {
+    sessionId: one.sessionId,
+    prompt: [],
+  })
+  assert.deepEqual(first.result, { stopReason: "end_turn" })
+  const second = await agent.request("session/prompt", {
+    sessionId: two.sessionId,
+    prompt: [],
+  })
+  assert.match(second.error.message, /no mcptest server/)
+  const unknown = await agent.request("session/prompt", { sessionId: "nope", prompt: [] })
+  assert.match(unknown.error.message, /no session nope/)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("an agent not named, or with no tool to call, exits 2 saying how to run it", () => {
+  for (const args of [["codex"], ["opencode", "review_rows"], []]) {
+    const run = spawnSync(process.execPath, [join(here, "scripted-agent.mjs"), ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+    assert.equal(run.status, 2, args.join(" "))
+    assert.match(run.stderr, /usage: scripted-agent\.mjs codex\|claude <tool>/)
+  }
 })
