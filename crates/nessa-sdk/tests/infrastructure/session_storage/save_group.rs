@@ -263,7 +263,17 @@ fn metadata_declaration_keeps_wire_and_preflight_field_authority_in_agreement() 
         .map(String::as_str)
         .collect::<Vec<_>>();
     checkpoint_keys.sort_unstable();
-    assert_eq!(checkpoint_keys, vec!["chain", "count", "identity"]);
+    assert_eq!(
+        checkpoint_keys,
+        vec![
+            "chain",
+            "count",
+            "identity",
+            "unit_length",
+            "unit_payload",
+            "unit_previous"
+        ]
+    );
     let roundtrip: GroupCheckpoint = serde_json::from_value(checkpoint.clone()).unwrap();
     assert_eq!(serde_json::to_value(roundtrip).unwrap(), checkpoint);
     for (field, value) in checkpoint.as_object().unwrap() {

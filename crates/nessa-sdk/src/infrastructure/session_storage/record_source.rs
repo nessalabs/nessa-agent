@@ -5,7 +5,9 @@
 use super::{
     record::RecordStorage,
     stream_fact,
-    terminal_discovery::{RecordReadStatus, TerminalCache},
+    terminal_discovery::{
+        CapturedCeiling, DiscoveryQuery, ExactPublication, RecordReadStatus, TerminalCache,
+    },
     transcript::TranscriptFold,
 };
 use crate::{
@@ -22,7 +24,7 @@ use nessa_sync::replication::{
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         mpsc, Arc, Mutex, PoisonError,
@@ -32,7 +34,6 @@ use std::{
 use tokio::runtime::Handle;
 
 const SCHEMA: &str = "nessa.physical-frame.v1";
-const REMEMBERED_HEADS: usize = 64;
 const SOURCE_QUEUE_CAPACITY: usize = 64;
 const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
 const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
@@ -400,7 +401,6 @@ impl NessaRecordSource {
                     stream,
                     origin: worker_origin,
                     head: 0,
-                    observed_heads: VecDeque::from([0]),
                     terminal_cache,
                 };
                 while let Ok(command) = receiver.recv() {
@@ -440,9 +440,11 @@ impl NessaRecordSource {
     /// record bytes. The store can decode one lookahead record before its byte
     /// limit check: total decoded accounted bytes are at most twice
     /// [`super::MAX_STORED_RECORD_BYTES`]. These are not physical disk I/O bytes.
-    /// Validation runs against a captured
-    /// tail, then return the actual committed head. `Preparing` resumes shared
-    /// SDK progress on a later call. Cache eviction or restart may repeat work.
+    /// Validation runs against a captured ceiling, then returns the actual
+    /// committed head. The shared cache owner reads current physical bounds
+    /// after checkout. `Preparing` resumes shared SDK progress on a later call.
+    /// Historical queries retain a separate bounded pass and completion proofs;
+    /// cache eviction or restart may repeat work.
     /// No idle worker is retained by the cache; dropping the final source joins
     /// this worker when done outside Tokio, as for ordinary source reads.
     ///
@@ -496,13 +498,19 @@ impl NessaRecordSource {
 
     /// Read one fixed-target page after bounded shared terminal discovery.
     /// An unknown target returns `Preparing` until its immutable prefix has been
-    /// validated; subsequent pages do not scan that prefix again. Physical page
+    /// validated. Retained completion proofs share reuse across sources; an
+    /// evicted proof may need a bounded historical rescan. A different unproven
+    /// historical query advances that original scan and returns `Preparing`
+    /// until the original query finishes, then may acquire its own scan.
+    /// Each physical step retains the count/byte limits of [`Self::bounded_head`].
+    /// Physical page
     /// budgets have the same units and bounds as `RecordSource::page`. Both
     /// paths ask core `validate_page_request` before stream metadata I/O; scope,
-    /// incarnation, retention and terminal checks remain source-owned. A ready
-    /// call additionally reads one target frame and one request-bounded page;
-    /// their decoded-byte ceilings are one and two runtime record caps,
-    /// respectively, in addition to discovery's two-cap ceiling.
+    /// incarnation, retention and terminal checks use the shared cache owner.
+    /// A ready call additionally reads one request-bounded page with a two
+    /// runtime-record-cap decoded-byte ceiling, in addition to discovery's
+    /// two-cap ceiling. Retained proofs are checked against current physical
+    /// bounds before reuse.
     ///
     /// # Errors
     /// Reports invalid page budgets or a nonterminal target, replaced/pruned
@@ -578,7 +586,6 @@ struct ReaderState {
     stream: StreamKey,
     origin: Id,
     head: u64,
-    observed_heads: VecDeque<u64>,
     terminal_cache: Arc<TerminalCache>,
 }
 
@@ -688,8 +695,7 @@ impl ReaderState {
                 .discover(
                     &self.runtime,
                     &self.stream,
-                    through.offset,
-                    Some(through.offset),
+                    DiscoveryQuery::CapturedHead(CapturedCeiling(through.offset)),
                 )
                 .await?
             {
@@ -697,12 +703,6 @@ impl ReaderState {
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
             }
         };
-        if self.observed_heads.back() != Some(&self.head) {
-            if self.observed_heads.len() == REMEMBERED_HEADS {
-                self.observed_heads.pop_front();
-            }
-            self.observed_heads.push_back(self.head);
-        }
         Ok(self.head)
     }
 
@@ -714,15 +714,7 @@ impl ReaderState {
         )
         .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
-        let tail = self.check_stream().await?;
-        if request.target > tail.offset {
-            return Err(SourceError::InvalidRequest);
-        }
-        if request.target > self.head {
-            self.advance_through(&Cursor::new(self.stream.clone(), request.target))
-                .await?;
-        }
-        if request.target > self.head || !self.is_terminal(request.target).await? {
+        if !self.is_terminal(request.target).await? {
             return Err(SourceError::InvalidRequest);
         }
         self.read_page(request).await
@@ -788,9 +780,8 @@ impl ReaderState {
 
     async fn bounded_head(&self, scope: &Scope) -> Result<RecordReadStatus<u64>, SourceError> {
         self.check_scope(scope)?;
-        let tail = self.check_stream().await?;
         self.terminal_cache
-            .discover(&self.runtime, &self.stream, tail.offset, None)
+            .discover(&self.runtime, &self.stream, DiscoveryQuery::Head)
             .await
     }
 
@@ -805,17 +796,12 @@ impl ReaderState {
         )
         .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
-        let tail = self.check_stream().await?;
-        if request.target > tail.offset {
-            return Err(SourceError::InvalidRequest);
-        }
         match self
             .terminal_cache
             .discover(
                 &self.runtime,
                 &self.stream,
-                tail.offset,
-                Some(request.target),
+                DiscoveryQuery::Publication(ExactPublication(request.target)),
             )
             .await?
         {
@@ -829,14 +815,14 @@ impl ReaderState {
     }
 
     async fn is_terminal(&self, target: u64) -> Result<bool, SourceError> {
-        if self.observed_heads.contains(&target) {
-            return Ok(true);
-        }
-        let tail = self.check_stream().await?.offset;
         loop {
             match self
                 .terminal_cache
-                .discover(&self.runtime, &self.stream, tail, Some(target))
+                .discover(
+                    &self.runtime,
+                    &self.stream,
+                    DiscoveryQuery::Publication(ExactPublication(target)),
+                )
                 .await?
             {
                 RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
@@ -1218,6 +1204,122 @@ mod tests {
             incarnation: IncarnationId(incarnation),
         };
         super::cached_receiver(cache, scope, stream)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn restored_checkpoint_accepts_real_same_generation_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+        let session = SessionId::new("checkpoint-extension").unwrap();
+        let lease = storage.open(session.clone()).await.unwrap();
+        let opening = SessionChange::Opened {
+            id: session.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        };
+        let initial = records::fold_changes(None, std::slice::from_ref(&opening)).unwrap();
+        let first = lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                initial.clone(),
+                vec![SessionSaveUnit::new(vec![opening]).unwrap()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.next().base(), 2);
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        let second_snapshot =
+            records::fold_changes(Some(&initial), std::slice::from_ref(&context)).unwrap();
+        let second = lease
+            .save_changes(
+                first.next().clone(),
+                second_snapshot,
+                vec![SessionSaveUnit::new(vec![context.clone()]).unwrap()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.next().base(), 4);
+        let source = storage
+            .record_source(&session, id("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let scope = source.scope(id("receiver"), id("epoch"));
+        let first_scope = scope.clone();
+        let prefix = tokio::task::spawn_blocking(move || {
+            let mut source = source;
+            assert_eq!(source.head(&first_scope).unwrap(), 4);
+            source
+                .page(&PageRequest {
+                    scope: first_scope,
+                    after: 0,
+                    target: 4,
+                    max_records: 4,
+                    max_payload_bytes: MAX_PAGE_PAYLOAD,
+                    max_record_bytes: MAX_PAGE_PAYLOAD,
+                })
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let mut uninterrupted = TranscriptFold::new(scope.clone()).unwrap();
+        uninterrupted.apply(&prefix.records).unwrap();
+        let mut restored =
+            TranscriptFold::restore(scope.clone(), 4, &uninterrupted.checkpoint().unwrap())
+                .unwrap();
+        let suffix = SessionChange::ProviderContext {
+            before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
+        };
+        let final_snapshot =
+            records::fold_changes(Some(&initial), &[context.clone(), suffix.clone()]).unwrap();
+        let extended = lease
+            .save_changes(
+                first.next().clone(),
+                final_snapshot.clone(),
+                vec![
+                    SessionSaveUnit::new(vec![context]).unwrap(),
+                    SessionSaveUnit::new(vec![suffix]).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(extended.next().base(), 6);
+        let source = storage
+            .record_source(&session, id("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let suffix_page = tokio::task::spawn_blocking(move || {
+            let mut source = source;
+            assert_eq!(source.head(&scope).unwrap(), 6);
+            source
+                .page(&PageRequest {
+                    scope,
+                    after: 4,
+                    target: 6,
+                    max_records: 2,
+                    max_payload_bytes: MAX_PAGE_PAYLOAD,
+                    max_record_bytes: MAX_PAGE_PAYLOAD,
+                })
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        uninterrupted.apply(&suffix_page.records).unwrap();
+        restored.apply(&suffix_page.records).unwrap();
+        assert_eq!(restored.applied(), 6);
+        assert_eq!(restored.snapshot(), Some(&final_snapshot));
+        assert_eq!(restored.snapshot(), uninterrupted.snapshot());
+        assert_eq!(
+            restored.checkpoint().unwrap(),
+            uninterrupted.checkpoint().unwrap()
+        );
+        drop(lease);
+        storage.shutdown().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2593,7 +2695,6 @@ mod tests {
             stream: stream.clone(),
             origin: id("origin"),
             head: 0,
-            observed_heads: VecDeque::from([0]),
             terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
@@ -2665,7 +2766,6 @@ mod tests {
             stream: stream.clone(),
             origin: id("origin"),
             head: 0,
-            observed_heads: VecDeque::from([0]),
             terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();

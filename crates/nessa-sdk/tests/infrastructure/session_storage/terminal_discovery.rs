@@ -22,7 +22,9 @@ use event_stream::{
     AdvanceRetentionFloor, EnableRetryPolicy, EventSink, IncarnationId, LifecycleAction,
     LifecycleOperationId, LifecycleRequest, NewEvent, Payload, RetentionOperationId, StreamId,
 };
+use nessa_sync::replication::application::RecordSource;
 use nessa_sync::replication::domain::{Id, Page, PageRequest, Scope};
+use rusqlite::Connection;
 use std::{env, panic, process::Command, sync::atomic::Ordering, thread};
 
 fn sid(value: &str) -> Id {
@@ -113,10 +115,13 @@ async fn append_save(
 
 // Unlike raw envelope fixtures, these saves pass the canonical semantic fold.
 async fn save_sixteen_publications(storage: &RecordStorage, id: &SessionId) {
+    save_publications(storage, id, 16).await;
+}
+async fn save_publications(storage: &RecordStorage, id: &SessionId, count: u64) {
     let lease = storage.open(id.clone()).await.unwrap();
     let mut binding = lease.load().await.unwrap().binding().clone();
     let mut snapshot: Option<SessionSnapshot> = None;
-    for generation in 0..16 {
+    for generation in 0..count {
         let change = if generation == 0 {
             SessionChange::Opened {
                 id: id.clone(),
@@ -143,7 +148,188 @@ async fn save_sixteen_publications(storage: &RecordStorage, id: &SessionId) {
         binding = receipt.next_for(&binding, 1).unwrap();
         snapshot = Some(next);
     }
-    assert_eq!(binding.base(), 32);
+    assert_eq!(binding.base(), 2 * count);
+}
+
+#[tokio::test]
+async fn fresh_reader_pages_older_publication_after_another_reader_proves_newer_head() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("older-page").unwrap();
+    save_sixteen_publications(&storage, &id).await;
+    let mut newer = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut older = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::task::spawn_blocking(move || {
+        let scope = newer.scope(sid("newer"), sid("epoch"));
+        assert_eq!(newer.head(&scope), Ok(32));
+        let mut request = PageRequest {
+            scope: older.scope(sid("older"), sid("epoch")),
+            after: 0,
+            target: 20,
+            max_records: 16,
+            max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        };
+        let page = older.page(&request);
+        assert!(
+            page.is_ok(),
+            "unchanged stream serves publication20: {page:?}"
+        );
+        let page = page.unwrap();
+        assert_eq!(page.request.target, 20);
+        assert_eq!(page.records.last().unwrap().position, 16);
+        request.target = 19;
+        assert_eq!(older.page(&request), Err(SourceError::InvalidRequest));
+        assert_eq!(newer.head(&scope), Ok(32));
+    })
+    .await
+    .unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn proven_historical_pages_share_completion_evidence_without_prefix_replay() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("proven-pages").unwrap();
+    save_sixteen_publications(&storage, &id).await;
+    let mut newer = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut older = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let cache = storage.terminal_cache.clone();
+    tokio::task::spawn_blocking(move || {
+        let scope = newer.scope(sid("newer"), sid("epoch"));
+        assert_eq!(newer.head(&scope), Ok(32));
+        let before = cache.returned_records.load(Ordering::SeqCst);
+        assert_eq!(before, 32);
+        for after in [0, 8, 16] {
+            let request = PageRequest {
+                scope: older.scope(sid("older"), sid("epoch")),
+                after,
+                target: 20,
+                max_records: 4,
+                max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            };
+            let page = older.bounded_page(&request).unwrap();
+            assert!(
+                matches!(page, RecordReadStatus::Ready(_)),
+                "proven publication20 is ready: {page:?}"
+            );
+            assert_eq!(cache.returned_records.load(Ordering::SeqCst), before);
+            assert_eq!(newer.head(&scope), Ok(32));
+            assert_eq!(cache.returned_records.load(Ordering::SeqCst), before);
+        }
+    })
+    .await
+    .unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn competing_historical_query_advances_original_scan_and_preserves_forward_head() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("competing-history").unwrap();
+    // Ninety-six saves exceed the existing 64 remembered completions.
+    // Completion40 is evicted; Unit11 has no completion proof.
+    save_publications(&storage, &id, 96).await;
+    let mut original = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut competing = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let cache = storage.terminal_cache.clone();
+    tokio::task::spawn_blocking(move || {
+        let scope = original.scope(sid("original"), sid("epoch"));
+        assert_eq!(original.head(&scope), Ok(192));
+        let before = cache.returned_records.load(Ordering::SeqCst);
+        {
+            let entries = cache.entries.lock().unwrap();
+            let progress = entries.front().unwrap().state.as_ref().unwrap();
+            assert_eq!(progress.proven.len(), PROVEN_COMPLETIONS, "shared completion evidence retains its published64-entry bound");
+            assert_eq!(progress.proven.capacity(), PROVEN_COMPLETIONS);
+        }
+        let request = PageRequest {
+            scope,
+            after: 0,
+            target: 40,
+            max_records: 4,
+            max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        };
+        assert_eq!(
+            original.bounded_page(&request),
+            Ok(RecordReadStatus::Preparing)
+        );
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 16);
+        {
+            let entries = cache.entries.lock().unwrap();
+            let progress = entries.front().unwrap().state.as_ref().unwrap();
+            let historical = progress.historical.as_ref().unwrap();
+            assert_eq!(progress.proven.len(), PROVEN_COMPLETIONS, "shared completion evidence retains its published64-entry bound");
+            assert_eq!(progress.proven.capacity(), PROVEN_COMPLETIONS);
+            let scan_allocations = progress.forward.validator.allocation_bytes()
+                + progress.forward.groups.allocation_bytes()
+                + historical.scan.validator.allocation_bytes()
+                + historical.scan.groups.allocation_bytes();
+            eprintln!("NESSA_401_DISCOVERY_METADATA progress_inline={} scan_inline={} historical_box={} entry_inline={} owner_inline={} proofs_len={} proofs_capacity={} proofs_bytes={} scan_dynamic={} cache_len={} cache_capacity={}",
+                std::mem::size_of::<Progress>(), std::mem::size_of::<Scan>(),
+                std::mem::size_of::<Historical>(), std::mem::size_of::<Entry>(),
+                std::mem::size_of::<Owner>(), progress.proven.len(), progress.proven.capacity(),
+                progress.proven.capacity() * std::mem::size_of::<u64>(), scan_allocations,
+                entries.len(), entries.capacity());
+        }
+        let mut other = request.clone();
+        other.scope = competing.scope(sid("competing"), sid("epoch"));
+        other.target = 11;
+        assert_eq!(
+            competing.bounded_page(&other),
+            Ok(RecordReadStatus::Preparing),
+            "another target advances the original finite proof before acquiring its own scan"
+        );
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 32);
+        assert!(matches!(
+            original.bounded_page(&request),
+            Ok(RecordReadStatus::Ready(_))
+        ));
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 40);
+        assert_eq!(original.head(&request.scope), Ok(192));
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 40);
+        assert_eq!(
+            competing.bounded_page(&other),
+            Err(SourceError::InvalidRequest)
+        );
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 51);
+        assert!(matches!(
+            original.bounded_page(&request),
+            Ok(RecordReadStatus::Ready(_))
+        ));
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 51);
+    })
+    .await
+    .unwrap();
+    storage.shutdown().await.unwrap();
 }
 async fn target_page(
     storage: &RecordStorage,
@@ -859,9 +1045,9 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
             .state
             .as_ref()
             .unwrap();
-        assert_eq!(saved.terminal, valid);
+        assert_eq!(saved.forward.groups.published(), valid);
         assert_eq!(
-            saved.validator.offset(),
+            saved.forward.validator.offset(),
             valid,
             "invalid framing does not publish progress"
         );
@@ -910,7 +1096,13 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         assert_eq!(result, Err(SourceError::Unavailable), "attempt={attempt}");
         let cache = storage.terminal_cache.entries.lock().unwrap();
         let saved = cache.front().unwrap().state.as_ref().unwrap();
-        assert_eq!((saved.validator.offset(), saved.terminal), (2, 0));
+        assert_eq!(
+            (
+                saved.forward.validator.offset(),
+                saved.forward.groups.published()
+            ),
+            (2, 0)
+        );
         assert_eq!(
             storage
                 .terminal_cache
@@ -962,7 +1154,13 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
     {
         let cache = storage.terminal_cache.entries.lock().unwrap();
         let saved = cache.front().unwrap().state.as_ref().unwrap();
-        assert_eq!((saved.validator.offset(), saved.terminal), (0, 0));
+        assert_eq!(
+            (
+                saved.forward.validator.offset(),
+                saved.forward.groups.published()
+            ),
+            (0, 0)
+        );
     }
     storage.shutdown().await.unwrap();
 }
@@ -1153,10 +1351,299 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             assert_eq!(result, Err(SourceError::Unavailable));
             let cache = storage.terminal_cache.entries.lock().unwrap();
             let progress = cache.front().unwrap().state.as_ref().unwrap();
-            assert_eq!(progress.validator.offset(), (16 + first_count) as u64);
-            assert_eq!(progress.terminal, 0);
+            assert_eq!(
+                progress.forward.validator.offset(),
+                (16 + first_count) as u64
+            );
+            assert_eq!(progress.forward.groups.published(), 0);
         } else {
             assert!(matches!(result, Ok(RecordReadStatus::Ready(_))));
+        }
+        storage.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn historical_miss_preserves_known_forward_failure_and_clean_head() {
+    for malformed in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("records");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("forward-failure").unwrap();
+        save_publications(&storage, &id, 96).await;
+        let newer = storage
+            .record_source(&id, sid("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut newer = tokio::task::spawn_blocking(move || {
+            let mut newer = newer;
+            let scope = newer.scope(sid("newer"), sid("epoch"));
+            assert_eq!(newer.head(&scope), Ok(192));
+            newer
+        })
+        .await
+        .unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (snapshot, binding) = lease.load().await.unwrap().into_published(&id).unwrap();
+        let snapshot = snapshot.unwrap();
+        let change = SessionChange::ProviderContext {
+            before: snapshot.provider_context.clone(),
+            after: ProviderContext::Recorded(ExecutionSessionId::new("later-context").unwrap()),
+        };
+        let next = records::fold_changes(Some(&snapshot), std::slice::from_ref(&change)).unwrap();
+        let receipt = lease
+            .save_changes(
+                binding.clone(),
+                next,
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.next_for(&binding, 1).unwrap().base(), 194);
+        drop(lease);
+        if malformed {
+            // Corrupt only a newly appended physical row, never a validated prefix.
+            // Keep its original stream identity, offset, event id and schema.
+            let changed = Connection::open(root.join("records.sqlite3"))
+                .unwrap()
+                .execute(
+                    "UPDATE event_records SET payload = ?1 WHERE offset = ?2",
+                    rusqlite::params![&[99u8][..], &193u64.to_be_bytes()[..]],
+                )
+                .unwrap();
+            assert_eq!(changed, 1);
+        }
+        let mut historical = storage
+            .record_source(&id, sid("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let cache = storage.terminal_cache.clone();
+        tokio::task::spawn_blocking(move || {
+            let scope = newer.scope(sid("newer"), sid("epoch"));
+            let expected = if malformed {
+                Err(SourceError::Unavailable)
+            } else {
+                Ok(RecordReadStatus::Ready(194))
+            };
+            assert_eq!(newer.bounded_head(&scope), expected);
+            let request = PageRequest {
+                scope: historical.scope(sid("historical"), sid("epoch")),
+                after: 0,
+                target: 40,
+                max_records: 4,
+                max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            };
+            let before = cache.returned_records.load(Ordering::SeqCst);
+            assert_eq!(
+                historical.bounded_page(&request),
+                Ok(RecordReadStatus::Preparing)
+            );
+            assert_eq!(
+                historical.bounded_page(&request),
+                Ok(RecordReadStatus::Preparing)
+            );
+            assert!(matches!(
+                historical.bounded_page(&request),
+                Ok(RecordReadStatus::Ready(_))
+            ));
+            assert_eq!(cache.returned_records.load(Ordering::SeqCst) - before, 40);
+            for _ in 0..2 {
+                assert_eq!(
+                    newer.bounded_head(&scope),
+                    expected,
+                    "historical40 preserves the original newer-head result"
+                );
+                assert_eq!(
+                    cache.returned_records.load(Ordering::SeqCst) - before,
+                    40,
+                    "sticky forward failure performs no additional discovery read"
+                );
+            }
+        })
+        .await
+        .unwrap();
+        storage.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn historical_scan_survives_public_source_drop_and_recreation() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("historical-drop").unwrap();
+    save_publications(&storage, &id, 96).await;
+    let mut first = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let cache = storage.terminal_cache.clone();
+    let request = tokio::task::spawn_blocking(move || {
+        let scope = first.scope(sid("receiver"), sid("epoch"));
+        assert_eq!(first.head(&scope), Ok(192));
+        let request = PageRequest {
+            scope,
+            after: 0,
+            target: 40,
+            max_records: 4,
+            max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        };
+        assert_eq!(
+            first.bounded_page(&request),
+            Ok(RecordReadStatus::Preparing)
+        );
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst), 208);
+        let mut known = request.clone();
+        known.target = 10;
+        assert!(matches!(
+            first.bounded_page(&known),
+            Ok(RecordReadStatus::Ready(_))
+        ));
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst), 208);
+        drop(first);
+        request
+    })
+    .await
+    .unwrap();
+    let mut replacement = storage
+        .record_source(&id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let cache = storage.terminal_cache.clone();
+    tokio::task::spawn_blocking(move || {
+        assert_eq!(
+            replacement.bounded_page(&request),
+            Ok(RecordReadStatus::Preparing)
+        );
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst), 224);
+        let page = replacement.bounded_page(&request);
+        assert!(
+            matches!(page, Ok(RecordReadStatus::Ready(_))),
+            "replacement resumes retained historical40: {page:?}"
+        );
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst), 232);
+        assert_eq!(replacement.head(&request.scope), Ok(192));
+        assert_eq!(cache.returned_records.load(Ordering::SeqCst), 232);
+    })
+    .await
+    .unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_completion_proof_refuses_reset_prune_and_same_incarnation_shrink() {
+    for change in ["reset", "prune", "shrink"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("records");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("physical-proof").unwrap();
+        save_sixteen_publications(&storage, &id).await;
+        let mut newer = storage
+            .record_source(&id, sid("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut historical = storage
+            .record_source(&id, sid("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::task::spawn_blocking(move || {
+            let scope = newer.scope(sid("newer"), sid("epoch"));
+            assert_eq!(newer.head(&scope), Ok(32));
+        })
+        .await
+        .unwrap();
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let expected = match change {
+            "reset" => {
+                runtime
+                    .change_lifecycle(LifecycleRequest {
+                        operation_id: LifecycleOperationId::new("proof-reset").unwrap(),
+                        expected: stream,
+                        action: LifecycleAction::Reset,
+                    })
+                    .await
+                    .unwrap();
+                SourceError::IdentityChanged
+            }
+            "prune" => {
+                runtime
+                    .enable_retry_policy(EnableRetryPolicy {
+                        operation_id: RetentionOperationId::new("proof-policy").unwrap(),
+                        stream: stream.clone(),
+                    })
+                    .await
+                    .unwrap();
+                runtime
+                    .advance_retention_floor(AdvanceRetentionFloor {
+                        operation_id: RetentionOperationId::new("proof-prune").unwrap(),
+                        stream: stream.clone(),
+                        expected_floor: Cursor::new(stream.clone(), 0),
+                        new_floor: Cursor::new(stream, 1),
+                    })
+                    .await
+                    .unwrap();
+                SourceError::Pruned
+            }
+            "shrink" => {
+                let mut database = Connection::open(root.join("records.sqlite3")).unwrap();
+                let transaction = database.transaction().unwrap();
+                assert_eq!(
+                    transaction
+                        .execute(
+                            "DELETE FROM event_records WHERE offset > ?1",
+                            [30u64.to_be_bytes().as_slice()]
+                        )
+                        .unwrap(),
+                    2
+                );
+                assert_eq!(
+                    transaction
+                        .execute(
+                            "UPDATE event_streams SET tail = ?1",
+                            [30u64.to_be_bytes().as_slice()]
+                        )
+                        .unwrap(),
+                    1
+                );
+                transaction.commit().unwrap();
+                SourceError::IdentityChanged
+            }
+            _ => unreachable!(),
+        };
+        let cache = storage.terminal_cache.clone();
+        tokio::task::spawn_blocking(move || {
+            let request = PageRequest {
+                scope: historical.scope(sid("historical"), sid("epoch")),
+                after: 0,
+                target: 20,
+                max_records: 4,
+                max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            };
+            let before = cache.returned_records.load(Ordering::SeqCst);
+            assert_eq!(
+                historical.bounded_page(&request),
+                Err(expected),
+                "change={change}"
+            );
+            assert_eq!(cache.returned_records.load(Ordering::SeqCst), before);
+        })
+        .await
+        .unwrap();
+        if change == "reset" {
+            assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(0));
         }
         storage.shutdown().await.unwrap();
     }

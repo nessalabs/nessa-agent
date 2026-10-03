@@ -132,10 +132,6 @@ impl RecordWriter {
     pub(super) fn stream(&self) -> &StreamKey {
         &self.stream
     }
-    pub(super) fn has_unresolved_fact(&self) -> bool {
-        self.unfinished || self.pending.is_some() || self.blocked
-    }
-
     fn accept(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {
         let header = Header::decode(&fact.body)?;
         let original = binding(
@@ -1888,7 +1884,6 @@ mod tests {
                 Cursor::new(stream.clone(), 1),
             )
             .unwrap();
-        assert!(writer.has_unresolved_fact());
         assert!(
             runtime
                 .shutdown(Duration::from_secs(5))

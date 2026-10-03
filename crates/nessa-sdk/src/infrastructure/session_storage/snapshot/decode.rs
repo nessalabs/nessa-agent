@@ -437,7 +437,10 @@ mod checkpoint_group_tests {
                     "generation": 0
                 },
                 "count": 1,
-                "chain": vec![0; 32]
+                "chain": vec![0; 32],
+                "unit_previous": vec![0; 32],
+                "unit_payload": vec![0; 32],
+                "unit_length": 1
             }
         });
         // Representation admission deliberately runs before serde/domain
@@ -448,9 +451,12 @@ mod checkpoint_group_tests {
             "/group",
             "/group/identity",
             "/group/chain",
+            "/group/unit_previous",
+            "/group/unit_payload",
             "/group/identity/stream",
             "/group/identity/incarnation",
             "/group/count",
+            "/group/unit_length",
             "/group/identity/base",
             "/group/identity/generation",
         ] {
@@ -460,17 +466,25 @@ mod checkpoint_group_tests {
             "/group",
             "/group/identity",
             "/group/count",
+            "/group/unit_length",
             "/group/identity/base",
             "/group/identity/generation",
         ] {
             cases.push((path, json!([0])));
         }
-        for path in ["/group/chain", "/group/identity/stream"] {
+        for path in [
+            "/group/chain",
+            "/group/unit_previous",
+            "/group/unit_payload",
+            "/group/identity/stream",
+        ] {
             cases.push((path, json!(vec![0; 33])));
         }
         cases.push(("/group/identity/incarnation", json!(vec![0; 17])));
         for path in [
             "/group/chain",
+            "/group/unit_previous",
+            "/group/unit_payload",
             "/group/identity/stream",
             "/group/identity/incarnation",
         ] {
@@ -478,9 +492,12 @@ mod checkpoint_group_tests {
         }
         for path in [
             "/group/chain",
+            "/group/unit_previous",
+            "/group/unit_payload",
             "/group/identity/stream",
             "/group/identity/incarnation",
             "/group/count",
+            "/group/unit_length",
             "/group/identity/base",
             "/group/identity/generation",
         ] {

@@ -1977,6 +1977,90 @@ mod tests {
         ]]);
         assert!(matches!(oversized, Err(TranscriptError::Checkpoint)));
     }
+
+    fn changed_prior_base_refuses(base: u64) {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            3,
+            &save_frames(accepted_input("next"), 2, 1),
+        ))
+        .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        assert!(TranscriptFold::restore(scope.clone(), 4, &checkpoint).is_ok());
+        let saved: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        assert_eq!(saved["group"]["identity"]["base"], serde_json::json!(2));
+        let mut changed = saved.clone();
+        changed["group"]["identity"]["base"] = serde_json::json!(base);
+        let malformed =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()]).unwrap();
+        assert!(
+            matches!(
+                TranscriptFold::restore(scope.clone(), 4, &malformed),
+                Err(TranscriptError::Checkpoint)
+            ),
+            "accepted changed original base {base}"
+        );
+    }
+
+    #[test]
+    fn checkpoint_refuses_lower_prior_base_with_other_completion_fields_unchanged() {
+        changed_prior_base_refuses(1);
+    }
+
+    #[test]
+    fn checkpoint_refuses_higher_prior_base_with_other_completion_fields_unchanged() {
+        changed_prior_base_refuses(3);
+    }
+
+    #[test]
+    fn checkpoint_refuses_changed_final_unit_preimage_and_completion_chain() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            3,
+            &save_frames(accepted_input("next"), 2, 1),
+        ))
+        .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let saved: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        assert!(TranscriptFold::restore(scope.clone(), 4, &checkpoint).is_ok());
+        for path in [
+            "/group/unit_previous/0",
+            "/group/unit_payload/0",
+            "/group/chain/0",
+            "/group/unit_length",
+            "/group/count",
+            "/group/identity/generation",
+        ] {
+            let mut changed = saved.clone();
+            let slot = changed.pointer_mut(path).unwrap();
+            let value = slot.as_u64().unwrap();
+            *slot = serde_json::json!(if path.ends_with("/0") {
+                (value + 1) % 256
+            } else {
+                value + 1
+            });
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(
+                matches!(
+                    TranscriptFold::restore(scope.clone(), 4, &malformed),
+                    Err(TranscriptError::Checkpoint)
+                ),
+                "accepted changed final Unit preimage: {path}"
+            );
+        }
+        assert!(TranscriptFold::restore(scope, 4, &checkpoint).is_ok());
+    }
+
     #[test]
     fn checkpoint_rejects_each_independent_completion_binding_contradiction() {
         let scope = scope();

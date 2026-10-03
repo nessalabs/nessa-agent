@@ -402,11 +402,6 @@ impl SessionStorageLease for RecordLease {
                     return state.reconcile_erasure(&inner).await;
                 }
                 let key = state.writer.stream().clone();
-                let bounds = inner.runtime.bounds(&key).await.map_err(store_error)?;
-                if bounds.tail.offset == 0 && !state.writer.has_unresolved_fact() {
-                    state.cleanup_pending = true;
-                    return state.reconcile_erasure(&inner).await;
-                }
                 let mut digest = Sha256::new();
                 digest.update(key.id.as_str().as_bytes());
                 digest.update(key.incarnation.0);
@@ -1393,6 +1388,71 @@ mod tests {
         assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
         drop(lease);
         storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_erase_invalidates_unpolled_original_save_before_new_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("empty-erase-binding").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, initial) = opening(&id);
+        let original = lease.load().await.unwrap().binding().clone();
+        let mut watch = storage.watch_committed(&id).unwrap();
+        watch_pending(&mut watch);
+        let queued = lease.save_changes(
+            original.clone(),
+            initial.clone(),
+            vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()],
+        );
+
+        lease.erase().await.unwrap();
+        let reset = lease.load().await.unwrap();
+        assert!(reset.snapshot().is_none());
+        assert_eq!(
+            (reset.binding().base(), reset.binding().generation()),
+            (0, 0)
+        );
+        let reset_notice = Box::pin(watch.changed())
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()));
+        let old_result = queued.await;
+        let rows_after_old = rows(&root);
+        let new_receipt = lease
+            .save_changes(
+                reset.binding().clone(),
+                initial.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage.open(id.clone()).await,
+            Err(StorageError::Busy)
+        ));
+        drop(lease);
+        let reopened = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = reopened.load().await.unwrap();
+        assert_eq!(loaded.snapshot(), Some(&initial));
+        assert_eq!(loaded.binding(), new_receipt.next());
+        drop(reopened);
+        storage.shutdown().await.unwrap();
+
+        assert_ne!(
+            reset.binding().backend(),
+            original.backend(),
+            "empty erase must replace the original binding"
+        );
+        assert!(
+            matches!(old_result, Err(StorageError::Corrupt(_))),
+            "old queued save must refuse before append"
+        );
+        assert_eq!(rows_after_old, 0);
+        assert!(
+            matches!(reset_notice, Poll::Ready(ChangeWatchState::Dirty)),
+            "empty Reset must publish through its original hook"
+        );
     }
 
     #[tokio::test]
