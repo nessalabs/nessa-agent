@@ -2,9 +2,10 @@
 //!
 //! The listening socket sits behind [`EnrollmentAccept`], so tests can produce
 //! accept failures. What a failure means is decided by `accept_step`, design
-//! row P67: a failure of one connection is skipped, descriptor exhaustion
-//! pauses with a bounded backoff, and anything else is a failure of the
-//! listening socket, which ends the run.
+//! row P67: only the closed set of errors that mean the listening socket is
+//! invalid ends the run; a failure of one connection is skipped; anything else,
+//! including an error the listener does not recognise, pauses with a bounded
+//! backoff and then accepts again.
 use super::worker::worker_fault;
 use super::{
     connection::NativeConnectionCompletion, NativeConnectionFailure, NativeEnrollmentConnections,
@@ -22,9 +23,9 @@ use tokio::{
     task::{JoinError, JoinSet},
 };
 
-/// Pause after the first descriptor-exhaustion failure; it doubles each time.
+/// Pause after the first failure that is not skipped; it doubles each time.
 const FIRST_PAUSE: Duration = Duration::from_millis(50);
-/// Longest pause after repeated descriptor-exhaustion failures.
+/// Longest pause after repeated failures.
 const LONGEST_PAUSE: Duration = Duration::from_secs(1);
 
 /// What one accept on the listening socket produced.
@@ -74,42 +75,68 @@ impl EnrollmentAccept for TcpEnrollmentAccept {
 /// What the listener does after a failed `accept`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AcceptStep {
-    /// Only that connection failed; accept the next one.
+    /// Only that connection failed; accept the next one at once.
     Skip,
-    /// The process or system is out of file descriptors; wait, then accept.
+    /// Resource exhaustion or an unrecognised error; wait, then accept.
     Pause,
-    /// The listening socket itself failed.
+    /// The listening socket itself is invalid.
     Stop,
 }
+/// Stop is the closed set; skip names the per-connection errors; everything
+/// else, recognised or not, pauses. An error with no OS code is unrecognised:
+/// only the OS can say the listening socket is invalid.
 fn accept_step(error: &IoError) -> AcceptStep {
-    if out_of_descriptors(error) {
-        return AcceptStep::Pause;
+    let code = error.raw_os_error();
+    if code.is_some_and(|code| LISTENER_INVALID.contains(&code)) {
+        return AcceptStep::Stop;
     }
-    match error.kind() {
-        ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::Interrupted => {
-            AcceptStep::Skip
-        }
-        _ => AcceptStep::Stop,
+    if matches!(
+        error.kind(),
+        ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::Interrupted
+    ) || code.is_some_and(|code| CONNECTION_FAILED.contains(&code))
+    {
+        return AcceptStep::Skip;
     }
+    AcceptStep::Pause
 }
-/// EMFILE and ENFILE have no `ErrorKind` of their own, so the OS code decides.
-fn out_of_descriptors(error: &IoError) -> bool {
-    #[cfg(unix)]
-    {
-        matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
-    }
-    #[cfg(windows)]
-    {
-        /// WSAEMFILE: too many open sockets.
-        const WSAEMFILE: i32 = 10024;
-        error.raw_os_error() == Some(WSAEMFILE)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = error;
-        false
-    }
-}
+/// OS codes meaning the listening socket itself is invalid.
+#[cfg(unix)]
+const LISTENER_INVALID: [i32; 4] = [libc::EBADF, libc::EINVAL, libc::ENOTSOCK, libc::EFAULT];
+/// WSAEBADF, WSAEINVAL, WSAENOTSOCK, WSAEFAULT.
+#[cfg(windows)]
+const LISTENER_INVALID: [i32; 4] = [10009, 10022, 10038, 10014];
+#[cfg(not(any(unix, windows)))]
+const LISTENER_INVALID: [i32; 0] = [];
+/// Network errors of the new socket that accept(2) passes back, which its
+/// manual says to retry like EAGAIN. Windows reports per-connection failures
+/// through the error kinds above; anything else there pauses.
+#[cfg(target_os = "linux")]
+const CONNECTION_FAILED: [i32; 10] = [
+    libc::ENETDOWN,
+    libc::EPROTO,
+    libc::ENOPROTOOPT,
+    libc::EHOSTDOWN,
+    libc::ENONET,
+    libc::EHOSTUNREACH,
+    libc::EOPNOTSUPP,
+    libc::ENETUNREACH,
+    libc::EPERM,
+    libc::ETIMEDOUT,
+];
+#[cfg(all(unix, not(target_os = "linux")))]
+const CONNECTION_FAILED: [i32; 9] = [
+    libc::ENETDOWN,
+    libc::EPROTO,
+    libc::ENOPROTOOPT,
+    libc::EHOSTDOWN,
+    libc::EHOSTUNREACH,
+    libc::EOPNOTSUPP,
+    libc::ENETUNREACH,
+    libc::EPERM,
+    libc::ETIMEDOUT,
+];
+#[cfg(not(unix))]
+const CONNECTION_FAILED: [i32; 0] = [];
 
 /// Bound native enrollment listener. Composition restores the gateway identity
 /// before binding. Dropping the listener, or the `run` future, stops admission;
@@ -130,12 +157,14 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
     /// Accept until `stop` completes or the listening socket fails, then stop
     /// admission, collect every admitted worker's result and wait for drain.
     ///
-    /// A failure of one connection is logged at debug and skipped. Descriptor
-    /// exhaustion is logged at warn and pauses for 50 ms, doubling to at most
-    /// 1 s, until an accept succeeds; stop wins during a pause
+    /// A failure of one connection is logged at debug and skipped
     /// (`native_listener_skips_connection_failures_and_backs_off_on_exhaustion`).
-    /// Any other accept failure ends the run: `failed` receives its kind before
-    /// the drain starts and the error is returned
+    /// Resource exhaustion and unrecognised errors are logged at warn and pause
+    /// for 50 ms, doubling to at most 1 s; the pause resets when an accept
+    /// yields a connection, and a stop during a pause ends the run at once
+    /// (`native_listener_stop_ends_a_pause`). Only an error meaning the listening
+    /// socket is invalid ends the run: `failed` receives its kind while admitted
+    /// workers are still running, before the drain, and the error is returned
     /// (`native_listener_stops_on_a_listening_socket_failure`). A failed peer
     /// does not end service for others. Result handles hold the connection
     /// permit, so the task set is bounded by connection capacity.
@@ -190,7 +219,7 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
                 AcceptStep::Pause => {
                     let wait = pause.map_or(FIRST_PAUSE, |last| (last * 2).min(LONGEST_PAUSE));
                     pause = Some(wait);
-                    tracing::warn!(?wait, "Native enrollment accept is out of file descriptors");
+                    tracing::warn!(?wait, kind = ?error.kind(), "Native enrollment accept failed; pausing");
                     tokio::select! {
                         biased;
                         () = &mut stop => break Ok(()),

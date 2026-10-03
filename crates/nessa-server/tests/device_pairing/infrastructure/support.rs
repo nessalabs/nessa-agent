@@ -36,6 +36,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{sync_channel, Receiver, SyncSender},
         Arc, Mutex,
     },
     thread::{self, ThreadId},
@@ -297,6 +298,8 @@ pub struct FaultyStore {
     claimed: AtomicBool,
     async_thread: Mutex<Option<ThreadId>>,
     calls_on_async_thread: AtomicUsize,
+    park: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
+    parked: AtomicBool,
 }
 impl FaultyStore {
     pub fn new(inner: Arc<LocalCredentialStore>) -> Arc<Self> {
@@ -306,7 +309,21 @@ impl FaultyStore {
             claimed: AtomicBool::new(false),
             async_thread: Mutex::new(None),
             calls_on_async_thread: AtomicUsize::new(0),
+            park: Mutex::new(None),
+            parked: AtomicBool::new(false),
         })
+    }
+    /// The next store read parks its thread: the first receiver fires when it
+    /// has parked, and it stays parked until the sender fires.
+    pub fn park_next_read(&self) -> (oneshot::Receiver<()>, SyncSender<()>) {
+        let (entered, has_entered) = oneshot::channel();
+        let (release, released) = sync_channel(1);
+        *self.park.lock().unwrap() = Some((entered, released));
+        (has_entered, release)
+    }
+    /// Whether a read is parked now.
+    pub fn parked(&self) -> bool {
+        self.parked.load(Ordering::SeqCst)
     }
     /// Count every later store call made on `thread`. On a current-thread
     /// runtime every async task runs on the thread that drives it, and blocking
@@ -335,6 +352,13 @@ impl FaultyStore {
         }
     }
     fn read(&self) -> Result<(), PairingStoreError> {
+        let park = self.park.lock().unwrap().take();
+        if let Some((entered, released)) = park {
+            self.parked.store(true, Ordering::SeqCst);
+            entered.send(()).ok();
+            released.recv().ok();
+            self.parked.store(false, Ordering::SeqCst);
+        }
         self.refuses(Fault::Reads)?;
         if self.claimed.load(Ordering::SeqCst) {
             self.refuses(Fault::ReadsAfterClaim)
