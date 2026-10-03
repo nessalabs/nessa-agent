@@ -1357,6 +1357,7 @@ pub trait GatewayHost: Send + Sync {
 /// finds no children to carry the gate to — it says so.
 #[cfg(test)]
 pub(crate) mod testing {
+    use super::super::Gateway;
     use super::{
         AuditDeliveryReceipt, GatewayError, GatewayReconciliationAttempt,
         GatewayReconciliationAudit, GatewayReconciliationIds, GatewayReconciliationIntent,
@@ -1367,10 +1368,16 @@ pub(crate) mod testing {
         LoginShellPath, ReconciliationCleanupDecision, ReconciliationCorrelation,
         ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     };
+    use super::{
+        GatewayHost, GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
+        ReconciliationHistoryFact,
+    };
+    use crate::gateway::domain::value_objects::ReconciliationInitiator;
     use std::{
+        path::Path,
         sync::{
             atomic::{AtomicU64, Ordering},
-            Arc,
+            Arc, Mutex,
         },
         time::Instant,
     };
@@ -1413,6 +1420,99 @@ pub(crate) mod testing {
 
     pub(crate) fn sequential_reconciliation_ids() -> Arc<dyn GatewayReconciliationIds> {
         Arc::new(SequentialReconciliationIds::default())
+    }
+
+    /// A background service host that registers, or refuses to, without
+    /// launchd, and writes down each registration and who asked for it.
+    pub(crate) struct RecordingGatewayHost {
+        registration: Result<ReconciledGateway, GatewayError>,
+        pub(crate) registrations: Mutex<u32>,
+        pub(crate) initiators: Mutex<Vec<ReconciliationInitiator>>,
+    }
+
+    impl GatewayHost for RecordingGatewayHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            *self.registrations.lock().unwrap() += 1;
+            self.initiators
+                .lock()
+                .unwrap()
+                .push(attempt.origin().evidence().initiator());
+            let target = match &self.registration {
+                Ok(gateway) => gateway.audit_identity()?.target().clone(),
+                Err(_) => ReconciliationTarget::new(
+                    "com.nessa.gateway".into(),
+                    "a".repeat(64),
+                    "b".repeat(64),
+                )
+                .expect("target"),
+            };
+            let intent =
+                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent");
+            progress.intent_admitted(intent)?;
+            if self.registration.is_ok() {
+                for fact in [
+                    ReconciliationHistoryFact::ServiceDefinitionPublished,
+                    ReconciliationHistoryFact::ServiceDefinitionDurable,
+                    ReconciliationHistoryFact::BootstrapCommandRequested,
+                    ReconciliationHistoryFact::BootstrapCommandCompleted,
+                    ReconciliationHistoryFact::BootstrapCommandSucceeded,
+                ] {
+                    progress.history_observed(fact);
+                }
+            }
+            self.registration.clone()
+        }
+
+        fn stop_agents(
+            &self,
+            _: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            _: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            Err(GatewayError::Stop("unused test stop".into()))
+        }
+    }
+
+    /// A gateway over a [`RecordingGatewayHost`] that registers as `registration` says.
+    pub(crate) fn recording_gateway(
+        registration: Result<ReconciledGateway, GatewayError>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>) {
+        let host = Arc::new(RecordingGatewayHost {
+            registration,
+            registrations: Mutex::new(0),
+            initiators: Mutex::new(Vec::new()),
+        });
+        (
+            Gateway::bootstrap(
+                host.clone(),
+                system_login_shell(),
+                discard_startup_events(),
+                sequential_reconciliation_ids(),
+                discard_reconciliation_audit(),
+                "/runtime".into(),
+                "ci".into(),
+            ),
+            host,
+        )
+    }
+
+    /// A gateway the host reports registered and running.
+    pub(crate) fn reconciled_gateway() -> ReconciledGateway {
+        ReconciledGateway::new(
+            "com.nessa.gateway".into(),
+            "a".repeat(64),
+            "550e8400-e29b-41d4-a716-446655440000".into(),
+            "b".repeat(64),
+            42,
+            7420,
+        )
     }
 
     pub(crate) struct DiscardReconciliationAudit;

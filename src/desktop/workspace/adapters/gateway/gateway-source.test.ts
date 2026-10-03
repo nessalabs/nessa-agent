@@ -23,7 +23,7 @@ import { approvalId } from "./gateway-views"
 import { deferred, fakeGateway, row, view, type FakeGateway } from "./fake-gateway"
 import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
 
-const timing = { callMs: 5_000, pollMs: 100 }
+const timing = { callMs: 5_000, pollMs: 100, reconnectMaxMs: 1_600 }
 const model = { provider: "anthropic", modelId: "claude-opus-5" }
 
 /** A clock and timers the test moves by hand. */
@@ -306,10 +306,10 @@ describe("a connection that could not be made says why (#419)", () => {
   const failing = (error: unknown) => started(fakeGateway(), () => Promise.reject(error))
   const unauthorized = new NessaRpcError("unauthorized", "message text nobody parses")
 
-  it("S2: no credential to present is signed out", async () => {
+  it("S2: no credential to present is unavailable: a configuration fault, not a sign-in", async () => {
     const warn = quiet()
     const { source } = failing(new NessaCredentialUnavailableError())
-    await expect(source.index()).rejects.toMatchObject({ reason: "signed-out" })
+    await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
     warn.mockRestore()
   })
 
@@ -443,12 +443,136 @@ describe("a connection that could not be made says why (#419)", () => {
       status: "failed",
       failure: "unavailable",
     })
-    // The gateway comes up before the first poll: no poll failed in between.
+    // The gateway comes up before the poller's first connect: no poll failed in between.
     refuse = false
-    await advance(timing.pollMs)
+    await advance(timing.pollMs * 2)
     await flush()
     expect(store.getState().workspace.status).toBe("ready")
     expect(Object.keys(store.getState().workspace.sessions)).toEqual(["a"])
+    warn.mockRestore()
+  })
+
+  /** A source whose first connect succeeds, and every later one is refused as signed out. */
+  function signedOutAfterFirst() {
+    const gateway = fakeGateway()
+    let attempts = 0
+    const started_ = started(gateway, () =>
+      ++attempts === 1 ? Promise.resolve(gateway.client) : Promise.reject(unauthorized),
+    )
+    return { ...started_, attempts: () => attempts }
+  }
+
+  it("S7: an answer whose connection is refused is not sent, and says signed out", async () => {
+    const warn = quiet()
+    const { gateway, source } = signedOutAfterFirst()
+    gateway.views.set(
+      "a",
+      view("a", { messages: [running()], permissions: [permission()] }),
+    )
+    await source.transcript("a")
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(4001, ""),
+    })
+    await expect(
+      source.approve("a", approvalId(permission()), "once", "person"),
+    ).rejects.toMatchObject({ reason: "signed-out" })
+    expect(gateway.count("answer")).toBe(0)
+    warn.mockRestore()
+  })
+
+  it("S7: an archive whose connection is refused is not sent, and says signed out", async () => {
+    const warn = quiet()
+    const { gateway, source } = signedOutAfterFirst()
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(4001, ""),
+    })
+    await expect(source.archive("a", "person")).rejects.toMatchObject({
+      reason: "signed-out",
+    })
+    expect(gateway.count("archive")).toBe(0)
+    warn.mockRestore()
+  })
+
+  it("S10, S11: after a failed connect the poller waits, doubling, before it connects again", async () => {
+    const warn = quiet()
+    let attempts = 0
+    const { source, follow, advance } = started(fakeGateway(), () => {
+      attempts++
+      return Promise.reject(unauthorized)
+    })
+    follow()
+    await source.index().catch(() => undefined)
+    expect(attempts).toBe(1)
+    // Waits of 2, 4, 8 and then 16 polls (the cap): connects only as each ends.
+    const connectsAt: number[] = []
+    for (let poll = 1; poll <= 40; poll++) {
+      const before = attempts
+      await advance(timing.pollMs)
+      if (attempts > before) connectsAt.push(poll)
+    }
+    expect(connectsAt).toEqual([2, 6, 14, 30])
+    warn.mockRestore()
+  })
+
+  it("S12: a call somebody makes connects at once, whatever the poller waits for", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    let refuse = true
+    let attempts = 0
+    const { source, follow } = started(gateway, () => {
+      attempts++
+      return refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client)
+    })
+    follow()
+    await source.index().catch(() => undefined)
+    refuse = false
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    warn.mockRestore()
+  })
+
+  it("S11: a connect that succeeds ends the wait: a later failure waits the shortest again", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    let refuse = true
+    let attempts = 0
+    const { source, follow, advance } = started(gateway, () => {
+      attempts++
+      return refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client)
+    })
+    follow()
+    await source.index().catch(() => undefined)
+    await advance(timing.pollMs * 6) // two failed waits: the next would be 8 polls
+    refuse = false
+    await source.index()
+    refuse = true
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    await advance(timing.pollMs) // the poll after the close connects, and fails
+    const failedAt = attempts
+    await advance(timing.pollMs)
+    expect(attempts).toBe(failedAt)
+    await advance(timing.pollMs)
+    expect(attempts).toBe(failedAt + 1)
+    warn.mockRestore()
+  })
+
+  it("S13: a connect refused after dispose is unavailable, and nothing is said of it", async () => {
+    const warn = quiet()
+    const refusing = deferred<FakeGateway["client"]>()
+    const { source } = started(fakeGateway(), () => refusing.promise)
+    const index = source.index().catch((error: unknown) => error)
+    await flush()
+    source.dispose()
+    refusing.reject(unauthorized)
+    expect(await index).toMatchObject({ reason: "unavailable" })
+    expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 })

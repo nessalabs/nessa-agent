@@ -1,9 +1,5 @@
-import {
-  NessaConnectionClosedError,
-  NessaCredentialUnavailableError,
-  NessaRpcError,
-} from "@nessa/client"
-import { SessionHealthError } from "./dev-session"
+import { NessaConnectionClosedError, NessaRpcError } from "@nessa/client"
+import { attemptFailure } from "./dev-session"
 
 export function isAuthenticationFailure(error: unknown): boolean {
   if (error instanceof NessaRpcError) return error.code === "unauthorized"
@@ -19,15 +15,13 @@ export function isAuthenticationFailure(error: unknown): boolean {
 }
 
 /**
- * Whether a session could not be made because it is signed out: there was
- * no credential to present, or the gateway refused the one presented — at
- * the handshake or at the health probe that follows it (`SessionHealthError`
- * carries the probe's own failure). Anything else, such as no answer, is not
- * a sign-in problem.
+ * Whether a session could not be made because it is signed out: the gateway
+ * refused the credential presented, at the handshake or at the health probe
+ * that follows it (`attemptFailure`). Having no credential to present at all
+ * is not this: in the desktop app that is a configuration fault — a gateway
+ * URL that is not loopback — which signing in would not repair. Anything
+ * else, such as no answer, is not a sign-in problem either.
  */
 export function isSignedOut(error: unknown): boolean {
-  const cause = error instanceof SessionHealthError ? error.cause : error
-  return (
-    cause instanceof NessaCredentialUnavailableError || isAuthenticationFailure(cause)
-  )
+  return isAuthenticationFailure(attemptFailure(error))
 }

@@ -13,8 +13,9 @@
  * approval was already answered, or never asked. `not-supported`: the source
  * has no such thing to do — a pin, or an answer it does not offer — so it
  * did nothing, and asking again changes nothing. `signed-out`: the window
- * could not connect, because it has no credential to present or the
- * gateway refused the one it did, so nothing was sent; asking again changes
+ * could not connect because the gateway refused its credential, so the
+ * request refused was not sent (a first message's conversation may already
+ * have been created before the connection closed); asking again changes
  * nothing until it is signed in again.
  */
 export type WorkspaceFailureReason =

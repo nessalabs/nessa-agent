@@ -17,15 +17,17 @@ it("separates authentication termination from transport and protocol failures", 
   )
 })
 
-it("is signed out with no credential, or one the gateway refused, at the handshake or the probe", () => {
+it("is signed out when the gateway refused the credential, at the handshake or the probe", () => {
   const refused = new NessaRpcError("unauthorized", "")
-  expect(isSignedOut(new NessaCredentialUnavailableError())).toBe(true)
   expect(isSignedOut(refused)).toBe(true)
   expect(isSignedOut(new NessaConnectionClosedError(4001, ""))).toBe(true)
   expect(isSignedOut(new SessionHealthError("probe", refused))).toBe(true)
 })
 
-it("is not signed out for no answer, another refusal, or a host's sentence", () => {
+it("is not signed out for no credential, no answer, another refusal, or a host's sentence", () => {
+  // A configuration fault in the desktop app (a gateway URL that is not
+  // loopback), which signing in would not repair.
+  expect(isSignedOut(new NessaCredentialUnavailableError())).toBe(false)
   expect(isSignedOut(new NessaConnectionClosedError(1006, ""))).toBe(false)
   expect(isSignedOut(new NessaRpcError("temporarily_unavailable", ""))).toBe(false)
   expect(

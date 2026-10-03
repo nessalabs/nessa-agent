@@ -75,6 +75,7 @@ export const css = {
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
+  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
   workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
   sampleCard: "[data-sample-card]", // the sample trail's own card

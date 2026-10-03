@@ -362,9 +362,6 @@ fn parse_initiator(value: &str) -> Result<ReconciliationInitiator, GatewayError>
         "setup_window" => Ok(ReconciliationInitiator::BundledSurface(
             BundledSurface::Setup,
         )),
-        "desktop_window" => Ok(ReconciliationInitiator::BundledSurface(
-            BundledSurface::Desktop,
-        )),
         _ => Err(invalid_record("unknown reconciliation initiator")),
     }
 }
@@ -1831,7 +1828,6 @@ fn initiator(initiator: ReconciliationInitiator) -> &'static str {
         ReconciliationInitiator::DesktopHost => "desktop_host",
         ReconciliationInitiator::BundledSurface(BundledSurface::Main) => "main_window",
         ReconciliationInitiator::BundledSurface(BundledSurface::Setup) => "setup_window",
-        ReconciliationInitiator::BundledSurface(BundledSurface::Desktop) => "desktop_window",
     }
 }
 
@@ -1904,22 +1900,6 @@ mod tests {
                 predicate
             );
         }
-    }
-
-    #[test]
-    fn every_initiator_is_stored_and_restored_as_itself() {
-        for initiator in [
-            ReconciliationInitiator::DesktopHost,
-            ReconciliationInitiator::BundledSurface(BundledSurface::Main),
-            ReconciliationInitiator::BundledSurface(BundledSurface::Setup),
-            ReconciliationInitiator::BundledSurface(BundledSurface::Desktop),
-        ] {
-            assert_eq!(
-                parse_initiator(super::initiator(initiator)).unwrap(),
-                initiator
-            );
-        }
-        assert!(parse_initiator("panel_window").is_err());
     }
 
     struct AdvancingClock {

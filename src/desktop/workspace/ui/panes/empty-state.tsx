@@ -1,7 +1,7 @@
 import { loadWorkspace } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import { failureCopy } from "../failure-copy"
+import { readFailureCopy } from "../failure-copy"
 
 /**
  * What the workspace shows when there is no conversation to show: its
@@ -25,15 +25,4 @@ export function EmptyWorkspace({ failure }: { failure: WorkspaceFailureReason | 
       </button>
     </div>
   )
-}
-
-/**
- * `failureCopy`'s sentence, except where a read had no answer: there the
- * window says what it could not read, and from where, rather than that a
- * call is unconfirmed.
- */
-function readFailureCopy(failure: WorkspaceFailureReason): string {
-  return failure === "unavailable"
-    ? "Nessa couldn’t read the local server’s conversations just now."
-    : failureCopy(failure)
 }

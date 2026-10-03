@@ -574,8 +574,11 @@ conversations would be.
   signed in to the local server."; a host refusal and no gateway say "Nessa
   couldn’t read the local server’s conversations just now." The status sits
   inside the chat area and the window, Try Again is at least 24px tall with
-  nothing over it, no session row or sample plugin is drawn, and Try Again
-  asks the host again and says the same while nothing changed.
+  nothing over it, and no session row or sample plugin is drawn. Try Again
+  reads the index again (the status goes while it reads, which no poll does),
+  asks the host again, and says the same while nothing changed. While signed
+  out the window asks the host at most twice in four seconds unprompted: it
+  backs off after a failed connect rather than polling the host every second.
   _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a

@@ -1,7 +1,8 @@
 //! Tauri entry points and event adapter for managed gateway startup.
 
 use super::super::application::{
-    GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
+    Gateway, GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase,
+    StartupStep,
 };
 use crate::{
     composition::HostDependencies,
@@ -55,8 +56,57 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
     match label {
         panel::MAIN_WINDOW => Ok(BundledSurface::Main),
         panel::SETUP_WINDOW => Ok(BundledSurface::Setup),
-        DESKTOP_WINDOW => Ok(BundledSurface::Desktop),
         _ => Err("Only a bundled Nessa surface can access the gateway".into()),
+    }
+}
+
+/// Who may read the local gateway's endpoint and the surface credential, and
+/// how each waits for the gateway first (#419).
+///
+/// The bundled surfaces bring the gateway up: each waits for reconciliation,
+/// which it may start, and is on record as its initiator. The desktop window
+/// only reads the gateway they brought up: it is served once startup is
+/// `Ready` and refused before that, so a window polling while it cannot
+/// connect never starts, joins or audits a reconciliation. It is no bundled
+/// surface ([`bundled_window`]): it reads no startup snapshot and retries
+/// nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatewayReader {
+    /// The panel or setup, which waits for the gateway to reconcile.
+    Surface(BundledSurface),
+    /// The desktop window, which reads a gateway that is already ready.
+    DesktopWindow,
+}
+
+impl GatewayReader {
+    /// The reader a window is, by its label; any other window is refused.
+    pub(crate) fn of_window(label: &str) -> Result<Self, String> {
+        if label == DESKTOP_WINDOW {
+            return Ok(Self::DesktopWindow);
+        }
+        bundled_window(label).map(Self::Surface)
+    }
+
+    /// Waits for the gateway as this reader may: a bundled surface until it
+    /// reconciles; the desktop window not at all — it is ready now, or the
+    /// read is refused.
+    pub(crate) async fn ready(self, gateway: &Gateway) -> Result<(), String> {
+        match self {
+            Self::Surface(surface) => gateway
+                .wait_ready(surface)
+                .await
+                .map_err(|error| error.to_string()),
+            Self::DesktopWindow => match gateway
+                .startup()
+                .map_err(|error| error.to_string())?
+                .phase()
+            {
+                GatewayStartupPhase::Ready => Ok(()),
+                GatewayStartupPhase::Starting(_) | GatewayStartupPhase::Failed(_) => {
+                    Err("The local server isn't ready yet".into())
+                }
+            },
+        }
     }
 }
 
@@ -91,12 +141,30 @@ pub async fn retry_gateway_startup(
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled_window, payload};
+    use super::{bundled_window, payload, GatewayReader};
     use crate::{
         desktop_window::DESKTOP_WINDOW,
         gateway::{application::GatewayStartup, domain::value_objects::BundledSurface},
         host, panel,
     };
+
+    #[test]
+    fn the_desktop_window_reads_the_gateway_and_is_no_bundled_surface() {
+        assert_eq!(
+            GatewayReader::of_window(DESKTOP_WINDOW),
+            Ok(GatewayReader::DesktopWindow)
+        );
+        assert!(bundled_window(DESKTOP_WINDOW).is_err());
+        assert_eq!(
+            GatewayReader::of_window(panel::MAIN_WINDOW),
+            Ok(GatewayReader::Surface(BundledSurface::Main))
+        );
+        assert_eq!(
+            GatewayReader::of_window(panel::SETUP_WINDOW),
+            Ok(GatewayReader::Surface(BundledSurface::Setup))
+        );
+        assert!(GatewayReader::of_window("untrusted").is_err());
+    }
 
     #[test]
     fn only_bundled_surfaces_may_reach_gateway_startup() {
@@ -105,7 +173,6 @@ mod tests {
             bundled_window(panel::SETUP_WINDOW),
             Ok(BundledSurface::Setup)
         );
-        assert_eq!(bundled_window(DESKTOP_WINDOW), Ok(BundledSurface::Desktop));
         assert!(bundled_window("untrusted").is_err());
     }
 

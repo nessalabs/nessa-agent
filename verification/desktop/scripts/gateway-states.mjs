@@ -28,6 +28,7 @@ const fakeGateway = "ws://127.0.0.1:7499"
 const noGateway = "ws://127.0.0.1:7498"
 const unread = "Nessa couldn’t read the local server’s conversations just now."
 const signedOut = "This window isn’t signed in to the local server."
+const quietMs = 4_000
 
 const scenarios = [
   {
@@ -35,6 +36,8 @@ const scenarios = [
     endpoint: fakeGateway,
     credential: "fixture-only",
     says: signedOut,
+    // And the poller's cadence while it stays so (S10).
+    cadence: true,
   },
   {
     name: "the host refuses the credential",
@@ -80,9 +83,9 @@ function fakeHost({ endpoint, credential }) {
 /**
  * A gateway refusing the credential it is shown, as `product/socket.rs` does:
  * the challenge first, then — for the client's `session.authenticate` — an
- * `unauthorized` answer under its request id, and the socket closed as
- * `authentication_failed` (4001). The frames are the client's own test
- * fixtures' (`connect-stress.test.ts`).
+ * `unauthorized` failure under its request id (`failure`, whose message is
+ * the code), and the socket closed as `authentication_failed` (4001) with
+ * its `SessionTermination` as the reason (`close_session`).
  */
 function refuseCredential(socket) {
   socket.send(
@@ -107,16 +110,19 @@ function refuseCredential(socket) {
         type: "res",
         id: frame.id,
         ok: false,
-        error: { code: "unauthorized", message: "Invalid credential" },
+        error: { code: "unauthorized", message: "unauthorized" },
       }),
     )
-    socket.close({ code: 4001, reason: "authentication_failed" })
+    socket.close({
+      code: 4001,
+      reason: JSON.stringify({ code: "authentication_failed", retryable: false }),
+    })
   })
 }
 
 async function measure(page) {
   return page.evaluate(
-    ([empty, retry, chat, rows, sample]) => {
+    ([empty, text, retry, chat, rows, sample]) => {
       const rect = (element) => {
         const r = element.getBoundingClientRect()
         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
@@ -125,7 +131,7 @@ async function measure(page) {
       const button = document.querySelector(retry)
       const area = document.querySelector(chat)
       return {
-        text: status?.querySelector("p")?.textContent ?? null,
+        text: document.querySelector(text)?.textContent ?? null,
         status: status ? rect(status) : null,
         button: button ? rect(button) : null,
         buttonOnTop: button
@@ -147,6 +153,7 @@ async function measure(page) {
     },
     [
       css.workspaceEmpty,
+      css.workspaceEmptyText,
       css.workspaceEmptyRetry,
       css.chatArea,
       css.sessionRow,
@@ -212,8 +219,28 @@ await main(
             const first = await measure(page)
             const failures = check(scenario, first)
             if (!first.button) return { failures, measured: { first } }
-            // Try Again asks the host again, and says the same while nothing changed.
-            const before = first.asked.load_gateway_endpoint
+            // The poller waits after a failed connect (S10): over a quiet
+            // window it asks the host at most twice — 1 Hz would be four.
+            let quiet
+            if (scenario.cadence) {
+              const start = first.asked.load_gateway_endpoint
+              await page.waitForTimeout(quietMs)
+              quiet = (await measure(page)).asked.load_gateway_endpoint - start
+              if (quiet > 2)
+                failures.push(
+                  `the window asked the host ${quiet} times in ${quietMs}ms without being asked to`,
+                )
+            }
+            // Try Again reads the index again: the status goes while it reads,
+            // which no poll does, and the host is asked again. Then it says
+            // the same while nothing changed.
+            await page.evaluate((empty) => {
+              window.__statusLeft = false
+              new MutationObserver(() => {
+                if (!document.querySelector(empty)) window.__statusLeft = true
+              }).observe(document.body, { childList: true, subtree: true })
+            }, css.workspaceEmpty)
+            const before = (await measure(page)).asked.load_gateway_endpoint
             await page.click(css.workspaceEmptyRetry)
             await page.waitForFunction(
               (count) => window.__fakeHostAsked.load_gateway_endpoint > count,
@@ -221,6 +248,8 @@ await main(
               { timeout: 10_000 },
             )
             await page.waitForSelector(css.workspaceEmpty, { timeout: 10_000 })
+            if (!(await page.evaluate(() => window.__statusLeft)))
+              failures.push("Try Again did not read the index again")
             const again = await measure(page)
             failures.push(
               ...check(scenario, again).map((failure) => `after Try Again: ${failure}`),
@@ -231,7 +260,7 @@ await main(
                 (error) => !(scenario.endpoint === noGateway && error.includes(refused)),
               ),
             )
-            return { failures, measured: { first, again } }
+            return { failures, measured: { first, again, quiet } }
           } finally {
             await opened.close()
           }

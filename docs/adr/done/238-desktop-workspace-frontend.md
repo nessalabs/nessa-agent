@@ -1030,14 +1030,6 @@ Watch for:
 Remaining — the one list of what this record leaves open; the
 [index](../README.md) summarises it. Each is its own issue:
 
-- **The desktop app's own window on the gateway**
-  ([#248](https://github.com/nessalabs/nessa-agent/issues/248), its design
-  question 3). The gateway's `WorkspaceSource` is `adapters/gateway/`,
-  composed in `src/desktop/dependencies.ts` when the window is given a way
-  to connect; a browser preview opened with `?gateway` is. The app's own
-  window still shows the in-memory sample: its host hands the gateway
-  credential to the panel and setup windows only, and widening that is the
-  host's decision.
 - **nessa_ui's icon contract, and an icon slot on its access mode**
   ([nessa_ui#101](https://github.com/nessalabs/nessa_ui/issues/101)). The icon
   provider in `src/desktop/ui/icons/` mirrors `NessaIconProvider` until

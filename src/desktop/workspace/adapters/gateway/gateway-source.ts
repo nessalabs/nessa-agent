@@ -115,6 +115,11 @@ export interface GatewayTiming {
   readonly callMs: number
   /** How long the poller rests between rounds. */
   readonly pollMs: number
+  /**
+   * The longest the poller waits to connect again after connecting failed;
+   * the wait starts at twice `pollMs` and doubles up to this (S11, #419).
+   */
+  readonly reconnectMaxMs: number
 }
 
 /**
@@ -122,7 +127,11 @@ export interface GatewayTiming {
  * call of several requests (a send is `create` then `send`) shares it, and
  * one still waiting on the client when it runs out settles `unavailable`.
  */
-export const defaultGatewayTiming: GatewayTiming = { callMs: 35_000, pollMs: 1_000 }
+export const defaultGatewayTiming: GatewayTiming = {
+  callMs: 35_000,
+  pollMs: 1_000,
+  reconnectMaxMs: 30_000,
+}
 
 export interface GatewaySource<
   C extends GatewayClient = GatewayClient,
@@ -252,6 +261,22 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
+  // After a connect that failed, the poller does not connect again until
+  // `reconnectAt` (S10): each connect asks the host for the gateway and its
+  // credential, and the gateway to authenticate, so a window that cannot
+  // connect must not ask every round. The wait doubles from twice `pollMs`
+  // to `reconnectMaxMs` (S11). A call somebody made — the first read, Try
+  // Again, a message — connects at once (S12); a connect that succeeds
+  // ends the wait.
+  let failedConnects = 0
+  let reconnectAt = 0
+  const connectFailed = () => {
+    failedConnects += 1
+    reconnectAt =
+      clock.now() + Math.min(timing.pollMs * 2 ** failedConnects, timing.reconnectMaxMs)
+  }
+  const waitingToReconnect = () =>
+    current === undefined && connecting === undefined && clock.now() < reconnectAt
   /** Takes a client that connected as the current one. */
   const adopt = (connected: C) => {
     const off = connected.onConnectionStateChange((state) => {
@@ -265,6 +290,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       }
     })
     current = { client: connected, off }
+    failedConnects = 0
+    reconnectAt = 0
     // A connection after another is a reconnect: what it missed is read again.
     if (connectedBefore) resync()
     connectedBefore = true
@@ -282,6 +309,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       let over = false
       const giveUp = (reason: WorkspaceFailureReason = "unavailable") => {
         over = true
+        if (!disposed) connectFailed()
         reject(new WorkspaceSourceError(reason))
       }
       const cancel = clock.after(timing.callMs, () => giveUp())
@@ -300,6 +328,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         (error: unknown) => {
           cancel()
           if (over) return
+          // Disposed meanwhile: the source answers nothing but `unavailable`,
+          // and has nothing left to say about why (S13).
+          if (disposed) return giveUp()
           // Not reaching the gateway is an answer the window can show; why is logged.
           console.warn("Could not connect to the gateway", error)
           giveUp(connectFailure(error))
@@ -539,6 +570,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let cancelPoll: (() => void) | undefined
   let polling = false
   const round = async () => {
+    // Waiting to connect again: this round asks nothing, and the next checks again (S10).
+    if (waitingToReconnect()) return schedule()
     polling = true
     try {
       await list()

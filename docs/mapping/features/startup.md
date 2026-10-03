@@ -444,8 +444,9 @@ sequenceDiagram
 
 The native source only provides a credential to client ID `nessa-panel` at a
 loopback WebSocket destination, and the native command additionally only admits
-the bundled window labels `main` and `setup` through the shared native
-`bundled_window` authority. The assigned stage and endpoint are checked before reading
+the bundled window labels `main` and `setup`, and the desktop window as a reader,
+through the shared native `GatewayReader` authority (`bundled_window` for the
+bundled surfaces). The assigned stage and endpoint are checked before reading
 the private token. File permissions, owner, symlink/namespace safety, and size
 are enforced; absence, refusal, wrong stage, invalid token, and unopenable file
 remain distinct host errors. Dev without a managed gateway skips the gateway
@@ -616,8 +617,10 @@ and [process smoke script](../../../scripts/smoke-auth.mjs).
 
 The regression fix keeps the existing trusted bundled-window authority owned by
 `gateway::infrastructure::commands::bundled_window`: main and setup run the
-bundled application, while other labels cannot trigger discovery, reconciliation,
-or credential reads. Both admitted labels still use the configured local namespace,
+bundled application. The desktop window (#419) is admitted by `GatewayReader` as
+a reader only: it is served once startup is ready and can never trigger a
+reconciliation. Other labels cannot trigger discovery, reconciliation, or
+credential reads. Both admitted labels still use the configured local namespace,
 stage and verified endpoint; setup is recorded as the reconciliation initiator.
 
 The frontend readiness request has a ten-second transport deadline: the server's
@@ -632,6 +635,7 @@ old answer independently of whether its transport has settled.
 | State / ordering | Result | Regression evidence |
 | --- | --- | --- |
 | Main or setup requests endpoint/credential | Admit the trusted bundled surface, wait for gateway with its own initiator, then validate stage/endpoint before reading credential | Native setup credential and endpoint tests |
+| Desktop window requests endpoint/credential | Served once startup is ready; refused before then without starting, joining or auditing a reconciliation (#419) | Native desktop-window credential and endpoint tests |
 | Unrelated window requests endpoint/credential | Refuse before gateway reconciliation, discovery or credential read | Native unrelated-window tests |
 | Setup uses another stage or a mismatched verified URL | Refuse without reading a credential | Native setup destination tests |
 | Fetch settles with a readable answer before deadline | Deliver answer and cancel deadline | HTTP adapter success/deadline cleanup test |
