@@ -114,6 +114,38 @@ release, so no test can observe it apart from this window. This predates the
 table and is open in #405. It joins the table, with its test, when #405
 changes it.
 
+## Receipt notification faults
+
+A receipt's result is published through a Tokio `watch` channel. Publishing
+calls each waiting task's `Waker` synchronously, on the publisher's own task:
+the queue runner, a withdrawal, or a cancellation. A `Waker` is caller code,
+and the safe `std::task::Wake` trait does not forbid it to panic. Before #431 a
+panicking waker unwound into its publisher. Publishing after a normal selected
+completion would then end the runner while `running` stayed true, so queued
+work behind it never dispatched and later admissions started no new runner.
+Tokio's notification list also drops the wakers it has not reached yet when a
+waker unwinds, so other tasks waiting on the same receipt could sleep forever.
+
+**Owner.** The receipt's wait future, `QueuedInvocation::wait`, owns waker
+faults. It is the only SDK code that receives the caller's waker. It registers a
+wrapper with the channel instead; the wrapper calls the caller's waker inside
+`catch_unwind` and logs a panic. Containing the fault where it is raised means
+no publisher sees it and Tokio's notification loop never unwinds. No publisher
+catches a notification panic itself, and nothing resets `running` after one.
+Tests below are in the public `application` test binary, under
+`application::agent_execution::agents::review_regressions::receipt_notifications`.
+
+| Event | What each owner keeps | Test |
+| --- | --- | --- |
+| A selected item completes and its receipt is published; one waiter's waker panics | The panic stays in that waiter's wrapper. The stored result, scheduling evidence and slot/work retirement are unchanged. The runner continues to the next queued item | `panicking_receipt_consumer_preserves_independent_queued_work`: the panicking waker is called once, the independent tail dispatches (two dispatches) and settles `Completed`, and both stored records end `Settled` with `Completed` |
+| Other tasks wait on the same receipt (same-submission retries) when one waker panics | Every other registered waiter is woken and reads the retained result | Same test: all sixteen retry waiters were woken before being polled again, and each returns `Completed`. Which waiters Tokio would drop without the wrapper depends on its randomly chosen notification bucket, so this assertion detects sibling loss with high probability, not on every run |
+| The panicking waiter's own task | Its waker was not delivered; the SDK does not retry it. The result stays retained, so polling that receipt again returns it | Same test: polling the original receipt again returns `Completed` |
+| A queued item is withdrawn and its waiter's waker panics | The withdrawal still returns `Removed`, keeps its `Withdrawn` evidence, and the receipt resolves `Closed` | `panicking_receipt_consumer_does_not_fail_its_withdrawal` |
+| No waker panics | Unchanged behavior | Both tests run the same journey first with a non-panicking waker |
+
+The wrapper contains a panic from waking only. A panic from dropping the
+caller's waker is not covered by this table.
+
 ## Idempotent submission retries
 
 Retry `enqueue`, `enqueue_steering`, or `steer` with the same execution ID, exact

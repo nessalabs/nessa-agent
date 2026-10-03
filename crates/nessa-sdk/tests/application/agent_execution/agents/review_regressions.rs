@@ -8,6 +8,7 @@ mod native_stop;
 mod native_storage_panics;
 mod provider_restoration;
 mod ready_steering;
+mod receipt_notifications;
 mod rejection_observations;
 mod retained_error_limits;
 mod scheduled_panics;

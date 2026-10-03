@@ -25,7 +25,8 @@ use std::{
     collections::{HashMap, HashSet},
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
-    task::Poll,
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
     time::Duration,
 };
 use tokio::{
@@ -158,15 +159,43 @@ impl QueuedInvocation {
     /// persistence, and explicit session-close failures. Closed can indicate local
     /// cancellation or provider disconnection; it does not confirm external cleanup.
     /// SubmissionUnresolved means the runner vanished without settlement.
+    ///
+    /// A panic raised by the polling task's `Waker` when the result is published
+    /// stays with this wait: it is logged, that one wake is lost, and the result
+    /// stays retained for the next poll. The publisher, other waiters on the same
+    /// receipt, and other queued work are unaffected. A panic from dropping the
+    /// waker is not contained.
     pub async fn wait(mut self) -> Result<ExecutionOutcome, AgentError> {
         loop {
             if let Some(result) = self.result.borrow_and_update().clone() {
                 return result;
             }
-            self.result
-                .changed()
-                .await
-                .map_err(|_| AgentError::SubmissionUnresolved)?;
+            let mut changed = std::pin::pin!(self.result.changed());
+            poll_fn(|context| {
+                let contained = Waker::from(Arc::new(ContainedWake {
+                    caller: context.waker().clone(),
+                }));
+                changed.as_mut().poll(&mut Context::from_waker(&contained))
+            })
+            .await
+            .map_err(|_| AgentError::SubmissionUnresolved)?;
+        }
+    }
+}
+
+/// The waker a receipt registers with its result channel in place of the
+/// caller's. Publication wakes it on the publisher's task; see "Receipt
+/// notification faults" in docs/agent_execution/scheduling.md.
+struct ContainedWake {
+    caller: Waker,
+}
+impl Wake for ContainedWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        if catch_unwind(AssertUnwindSafe(|| self.caller.wake_by_ref())).is_err() {
+            tracing::warn!("a queued receipt's waker panicked; its result stays retained");
         }
     }
 }
