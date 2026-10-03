@@ -241,7 +241,10 @@ async function receive(message) {
   }
   if (method === "session/cancel") {
     requireSession(params)
-    assert.ok(pendingPrompt, "cancellation must target active provider work")
+    assert.ok(providerSessionId, "cancellation requires a known provider session")
+    // Cleanup can race prompt completion or repeat after its terminal response.
+    // The process/wire cases in claude-acp-fixture.test.mjs hold both orderings.
+    if (!pendingPrompt) return
     record({
       type: "cancel",
       providerSessionId,
