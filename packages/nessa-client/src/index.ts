@@ -151,7 +151,11 @@ export {
   type AttachmentBeginRefusal,
   type AttachmentFailureCode,
 } from "./application/attachment-upload.js"
-export type { McpAppsApi, McpResourceDescription } from "./presentation/mcp-apps-api.js"
+export {
+  mcpAppDeadlines,
+  type McpAppsApi,
+  type McpResourceDescription,
+} from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
 export {
   NessaMcpResourceError,

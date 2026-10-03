@@ -14,6 +14,7 @@ use super::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
 };
+use crate::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
@@ -22,8 +23,9 @@ use std::{
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-/// How long an app's review waits for the person.
-pub const APP_REVIEW_DEADLINE: Duration = Duration::from_secs(5 * 60);
+/// How long an app's review waits for the person: the protocol's
+/// `x-mcpAppCallTiming.reviewDeadlineMs`, its one statement.
+pub const APP_REVIEW_DEADLINE: Duration = Duration::from_millis(MCP_APP_REVIEW_DEADLINE_MS);
 /// The option that allows an app's call.
 pub const ALLOW: &str = "allow";
 /// The option that denies it.
