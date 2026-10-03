@@ -32,6 +32,7 @@ import { mkdirSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { join } from "node:path"
 
+import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -170,7 +171,7 @@ async function agentTurn(client, conversationId, agent) {
       )
     }
     const last = view.messages.at(-1)
-    if (last && !["running", "queued"].includes(last.status)) {
+    if (last && turnEnded(last.status)) {
       const outcome = setupOutcome(view, SERVER, APP_TOOL)
       if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
       const tool = outcome.call

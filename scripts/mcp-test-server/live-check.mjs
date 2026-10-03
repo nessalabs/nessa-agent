@@ -47,6 +47,7 @@ import {
   permissionDecisions,
   parseRecording,
   toolFrames,
+  turnEnded,
   uiMentions,
   viewTools,
 } from "./evidence.mjs"
@@ -153,7 +154,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
         step("not allowed", `${permission.toolName} (tool ${permission.toolId})`)
       }
       const turn = view.messages.at(-1)
-      if (turn && !["running", "queued"].includes(turn.status)) break
+      if (turn && turnEnded(turn.status)) break
     }
     writeFileSync(join(evidence, "view.json"), JSON.stringify(view, null, 2))
     const records = parseRecording(readFileSync(recording, "utf8"))

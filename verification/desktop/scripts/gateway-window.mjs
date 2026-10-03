@@ -2,8 +2,9 @@
 /**
  * The desktop app's window over a real gateway (#419): it connects as the
  * desktop app does, lists the gateway's conversations, opens one and draws
- * its turn, and draws a turn made elsewhere as it happens. Design rows W1–W5
- * (#419, comment 5972894657).
+ * its turn, and draws a turn made elsewhere without a reload, once the
+ * gateway holds it (the gateway source's poller). Design rows W1–W5 (#419,
+ * comment 5972894657, and the revisions after it).
  *
  * The page runs as the desktop app does: the fake host (`lib/fake-host.mjs`)
  * makes `host.kind` native, so `main.tsx` composes `hostGateway` — the
@@ -29,7 +30,8 @@
 import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 
-import { need, openPage, withEngines } from "./lib/browser.mjs"
+import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
+import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { panelCredential, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
@@ -43,7 +45,7 @@ const steps = ["handshake", "lists", "opens", "live"]
 const meta = {
   name: "gateway-window",
   summary:
-    "the desktop app's window over a real gateway: its conversations, a turn, a live turn",
+    "the desktop app's window over a real gateway: its handshake, a conversation, a turn made elsewhere",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
   help: `
@@ -58,23 +60,27 @@ Options:
   --agent claude|codex  the agent the gateway runs (default: claude)
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
-  handshake  on the window's own socket, it authenticated as client
-          nessa-panel and the gateway answered ok with principal
-          surface:nessa-panel: the panel's credential (W4)
+  handshake  on the window's own socket, to the host's endpoint, it
+          authenticated as client nessa-panel and the gateway answered ok with
+          principal surface:nessa-panel: the panel's credential (W4)
   lists   connected over the host's endpoint and the panel's credential, the
           window lists the gateway's conversation by its title: no failure
           status, no sample (W1)
   opens   the conversation open, its transcript draws the person's message,
-          then the agent's reply, as the gateway holds them (W2)
-  live    a turn sent from another surface appears in the open transcript,
-          in order, without a reload (W3)
+          then the agent's reply, exactly as the gateway holds them (W2)
+  live    a turn sent from another surface, once the gateway holds it, is
+          drawn in the open transcript, in order, the page not reloaded (W3)
 
-Every step also fails on a console error, page error or failed request (W5).`,
+Every step also fails on a console error, page error or failed request, and
+any that arrives after the last step is reported as "console" (W5).`,
 }
 
-/** Whatever the person said, the agent is to answer with `marker` alone. */
+/**
+ * The agent is to answer with `marker` alone. It comes first, so the title
+ * the gateway makes from the message is this conversation's alone.
+ */
 const prompt = (marker) =>
-  `Reply with exactly this word and nothing else, using no tools: ${marker}`
+  `${marker}: reply with exactly that word and nothing else, using no tools.`
 
 /**
  * Sends `text` and waits for its turn to end; the view, once it has. A turn
@@ -88,25 +94,25 @@ async function turn({ client, conversationId, gateway }, text, agent) {
   } catch (error) {
     throw new CannotRun(`the gateway refused the ${agent} turn: ${error.message}`)
   }
+  let last
   for (let i = 0; i < 180; i += 1) {
     await sleep(1000)
     const view = await client.conversation.read(conversationId)
     // The view's messages are its turns; this one is the one after `before`.
-    const last = view.messages[before]
-    // `unresolved` is not an end here: a live turn reads so for a moment,
-    // as it becomes live and before its result is committed (#449). A turn
-    // really interrupted stays so, and runs out the wait below.
-    if (last && ["completed", "failed", "cancelled"].includes(last.status)) {
+    last = view.messages[before]
+    if (last && turnEnded(last.status)) {
       if (last.status !== "completed") {
         log(gateway.log().slice(-4000))
         throw new CannotRun(
-          `${agent}'s turn ended ${last.status}${last.error ? ` (${last.error.code ?? last.error})` : ""}`,
+          `${agent}'s turn ended ${last.status}${last.error ? ` (${JSON.stringify(last.error)})` : ""}`,
         )
       }
       return view
     }
   }
-  throw new CannotRun(`${agent}'s turn did not end within 180 s`)
+  throw new CannotRun(
+    `${agent}'s turn did not end within 180 s; it was last ${last?.status ?? "not listed"}`,
+  )
 }
 
 /** The gateway, the dev server, and a conversation with one finished turn. */
@@ -135,6 +141,7 @@ async function startStack(options) {
     log(`conversation ready in ${stack.timings.agentTurnMs} ms`)
     return {
       ...stack,
+      endpoint: stack.gateway.url.replace(/^http/, "ws"),
       conversationId,
       title,
       credential: panelCredential(stack.gateway),
@@ -147,9 +154,9 @@ async function startStack(options) {
 
 /**
  * Watches `page`'s sockets for the product handshake, into `seen`: each
- * `session.authenticate` the page sent, by the client id it named, and the
- * gateway's answer to it. Only those fields are kept: the request carries the
- * credential, and no frame is.
+ * `session.authenticate` the page sent, with the socket's URL and the client
+ * id it named, and the gateway's answer to it. Only those fields are kept:
+ * the request carries the credential, and no frame is.
  */
 function watchHandshakes(page, seen) {
   page.on("websocket", (socket) => {
@@ -164,7 +171,11 @@ function watchHandshakes(page, seen) {
     socket.on("framesent", ({ payload }) => {
       const frame = parse(payload)
       if (frame?.method !== "session.authenticate") return
-      const entry = { client: frame.params?.client?.id ?? null, answer: null }
+      const entry = {
+        socket: socket.url(),
+        client: frame.params?.client?.id ?? null,
+        answer: null,
+      }
       asked.set(frame.id, entry)
       seen.push(entry)
     })
@@ -211,7 +222,9 @@ function drawn(messages, turn) {
     failures.push(
       `the person's message is ${JSON.stringify(user ?? null)}, not ${JSON.stringify(turn.user)}`,
     )
-  if (agent?.role !== "agent" || !agent.text.includes(turn.reply))
+  // A text-only reply is drawn as its text alone (`message.tsx`); the prompt
+  // asks for no tools, so nothing else may be in it.
+  if (!turn.reply || agent?.role !== "agent" || agent.text !== turn.reply)
     failures.push(
       `the reply is ${JSON.stringify(agent ?? null)}, not ${JSON.stringify(turn.reply)}`,
     )
@@ -253,9 +266,20 @@ const checks = {
     const failures = []
     // The window's first handshake, answered.
     await waitFor(() => handshakes.some((each) => each.answer !== null), 30_000)
-    const seen = handshakes.map(({ client, answer }) => ({ client, answer }))
+    const seen = handshakes.map(({ socket, client, answer }) => ({
+      socket,
+      client,
+      answer,
+    }))
     if (seen.length === 0) failures.push("the window's socket carried no handshake")
+    // The host's endpoint, not the dev server's `/browser` proxy to the same gateway.
+    const host = new URL(stack.endpoint)
     for (const each of seen) {
+      const url = new URL(each.socket)
+      if (url.protocol !== host.protocol || url.host !== host.host)
+        failures.push(
+          `the window's socket is ${each.socket}, not the host's ${stack.endpoint}`,
+        )
       if (each.client !== "nessa-panel")
         failures.push(
           `the window authenticated as ${JSON.stringify(each.client)}, not nessa-panel`,
@@ -270,7 +294,15 @@ const checks = {
 
   opens: async (page, stack) => {
     await page.locator(css.sessionRow, { hasText: stack.title }).first().click()
-    await need(page, css.message, "a message in the conversation", 20_000)
+    // Waiting on the product: a transcript that never draws has failed.
+    const shown = await page
+      .locator(css.message)
+      .first()
+      .waitFor({ timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!shown)
+      return { seen: {}, failures: ["the open conversation drew no message within 20 s"] }
     await settled(page)
     const messages = await transcript(page)
     // The last turn as the gateway holds it now: an engine before this one
@@ -281,6 +313,9 @@ const checks = {
 
   live: async (page, stack, options) => {
     const before = (await transcript(page)).length
+    // A mark on this document: a reload would take it away.
+    const mark = randomUUID()
+    await page.evaluate((mark) => (window.__gatewayWindowMark = mark), mark)
     const marker = `W${randomUUID().slice(0, 8)}`
     const view = await turn(stack, prompt(marker), options.agent)
     const second = lastTurn(view)
@@ -293,7 +328,9 @@ const checks = {
     const failures = drawn(now, second)
     if (now.length !== before + 2)
       failures.push(`${now.length} messages after the turn, not ${before + 2}`)
-    return { seen: { before, messages: now }, failures }
+    const kept = await page.evaluate(() => window.__gatewayWindowMark)
+    if (kept !== mark) failures.push("the page was reloaded during the turn")
+    return { seen: { before, messages: now, reloaded: kept !== mark }, failures }
   },
 }
 
@@ -308,7 +345,7 @@ await main(
       failures: [],
     })
     const origin = new URL(stack.url).origin
-    const endpoint = stack.gateway.url.replace(/^http/, "ws")
+    const endpoint = stack.endpoint
     await withEngines(options, rep, async (engine, browser) => {
       for (const layout of options.layouts) {
         const started = Date.now()
@@ -353,6 +390,10 @@ await main(
             })
             if (!entry.ok) stopped = name
           }
+          // What the page said after the last step, before it closes.
+          const late = opened.errors.splice(0)
+          if (late.length > 0)
+            rep.add({ name: "console", engine, layout, failures: late })
         } finally {
           await opened.close()
           log(`${engine} ${layout}: ${Date.now() - started} ms`)

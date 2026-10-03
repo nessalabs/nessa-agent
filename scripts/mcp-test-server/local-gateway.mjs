@@ -2,9 +2,8 @@
  * A real gateway for a live check: provisioned in a temporary `ci` namespace
  * of its own, with one agent runtime and the test MCP server configured as
  * `mcptest`, started on 127.0.0.1, and stopped and removed again — its owner
- * token with it. `live-check.mjs` and the desktop's real-gateway check
- * (`verification/desktop/scripts/mcp-apps-gateway.mjs`) both start theirs
- * here.
+ * token with it. `live-check.mjs` and the desktop's real-gateway checks
+ * (`verification/desktop/scripts/lib/gateway-stack.mjs`) start theirs here.
  *
  * It uses whatever sign-in the agent already has on this machine and writes
  * no credential of its own beyond the gateway's owner token, which stays in

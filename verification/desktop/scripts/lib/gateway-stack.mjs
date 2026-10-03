@@ -11,7 +11,7 @@
  * temporary directory, never printed, and removed with it.
  */
 import { readdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import {
@@ -23,14 +23,16 @@ import { CannotRun, log } from "./cli.mjs"
 import { freePort, startDevServer } from "./server.mjs"
 
 /**
- * The panel's credential as the gateway provisioned it: the one file of that
- * name under its directory, wherever its namespace put it. It is what the
- * native host's `SurfaceCredential` reads for the desktop window, and carries
- * the panel's grants, not the owner's.
+ * The panel's credential as the gateway provisioned it: the one
+ * `auth/surfaces/nessa-panel.token` under its directory, whichever namespace
+ * holds it (`provisioning.rs` writes it, `surface_credential.rs` reads it for
+ * the desktop window). It carries the panel's grants, not the owner's. Not
+ * exactly one there is "could not run".
  */
 export function panelCredential(gateway) {
-  const found = readdirSync(gateway.directory, { recursive: true }).filter((path) =>
-    String(path).endsWith("nessa-panel.token"),
+  const file = join("auth", "surfaces", "nessa-panel.token")
+  const found = readdirSync(gateway.directory, { recursive: true }).filter(
+    (path) => String(path) === file || String(path).endsWith(sep + file),
   )
   if (found.length !== 1)
     throw new CannotRun(
