@@ -11,8 +11,8 @@
  * refused too. Its one call is finished, with arguments and a result. A
  * release holds nothing to let go of. Its conversation, where composition
  * gives it one, is the sample workspace's (`fixtureConversation`): a message
- * lands there written by the app, and a context is taken and kept nowhere,
- * as the sample's agent reads none.
+ * lands there written by the app; a context is refused, as the sample has no
+ * model to give it to.
  */
 import type { JsonObject } from "../model/json-rpc"
 import type { AppCall } from "../model/tool-call"
@@ -94,7 +94,9 @@ export function fixtureConversation(
         () => "done" as const,
         () => "refused" as const,
       ),
-    updateModelContext: async () => "done",
+    // The sample's replies are scripted: there is no model to give a context
+    // to, so it is not taken (gate 7: no answer of a success it is not).
+    updateModelContext: async () => "refused",
   }
 }
 

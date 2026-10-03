@@ -374,7 +374,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   "Sent by show_fixture, from nessa-fixture" above its bubble, right-aligned with it
   (within 6 px) and inside the column; another while the reply runs is
   refused (`isError: true`) and adds nothing; `ui/update-model-context` is
-  answered `{}`. The gateway's own path is `crates/nessa-server/tests/conversation/app_messages.rs`
+  refused ("Context update denied"): the sample has no model to give it to.
+  The gateway's own path is `crates/nessa-server/tests/conversation/app_messages.rs`
   and `app-messages.test.ts`. _Check:_ `mcp-apps.mjs --only message`.
 - [ ] **A request to an origin the app did not declare is blocked by its CSP,
   and the host says so** above the app. _Check:_ `mcp-apps.mjs --only csp`.

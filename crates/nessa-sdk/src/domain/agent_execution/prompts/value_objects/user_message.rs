@@ -195,7 +195,10 @@ impl LinkedFile {
 }
 
 /// What a user said in one turn: text, the images it carries, and the files it
-/// points at, in that order.
+/// points at, in that order; who wrote it (the person, unless
+/// [`Self::sent_by`] says an app did); and what apps gave the model to know
+/// with it ([`Self::with_app_model_context`]), which is not part of what it
+/// says.
 ///
 /// Text is optional because an image or a file alone is a complete message; a
 /// message with none of the three is not one. Images and files each keep the
@@ -242,7 +245,7 @@ impl UserMessage {
     pub const MAX_APP_MODEL_CONTEXTS: usize = 4;
 
     /// Combine optional `text` with `images` and `files`, each in attachment
-    /// order. All three empty is [`ExecutionError::EmptyValue`]; more than
+    /// order: the person's message, carrying no app's context. All three empty is [`ExecutionError::EmptyValue`]; more than
     /// [`Self::MAX_IMAGES`] or [`Self::MAX_FILES`] is
     /// [`ExecutionError::TooManyValues`]; more than [`Self::MAX_IMAGE_BYTES`]
     /// in total is [`ExecutionError::ValueTooLong`]. The same image or file may
@@ -282,7 +285,8 @@ impl UserMessage {
             app_model_context: Box::default(),
         })
     }
-    /// A message of text alone, which cannot fail: the text is already nonblank.
+    /// A message of text alone, the person's, which cannot fail: the text is
+    /// already nonblank.
     pub fn text_only(text: PromptText) -> Self {
         Self {
             text: Some(text),

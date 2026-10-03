@@ -44,7 +44,8 @@ Checks, per engine and layout (--only <names> to pick):
   message      ui/message lands in the transcript as the person's message, labelled
                with the app that wrote it, the label over its bubble's right edge
                and inside the column; a second while the reply runs is refused
-               (isError) and adds nothing; ui/update-model-context is taken
+               (isError) and adds nothing; ui/update-model-context is refused, the
+               sample having no model to give it to
   csp          a fetch to an undeclared origin is blocked, and the host's notice
                names it
   isolation    the app's origin is opaque: no parent document, no storage; the
@@ -802,7 +803,9 @@ const checks = {
       failures.push("a refused message appeared in the transcript")
     await app.click(css.fixtureControl("context"))
     const context = await output(app, css.fixtureOutput("context"))
-    if (context !== "ok: {}") failures.push(`the context was answered ${context}`)
+    // The sample has no model to give a context to, and says so.
+    if (context !== "error: Context update denied")
+      failures.push(`the context was answered ${context}`)
     return { sent, label, said, busy, context, geometry, failures }
   },
 

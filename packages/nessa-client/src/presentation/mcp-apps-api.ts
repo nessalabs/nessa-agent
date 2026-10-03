@@ -208,9 +208,10 @@ export type McpAppsApi = {
    * in place of what this mount gave before; an update with neither part
    * clears it. It is held until the next message admitted while nothing runs
    * or waits in the conversation — the person's or an app's; one queued
-   * behind a turn carries none — takes it, and goes to the agent once, with
-   * that turn, ahead of
-   * what the message says, and is not part of the transcript. A release of
+   * behind a turn carries none — carries it to the agent, ahead of what the
+   * message says, and is not part of the transcript. It is let go of once a
+   * turn that carried it ran; one removed or failed before it ran leaves it
+   * held for the next. A release of
    * the mount, or the end of the conversation's opening, lets go of it
    * unsent.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
@@ -221,14 +222,19 @@ export type McpAppsApi = {
    * {@link mcpAppRequestProblem}`.context` says. Together, as the gateway
    * holds them, they take no more (`mcp_request_too_large`).
    * @param options - Optional caller-managed action identity.
-   * @returns The gateway's acknowledgement: the context is held.
+   * @returns The gateway's acknowledgement that it took the update: held, or
+   * cleared for an update with neither part — or let go of at once, should
+   * the mount be released as it was taken.
    * @throws TypeError for arguments outside the schema's bounds, before
-   * anything is sent; otherwise {@link NessaMcpAppError}:
-   * `temporarily_unavailable` when as many other mounts of the conversation
+   * anything is sent; otherwise {@link NessaMcpAppError}: `audit_unavailable`
+   * when the update could not be recorded, and so was not taken;
+   * `temporarily_unavailable` when the app lane is full, or as many other
+   * mounts of the conversation
    * hold a context as one message carries (the schema's
    * `McpUpdateModelContextParams` says how many), `invalid_request` for structured content that is no
    * object, `mcp_request_too_large`, `mcp_app_unknown`,
-   * `mcp_server_mismatch` and `mcp_cancelled`.
+   * `mcp_server_mismatch` and `mcp_cancelled`; and any other refusal by its
+   * own conversation code.
    */
   updateModelContext: (
     conversationId: string,

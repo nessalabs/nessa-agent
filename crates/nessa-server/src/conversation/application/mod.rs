@@ -143,7 +143,7 @@ pub use record_read::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, McpAppCall, McpAppMessage, McpAppModelContext, McpAppRead,
+    ConversationService, DeletionsLeft, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead,
     McpAppResource, QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
     MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };

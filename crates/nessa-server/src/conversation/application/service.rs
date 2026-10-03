@@ -1,6 +1,6 @@
 use super::session_key::conversation_session;
 use super::{
-    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    app_reviews::{AppReviews, HeldContexts, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     projection::{bound_view, clipped, Projection, MAX_TEXT},
@@ -2011,10 +2011,6 @@ impl ConversationService {
                 }
             };
             let delivery = delivery.map_err(ConversationError::Agent)?;
-            // The agent has it, and what it carries: those contexts are sent.
-            if let Some(held) = &held {
-                live.app_reviews.took(held);
-            }
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -2029,7 +2025,12 @@ impl ConversationService {
                             Some(admission_evidence_error(failure))
                         }
                     };
-                    let settled = service.watch_receipt(&id, live, receipt, !known).await;
+                    // What it carries is let go of once its turn is seen to
+                    // run, when its receipt settles: a turn removed, failed or
+                    // cancelled before it ran leaves them held for the next.
+                    let settled = service
+                        .watch_receipt(&id, live, receipt, !known, held)
+                        .await;
                     if let Some(error) = evidence_error {
                         return Err(error);
                     }
@@ -2058,12 +2059,18 @@ impl ConversationService {
     /// `new_submission` is false for a retry of a submission the agent already
     /// had. One found already settled then says nothing new, so its reply is
     /// not recorded as if it had just been said.
+    ///
+    /// `carried` are the app contexts the turn carries: once it settles, they
+    /// are let go of if its record shows it selected to run — the prompt
+    /// that holds them was sent, or attempted — and kept for the next turn
+    /// if it never ran (`c8_a_context_carried_by_a_turn_that_never_ran_is_kept`).
     async fn watch_receipt(
         &self,
         conversation: &ConversationId,
         live: Arc<LiveConversation>,
         receipt: QueueAdmission,
         new_submission: bool,
+        carried: Option<HeldContexts>,
     ) -> bool {
         let id = receipt.id().as_str().to_owned();
         let mut completion = Box::pin(receipt.wait());
@@ -2071,6 +2078,7 @@ impl ConversationService {
         // can already be settled; dropping this wait never cancels SDK work.
         if let Some(_result) = completion.as_mut().now_or_never() {
             let snapshot = live.agent.session_manager().snapshot().await;
+            let_go_if_it_ran(&live, snapshot.as_ref(), &id, carried.as_ref());
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
             // Let go of the agent before waiting for the summary lock: a
             // summary is not a reason to keep a stopped agent's history
@@ -2082,6 +2090,8 @@ impl ConversationService {
             return true;
         }
         if !live.watched.lock().await.insert(id.clone()) {
+            // Watched already: a retry, which carried what its first attempt
+            // took, and is let go of by that first watch.
             return false;
         }
         let service = self.clone();
@@ -2089,6 +2099,7 @@ impl ConversationService {
         tokio::spawn(async move {
             let _result = completion.await;
             let snapshot = live.agent.session_manager().snapshot().await;
+            let_go_if_it_ran(&live, snapshot.as_ref(), &id, carried.as_ref());
             let reply = completed_reply(snapshot.as_ref(), &id);
             live.watched.lock().await.remove(&id);
             // As above: the agent is let go of before the summary lock is
@@ -3954,6 +3965,31 @@ fn turn_in_progress(snapshot: Option<SessionSnapshot>) -> bool {
 /// between them, and a list previews the last run: what the agent said when it
 /// finished, not what it said it was about to do. Only text is read, never a
 /// thought, and no more of it than a preview could use.
+/// Let go of the app contexts `carried` by the turn `execution` when its
+/// record shows it selected to run.
+fn let_go_if_it_ran(
+    live: &LiveConversation,
+    snapshot: Option<&SessionSnapshot>,
+    execution: &str,
+    carried: Option<&HeldContexts>,
+) {
+    let Some(carried) = carried else {
+        return;
+    };
+    let ran = snapshot.is_some_and(|snapshot| {
+        snapshot.invocations.iter().any(|record| {
+            record.request.execution_id.as_str() == execution
+                && record
+                    .scheduling
+                    .iter()
+                    .any(|event| event.stage == InvocationStage::Running)
+        })
+    });
+    if ran {
+        live.app_reviews.took(carried);
+    }
+}
+
 fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Option<String> {
     let record = snapshot?
         .invocations
@@ -4006,7 +4042,7 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
 
 mod app_calls;
 pub use app_calls::{
-    McpAppCall, McpAppMessage, McpAppModelContext, McpAppRead, McpAppResource, MAX_APP_CALLS,
+    McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, MAX_APP_CALLS,
     MAX_RESOURCE_META_BYTES,
 };
 

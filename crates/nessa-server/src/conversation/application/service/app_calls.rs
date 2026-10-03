@@ -33,6 +33,7 @@ use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
 };
+use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -86,7 +87,7 @@ pub struct McpAppMessage {
 /// An app's `mcp.updateModelContext` (`ui/update-model-context`): what it
 /// gives the model now. Neither part is no context: what it held is cleared.
 #[derive(Clone, Debug)]
-pub struct McpAppModelContext {
+pub struct McpAppContextUpdate {
     pub app: McpAppRef,
     pub server: String,
     pub text: Option<String>,
@@ -193,7 +194,7 @@ impl ConversationService {
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-        update: McpAppModelContext,
+        update: McpAppContextUpdate,
     ) -> Result<(), ConversationError> {
         let running = self.app_call_permit()?;
         let service = self.clone();
@@ -631,6 +632,18 @@ impl ConversationService {
             // answer says — unless its own record cannot be written either,
             // when the answer is that, and the evidence's failure is kept in
             // the log rather than lost.
+            // Whether the agent has it is not known: the submission's own
+            // task failed, or the agent could not say. Said so, not guessed.
+            Err(
+                error @ (ConversationError::Unavailable
+                | ConversationError::Agent(AgentError::SubmissionUnresolved)),
+            ) => Err(step
+                .ended(
+                    McpAppAuditPhase::MessageUnresolved { execution_id },
+                    None,
+                    error,
+                )
+                .await),
             Err(error @ ConversationError::AdmissionEvidence { .. }) => {
                 match step.record(sent, None).await {
                     Ok(()) => Err(error),
@@ -657,7 +670,7 @@ impl ConversationService {
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-        update: McpAppModelContext,
+        update: McpAppContextUpdate,
     ) -> Result<(), ConversationError> {
         let (opening, seen, ports) = self.app_in_conversation(&id, &caller, &update.app).await?;
         let step = Step::new(
@@ -686,22 +699,9 @@ impl ConversationService {
         {
             return Err(step.refuse(McpAppError::RequestTooLarge).await);
         }
-        // Sent as parsed: re-encoded, a duplicate key's last value kept, as
-        // a tool's arguments are. What may be held — an object, within its
-        // bound, something at all — is the context's own to say.
-        let structured = match update
-            .structured_content_json
-            .as_deref()
-            .map(serde_json::from_str::<Value>)
-        {
-            None => None,
-            Some(Ok(value)) => Some(value.to_string()),
-            Some(Err(_)) => {
-                return Err(step
-                    .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
-                    .await)
-            }
-        };
+        // Held as given: the context itself is the one judge of what may be
+        // held — one JSON object, within its bound, something at all.
+        let structured = update.structured_content_json;
         let Ok(source) = app_source(&update.app, tool) else {
             return Err(step
                 .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
@@ -719,10 +719,10 @@ impl ConversationService {
                     .await)
             }
         };
-        // One update of the conversation at a time, from its room to its
-        // hold: so they are recorded in the order they were given, and the
-        // one recorded last of a mount's is the one held.
-        let _one = opening.apps.one_update().await;
+        // One update of the mount at a time, from its room to its hold: so
+        // its updates are recorded in the order they reach it, and the one
+        // recorded last is the one held. Another mount's waits for none.
+        let _one = opening.apps.one_update(&update.app).await;
         let number = match opening
             .apps
             .number_update(opening.epoch, &update.app, context.is_some())
@@ -750,7 +750,10 @@ impl ConversationService {
         // On record before it is given: a context nobody can account for
         // never reaches the model, and one that could not be recorded
         // changes nothing.
-        step.record(phase, None).await?;
+        if let Err(error) = step.record(phase, None).await {
+            opening.apps.forget(&update.app);
+            return Err(error);
+        }
         // A release or an end since came after it, and it is not held.
         opening
             .apps

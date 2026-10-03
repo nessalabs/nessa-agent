@@ -43,7 +43,8 @@
  *   app/application/ports.ts: the server (#348), the calls, the conversation, links, downloads, timers
  *                                                    │ implemented, for a real server, by
  *                                                    ▼
- *   app/adapters/gateway/: the server over client.mcpApps, the calls from a view's tools (#384)
+ *   app/adapters/gateway/: the server over client.mcpApps, the calls from a view's tools (#384),
+ *                          the conversation's messages and model context (app-messages.ts, #390)
  * ```
  *
  * The first arrow is what draws what; the rest point the way a message

@@ -16,7 +16,7 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    ConversationError, McpAppCall, McpAppError, McpAppMessage, McpAppModelContext, McpAppRead,
+    ConversationError, McpAppCall, McpAppContextUpdate, McpAppError, McpAppMessage, McpAppRead,
     McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
@@ -140,7 +140,7 @@ pub(super) async fn dispatch(
                     .update_app_model_context(
                         conversation_id(&params.conversation_id)?,
                         caller(session, params.request_id.clone()),
-                        McpAppModelContext {
+                        McpAppContextUpdate {
                             app: app(params.app)?,
                             server: params.server,
                             text: params.text,

@@ -250,6 +250,9 @@ pub enum McpAppAuditPhase {
     /// The conversation refused the app's message: nothing reached the
     /// agent. Its code is the answer's.
     MessageNotSent { execution_id: String },
+    /// Whether the agent has the app's message is not known: the
+    /// submission's own task failed, or the agent could not settle it.
+    MessageUnresolved { execution_id: String },
     /// The mount's context, `bytes` of it, is held for the next message, in
     /// place of what it held. `sequence` orders the conversation's updates:
     /// of a mount's, the highest recorded stands. A turn that carries it

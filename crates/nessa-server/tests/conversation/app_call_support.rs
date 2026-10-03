@@ -6,10 +6,10 @@ use crate::conversation::application::{
     conversation_session, ConversationCaller, ConversationDependencies, ConversationError,
     ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationPermission,
     ConversationPermissionOrigin, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppMessage,
-    McpAppModelContext, McpAppPorts, McpAppRef, McpApps, McpToolUis, ProviderSessionErasers,
-    RequestedConversation, ResourceTickets, SubmissionMode, SubmittedMessage, TicketEnd,
-    TicketRefusal,
+    McpAppAuditRecord, McpAppCall, McpAppContextUpdate, McpAppFailure, McpAppFuture,
+    McpAppInitiator, McpAppMessage, McpAppPorts, McpAppRef, McpApps, McpToolUis,
+    ProviderSessionErasers, RequestedConversation, ResourceTickets, SubmissionMode,
+    SubmittedMessage, TicketEnd, TicketRefusal,
 };
 use crate::conversation::application::{ConversationAgent, ConversationAgents};
 use crate::conversation::domain::ConversationId;
@@ -449,7 +449,7 @@ impl Fixture {
             .update_app_model_context(
                 self.id.clone(),
                 self.caller("app-context"),
-                McpAppModelContext {
+                McpAppContextUpdate {
                     app: self.app(instance),
                     server: SERVER.into(),
                     text: text.map(str::to_owned),

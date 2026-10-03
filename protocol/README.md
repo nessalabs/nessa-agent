@@ -134,9 +134,10 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   while nothing runs or waits — the person's or an app's — takes every
   context held, and the agent is given them once, with that turn, ahead of
   its text: one text block, the contexts JSON-encoded. A message queued
-  behind a turn, or steered into one, carries none and leaves them held. A
-  conversation's updates are taken one at a time, each on record
-  (`sequence`) before it is held. They are not part of the transcript. A release of
+  behind a turn, or steered into one, carries none and leaves them held, and a turn that never ran — removed, failed
+  — leaves them held too: they are let go of once a turn that carried them ran.
+  A mount's updates are taken one at a time, each on record (`sequence`)
+  before it is held; the structured content is held exactly as given. They are not part of the transcript. A release of
   the mount, or the end of the opening, lets go of a context unsent. The
   schema states its bounds (`McpUpdateModelContextParams`).
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app

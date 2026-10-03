@@ -241,40 +241,45 @@ app's on behalf of the caller, on the app lane.
   its `MessageSender` — the person, or the app's tool call (execution and
   tool call, server and tool) — persisted with the invocation, compared on a
   retry, and projected as `ConversationMessage.app`.
-- **Checked under the submission lock.** Under the lock a close takes too,
-  an app's message is checked again before the conversation is resolved — a
-  close that ended its opening first refuses it, and nothing is reopened —
-  and once more just before the enqueue: its mount not released, its
-  opening the live one. It waits for nobody: refused `turn_running` while a
+- **Checked under the submission lock.** An app's message is submitted only
+  into the opening it was admitted in: its submission resolves only a live
+  opening, and opens none, and just before the enqueue its mount must not be
+  released and its opening must be the live one. (Admitting it, as any app
+  request, opens the conversation as #348's calls do.) It waits for nobody: refused `turn_running` while a
   turn runs or input waits, at that same point.
 - **A request is a turn.** The turn's identity is derived from the
   conversation, the mount and the request id, so the same request again is
   the same turn, which the agent settles as it settles the person's retries.
-- **One context per mount, sent once, with a turn that starts now.** A
-  conversation's context updates are taken one at a time (`one_update`,
-  an async lock held from the room check through the record to the hold),
-  so they are recorded in the order they were given and the one recorded
-  last of a mount's is the one held; each is numbered (`sequence`, on its
-  record), within a run of the gateway. A context is read by the next
-  message admitted while nothing runs or waits — under the submission lock,
-  just before its enqueue, by the same check that refuses an app's message
-  `turn_running` — so the turn that carries it starts at once, and is never
-  removed or reordered with it in it. A message queued behind a turn, or
-  steered into one, carries none and leaves them held. Let go of only once
-  the agent has the message: a refused message takes none. A retry carries
-  what its first attempt took and takes nothing more. A carried context
-  names its update's call id (`AppModelContext::update`), so the record of an
-  update and the turn that carried it are joined by identity. A context never
-  sent is a `ContextHeld` whose call id no turn carries; what let go of it —
-  a later update, a release, an end — is on its own record, not on a
-  per-context one (a recorded limit).
+- **One context per mount, let go of once a turn that carried it ran.** A
+  mount's context updates are taken one at a time (`one_update`, an async
+  lock per mount held from the room check through the record to the hold),
+  so they are recorded in the order they reach it and the one recorded last
+  is the one held; a mount whose update is on its way holds its place
+  (`reserved`), so two mounts never both take the last. Each is numbered
+  (`sequence`, on its record), within a run of the gateway. A context is
+  carried by the next message admitted while nothing runs or waits — read
+  under the submission lock, just before its enqueue, by the same check that
+  refuses an app's message `turn_running` — and is let go of only once that
+  turn's own record shows it selected to run (`InvocationStage::Running`),
+  checked when its receipt settles: whether a turn ran is the SDK's fact, not
+  admission's. A turn removed, failed or cancelled before it ran leaves its
+  contexts held for the next; while it is pending nothing else is idle, so
+  nothing else carries them. A message queued behind a turn, or steered into
+  one, carries none. A retry carries what its first attempt carried. A
+  carried context names its update's call id (`AppModelContext::update`), so
+  the record of an update and the turn that carried it are joined by
+  identity. A context never sent is a `ContextHeld` whose call id no turn
+  that ran carries; what let go of it — a later update, a release, an end —
+  is on its own record, not on a per-context one (a recorded limit). The
+  desktop sends a mount's updates one after another, in the app's order.
 - **How it reaches the agent.** Claude, Codex and OpenCode are all ACP
   harnesses; each is given one leading `text` block — a fixed preamble, then
   the contexts as one JSON array (`prompt_content.rs`). A text block is the
   one kind every ACP agent takes, and JSON encoding means nothing an app
   writes can end the block or pass for another app's entry. The structured
-  content goes in as `AppModelContext` holds it: it is the one judge of
-  "one JSON object", and nothing parses it again.
+  content is held and sent exactly as the app gave it: `AppModelContext`
+  (`is_json`) is the one judge of "one JSON object", at the gateway as in the
+  SDK, and nothing parses it again.
 - **Bounds.** A message: the conversation's input bound. A context: 8 KiB of
   text and structured JSON together (`AppModelContext::MAX_BYTES`); at most 4
   mounts hold one (`UserMessage::MAX_APP_MODEL_CONTEXTS`), so a turn carries at
@@ -298,10 +303,11 @@ app's on behalf of the caller, on the app lane.
 | M9 | — | mount allowed | Sending | `Admitted` |
 | M10 | Sending | under the submission lock: released, its opening ended (a close first on the lock), or another opening live | — | `Refused(mcp_cancelled)`, by the system; not sent, nothing reopened |
 | M10b | Sending, past that check | a release | Sending | sent, as a call past its last check (a limit: nothing enforces it, so no test) |
-| M10c | Sending | the agent stopped without the lock (the desktop quitting) before its resolve | — | `Refused(mcp_cancelled)`: an app's message resolves only a live opening and opens none |
+| M10c | Sending | the agent stopped without the lock (the desktop quitting) before its submission resolves | — | `Refused(mcp_cancelled)`: its submission resolves only a live opening and opens none |
 | M11 | Sending | a turn running or input waiting | — | `Refused(turn_running)` |
 | M12 | Sending | the agent takes it | — | `MessageSent{executionId}`; answered with it |
 | M13 | Sending | the conversation refuses it | — | `MessageNotSent{executionId}`; its own code |
+| M13b | Sending | whether the agent has it is not known (its task failed, `submission_unresolved`) | — | `MessageUnresolved{executionId}`; that code (no test: a supervised panic is not forced) |
 | M14 | Sending | the agent took it, its admission evidence failed | — | `MessageSent`; the evidence's code |
 | M15a | before the send | a record cannot be written | — | `audit_unavailable`; the step not taken |
 | M15b | sent | `MessageSent` cannot be written | — | the agent has the turn; `audit_unavailable`, its id withheld; an admission-evidence failure beside it logged |
@@ -315,13 +321,15 @@ app's on behalf of the caller, on the app lane.
 | --- | --- | --- | --- | --- |
 | C1 | — | lane or slots full | — | `temporarily_unavailable` |
 | C2 | — | no app, another server, released, ended | — | as M2, M5 |
-| C3 | — | a part past 8 KiB, or both together past it as held | — | `Refused(mcp_request_too_large)`, before anything parses it |
-| C4 | — | structured content that is no JSON object, as parsed | — | `Refused(invalid_request)` |
+| C3 | — | a part past 8 KiB, or both together past it | — | `Refused(mcp_request_too_large)` |
+| C4 | — | structured content that is not one JSON object, as `AppModelContext` judges it | — | `Refused(invalid_request)` |
 | C5 | none or held | an update, its turn among the conversation's, fewer than 4 other mounts holding one | held | numbered; `ContextHeld{bytes, sequence}`; then held, in place of the mount's |
-| C6 | none | 4 other mounts hold one | none | `Refused(temporarily_unavailable)` |
+| C6 | none | 4 other mounts hold one, or have one on its way | none | `Refused(temporarily_unavailable)` |
 | C7 | any | an update with neither part | none | numbered; `ContextCleared{sequence}`; what the mount held let go of |
-| C7b | — | two updates of one conversation at once | — | the second waits until the first is held: recorded in the order given, the later stands |
-| C8 | held | a message admitted while nothing runs or waits | none | read under the submission lock just before the enqueue; carried with it, once, in the order given, naming its update |
+| C7b | — | two updates of one mount at once | — | the second waits until the first is held: recorded in the order they reach it, the later stands; another mount's waits for neither |
+| C8 | held | a message admitted while nothing runs or waits | carried | read under the submission lock just before the enqueue; carried with it, in the order given, naming its update |
+| C8c | carried | its turn's record shows it ran | none | let go of, when its receipt settles |
+| C8d | carried | its turn removed, failed or cancelled before it ran | held | kept for the next |
 | C8b | held | a message queued behind a turn, or steered into one | held | carries none |
 | C9 | held | a message refused | held | kept |
 | C10 | held | a retry of a message the agent has | held | the retry carries what it first took |
@@ -329,7 +337,7 @@ app's on behalf of the caller, on the app lane.
 | C12 | held | the opening ends | none | all let go of, unsent |
 | C13 | held | an update being recorded when a message is admitted | held | the message carries what was held before it |
 | C13b | held | a release after a message read it | — | sent with that message, as M10b (a limit; no test) |
-| C14 | — | `ContextHeld` or `ContextCleared` cannot be written | — | `audit_unavailable`; what was held stands |
+| C14 | — | `ContextHeld` or `ContextCleared` cannot be written | — | `audit_unavailable`; what was held stands, and its place is free |
 | C15 | — | released or ended after its number, before its hold | none | not held; answered `applied`: the release came after it |
 
 ## Lanes

@@ -75,10 +75,9 @@ impl McpAppSource {
 /// Who wrote a user message: the person, or an MCP App on their behalf
 /// (MCP Apps' `ui/message`). Either way it is the person's turn, under their
 /// credential; this says whose words they are.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageSender {
     /// The person wrote it.
-    #[default]
     Person,
     /// An app sent it on the person's behalf. Whether the person allowed it
     /// is the host's to decide before it says so.

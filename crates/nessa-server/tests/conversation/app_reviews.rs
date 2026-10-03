@@ -639,19 +639,41 @@ fn an_update_whose_mount_was_released_or_whose_opening_ended_after_its_number_is
 }
 
 #[tokio::test]
-async fn one_context_update_of_a_conversation_runs_at_a_time() {
+async fn one_context_update_of_a_mount_runs_at_a_time_and_holds_up_no_other_mount() {
     let reviews = Arc::new(AppReviews::default());
-    let first = reviews.one_update().await;
+    let first = reviews.one_update(&app("i1")).await;
     let waiting = {
         let reviews = reviews.clone();
         tokio::spawn(async move {
-            let _second = reviews.one_update().await;
+            let _second = reviews.one_update(&app("i1")).await;
         })
     };
+    // Another mount's is not held up.
+    drop(reviews.one_update(&app("i2")).await);
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished());
     drop(first);
     waiting.await.unwrap();
+}
+
+#[test]
+fn a_mount_with_an_update_on_its_way_holds_its_place() {
+    let reviews = reviews();
+    for n in 0..MAX_HELD_CONTEXTS - 1 {
+        give(&reviews, &format!("i{n}"), Some(context("x")));
+    }
+    // The last place, taken by a mount whose update is being recorded.
+    let number = reviews.number_update(EPOCH, &app("racing"), true).unwrap();
+    assert_eq!(
+        reviews.number_update(EPOCH, &app("other"), true),
+        Err(ContextRefusal::Full)
+    );
+    // Its record failed: the place is free again.
+    reviews.forget(&app("racing"));
+    let other = reviews.number_update(EPOCH, &app("other"), true).unwrap();
+    reviews.give(EPOCH, &app("other"), other, Some(context("y")));
+    let _ = number;
+    assert_eq!(held(&reviews).len(), MAX_HELD_CONTEXTS);
 }
 
 #[test]

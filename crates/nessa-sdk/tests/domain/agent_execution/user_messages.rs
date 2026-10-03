@@ -459,5 +459,4 @@ fn an_app_and_its_context_count_every_byte_they_hold() {
         .unwrap()
         .unwrap();
     assert_eq!(text_only.structured_content(), None);
-    assert_eq!(MessageSender::default(), MessageSender::Person);
 }

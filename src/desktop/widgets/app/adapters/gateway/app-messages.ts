@@ -8,7 +8,8 @@
  *
  * What the app sent is already read into blocks of text
  * (`model/messages.ts`); a message is their text, a blank line between each,
- * and a context their text beside its structured content, encoded. Both are
+ * and a context their text beside its structured content, encoded; a
+ * mount's context updates are sent one after another, in the app's order. Both are
  * held to the client's bounds (`mcpAppRequestProblem`) before anything is
  * sent: past them the app is told it was refused, and nothing is logged.
  *
@@ -38,6 +39,22 @@ function refusedOr(error: unknown): Delivered {
 
 /** The app's conversation, through the gateway's `client.mcpApps`. */
 export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConversation {
+  // Each mount's context updates go one after another, in the order the app
+  // gave them: sent at once, two could reach the gateway the other way round,
+  // and the older stand.
+  const updating = new Map<string, Promise<unknown>>()
+  const inTurn = <T>(mount: string, update: () => Promise<T>): Promise<T> => {
+    const sent = (updating.get(mount) ?? Promise.resolve()).then(update, update)
+    const settled = sent.then(
+      () => undefined,
+      () => undefined,
+    )
+    updating.set(mount, settled)
+    void settled.then(() => {
+      if (updating.get(mount) === settled) updating.delete(mount)
+    })
+    return sent
+  }
   return {
     // The longest the client waits for either: a review, an opening, the send.
     within: Math.max(mcpAppDeadlines.sendMessageMs, mcpAppDeadlines.updateModelContextMs),
@@ -62,17 +79,19 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
           : {}),
       }
       if (mcpAppRequestProblem.context(update)) return "refused"
-      try {
-        await mcpApps.updateModelContext(
-          address.sessionId,
-          address.app,
-          address.server,
-          update,
-        )
-        return "done"
-      } catch (error) {
-        return refusedOr(error)
-      }
+      return inTurn(address.app.instanceId, async () => {
+        try {
+          await mcpApps.updateModelContext(
+            address.sessionId,
+            address.app,
+            address.server,
+            update,
+          )
+          return "done" as const
+        } catch (error) {
+          return refusedOr(error)
+        }
+      })
     },
   }
 }

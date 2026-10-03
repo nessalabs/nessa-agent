@@ -854,7 +854,7 @@ export interface McpSendMessageResult {
   /** The turn the message became, as the transcript names it. */
   executionId: string
 }
-/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson clears it. It is held for the mount until the next message admitted into the conversation while nothing runs or waits, the person's or an app's, takes it: sent once, with that turn, ahead of what the message says, and not shown in the transcript; a message queued behind a turn carries none. A release of the mount (mcp.releaseApp) or the end of the conversation's opening lets go of it unsent. Text and structured content together, the structure as held — re-encoded — take at most 8192 UTF-8 bytes, as each part does on its own (mcp_request_too_large past either), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
+/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson clears it. It is held for the mount until the next message admitted into the conversation while nothing runs or waits, the person's or an app's, carries it, ahead of what the message says, not shown in the transcript; it is let go of once a turn that carried it ran, and a message queued behind a turn carries none. A release of the mount (mcp.releaseApp) or the end of the conversation's opening lets go of it unsent. Text and structured content together, the structure as held — re-encoded — take at most 8192 UTF-8 bytes, as each part does on its own (mcp_request_too_large past either), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
 export interface McpUpdateModelContextParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -866,7 +866,7 @@ export interface McpUpdateModelContextParams {
   server: string
   /** The context as text. Empty is none. */
   text?: string
-  /** The context's structured content: one JSON object, encoded (invalid_request if it is not one), held as parsed — re-encoded, a duplicate key's last value kept. Absent is none. */
+  /** The context's structured content: one JSON object, encoded (invalid_request if it is not one), held exactly as given. Absent is none. */
   structuredContentJson?: string
 }
 /** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */

@@ -166,3 +166,50 @@ describe("an app's context", () => {
     },
   )
 })
+
+describe("a mount's context updates", () => {
+  it("are sent one after another, in the order the app gave them", async () => {
+    const sent: string[] = []
+    const answers: (() => void)[] = []
+    const apps = fakeApps({
+      updateModelContext: vi.fn(async (_conversation, _app, _server, context) => {
+        sent.push(context.text ?? "")
+        await new Promise<void>((resolve) => answers.push(resolve))
+        return { requestId: "request-1", applied: true }
+      }),
+    })
+    const conversation = gatewayAppConversation(apps)
+    const first = conversation.updateModelContext(address, { content: [text("first")] })
+    const second = conversation.updateModelContext(address, { content: [text("second")] })
+    const other = conversation.updateModelContext(
+      { ...address, app: { ...app, instanceId: "0d6c3e7a-1b2c-4d5e-8f90-a1b2c3d4e5f6" } },
+      { content: [text("other mount")] },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The second waits for the first; another mount's does not.
+    expect(sent).toEqual(["first", "other mount"])
+    answers.shift()?.()
+    await first
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sent).toEqual(["first", "other mount", "second"])
+    answers.forEach((answer) => answer())
+    expect(await second).toBe("done")
+    expect(await other).toBe("done")
+  })
+
+  it("go on after one the gateway refused", async () => {
+    let calls = 0
+    const apps = fakeApps({
+      updateModelContext: vi.fn(async () => {
+        calls += 1
+        if (calls === 1) throw refusal("temporarily_unavailable")
+        return { requestId: "request-1", applied: true }
+      }),
+    })
+    const conversation = gatewayAppConversation(apps)
+    const first = conversation.updateModelContext(address, { content: [text("a")] })
+    const second = conversation.updateModelContext(address, { content: [text("b")] })
+    expect(await first).toBe("refused")
+    expect(await second).toBe("done")
+  })
+})

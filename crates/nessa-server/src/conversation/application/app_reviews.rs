@@ -23,7 +23,7 @@ use super::view::{
 use crate::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, UserMessage};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -137,10 +137,11 @@ struct Pending {
 #[derive(Default)]
 pub struct AppReviews {
     state: Mutex<Reviews>,
-    /// Held across one context update — room checked, recorded, held — so
-    /// the conversation's updates are recorded in the order they were
-    /// given, and none is held out of turn.
-    updates: tokio::sync::Mutex<()>,
+    /// One lock per mount, held across one of its context updates — room
+    /// checked, recorded, held — so a mount's updates are recorded in the
+    /// order they reach it, and none is held out of turn. Per mount, so one
+    /// mount's slow record holds up no other's. Let go of with the mount.
+    updates: Mutex<HashMap<McpAppRef, Arc<tokio::sync::Mutex<()>>>>,
 }
 #[derive(Default)]
 struct Reviews {
@@ -169,6 +170,9 @@ struct Reviews {
     /// carries, and how a message takes a context only if it is still the
     /// one it read.
     next_context: u64,
+    /// The mounts with an update between its number and its hold: each
+    /// holds a place, so two mounts never both take the last.
+    reserved: Vec<McpAppRef>,
 }
 /// One mount's context, as it gave it.
 struct HeldContext {
@@ -208,6 +212,7 @@ impl Reviews {
     fn let_go_of_the_opening(&mut self) {
         self.consented.clear();
         self.contexts.clear();
+        self.reserved.clear();
     }
     fn key(&self, permission: &str) -> Option<u64> {
         self.pending
@@ -276,6 +281,7 @@ impl AppReviews {
             state.let_go_of_the_opening();
             std::mem::take(&mut state.pending)
         };
+        self.updates.lock().expect("context updates").clear();
         withdraw_ended(ended, &McpAppInitiator::System);
     }
 
@@ -296,10 +302,17 @@ impl AppReviews {
         Ok(())
     }
 
-    /// One context update of the conversation at a time: held across its
-    /// room check, its record and its hold.
-    pub async fn one_update(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.updates.lock().await
+    /// One context update of `app` at a time: held across its room check,
+    /// its record and its hold.
+    pub async fn one_update(&self, app: &McpAppRef) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self
+            .updates
+            .lock()
+            .expect("context updates")
+            .entry(app.clone())
+            .or_default()
+            .clone();
+        lock.lock_owned().await
     }
 
     /// The number of an update of `app` in the opening `epoch` — the
@@ -315,16 +328,37 @@ impl AppReviews {
     ) -> Result<u64, ContextRefusal> {
         let mut state = self.state.lock().expect("app reviews");
         state.live(epoch, app).map_err(ContextRefusal::Gone)?;
-        let others = state
+        // The places other mounts take: those holding a context, and those
+        // with an update on its way to one.
+        let mut others: Vec<&McpAppRef> = Vec::new();
+        for mount in state
             .contexts
             .iter()
-            .filter(|held| &held.app != app)
-            .count();
-        if holds && others >= MAX_HELD_CONTEXTS {
+            .map(|held| &held.app)
+            .chain(state.reserved.iter())
+        {
+            if mount != app && !others.contains(&mount) {
+                others.push(mount);
+            }
+        }
+        if holds && others.len() >= MAX_HELD_CONTEXTS {
             return Err(ContextRefusal::Full);
+        }
+        if holds && !state.reserved.contains(app) {
+            state.reserved.push(app.clone());
         }
         state.next_context += 1;
         Ok(state.next_context)
+    }
+
+    /// The update of `app` numbered last could not be recorded: it gives
+    /// nothing, and its place is free again.
+    pub fn forget(&self, app: &McpAppRef) {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .reserved
+            .retain(|mount| mount != app);
     }
 
     /// The update `number` of `app`, on record, is what it gives the model
@@ -332,6 +366,7 @@ impl AppReviews {
     /// an end since its number was taken came after it, and it is not held.
     pub fn give(&self, epoch: u64, app: &McpAppRef, number: u64, context: Option<AppModelContext>) {
         let mut state = self.state.lock().expect("app reviews");
+        state.reserved.retain(|mount| mount != app);
         if state.live(epoch, app).is_err() {
             return;
         }
@@ -543,11 +578,13 @@ impl AppReviews {
                 .collect();
             state.consented.retain(|consented| consented != app);
             state.contexts.retain(|held| &held.app != app);
+            state.reserved.retain(|mount| mount != app);
             release();
             keys.into_iter()
                 .filter_map(|key| state.remove(key))
                 .collect()
         };
+        self.updates.lock().expect("context updates").remove(app);
         for open in ended {
             let _ = open.end.send(ReviewEnd::Withdrawn {
                 cause: McpAppWithdrawal::AppTornDown,
@@ -572,6 +609,7 @@ impl AppReviews {
             state.let_go_of_the_opening();
             std::mem::take(&mut state.pending)
         };
+        self.updates.lock().expect("context updates").clear();
         withdraw_ended(ended, by);
     }
 }

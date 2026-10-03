@@ -667,6 +667,25 @@ mod tests {
             ),
             Err(StorageError::Corrupt(_))
         ));
+        // A context missing either part's key is not of this shape either,
+        // not read as that part being none.
+        for part in ["text", "structured_content"] {
+            let mut partial = valid.clone();
+            partial["InputAccepted"]["metadata"]["user_app_model_context"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove(part);
+            assert!(
+                matches!(
+                    decode_change(
+                        &serde_json::to_vec(&partial).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{part}"
+            );
+        }
         // A record without either field is not of this shape: corrupt, not
         // read as the person's with nothing given (no older reader is kept).
         for field in ["user_app", "user_app_model_context"] {

@@ -564,7 +564,7 @@ impl SessionManager {
         submission: SubmissionMode,
         scheduling: Vec<InvocationSchedulingEvent>,
     ) -> Result<usize, AgentError> {
-        request.validate_message_size()?;
+        request.validate_message()?;
         InvocationSchedulingEvent::validate_history(&scheduling)
             .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
         let storage_lease = self.storage_lease.clone();

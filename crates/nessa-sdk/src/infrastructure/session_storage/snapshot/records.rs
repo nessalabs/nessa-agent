@@ -128,7 +128,9 @@ impl App {
 pub(super) struct AppModelContext {
     pub(super) app: App,
     pub(super) update: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(super) text: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(super) structured_content: Option<String>,
 }
 impl From<&DomainAppModelContext> for AppModelContext {
@@ -171,9 +173,8 @@ pub(super) struct Metadata {
     /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
     /// The app that wrote the message on the person's behalf; `null` when
-    /// the person did. Required, as every field here is: a record without it
-    /// is not of this shape (`deserialize_with` keeps serde from reading its
-    /// absence as `None`).
+    /// the person did. Required: a record without it is not of this shape
+    /// (`deserialize_with` keeps serde from reading its absence as `None`).
     #[serde(deserialize_with = "Option::deserialize")]
     pub(super) user_app: Option<App>,
     /// What apps gave the model with this message; empty when none did.
@@ -428,22 +429,7 @@ impl Provider {
 }
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
-        // An app is the UI of a tool call an earlier turn made: no message
-        // is written by, or carries the context of, an app of its own turn.
-        let own = self.execution_id.as_str();
-        if self
-            .user_app
-            .iter()
-            .chain(
-                self.user_app_model_context
-                    .iter()
-                    .map(|context| &context.app),
-            )
-            .any(|app| app.execution_id == own)
-        {
-            return Err(corrupt("a message names an app of its own turn"));
-        }
-        Ok(InvocationRecord {
+        let record = InvocationRecord {
             target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
             request: ExecutionRequest {
@@ -498,7 +484,11 @@ impl Metadata {
                 .map(InvocationCancellation::decode)
                 .transpose()?,
             result: self.result.map(decode_result).transpose()?,
-        })
+        };
+        // The message's own rules, asked as at its admission: one restored
+        // that admission would refuse is corrupt.
+        record.request.validate_message().map_err(corrupt)?;
+        Ok(record)
     }
 }
 impl Event {

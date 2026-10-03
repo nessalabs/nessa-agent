@@ -53,10 +53,7 @@ impl InvocationContinuation {
         Ok(state)
     }
     pub(super) fn empty(invocation: &InvocationRecord) -> Result<Self, StorageError> {
-        invocation
-            .request
-            .validate_message_size()
-            .map_err(corrupt)?;
+        invocation.request.validate_message().map_err(corrupt)?;
         if invocation.events.capacity() > MAX_RETAINED_OUTPUT_EVENTS {
             return Err(corrupt(
                 "retained observation capacity exceeds per-invocation limit",
