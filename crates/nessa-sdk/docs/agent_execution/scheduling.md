@@ -116,9 +116,10 @@ Preselection stopped work and automatic attachment recovery release the runner's
 empty slot before their independently owned receipt settlement. A different live
 invocation retains its own slot and can still make a direct invocation `Busy`.
 
-The original main66 implementation reproduced stale `Busy` through the public
-normal-completion regression. The ownership contract and its public regression
-cases are listed below.
+Before this change, the runner could publish a queued item's receipt before
+releasing its invocation slot. A direct `invoke` just after the receipt resolved
+could therefore return stale `Busy`. The ownership contract and its public
+regression cases are listed below.
 Tests below are in the public `application` test binary, under
 `application::agent_execution::agents::review_regressions::receipt_readiness`.
 
