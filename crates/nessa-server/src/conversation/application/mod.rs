@@ -168,6 +168,10 @@ mod tests;
 mod projection_tests;
 
 #[cfg(test)]
+#[path = "../../../tests/conversation/tool_parts.rs"]
+mod tool_part_tests;
+
+#[cfg(test)]
 #[path = "../../../tests/conversation/reorder.rs"]
 mod reorder_tests;
 

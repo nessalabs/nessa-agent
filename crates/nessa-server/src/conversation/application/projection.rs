@@ -688,14 +688,23 @@ impl Projection {
                 tool_id: String::new(),
                 notice_id: String::new(),
             }),
-            ExecutionUpdate::Tool(update) => Some(ConversationPart {
-                message_id: None,
-                offset,
-                kind: "tool".into(),
-                text: String::new(),
-                tool_id: clipped(update.id().as_str(), 256),
-                notice_id: String::new(),
-            }),
+            // One part per tool call, where it was first seen: a call's later
+            // updates change its `tools` entry, not the turn's parts.
+            ExecutionUpdate::Tool(update) => {
+                let tool_id = clipped(update.id().as_str(), 256);
+                let seen = self.view.messages[index]
+                    .parts
+                    .iter()
+                    .any(|part| part.kind == "tool" && part.tool_id == tool_id);
+                (!seen).then(|| ConversationPart {
+                    message_id: None,
+                    offset,
+                    kind: "tool".into(),
+                    text: String::new(),
+                    tool_id,
+                    notice_id: String::new(),
+                })
+            }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 let notice_id = observation.id().as_str();
                 let text = decline_notice(observation.decline(), observation.stage());
