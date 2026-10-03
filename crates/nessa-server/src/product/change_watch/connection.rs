@@ -38,6 +38,9 @@ pub(in crate::product) struct WatchAcknowledgement {
     pub deadline: Instant,
     pub completed: oneshot::Sender<()>,
     pub owner: Arc<ProductWatchPermit>,
+    /// For an unwatch reply: the watch it retires, which the writer tells as
+    /// soon as the reply is physically written (row U4).
+    pub retired: Option<(String, Arc<WatchDeliveries>)>,
 }
 
 pub(in crate::product) struct WatchReply {
@@ -91,9 +94,10 @@ enum Progress {
     },
     Authorized {
         key: u64,
-        purpose: AuthorityCheck,
         result: Result<(), WatchRefusal>,
     },
+    /// The connection's one periodic re-check of all its live watches.
+    Rechecked { result: Result<(), WatchRefusal> },
     Source {
         key: u64,
         result: Option<(OwnedSource, Option<ChangeWatchEndReason>)>,
@@ -103,17 +107,6 @@ enum Progress {
         activation: bool,
         result: Result<(), oneshot::error::RecvError>,
     },
-}
-
-/// Why a target's authority is being asked. Either way it is the same single
-/// task per target; only what an allowed answer does differs.
-#[derive(Clone, Copy)]
-enum AuthorityCheck {
-    /// A notice is pending; an allowed answer lets the writer send it.
-    Notice,
-    /// The connection's periodic current-state check (row A3); an allowed
-    /// answer changes nothing, a refusal closes the connection.
-    Periodic,
 }
 
 type PendingProgress = Pin<Box<dyn Future<Output = Progress> + Send>>;
@@ -130,6 +123,9 @@ pub(in crate::product) struct ConnectionWatches {
     pending: FuturesUnordered<PendingProgress>,
     tokens: WatchToken,
     sequence: u64,
+    // At most one periodic re-check runs per connection; a tick while it runs
+    // is skipped rather than queued.
+    recheck_pending: bool,
     pub deliveries: Arc<WatchDeliveries>,
 }
 
@@ -140,6 +136,7 @@ impl ConnectionWatches {
             pending: FuturesUnordered::new(),
             tokens: WatchToken::new(state.watch_namespaces.mint()),
             sequence: 0,
+            recheck_pending: false,
             deliveries: Arc::new(WatchDeliveries::new()),
         }
     }
@@ -209,7 +206,8 @@ impl ConnectionWatches {
             let deadline = *target.retirement_deadline.get_or_insert(deadline);
             self.deliveries.retire(&target.id, deadline);
             let key = target.key;
-            return Some(self.reply(key, message, slot, deadline, false));
+            let retired = Some(target.id.clone());
+            return Some(self.reply(key, message, slot, deadline, false, retired));
         }
         let selector = match WatchSelector::decode(&frame.method, frame.params.clone()) {
             Ok(selector) => selector,
@@ -307,6 +305,7 @@ impl ConnectionWatches {
         slot: Arc<OwnedSemaphorePermit>,
         deadline: Instant,
         activation: bool,
+        retired: Option<String>,
     ) -> WatchReply {
         let target = self
             .targets
@@ -332,6 +331,7 @@ impl ConnectionWatches {
                 deadline,
                 completed,
                 owner,
+                retired: retired.map(|id| (id, self.deliveries.clone())),
             }),
         }
     }
@@ -366,27 +366,42 @@ impl ConnectionWatches {
         }));
     }
 
-    /// Re-ask every live target's authority, from the connection's periodic
-    /// current-state check, so revoked access ends a watch without a commit.
-    pub fn recheck(&mut self, state: &ProductRouteState, session: &AuthenticatedSession) {
-        let live: Vec<u64> = self
+    /// Re-ask the authority of every live watch on this connection, after the
+    /// connection's own refresh confirmed `current` (row A3), so revoked access
+    /// ends a watch without a commit. One task for the whole connection, holding
+    /// each watch's original owner until it returns.
+    pub fn recheck(&mut self, state: &ProductRouteState, current: &AuthenticatedSession) {
+        if self.recheck_pending {
+            return;
+        }
+        let live: Vec<_> = self
             .targets
             .iter()
-            .filter(|target| target.accepted && !target.retiring && !target.authority_pending)
-            .map(|target| target.key)
+            .filter(|target| target.accepted && !target.retiring)
+            .map(|target| (target.selector.clone(), target.owner.task()))
             .collect();
-        for key in live {
-            self.authorize(key, AuthorityCheck::Periodic, state, session);
+        if live.is_empty() {
+            return;
         }
+        self.recheck_pending = true;
+        let state = state.clone();
+        let current = current.clone();
+        let task = tokio::spawn(async move {
+            let (selectors, guards): (Vec<_>, Vec<_>) = live.into_iter().unzip();
+            let result = WatchSelector::recheck(&selectors, &state, &current).await;
+            for guard in guards {
+                guard.completed();
+            }
+            result
+        });
+        self.pending.push(Box::pin(async move {
+            Progress::Rechecked {
+                result: task.await.unwrap_or(Err(WatchRefusal::Unavailable)),
+            }
+        }));
     }
 
-    fn authorize(
-        &mut self,
-        key: u64,
-        purpose: AuthorityCheck,
-        state: &ProductRouteState,
-        session: &AuthenticatedSession,
-    ) {
+    fn authorize(&mut self, key: u64, state: &ProductRouteState, session: &AuthenticatedSession) {
         let target = self
             .targets
             .iter_mut()
@@ -409,7 +424,6 @@ impl ConnectionWatches {
         self.pending.push(Box::pin(async move {
             Progress::Authorized {
                 key,
-                purpose,
                 result: task.await.unwrap_or(Err(WatchRefusal::Unavailable)),
             }
         }));
@@ -452,7 +466,7 @@ impl ConnectionWatches {
                         self.source(key, handle);
                         let message = success(&request, &ConversationWatchResult { watch_id: id });
                         WatchOutcome::Reply(Box::new(
-                            self.reply(key, message, slot, deadline, true),
+                            self.reply(key, message, slot, deadline, true, None),
                         ))
                     }
                     result => {
@@ -468,15 +482,19 @@ impl ConnectionWatches {
                             slot,
                             deadline,
                             false,
+                            None,
                         )))
                     }
                 }
             }
-            Progress::Authorized {
-                key,
-                purpose,
-                result,
-            } => {
+            Progress::Rechecked { result } => {
+                self.recheck_pending = false;
+                if let Err(refusal) = result {
+                    return WatchOutcome::Close(refusal.close_reason());
+                }
+                WatchOutcome::Progress
+            }
+            Progress::Authorized { key, result } => {
                 let Some(target) = self.targets.iter_mut().find(|target| target.key == key) else {
                     return WatchOutcome::Progress;
                 };
@@ -485,16 +503,7 @@ impl ConnectionWatches {
                     if let Err(refusal) = result {
                         return WatchOutcome::Close(refusal.close_reason());
                     }
-                    let id = target.id.clone();
-                    match purpose {
-                        AuthorityCheck::Notice => self.deliveries.authorize(&id),
-                        // A notice that arrived while this check ran still needs
-                        // its own authority, asked after the notice existed.
-                        AuthorityCheck::Periodic if self.deliveries.needs_authority(&id) => {
-                            self.authorize(key, AuthorityCheck::Notice, state, session)
-                        }
-                        AuthorityCheck::Periodic => {}
-                    }
+                    self.deliveries.authorize(&target.id);
                 }
                 self.collect_retired();
                 WatchOutcome::Progress
@@ -517,7 +526,7 @@ impl ConnectionWatches {
                     self.source(key, owned.handle);
                 }
                 if admission {
-                    self.authorize(key, AuthorityCheck::Notice, state, session);
+                    self.authorize(key, state, session);
                 }
                 WatchOutcome::Progress
             }

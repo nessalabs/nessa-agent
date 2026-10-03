@@ -292,6 +292,8 @@ const watchId = schema.$defs.ChangeWatchId
 if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
   throw new Error("Invalid change watch ID publication")
 rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
+// Published so the server can test the identities it mints against the schema.
+rs += `pub const CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(watchId.pattern)};\n`
 rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
 rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
 rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`

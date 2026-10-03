@@ -32,6 +32,8 @@ struct TargetDelivery {
     terminal: bool,
     terminal_sent: bool,
     retiring: bool,
+    // Unwatch replies queued but not yet physically written.
+    replies: usize,
 }
 struct State {
     targets: Vec<TargetDelivery>,
@@ -81,6 +83,7 @@ impl WatchDeliveries {
             terminal: false,
             terminal_sent: false,
             retiring: false,
+            replies: 0,
         });
         drop(state);
         self.ready.notify_one();
@@ -105,6 +108,22 @@ impl WatchDeliveries {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {
             target.acknowledgement = None;
+        }
+        drop(state);
+        self.ready.notify_one();
+    }
+
+    /// The writer has physically written one unwatch reply for this watch.
+    /// Once none is left queued, the retirement reply deadline no longer bounds
+    /// the writer (row U4). A retiring watch sends no notices, so this enables
+    /// none.
+    pub fn reply_written(&self, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {
+            target.replies = target.replies.saturating_sub(1);
+            if target.retiring && target.replies == 0 {
+                target.acknowledgement = None;
+            }
         }
         drop(state);
         self.ready.notify_one();
@@ -152,18 +171,6 @@ impl WatchDeliveries {
         }
         drop(state);
         self.ready.notify_one();
-    }
-
-    /// Whether this watch has a notice still waiting for its authority check.
-    pub fn needs_authority(&self, id: &str) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .targets
-            .iter()
-            .any(|target| {
-                target.id == id && target.pending.is_some_and(|pending| !pending.authorized)
-            })
     }
 
     pub fn registration_deadline(&self, id: &str) -> Option<Instant> {
@@ -282,6 +289,7 @@ impl WatchDeliveries {
         if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {
             target.retiring = true;
             target.pending = None;
+            target.replies += 1;
             target.acknowledgement = Some(
                 target
                     .acknowledgement

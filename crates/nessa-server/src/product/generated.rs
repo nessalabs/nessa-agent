@@ -1264,6 +1264,8 @@ pub struct ConversationWatchEnded {
     pub reason: ChangeWatchEndReason,
 }
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
+pub const CHANGE_WATCH_ID_PATTERN: &str =
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
 pub const MAX_GLOBAL_CHANGE_WATCHES: usize = 64;
 pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = 8;
 pub const MAX_CONNECTION_RECORD_WATCHES: usize = 1;

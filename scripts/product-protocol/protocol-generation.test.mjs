@@ -339,6 +339,9 @@ test("watch policy and identity publish the same schema owner to both languages"
     assert.match(ts, /recordTargets: 3/)
     assert.match(ts, /catalogueTargets: 2/)
     assert.match(rust, /MAX_CHANGE_WATCH_ID_BYTES: usize = 51;/)
+    assert.ok(
+      rust.includes(`CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(pattern)};`),
+    )
     assert.match(rust, /MAX_GLOBAL_CHANGE_WATCHES: usize = 17;/)
     assert.match(rust, /MAX_PRINCIPAL_CHANGE_WATCHES: usize = 5;/)
     assert.match(rust, /MAX_CONNECTION_RECORD_WATCHES: usize = 3;/)

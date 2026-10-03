@@ -1420,8 +1420,19 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
     assert_eq!(owners.available_permits(), 1);
 }
 
+/// Row B4: neither continuously ready controls nor continuously ready
+/// ordinary responses can starve a pending watch deadline.
 #[tokio::test(start_paused = true)]
 async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls() {
+    pending_watch_deadline_survives_a_continuously_ready_lane(false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_ordinary_responses() {
+    pending_watch_deadline_survives_a_continuously_ready_lane(true).await;
+}
+
+async fn pending_watch_deadline_survives_a_continuously_ready_lane(ordinary_lane: bool) {
     let owners = Arc::new(WatchOwners::new(1, 1));
     let deliveries = Arc::new(WatchDeliveries::new());
     assert!(deliveries.reserve(
@@ -1433,9 +1444,16 @@ async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls
     assert!(deliveries.notice("watch", Notice::Changed)); // No fabricated allowed authority snapshot.
     let (control_send, controls) = mpsc::channel(4);
     let (_refusal_send, refusals) = mpsc::channel(1);
-    let (_ordinary_send, ordinary) = mpsc::channel(16);
+    let (ordinary_send, ordinary) = mpsc::channel(16);
     let (_record_send, records) = mpsc::channel(1);
-    let lane = ReadyLane::Control(control_send, Arc::new(Semaphore::new(2)));
+    // The busy lane refills itself; the other lane stays open and idle.
+    let (lane, _idle_control, _idle_ordinary) = if ordinary_lane {
+        let lane = ReadyLane::Ordinary(ordinary_send, Arc::new(Semaphore::new(2)));
+        (lane, Some(control_send), None)
+    } else {
+        let lane = ReadyLane::Control(control_send, Arc::new(Semaphore::new(2)));
+        (lane, None, Some(ordinary_send))
+    };
     lane.refill();
     let ready = Arc::new(Notify::new());
     let writes = Arc::new(AtomicUsize::new(0));
@@ -1469,7 +1487,7 @@ async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls
     let _ = writer.await;
     assert!(
         completed,
-        "continuously ready controls must not starve the original watch deadline"
+        "a continuously ready lane must not starve the original watch deadline"
     );
     assert_eq!(records_written.load(Ordering::SeqCst), 0);
     assert_eq!(owners.available_permits(), 0);

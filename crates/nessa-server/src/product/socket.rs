@@ -529,6 +529,8 @@ enum AuthenticatedInput {
 }
 
 type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Send + 'a>>;
+type RefreshCheck<'a> =
+    Pin<Box<dyn Future<Output = Result<AuthenticatedSession, AccessError>> + Send + 'a>>;
 
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
@@ -580,7 +582,7 @@ where
     // sink does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
-    let mut refresh: Option<AuthorityCheck<'_>> = None;
+    let mut refresh: Option<RefreshCheck<'_>> = None;
     let mut input_check: Option<AuthorityCheck<'_>> = None;
     let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
@@ -619,17 +621,22 @@ where
                 let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired));
                 break;
             }
-            error = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
+            current = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
                 refresh = None;
-                if let Some(error) = error {
-                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
-                    break;
+                match current {
+                    // The one identity check per tick also confirms each live
+                    // watch's session; the watches then re-ask only their
+                    // passive-read admission (row A3).
+                    Ok(current) => watches.recheck(&state, &current),
+                    Err(error) => {
+                        let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                        break;
+                    }
                 }
                 None
             }
             _ = current_state.tick(), if refresh.is_none() => {
-                refresh = Some(Box::pin(current_session_error(&state, &session)));
-                watches.recheck(&state, &session);
+                refresh = Some(Box::pin(current_session(&state, &session)));
                 None
             }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
@@ -1342,6 +1349,16 @@ pub(super) async fn watch_browser_present(
     ensure_browser_session_present(state, session).await
 }
 
+/// The connection's current session, or why it is no longer current.
+async fn current_session(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<AuthenticatedSession, AccessError> {
+    current_identity(state, session)
+        .await
+        .map(|(current, _)| current)
+}
+
 async fn current_session_error(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1406,10 +1423,14 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 deadline,
                 completed,
                 owner: _original_owner,
+                retired,
             } = acknowledgement;
             within_deadline(deadline, send(write_timeout, socket, *message))
                 .await
                 .ok_or(())??;
+            if let Some((id, deliveries)) = retired {
+                deliveries.reply_written(&id);
+            }
             let _ = completed.send(());
             Ok(())
         }

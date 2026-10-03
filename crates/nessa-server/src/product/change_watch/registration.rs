@@ -149,7 +149,20 @@ impl WatchSelector {
         let current = super::super::socket::watch_identity(state, session)
             .await
             .map_err(WatchRefusal::Access)?;
-        let session = &current;
+        let admitted = self.admit_current(state, &current).await?;
+        super::super::socket::watch_browser_present(state, &current)
+            .await
+            .map_err(WatchRefusal::Access)?;
+        Ok(admitted)
+    }
+
+    /// Passive-read admission alone, for a session whose identity and browser
+    /// presence the caller has just checked.
+    async fn admit_current(
+        &self,
+        state: &ProductRouteState,
+        session: &AuthenticatedSession,
+    ) -> Result<Admitted, WatchRefusal> {
         let (receivers, conversations) = state
             .passive_read
             .as_ref()
@@ -183,10 +196,25 @@ impl WatchSelector {
                     .map_err(WatchRefusal::Read)?,
             ),
         };
-        super::super::socket::watch_browser_present(state, session)
-            .await
-            .map_err(WatchRefusal::Access)?;
         Ok(admitted)
+    }
+
+    /// The connection's periodic re-check of its live watches (row A3). The
+    /// connection's own refresh has just confirmed `current` (identity and
+    /// browser presence) and passes it in, so this asks only passive-read
+    /// admission, once per distinct target.
+    pub async fn recheck(
+        selectors: &[Self],
+        state: &ProductRouteState,
+        current: &AuthenticatedSession,
+    ) -> Result<(), WatchRefusal> {
+        for (index, selector) in selectors.iter().enumerate() {
+            if selectors[..index].contains(selector) {
+                continue;
+            }
+            selector.admit_current(state, current).await?;
+        }
+        Ok(())
     }
 
     pub async fn authorize(
@@ -315,6 +343,24 @@ fn admission_code(error: ReadRefusal) -> ChangeWatchErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product::generated::CHANGE_WATCH_ID_PATTERN;
+
+    /// Row R6: the identities the server mints, up to the last counter, match
+    /// the pattern and length the schema publishes, so the format has one owner
+    /// and a schema change that disagrees with minting fails here.
+    #[test]
+    fn minted_identities_match_the_published_pattern_and_length() {
+        let pattern = regex::Regex::new(CHANGE_WATCH_ID_PATTERN).unwrap();
+        let mut tokens = WatchToken::new(Uuid::from_u128(u128::MAX));
+        let first = tokens.next().unwrap();
+        assert!(pattern.is_match(&first), "{first}");
+        assert!(first.len() <= MAX_CHANGE_WATCH_ID_BYTES);
+        tokens.accepted = u64::MAX - 1;
+        let last = tokens.next().unwrap();
+        assert!(pattern.is_match(&last), "{last}");
+        // The published bound is exactly the longest identity minted.
+        assert_eq!(last.len(), MAX_CHANGE_WATCH_ID_BYTES);
+    }
 
     #[test]
     fn frontier_recognizes_exact_removed_ids_without_foreign_or_unminted_ids() {
