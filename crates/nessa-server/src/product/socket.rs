@@ -286,7 +286,11 @@ impl ResponseClass {
             | "conversation.reorder"
             // Releasing an app ends its held calls, so it is never behind
             // them on the app lane.
-            | "mcp.releaseApp" => Self::Control,
+            | "mcp.releaseApp"
+            // Ending an enrollment is never crowded out by ordinary requests
+            // (design row O7).
+            | "pairing.deny"
+            | "pairing.cancel" => Self::Control,
             "mcp.callTool" | "mcp.readResource" => Self::App,
             "conversation.recordsHead"
             | "conversation.recordsPage"
@@ -872,6 +876,9 @@ async fn dispatch_authorized(
         method if method.starts_with("mcp.") => {
             super::mcp_apps::dispatch(state, session, frame).await
         }
+        method if method.starts_with("pairing.") => {
+            super::pairing::dispatch(state, session, frame).await
+        }
         "server.health" => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
@@ -1056,6 +1063,14 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcp.readResource"
         | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
+        // Enrolling a device creates a credential for it; Auth asks again for
+        // the exact consent inside the runtime.
+        "pairing.create"
+        | "pairing.pending"
+        | "pairing.status"
+        | "pairing.approve"
+        | "pairing.deny"
+        | "pairing.cancel" => Some("credential.manage"),
         _ => None,
     }
 }
@@ -1463,6 +1478,36 @@ mod tests {
             assert!(
                 action_for_method(method).is_some(),
                 "advertised method has no authorization/dispatch path: {method}"
+            );
+        }
+    }
+
+    /// Design row O7: ending an enrollment takes the control lane and its
+    /// capacity, so ordinary requests cannot crowd it out; the other pairing
+    /// methods are ordinary requests, and every one asks Cedar for
+    /// `credential.manage` before it is dispatched.
+    #[test]
+    fn pairing_deny_and_cancel_are_controls() {
+        for method in PRODUCT_READY_METHODS
+            .iter()
+            .filter(|method| method.starts_with("pairing."))
+        {
+            let control = matches!(*method, "pairing.deny" | "pairing.cancel");
+            assert_eq!(
+                matches!(ResponseClass::for_method(method), ResponseClass::Control),
+                control,
+                "{method}"
+            );
+            if !control {
+                assert!(
+                    matches!(ResponseClass::for_method(method), ResponseClass::Ordinary),
+                    "{method}"
+                );
+            }
+            assert_eq!(
+                action_for_method(method),
+                Some("credential.manage"),
+                "{method}"
             );
         }
     }

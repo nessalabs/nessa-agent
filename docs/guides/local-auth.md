@@ -276,6 +276,20 @@ The following values are the defaults:
 }
 ```
 
+Native device pairing is off by default. To turn it on, add a `native` section
+with a numeric listen address (no hostname is looked up); `null` or no section
+keeps it off:
+
+```json
+{
+  "native": { "listenAddress": "127.0.0.1:47650" }
+}
+```
+
+On first start the gateway creates a private `native-pairing/` directory beside
+`auth/` and publishes its pairing key there before binding anything. A missing key
+with enrollment history refuses startup rather than generating a new one.
+
 Omitted fields use defaults. Restart the gateway after editing; offline auth
 commands read the same settings on each invocation. Positive integers are required;
 unknown fields, malformed files, and unrepresentable sizes or deadlines fail startup.

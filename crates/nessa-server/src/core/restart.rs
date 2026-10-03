@@ -79,13 +79,18 @@ pub(super) fn restart(error: &RunError) -> Restart {
         | RunError::Agent(_)
         | RunError::Bind { .. }
         | RunError::Serve(_)
-        | RunError::Shutdown(_) => Restart::Worthwhile,
+        | RunError::Shutdown(_)
+        // Native pairing follows the authentication setup, bind and serve
+        // failures it is reported as: a held private state, a taken port or a
+        // failed listener can clear.
+        | RunError::Native(_) => Restart::Worthwhile,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::NativeFailure;
     use crate::env::{EnvironmentError, HOST};
     use std::io::{Error, ErrorKind};
 
@@ -136,6 +141,13 @@ mod tests {
             // evidence that the next attempt would fail the same way.
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
+            // Native pairing's held private state, taken port, or failed
+            // listener can each clear.
+            RunError::Native(NativeFailure::Listener(ErrorKind::InvalidInput)),
+            RunError::Native(NativeFailure::Bind {
+                address: "127.0.0.1:47650".parse().unwrap(),
+                source: Error::from(ErrorKind::AddrInUse),
+            }),
         ] {
             assert_eq!(restart(&error), Restart::Worthwhile, "{error}");
         }

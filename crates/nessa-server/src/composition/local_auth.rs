@@ -59,7 +59,7 @@ use nessa_auth::{
         dto::CredentialMetadataDto,
         ports::{Clock, PortFuture},
     },
-    domain::{AudienceId, OrganizationId, ResourceId},
+    domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
@@ -108,6 +108,10 @@ pub(super) struct LocalProduct {
     /// The gateway's connection to each configured MCP server, and its relay:
     /// started once the gateway is listening, stopped after conversations.
     pub(super) mcp: McpParts,
+    /// Native pairing with its key restored and enrollments settled, bound by
+    /// the root after the browser listener; `None` unless `config.json` names
+    /// a native listen address (design row S1).
+    pub(super) native: Option<super::native_pairing::PreparedNative>,
 }
 
 #[cfg(unix)]
@@ -187,6 +191,28 @@ pub(super) async fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
+    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
+    // Before any socket is bound: the key is restored or first published, and
+    // this gateway's unfinished enrollments are settled (design rows S3–S6).
+    let native = match &settings.native {
+        Some(native) => Some(
+            super::native_pairing::prepare(
+                native,
+                super::native_pairing::NativeInputs {
+                    namespace: directory
+                        .parent()
+                        .ok_or_else(|| setup_error("invalid data root"))?
+                        .to_path_buf(),
+                    registry: store.clone(),
+                    policy: policy.clone(),
+                    clock: Arc::new(SystemClock),
+                    gateway: Resource::new(organization.clone(), gateway.clone()),
+                },
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let credential_namespace = CredentialNamespace::new(
         config.stage.as_str().to_owned(),
         config.instance().map(str::to_owned),
@@ -200,7 +226,6 @@ pub(super) async fn product_state(
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
-    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let (conversations, agent_probe, warm_ups, mcp) = match &settings.agents {
         Some(agents) => {
             let mut built = conversations(
@@ -272,6 +297,13 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    let native = match native {
+        Some((prepared, commands)) => {
+            product = product.with_pairing(Arc::new(commands));
+            Some(prepared)
+        }
+        None => None,
+    };
     let mut record_reader = None;
     let mut catalogue_reader = None;
     if let Some((
@@ -305,6 +337,7 @@ pub(super) async fn product_state(
         catalogue_reader,
         warm_ups,
         mcp,
+        native,
     })
 }
 

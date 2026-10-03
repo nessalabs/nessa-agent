@@ -22,6 +22,13 @@ export function derivePairingValues(schema, values) {
       node.items = { type: "integer", minimum: 0, maximum: 255 }
       node.minItems = node.maxItems = values[owners[name]]
     }
+    if (Object.hasOwn(node, "x-pairing-manual-code")) {
+      if (node["x-pairing-manual-code"] !== "display")
+        throw new Error(`Unknown manual code form: ${node["x-pairing-manual-code"]}`)
+      // The grouped display form: the code's symbols and one separator.
+      node.type = "string"
+      node.minLength = node.maxLength = values.manualCodeBytes + 1
+    }
     for (const value of Object.values(node)) visit(value)
   }
   visit(compiled)

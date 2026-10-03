@@ -3,7 +3,7 @@ use super::agent::AgentsConfig;
 use crate::{core::RunError, product::SessionSettings};
 use nessa_auth::adapters::local::LocalStoreConfig;
 use serde::Deserialize;
-use std::{io::Read, path::Path, time::Duration};
+use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
 
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
@@ -11,6 +11,16 @@ pub(super) struct RuntimeConfig {
     pub registry: LocalStoreConfig,
     pub session: SessionConfig,
     pub agents: Option<AgentsConfig>,
+    /// Native device pairing; absent or `null` keeps it off (design rows S1, S2).
+    pub native: Option<NativeConfig>,
+}
+
+/// Where the native enrollment listener binds. The address is numeric: serde's
+/// standard `SocketAddr` parser, so no hostname is ever looked up.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct NativeConfig {
+    pub listen_address: SocketAddr,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +158,52 @@ mod tests {
             assert!(RuntimeConfig::parse(bytes).is_err());
         }
     }
+    /// Design rows S1 and S2: native pairing is off unless named, and a
+    /// malformed native section refuses startup before anything is opened.
+    #[test]
+    fn native_config_refuses_before_effect() {
+        assert!(RuntimeConfig::parse(b"{}").unwrap().native.is_none());
+        assert!(RuntimeConfig::parse(br#"{"native":null}"#)
+            .unwrap()
+            .native
+            .is_none());
+        for (bytes, address) in [
+            (
+                br#"{"native":{"listenAddress":"127.0.0.1:47650"}}"#.as_slice(),
+                "127.0.0.1:47650",
+            ),
+            (br#"{"native":{"listenAddress":"[::1]:0"}}"#, "[::1]:0"),
+            (
+                br#"{"native":{"listenAddress":"0.0.0.0:47650"}}"#,
+                "0.0.0.0:47650",
+            ),
+        ] {
+            assert_eq!(
+                RuntimeConfig::parse(bytes)
+                    .unwrap()
+                    .native
+                    .unwrap()
+                    .listen_address,
+                address.parse::<SocketAddr>().unwrap()
+            );
+        }
+        for bytes in [
+            br#"{"native":{"listenAddress":"localhost:47650"}}"#.as_slice(),
+            br#"{"native":{"listenAddress":"127.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":""}}"#,
+            br#"{"native":{"listenAddress":47650}}"#,
+            br#"{"native":{}}"#,
+            br#"{"native":{"listenAddress":"127.0.0.1:1","tls":true}}"#,
+            br#"{"native":"127.0.0.1:47650"}"#,
+        ] {
+            assert!(
+                RuntimeConfig::parse(bytes).is_err(),
+                "{}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+    }
+
     #[test]
     fn a_zero_polling_interval_is_rejected_by_both_entry_paths() {
         // The file path and a caller constructing settings directly now fail on

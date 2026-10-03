@@ -6,6 +6,7 @@
 //! client   --> enrollment_channel --> wire + Auth NativeTransport
 //! connection --> enrollment_channel
 //! runtime  --> registration (one code registration at a time)
+//! owner_commands --> runtime (owner side only; the product socket's handle)
 //! ```
 //! Arrows are compile-time dependencies. Auth owns every enrollment phase; the
 //! runtime holds only the volatile PAKE setup of the one open invitation.
@@ -16,6 +17,7 @@ mod connection;
 mod enrollment_channel;
 mod identity;
 mod listener;
+mod owner_commands;
 mod registration;
 mod runtime;
 pub mod wire;
@@ -28,6 +30,7 @@ pub use connection::{
 pub use enrollment_channel::{EnrollmentChannel, NativeFrameError};
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};
+pub use owner_commands::{InvitationEntropy, InvitationEntropySource, PairingOwnerCommands};
 pub use registration::{RegisteredInvitation, RegistrationError, RegistrationWorker};
 pub use runtime::{
     BeginPairing, CreatedInvitation, GatewayPairing, PairingRuntimeDependencies,

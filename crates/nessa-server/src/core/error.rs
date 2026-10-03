@@ -11,13 +11,16 @@ use super::ShutdownFailure;
 use crate::browser_session::adapters::JournalOpenError;
 #[cfg(test)]
 use crate::conversation::application::ConversationError;
+use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
+use nessa_auth::application::pairing::PrivateStateError;
 #[cfg(unix)]
 use nessa_local_database::OpenError;
 use std::fmt;
 use std::io::{self, ErrorKind};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// Fatal errors that stop the server process.
@@ -59,6 +62,64 @@ pub enum RunError {
     /// `None` means shutdown never reported at all — unknown, which is its own
     /// fact and not the same as a reported failure.
     Shutdown(Option<ShutdownFailure>),
+    /// Native device pairing, configured in `config.json`, could not start or
+    /// stopped serving (design rows S4, S10, S14 in
+    /// `docs/design/auth/device-pairing.md`).
+    Native(NativeFailure),
+}
+
+/// Why native pairing stopped this gateway: preparing its private state and
+/// key, binding its socket, or its listener failing while serving.
+#[derive(Debug)]
+pub enum NativeFailure {
+    /// The private `native-pairing/` directory could not be created or verified.
+    Directory(io::Error),
+    /// The private pairing state refused to open, or is held by another process.
+    PrivateState(PrivateStateError),
+    /// The gateway key could not be restored or first published. A missing key
+    /// with enrollment history is refused here rather than regenerated.
+    Identity(GatewayIdentityError),
+    /// Settling this gateway's unfinished enrollments before serving failed.
+    Open(PairingRuntimeError),
+    /// The configured native address could not be bound.
+    Bind {
+        address: SocketAddr,
+        source: io::Error,
+    },
+    /// The listener ended on an accept failure (design row P67).
+    Listener(ErrorKind),
+}
+
+impl fmt::Display for NativeFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Directory(error) => {
+                write!(formatter, "native pairing directory unusable: {error}")
+            }
+            Self::PrivateState(error) => {
+                write!(formatter, "native pairing private state refused: {error:?}")
+            }
+            Self::Identity(error) => {
+                write!(
+                    formatter,
+                    "native pairing gateway key unavailable: {error:?}"
+                )
+            }
+            Self::Open(error) => {
+                write!(
+                    formatter,
+                    "native pairing enrollments could not be settled: {error:?}"
+                )
+            }
+            Self::Bind { address, source } => {
+                write!(
+                    formatter,
+                    "native pairing could not bind {address}: {source}"
+                )
+            }
+            Self::Listener(kind) => write!(formatter, "native pairing listener failed: {kind}"),
+        }
+    }
 }
 
 impl RunError {
@@ -240,6 +301,7 @@ impl fmt::Display for RunError {
             Self::Shutdown(None) => {
                 write!(f, "shutdown never reported whether cleanup completed")
             }
+            Self::Native(failure) => write!(f, "{failure}"),
         }
     }
 }
@@ -254,6 +316,10 @@ impl std::error::Error for RunError {
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),
+            Self::Native(NativeFailure::Directory(source) | NativeFailure::Bind { source, .. }) => {
+                Some(source)
+            }
+            Self::Native(_) => None,
         }
     }
 }

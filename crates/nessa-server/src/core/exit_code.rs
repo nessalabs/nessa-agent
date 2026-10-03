@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use nessa_auth::adapters::local::LocalStoreError;
 
-use super::RunError;
+use super::{error::NativeFailure, RunError};
 
 const CODES_JSON: &str = include_str!("../../../../protocol/defaults/gateway-exit-codes.json");
 
@@ -80,6 +80,18 @@ pub(super) fn reason(error: &RunError) -> &'static str {
         RunError::Runtime(_) => "runtime",
         RunError::Serve(_) => "serve",
         RunError::Shutdown(_) => "shutdown",
+        // Native pairing's own failures, said with the reasons the host
+        // already knows: its listener failing is a serve failure, its socket a
+        // bind failure, and its key and private state the authentication setup
+        // they belong to.
+        RunError::Native(NativeFailure::Listener(_)) => "serve",
+        RunError::Native(NativeFailure::Bind { .. }) => "bind",
+        RunError::Native(
+            NativeFailure::Directory(_)
+            | NativeFailure::PrivateState(_)
+            | NativeFailure::Identity(_)
+            | NativeFailure::Open(_),
+        ) => "authentication",
     }
 }
 
@@ -150,6 +162,14 @@ mod tests {
             },
             RunError::Serve(Error::from(ErrorKind::BrokenPipe)),
             RunError::Shutdown(None),
+            RunError::Native(NativeFailure::Directory(Error::from(
+                ErrorKind::PermissionDenied,
+            ))),
+            RunError::Native(NativeFailure::Bind {
+                address: "127.0.0.1:47650".parse().unwrap(),
+                source: Error::from(ErrorKind::AddrInUse),
+            }),
+            RunError::Native(NativeFailure::Listener(ErrorKind::InvalidInput)),
         ] {
             assert!(CODES.codes.contains_key(reason(&error)), "{error}");
             assert_eq!(exit_code(&error), CODES.codes[reason(&error)]);

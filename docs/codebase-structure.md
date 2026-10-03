@@ -376,11 +376,18 @@ projection (`read_status.rs`, `status.rs`). `infrastructure/` holds the pure JSO
 codec (`wire/`), framing (`enrollment_channel.rs`), the gateway runtime
 (`runtime.rs`, with the single code-registration worker in `registration.rs`),
 connection workers and their shutdown wake-ups (`connection.rs`,
-`connection/wake.rs`), the listener, the device client and gateway identity
-restore. It is not mounted in the default gateway. Public tests are under
-`nessa-server/tests/device_pairing/infrastructure/`, registered by
-`tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`.
-Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1).
+`connection/wake.rs`), the listener, the device client, gateway identity
+restore, and `owner_commands.rs`, the owner-only handle the product socket holds.
+The owner product methods are `nessa-server/src/product/pairing.rs`; mounting is
+`nessa-server/src/composition/native_pairing.rs`, only when `config.json` names a
+native listen address. Public tests are under
+`nessa-server/tests/device_pairing/infrastructure/`, the owner routes in
+`tests/device_pairing/owner_routes.rs` and the composed process in
+`tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
+`tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`;
+composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
+Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1)
+and [owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).

@@ -224,6 +224,7 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
         session,
         gateway,
         time: _,
+        owner_token: _,
     } = fixture;
     drop(gateway);
     drop(registry);
