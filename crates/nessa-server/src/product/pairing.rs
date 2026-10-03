@@ -88,10 +88,10 @@ pub(super) async fn dispatch(
                 return failure(&id, "invalid_request");
             };
             pairing
-                .decide(
+                .approve(
                     session,
                     InvitationId::new(params.invitation_id),
-                    OwnerDecision::Approve(DeviceKey::new(params.device_key)),
+                    DeviceKey::new(params.device_key),
                 )
                 .await
         }
@@ -223,6 +223,8 @@ fn refusal(error: PairingRuntimeError) -> &'static str {
         | PairingRuntimeError::Crypto(_)
         | PairingRuntimeError::Handshake { .. }
         | PairingRuntimeError::WorkerFault(_)
+        | PairingRuntimeError::Receiver(_)
+        | PairingRuntimeError::Cleanup(_)
         | PairingRuntimeError::Entropy => PairingErrorCode::PairingUnavailable,
     };
     code.as_str()

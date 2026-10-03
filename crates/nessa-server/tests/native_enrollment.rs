@@ -1,4 +1,6 @@
 //! Public native enrollment constructors, actual peers and interrupted neighbors.
+#[path = "device_pairing/infrastructure/activation.rs"]
+mod activation;
 #[path = "device_pairing/infrastructure/enrollment.rs"]
 mod enrollment;
 #[path = "device_pairing/infrastructure/framing.rs"]

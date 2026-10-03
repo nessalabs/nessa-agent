@@ -26,7 +26,7 @@ pub use stage::{
 };
 
 pub use private_state::{
-    ClientPendingStore, GatewayKeyStore, GatewayPublicationState, PendingEnrollment,
-    PrivateKeyMaterial, PrivatePublicationEffect, PrivatePublicationError, PrivatePublicationStep,
-    PrivateStateError, PrivateStorageFailure,
+    ClientPendingStore, DeviceCredential, GatewayKeyStore, GatewayPublicationState,
+    PendingEnrollment, PrivateKeyMaterial, PrivatePublicationEffect, PrivatePublicationError,
+    PrivatePublicationStep, PrivateStateError, PrivateStorageFailure,
 };

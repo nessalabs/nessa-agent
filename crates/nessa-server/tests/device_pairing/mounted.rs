@@ -8,20 +8,29 @@ use super::product_client::ProductClient;
 use super::support::{pending, WAIT};
 use nessa_auth::{
     adapters::{
+        cedar::CedarPolicyEvaluator,
         local::{BootstrapRequest, LocalCredentialStore},
-        pairing::{ManualCode, OsEntropy},
+        pairing::{
+            FilePairingState, GatewayTrust, ManualCode, NativeIdentity, NativeTransport, OsEntropy,
+        },
     },
     application::{
+        authorization::AuthorizeAction,
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
         },
-        ports::{AccessReader, CredentialEvidence, CredentialVerifier},
+        pairing::{ClientPendingStore, DeviceCredential, GatewayKeyStore, PairingStore},
+        ports::{
+            AccessError, AccessReader, Clock, CredentialEvidence, CredentialVerifier, Decision,
+        },
+        session::AuthenticateSession,
     },
-    domain::AudienceId,
+    domain::{pairing::TerminalCause, Action, AudienceId, OrganizationId, Resource, ResourceId},
 };
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
+    conversation::infrastructure::LocalReceiverAuthority,
     device_pairing::infrastructure::{wire::NativePairingStatus, NativeEnrollmentClient},
 };
 use serde_json::{json, Value};
@@ -30,6 +39,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -165,10 +175,118 @@ fn invitation(status: &Value) -> Value {
     status["invitationId"].clone()
 }
 
-/// Rows O1, S3, S12, S17: the composed gateway enrolls a device to Approved, and a
-/// SIGTERM with a native peer still connected stops it cleanly.
+/// What the gateway's own stores say about a device, read while the gateway is
+/// stopped (it holds the registry's lock while it runs): whether a fresh TLS
+/// connection made with the device's saved key authenticates as its issued
+/// credential, what that session may do, and the credential's receiver.
+struct DeviceAtGateway {
+    authenticated: Result<Vec<(String, bool)>, AccessError>,
+    receiver_active: bool,
+    cleanup_pending: bool,
+}
+async fn device_at_gateway(gateway: &Gateway, device: DeviceCredential) -> DeviceAtGateway {
+    let data = gateway.root.path().join("data/ci");
+    #[cfg(unix)]
+    let data = data.canonicalize().unwrap();
+    let registry = LocalCredentialStore::open(data.join("auth"), "credentials.v1.json").unwrap();
+    let audience = AudienceId::new(registry.gateway_id().unwrap()).unwrap();
+    let keys = FilePairingState::open(&data, Path::new("native-pairing")).unwrap();
+    let identity = NativeIdentity::restore(
+        keys.restore_gateway_key(&audience, &RuntimeClock)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let invitation = device.intent().invitation();
+    let credential = device.credential().clone();
+    let receiver = device.receiver().as_str().to_owned();
+    let (key, pin, _) = device.into_enrollment().into_parts();
+    let server = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = server.local_addr().unwrap();
+    let connect = std::thread::spawn(move || {
+        let identity = NativeIdentity::restore(key).unwrap();
+        NativeTransport::connect(
+            TcpStream::connect(address).unwrap(),
+            &identity,
+            GatewayTrust::Pinned(pin),
+        )
+        .map(drop)
+    });
+    let accepted = NativeTransport::accept(server.accept().unwrap().0, &identity).unwrap();
+    connect.join().unwrap().unwrap();
+    let verifier = registry.device_verifier(accepted.device_proof());
+    let session = AuthenticateSession {
+        verifier: &verifier,
+        access: &registry,
+        clock: &RuntimeClock,
+    }
+    .execute(
+        &CredentialEvidence::new(credential.as_str().as_bytes().to_vec()).unwrap(),
+        &audience,
+    )
+    .await;
+    let organization = registry.identity().unwrap().organization_ids[0].clone();
+    let resource = Resource::new(
+        OrganizationId::new(organization).unwrap(),
+        ResourceId::new(audience.as_str()).unwrap(),
+    );
+    let mut authenticated = Err(AccessError::Unavailable);
+    if let Ok(session) = &session {
+        assert_eq!(session.context().credential_id(), &credential);
+        let mut decisions = Vec::new();
+        for action in [
+            "conversation.read",
+            "conversation.write",
+            "credential.manage",
+        ] {
+            let decision = AuthorizeAction {
+                access: &registry,
+                clock: &RuntimeClock,
+                policy: &CedarPolicyEvaluator::new().unwrap(),
+            }
+            .execute(session, &Action::new(action).unwrap(), &resource)
+            .await
+            .unwrap();
+            decisions.push((action.to_owned(), decision == Decision::Allow));
+        }
+        authenticated = Ok(decisions);
+    } else if let Err(error) = session {
+        authenticated = Err(error);
+    }
+    let receivers = LocalReceiverAuthority::open(
+        &data.join("conversations/receiver-access.sqlite3"),
+        &CedarPolicyEvaluator::profile_digest(),
+        Arc::new(RuntimeClock),
+    )
+    .unwrap();
+    let binding = receivers.binding(&credential).unwrap().unwrap();
+    assert_eq!(binding.receiver_id, receiver);
+    DeviceAtGateway {
+        authenticated,
+        receiver_active: binding.active,
+        cleanup_pending: registry.read_pairing(invitation).unwrap().cleanup_pending(),
+    }
+}
+
+/// The wall clock, for reading the gateway's stores as it does.
+struct RuntimeClock;
+impl Clock for RuntimeClock {
+    fn unix_milliseconds(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    }
+}
+
+/// Rows E1, A9, S7, D5, O1, S3, S12, S17: the composed gateway issues a device
+/// a credential the gateway accepts, scoped to `conversation.read`, delivers it
+/// on the device's pinned status, and refuses it once the owner revokes it.
+/// The revoked credential's receiver is fenced before serving after a killed
+/// process, and by an ordinary stop's reconciliation. A SIGTERM with a native
+/// peer still connected stops it cleanly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mounted_gateway_enrolls_a_device_to_approved() {
+async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
     let gateway = Gateway::new(true);
     let native = gateway.native.unwrap();
     let server = tokio::task::block_in_place(|| gateway.start());
@@ -181,7 +299,7 @@ async fn mounted_gateway_enrolls_a_device_to_approved() {
     let id = invitation(&created["status"]);
     let client_root = tempfile::tempdir().unwrap();
     let (_, store) = pending(client_root.path(), "device");
-    let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
     let code = ManualCode::parse(created["code"].as_str().unwrap().as_bytes()).unwrap();
     let claimed = tokio::time::timeout(
         WAIT,
@@ -202,7 +320,9 @@ async fn mounted_gateway_enrolls_a_device_to_approved() {
             json!({"invitationId": id, "deviceKey": status["claimedDeviceKey"]}),
         )
     });
-    assert_eq!(approved["phase"], "approved");
+    assert_eq!(approved["phase"], "active", "{approved}");
+    assert_eq!(approved["cleanupPending"], false);
+    let credential = approved["credentialId"].as_str().unwrap().to_owned();
     let status = tokio::time::timeout(
         WAIT,
         client.status(
@@ -213,16 +333,171 @@ async fn mounted_gateway_enrolls_a_device_to_approved() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(status, NativePairingStatus::Approved(consent));
+    let NativePairingStatus::Active {
+        credential: delivered,
+        receiver,
+        access_epoch,
+        ..
+    } = &status
+    else {
+        panic!("the device reads Active: {status:?}");
+    };
+    assert_eq!(delivered.as_str(), credential);
+    assert_eq!(receiver.as_str(), approved["receiver"]["receiverId"]);
+    assert_eq!(*access_epoch, 1);
+    assert!(store.load_pending().unwrap().is_none());
+    assert_eq!(
+        store
+            .load_credential()
+            .unwrap()
+            .unwrap()
+            .credential()
+            .as_str(),
+        credential
+    );
     client.shutdown().await;
     // A peer that connects and never speaks is woken by shutdown, not waited on
     // for its TLS deadline.
-    let _held = TcpStream::connect(native).unwrap();
+    let held = TcpStream::connect(native).unwrap();
     let stopped = tokio::task::block_in_place(|| server.stop());
     assert!(
         stopped.success(),
         "shutdown confirmed every stage: {stopped}"
     );
+    drop(held);
+
+    let issued = device_at_gateway(&gateway, store.load_credential().unwrap().unwrap()).await;
+    assert_eq!(
+        issued.authenticated,
+        Ok(vec![
+            ("conversation.read".to_owned(), true),
+            ("conversation.write".to_owned(), false),
+            ("credential.manage".to_owned(), false),
+        ]),
+        "the gateway accepts the key as the issued credential, for reading only"
+    );
+    assert!(issued.receiver_active);
+    assert!(!issued.cleanup_pending);
+
+    // Row A9: the owner revokes the credential with the existing method.
+    let server = tokio::task::block_in_place(|| gateway.start());
+    let revoked = tokio::task::block_in_place(|| {
+        let mut owner = gateway.owner();
+        owner.ok(
+            "credential.revoke",
+            json!({"requestId": "revoke-device", "credentialId": credential}),
+        );
+        owner.ok("pairing.status", json!({"invitationId": id}))
+    });
+    assert_eq!(revoked["phase"], "terminal", "{revoked}");
+    assert_eq!(revoked["terminal"]["cause"], "credential_revoked");
+    assert_eq!(revoked["cleanupPending"], true);
+    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    let status = tokio::time::timeout(
+        WAIT,
+        client.status(TcpStream::connect(native).unwrap(), None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        matches!(
+            &status,
+            NativePairingStatus::Terminal {
+                cause: TerminalCause::CredentialRevoked,
+                ..
+            }
+        ),
+        "{status:?}"
+    );
+    client.shutdown().await;
+    // Killed, so shutdown's reconciliation never runs: the credential is
+    // refused at once, while its receiver's fence is still owed.
+    drop(server);
+    let ended = device_at_gateway(&gateway, store.load_credential().unwrap().unwrap()).await;
+    assert!(
+        matches!(
+            ended.authenticated,
+            Err(AccessError::InvalidCredential | AccessError::CredentialRevoked)
+        ),
+        "a revoked credential no longer authenticates: {:?}",
+        ended.authenticated
+    );
+    assert!(ended.receiver_active);
+    assert!(ended.cleanup_pending);
+    // Row S7: the next start settles it before serving.
+    let server = tokio::task::block_in_place(|| gateway.start());
+    let settled = tokio::task::block_in_place(|| {
+        gateway
+            .owner()
+            .ok("pairing.status", json!({"invitationId": id}))
+    });
+    assert_eq!(settled["cleanupPending"], false, "{settled}");
+    assert_eq!(settled["terminal"], revoked["terminal"]);
+
+    // Row D5: a second device, revoked while serving, is settled by an
+    // ordinary stop after the drains.
+    let created = tokio::task::block_in_place(|| gateway.owner().ok("pairing.create", json!({})));
+    let second = invitation(&created["status"]);
+    let (_, second_store) = pending(client_root.path(), "second-device");
+    let client =
+        NativeEnrollmentClient::new(second_store.clone(), RuntimeDependencies::default().clock);
+    let code = ManualCode::parse(created["code"].as_str().unwrap().as_bytes()).unwrap();
+    tokio::time::timeout(
+        WAIT,
+        client.enroll(TcpStream::connect(native).unwrap(), code, OsEntropy),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let approved = tokio::task::block_in_place(|| {
+        let mut owner = gateway.owner();
+        let status = owner.ok("pairing.status", json!({"invitationId": second}));
+        owner.ok(
+            "pairing.approve",
+            json!({"invitationId": second, "deviceKey": status["claimedDeviceKey"]}),
+        )
+    });
+    assert_eq!(approved["phase"], "active", "{approved}");
+    assert!(matches!(
+        tokio::time::timeout(
+            WAIT,
+            client.status(TcpStream::connect(native).unwrap(), None)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Active { .. }
+    ));
+    let revoked = tokio::task::block_in_place(|| {
+        let mut owner = gateway.owner();
+        owner.ok(
+            "credential.revoke",
+            json!({"requestId": "revoke-second", "credentialId": approved["credentialId"]}),
+        );
+        owner.ok("pairing.status", json!({"invitationId": second}))
+    });
+    assert_eq!(revoked["cleanupPending"], true, "{revoked}");
+    assert!(matches!(
+        tokio::time::timeout(
+            WAIT,
+            client.status(TcpStream::connect(native).unwrap(), None)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Terminal { .. }
+    ));
+    client.shutdown().await;
+    let stopped = tokio::task::block_in_place(|| server.stop());
+    assert!(stopped.success(), "{stopped}");
+    let ended = device_at_gateway(&gateway, second_store.load_credential().unwrap().unwrap()).await;
+    assert!(ended.authenticated.is_err());
+    assert!(
+        !ended.receiver_active,
+        "shutdown's reconciliation fenced it"
+    );
+    assert!(!ended.cleanup_pending);
 }
 
 /// Row S1: without a native section the gateway opens no private state and

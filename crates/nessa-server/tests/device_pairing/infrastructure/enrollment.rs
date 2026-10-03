@@ -6,15 +6,18 @@ use nessa_auth::{
     },
     application::{
         pairing::{
-            ClientPendingStore, OwnerDecision, PairingStore, PairingStoreError, PendingEnrollment,
-            PrivateKeyMaterial, PrivateStateError,
+            ClientPendingStore, DeviceCredential, OwnerDecision, PairingStore, PairingStoreError,
+            PendingEnrollment, PrivateKeyMaterial, PrivateStateError,
         },
         ports::AccessError,
         session::ReadCurrentSession,
     },
-    domain::pairing::{
-        AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingInitiator,
-        PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+    domain::{
+        pairing::{
+            AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingInitiator,
+            PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+        },
+        CredentialId, ResourceId,
     },
 };
 use nessa_server::{
@@ -221,6 +224,17 @@ struct RefusingSave(Arc<FilePairingState>);
 impl ClientPendingStore for RefusingSave {
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         self.0.load_pending()
+    }
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
+        self.0.load_credential()
+    }
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError> {
+        self.0.save_credential(credential, receiver, expected)
     }
     fn save_pending(
         &self,

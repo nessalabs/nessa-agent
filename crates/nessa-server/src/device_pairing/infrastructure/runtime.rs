@@ -2,7 +2,8 @@
 use super::worker::worker_fault;
 use super::{RegistrationError, RegistrationWorker};
 use crate::device_pairing::application::{
-    DevicePairingStatus, OwnerError, PairingOwner, ReadDevicePairing,
+    Approval, CleanupError, DevicePairingStatus, DeviceStatusError, FreshStage, OwnerError,
+    PairingOwner, PairingReceivers, ReadDevicePairing, ReceiverError, SettleCleanup,
 };
 use nessa_auth::{
     adapters::pairing::{
@@ -19,10 +20,10 @@ use nessa_auth::{
     },
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, ConsentIntentId, InvitationId, PairingPhase, PairingPolicy,
-            PairingRecord, PublicIntent,
+            AttemptFailure, AttemptId, ConsentIntentId, DeviceKey, InvitationId, PairingPhase,
+            PairingPolicy, PairingRecord, PublicIntent,
         },
-        Resource,
+        CredentialId, Resource,
     },
 };
 use std::{
@@ -59,6 +60,12 @@ pub enum PairingRuntimeError {
     Entropy,
     /// No canonical Available slot with owned volatile setup exists.
     NoInvitation,
+    /// The receiver authority refused or failed while reading an Active
+    /// enrollment's current receiver.
+    Receiver(ReceiverError),
+    /// An ended enrollment's receiver cleanup did not complete; the record
+    /// keeps the obligation and its first cause.
+    Cleanup(CleanupError),
 }
 /// Trusted composition inputs; native key is restored by its private storage owner.
 pub struct PairingRuntimeDependencies {
@@ -69,6 +76,9 @@ pub struct PairingRuntimeDependencies {
     pub access: Arc<dyn AccessReader>,
     /// Existing current policy evaluator (Cedar in real composition).
     pub policy: Arc<dyn PolicyEvaluator>,
+    /// The canonical receiver authority an approved enrollment is paired with
+    /// and an ended one is fenced at.
+    pub receivers: Arc<dyn PairingReceivers>,
     /// Existing injected absolute clock.
     pub clock: Arc<dyn Clock>,
     /// Composition-resolved exact gateway read resource.
@@ -131,6 +141,11 @@ pub struct GatewayPairing {
     registration: RegistrationWorker,
     creating: Arc<Semaphore>,
     create_drained: Arc<Notify>,
+    /// Counts admitted owner commands, so shutdown can close admission and
+    /// wait for them, approval's receiver work included (design row D5). It
+    /// bounds nothing: the product socket bounds its own requests.
+    owner_work: Arc<Semaphore>,
+    owner_drained: Arc<Notify>,
     available: Arc<Mutex<Option<AvailableSetup>>>,
 }
 impl GatewayPairing {
@@ -163,6 +178,8 @@ impl GatewayPairing {
             registration: RegistrationWorker::new(),
             creating: Arc::new(Semaphore::new(1)),
             create_drained: Arc::new(Notify::new()),
+            owner_work: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+            owner_drained: Arc::new(Notify::new()),
             available: Arc::new(Mutex::new(None)),
         })
     }
@@ -173,7 +190,8 @@ impl GatewayPairing {
                 policy: dependencies.policy.as_ref(),
                 clock: dependencies.clock.as_ref(),
             },
-            enrollments: dependencies.enrollments.as_ref(),
+            enrollments: &dependencies.enrollments,
+            receivers: dependencies.receivers.as_ref(),
             gateway: &dependencies.gateway,
             policy: PairingPolicy::initial(),
             clock: dependencies.clock.as_ref(),
@@ -183,16 +201,29 @@ impl GatewayPairing {
         &self,
         command: impl FnOnce(&PairingOwner<'_>, &Handle) -> Result<T, OwnerError> + Send + 'static,
     ) -> Result<T, PairingRuntimeError> {
+        let lease = OwnerPermit {
+            permit: Some(
+                self.owner_work
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| PairingRuntimeError::Busy)?,
+            ),
+            drained: self.owner_drained.clone(),
+        };
         let dependencies = self.dependencies.clone();
         let available = self.available.clone();
         let handle = Handle::current();
         // Owner commands, including any expiry they settle, do store work, so
         // they run on a blocking worker
-        // (`native_owner_store_work_runs_off_the_async_thread`).
-        tokio::task::spawn_blocking(move || run_owner(&dependencies, &available, &handle, command))
-            .await
-            .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
-            .map_err(PairingRuntimeError::Owner)
+        // (`native_owner_store_work_runs_off_the_async_thread`). The lease
+        // moves into the worker: a caller that goes away does not end it.
+        tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            run_owner(&dependencies, &available, &handle, command)
+        })
+        .await
+        .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
+        .map_err(PairingRuntimeError::Owner)
     }
     /// Read the permanent gateway key only for the native TLS composition owner.
     pub fn identity(&self) -> &NativeIdentity {
@@ -457,6 +488,7 @@ impl GatewayPairing {
         }
         let status = ReadDevicePairing {
             enrollments: self.dependencies.enrollments.as_ref(),
+            receivers: self.dependencies.receivers.as_ref(),
             clock: self.dependencies.clock.as_ref(),
         }
         .execute(
@@ -464,7 +496,10 @@ impl GatewayPairing {
             public.attempt(),
             channel.device_proof(),
         )
-        .map_err(PairingRuntimeError::Enrollment)?;
+        .map_err(|error| match error {
+            DeviceStatusError::Enrollment(error) => PairingRuntimeError::Enrollment(error),
+            DeviceStatusError::Receiver(error) => PairingRuntimeError::Receiver(error),
+        })?;
         // The read may have expired the open invitation; drop its setup.
         discard_ended(&mut *self.available.lock().await, &self.dependencies);
         Ok(status)
@@ -479,8 +514,51 @@ impl GatewayPairing {
         self.owner_command(move |owner, handle| handle.block_on(owner.status(&session, id)))
             .await
     }
-    /// Commit explicit owner consent/termination and erase only the matching slot.
-    /// Physical cleanup remains a canonical obligation for its separate coordinator.
+    /// Approve the exact claimed key and carry the enrollment through to an
+    /// issued credential: stage, receiver, publication (design rows P19–P25,
+    /// O5, O6). The server mints the stage's credential and correlation from
+    /// `entropy`; a retry keeps the stage the record already has. A step that
+    /// does not complete leaves the record where it stands, and the record is
+    /// what is returned: approving again continues from there.
+    pub async fn approve<R: RngCore + CryptoRng + Send + 'static>(
+        &self,
+        session: &AuthenticatedSession,
+        id: InvitationId,
+        key: DeviceKey,
+        mut entropy: R,
+    ) -> Result<PairingRecord, PairingRuntimeError> {
+        let mut bytes = [0; 32];
+        entropy
+            .try_fill_bytes(&mut bytes)
+            .map_err(|_| PairingRuntimeError::Entropy)?;
+        let credential = CredentialId::new(format!("device-{}", hex(&bytes[..16])))
+            .map_err(|_| PairingRuntimeError::Entropy)?;
+        let mut request = [0; 16];
+        request.copy_from_slice(&bytes[16..]);
+        let fresh = FreshStage {
+            credential,
+            request: AttemptId::new(request),
+        };
+        let session = session.clone();
+        let Approval { record, stopped } = self
+            .owner_command(move |owner, handle| {
+                handle.block_on(owner.approve(&session, id, key, fresh))
+            })
+            .await?;
+        if let Some(stopped) = stopped {
+            tracing::warn!(
+                ?stopped,
+                phase = ?record.phase(),
+                "device pairing activation stopped; approving again continues it"
+            );
+        }
+        Ok(record)
+    }
+    /// Record an owner decision. `Approve` here records consent only; `approve`
+    /// carries it on to Active. An enrollment that ends after it was staged has its
+    /// receiver settled at once when nothing else holds its stage; otherwise
+    /// the record keeps `cleanup_pending` for the stage's holder or the next
+    /// reconciliation, and is returned that way (design row P23).
     pub async fn decide(
         &self,
         session: &AuthenticatedSession,
@@ -489,9 +567,63 @@ impl GatewayPairing {
     ) -> Result<PairingRecord, PairingRuntimeError> {
         let session = session.clone();
         self.owner_command(move |owner, handle| {
-            handle.block_on(owner.decide(&session, id, decision))
+            let record = handle.block_on(owner.decide(&session, id, decision))?;
+            if !record.cleanup_pending() {
+                return Ok(record);
+            }
+            let settled = handle.block_on(
+                SettleCleanup {
+                    enrollments: owner.enrollments,
+                    receivers: owner.receivers,
+                    clock: owner.clock,
+                }
+                .execute(id),
+            );
+            match settled {
+                Ok(record) => Ok(record),
+                Err(error) => {
+                    tracing::warn!(?error, "device pairing cleanup left pending");
+                    owner
+                        .enrollments
+                        .read_pairing(id)
+                        .map_err(OwnerError::Enrollment)
+                }
+            }
         })
         .await
+    }
+    /// Settle every ended enrollment of this gateway whose receiver cleanup is
+    /// pending: lookup only, then fence or no-receiver completion (design rows
+    /// S7, D5). Composition runs it before the native bind and after the
+    /// native and owner drains. Each record is tried; the first failure is
+    /// returned and every unsettled record keeps its obligation (rows S8, D6).
+    pub async fn reconcile_cleanup(&self) -> Result<(), PairingRuntimeError> {
+        let dependencies = self.dependencies.clone();
+        let handle = Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let cleanup = SettleCleanup {
+                enrollments: &dependencies.enrollments,
+                receivers: dependencies.receivers.as_ref(),
+                clock: dependencies.clock.as_ref(),
+            };
+            let mut first = None;
+            for record in dependencies
+                .enrollments
+                .pending_pairings()
+                .map_err(PairingRuntimeError::Enrollment)?
+            {
+                if record.intent().resource() != &dependencies.gateway || !record.cleanup_pending()
+                {
+                    continue;
+                }
+                if let Err(error) = handle.block_on(cleanup.execute(record.id())) {
+                    first.get_or_insert(PairingRuntimeError::Cleanup(error));
+                }
+            }
+            first.map_or(Ok(()), Err)
+        })
+        .await
+        .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
     }
     fn verify_channel<S: Read + Write>(
         &self,
@@ -586,20 +718,50 @@ impl GatewayPairing {
             }
         }
     }
-    /// Exclude physical registration and wait for its actual worker to drain.
+    /// Exclude physical registration and owner commands, and wait for their
+    /// actual workers to drain, an approval's receiver work included.
     pub async fn shutdown(&self) {
         self.creating.close();
+        self.owner_work.close();
         self.registration.shutdown().await;
-        loop {
-            let notified = self.create_drained.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.creating.available_permits() == 1 {
-                return;
-            }
-            notified.await;
-        }
+        drain(&self.creating, &self.create_drained, 1).await;
+        drain(
+            &self.owner_work,
+            &self.owner_drained,
+            Semaphore::MAX_PERMITS,
+        )
+        .await;
     }
+}
+
+/// Wait until every permit of a closed `capacity` has come back.
+async fn drain(capacity: &Semaphore, drained: &Notify, permits: usize) {
+    loop {
+        let notified = drained.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if capacity.available_permits() == permits {
+            return;
+        }
+        notified.await;
+    }
+}
+
+/// One admitted owner command, held by its worker until it returns.
+struct OwnerPermit {
+    permit: Option<OwnedSemaphorePermit>,
+    drained: Arc<Notify>,
+}
+impl Drop for OwnerPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        self.drained.notify_waiters();
+    }
+}
+
+/// Lower-case hex, for identities the server mints from random bytes.
+pub(super) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 struct CreatePermit {

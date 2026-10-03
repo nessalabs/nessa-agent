@@ -8,10 +8,13 @@ use nessa_auth::{
         },
     },
     application::pairing::{
-        ClientPendingStore, PairingStore, PairingWorkerFault, PendingEnrollment,
+        ClientPendingStore, DeviceCredential, PairingStore, PairingWorkerFault, PendingEnrollment,
         PrivateKeyMaterial, PrivateStateError,
     },
-    domain::pairing::{InvitationId, PublicIntent},
+    domain::{
+        pairing::{InvitationId, PublicIntent},
+        CredentialId, ResourceId,
+    },
 };
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
@@ -231,6 +234,7 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
         gateway,
         time: _,
         owner_token: _,
+        receivers: _,
     } = fixture;
     drop(gateway);
     drop(registry);
@@ -282,6 +286,17 @@ struct AcknowledgedSave {
 impl ClientPendingStore for AcknowledgedSave {
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         self.state.load_pending()
+    }
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
+        self.state.load_credential()
+    }
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError> {
+        self.state.save_credential(credential, receiver, expected)
     }
     fn save_pending(
         &self,

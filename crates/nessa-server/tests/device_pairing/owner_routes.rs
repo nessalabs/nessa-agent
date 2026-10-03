@@ -242,7 +242,8 @@ async fn owner_route_refuses_a_member_before_disclosure() {
 }
 
 /// Row O4: approval names the exact claimed key; another key is a conflict
-/// that changes nothing. Deny of a claimed enrollment ends it as the owner's.
+/// that changes nothing, and the claimed key is carried through to Active
+/// (slice 2b). Deny of a claimed enrollment ends it as the owner's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_route_approve_exact_claim_before_effect() {
     let fixture = Fixture::new().await;
@@ -304,12 +305,14 @@ async fn owner_route_approve_exact_claim_before_effect() {
                 "pairing.approve",
                 json!({"invitationId": id, "deviceKey": key}),
             );
-            assert_eq!(approved["phase"], "approved");
+            // Approval carries the exact key through to an issued credential
+            // and its paired receiver (slice 2b, rows A1, A2).
+            assert_eq!(approved["phase"], "active");
             assert_eq!(approved["claimedDeviceKey"], json!(key));
-            assert!(
-                approved.get("credentialId").is_none(),
-                "approval issues nothing"
-            );
+            assert!(approved["credentialId"].is_string());
+            assert!(approved["receiver"]["receiverId"].is_string());
+            assert_eq!(approved["receiver"]["accessEpoch"], 1);
+            assert_eq!(approved["cleanupPending"], false);
         });
         client.shutdown().await;
     }

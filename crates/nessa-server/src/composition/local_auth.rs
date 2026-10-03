@@ -192,26 +192,38 @@ pub(super) async fn product_state(
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
-    // Before any socket is bound: the key is restored or first published, and
-    // this gateway's unfinished enrollments are settled (design rows S3–S6).
-    let native = match &settings.native {
-        Some(native) => Some(
+    let namespace = directory
+        .parent()
+        .ok_or_else(|| setup_error("invalid data root"))?;
+    // One receiver authority, shared by conversations' passive reads and by
+    // native pairing, which pairs and fences receivers (design row S7).
+    let receivers = if settings.agents.is_some() || settings.native.is_some() {
+        Some(receiver_access(
+            namespace,
+            &CedarPolicyEvaluator::profile_digest(),
+        )?)
+    } else {
+        None
+    };
+    // Before any socket is bound: the key is restored or first published,
+    // this gateway's unfinished enrollments are settled, and ended ones have
+    // their receivers settled (design rows S3–S8).
+    let native = match (&settings.native, &receivers) {
+        (Some(native), Some(receivers)) => Some(
             super::native_pairing::prepare(
                 native,
                 super::native_pairing::NativeInputs {
-                    namespace: directory
-                        .parent()
-                        .ok_or_else(|| setup_error("invalid data root"))?
-                        .to_path_buf(),
+                    namespace: namespace.to_path_buf(),
                     registry: store.clone(),
                     policy: policy.clone(),
+                    receivers: receivers.clone(),
                     clock: Arc::new(SystemClock),
                     gateway: Resource::new(organization.clone(), gateway.clone()),
                 },
             )
             .await?,
         ),
-        None => None,
+        _ => None,
     };
     let credential_namespace = CredentialNamespace::new(
         config.stage.as_str().to_owned(),
@@ -226,14 +238,14 @@ pub(super) async fn product_state(
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
-    let (conversations, agent_probe, warm_ups, mcp) = match &settings.agents {
-        Some(agents) => {
+    let (conversations, agent_probe, warm_ups, mcp) = match (&settings.agents, receivers) {
+        (Some(agents), Some(receivers)) => {
             let mut built = conversations(
                 agents,
                 directory,
+                receivers,
                 agent_credentials.clone(),
                 packaged_agents,
-                &CedarPolicyEvaluator::profile_digest(),
                 record_origin.clone(),
             )
             .await?;
@@ -253,7 +265,7 @@ pub(super) async fn product_state(
                 built.mcp.take(),
             )
         }
-        None => (
+        _ => (
             None,
             Arc::new(LocalAgentProbe::from_environment(
                 HashMap::new(),
@@ -417,9 +429,9 @@ struct BuiltConversations {
 async fn conversations(
     _agents: &AgentsConfig,
     _directory: &Path,
+    _receivers: Arc<LocalReceiverAuthority>,
     _credentials: Arc<dyn AgentCredentialSource>,
     _packaged_agents: bool,
-    _policy_revision: &str,
     _record_origin: RecordId,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
@@ -427,9 +439,22 @@ async fn conversations(
     ))
 }
 
+/// Open the namespace's receiver-access store, creating its directory.
+fn receiver_access(
+    namespace: &Path,
+    policy_revision: &str,
+) -> Result<Arc<LocalReceiverAuthority>, RunError> {
+    let root = conversation_root(namespace);
+    nessa_local_storage::create_directory(&root)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let path = root.join("receiver-access.sqlite3");
+    LocalReceiverAuthority::open(&path, policy_revision, Arc::new(SystemClock))
+        .map(Arc::new)
+        .map_err(|cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &path, cause))
+}
+
 /// Where a namespace keeps its conversations. Read by composition and by the
 /// retirement that reports whether they are still there.
-#[cfg(unix)]
 pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }
@@ -438,9 +463,9 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 async fn conversations(
     agents: &AgentsConfig,
     directory: &Path,
+    receivers: Arc<LocalReceiverAuthority>,
     credentials: Arc<dyn AgentCredentialSource>,
     packaged_agents: bool,
-    policy_revision: &str,
     record_origin: RecordId,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
@@ -506,12 +531,7 @@ async fn conversations(
             )
         })?,
     );
-    let receiver_path = root.join("receiver-access.sqlite3");
-    let receivers: Arc<dyn ReceiverAuthority> = Arc::new(
-        LocalReceiverAuthority::open(&receiver_path, policy_revision, clock.clone()).map_err(
-            |cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &receiver_path, cause),
-        )?,
-    );
+    let receivers: Arc<dyn ReceiverAuthority> = receivers;
     let current_opencode_model = opencode
         .configured()
         .map(|profile| profile.validated().model());

@@ -1,4 +1,5 @@
 //! Owner commands derive canonical consent from current authenticated identity.
+use super::receivers::PairingReceivers;
 use nessa_auth::{
     application::{
         pairing::{
@@ -15,6 +16,7 @@ use nessa_auth::{
         Resource,
     },
 };
+use std::sync::Arc;
 /// Typed refusal at the owner operation boundary; no provider diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnerError {
@@ -42,7 +44,10 @@ pub struct PairingOwner<'a> {
     /// Current session/membership/grant policy owner, reevaluated per command.
     pub authorization: AuthorizePairing<'a>,
     /// Existing registry owner; writes retain its revision CAS and audit history.
-    pub enrollments: &'a dyn PairingStore,
+    /// Shared ownership because a stage lease keeps the registry alive.
+    pub enrollments: &'a Arc<dyn PairingStore>,
+    /// The canonical receiver authority an approved enrollment is paired with.
+    pub receivers: &'a dyn PairingReceivers,
     /// The gateway resource, chosen by composition rather than by the request.
     pub gateway: &'a Resource,
     /// Composition-selected finite invitation policy.
@@ -177,7 +182,7 @@ impl PairingOwner<'_> {
             .await
             .map_err(OwnerError::Enrollment)
     }
-    async fn admit(
+    pub(super) async fn admit(
         &self,
         session: &AuthenticatedSession,
         id: InvitationId,

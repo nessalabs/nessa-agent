@@ -29,6 +29,8 @@ pub enum NativeClientError {
     Busy,
     /// Recover the existing exact pending operation rather than create another key.
     PendingExists,
+    /// This device already holds an issued credential; it does not enroll again.
+    Enrolled,
     /// The original canonical receipt is still pending or already claimed.
     OriginalNotRetryable,
     /// Status requires an existing durable pending key/pin/attempt.
@@ -60,7 +62,9 @@ pub struct NativeRetryOutcome {
     /// New attempt's historical enrollment state, not product authority.
     pub retried: NativePairingStatus,
 }
-/// Enrollment and pinned status only; it emits no product credential or read authority.
+/// Enrollment and pinned status. When the gateway reports Active, the issued
+/// credential replaces the pending record before the status is returned. The
+/// credential identifies the device's key binding; it is not read authority.
 pub struct NativeEnrollmentClient {
     pending: Arc<dyn ClientPendingStore>,
     clock: Arc<dyn Clock>,
@@ -97,6 +101,13 @@ impl NativeEnrollmentClient {
                 .is_some()
             {
                 return Err(NativeClientError::PendingExists);
+            }
+            if pending
+                .load_credential()
+                .map_err(NativeClientError::Storage)?
+                .is_some()
+            {
+                return Err(NativeClientError::Enrolled);
             }
             let mut entropy = entropy;
             let identity =
@@ -176,8 +187,16 @@ impl NativeEnrollmentClient {
         })
         .await
     }
-    /// Restore exact pending seed/pin and read status on a fresh strict-key channel.
-    /// A prior transient disclosure can be supplied to refuse conflicting retry scope.
+    /// Restore the exact seed/pin, from the pending record or the issued
+    /// credential that replaced it, and read status on a fresh strict-key
+    /// channel. A prior transient disclosure can be supplied to refuse
+    /// conflicting retry scope.
+    ///
+    /// An Active status is saved before it is returned: the credential replaces
+    /// the pending record in one publication (design row A10). If that save
+    /// fails the pending record stays, and the next status delivers the same
+    /// credential again. A credential other than the one already saved is
+    /// refused as a storage conflict.
     pub async fn status(
         &self,
         stream: TcpStream,
@@ -187,10 +206,14 @@ impl NativeEnrollmentClient {
         let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())
             .map_err(physical_error)?;
         self.dispatch_owned(vec![endpoint], move |pending| {
-            let saved = pending
-                .load_pending()
-                .map_err(NativeClientError::Storage)?
-                .ok_or(NativeClientError::NoPending)?;
+            let saved = match pending.load_pending().map_err(NativeClientError::Storage)? {
+                Some(saved) => saved,
+                None => pending
+                    .load_credential()
+                    .map_err(NativeClientError::Storage)?
+                    .ok_or(NativeClientError::NoPending)?
+                    .into_enrollment(),
+            };
             let (key, pin, public) = saved.into_parts();
             let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
             stream.blocking().map_err(physical_error)?;
@@ -201,6 +224,16 @@ impl NativeEnrollmentClient {
             send(&mut channel, NativePairingRequest::Status(public))?;
             let status = receive_status(&mut channel, public, received.as_ref())?;
             check_deadline(&deadline).map_err(physical_error)?;
+            if let NativePairingStatus::Active {
+                credential,
+                receiver,
+                ..
+            } = &status
+            {
+                pending
+                    .save_credential(credential, receiver, public)
+                    .map_err(NativeClientError::Storage)?;
+            }
             Ok(status)
         })
         .await

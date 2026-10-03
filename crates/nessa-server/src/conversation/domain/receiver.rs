@@ -121,15 +121,13 @@ impl ReceiverTransition {
                 access_epoch: 1,
                 active: true,
             },
-            (ReceiverIntent::Revoke, Some(current), ReceiverInitiator::Principal(_))
-                if current.active =>
-            {
-                ReceiverBinding {
-                    access_epoch: next_epoch(current)?,
-                    active: false,
-                    ..current.clone()
-                }
-            }
+            // A principal revokes a receiver; the system fences one whose device
+            // enrollment has ended (device pairing cleanup).
+            (ReceiverIntent::Revoke, Some(current), _) if current.active => ReceiverBinding {
+                access_epoch: next_epoch(current)?,
+                active: false,
+                ..current.clone()
+            },
             (
                 ReceiverIntent::Regrant(credential_id),
                 Some(current),
@@ -328,6 +326,44 @@ mod tests {
                 5
             ),
             Err(ReceiverTransitionError::Exhausted)
+        );
+    }
+
+    /// Device pairing cleanup (design row P39): the system fences an active
+    /// receiver, and the fence replays; an inactive one cannot be fenced again.
+    #[test]
+    fn the_system_fences_only_an_active_receiver() {
+        let fenced = ReceiverTransition::apply(
+            Some(&binding()),
+            ReceiverIntent::Revoke,
+            ReceiverInitiator::System,
+            "fence".into(),
+            2,
+        )
+        .unwrap();
+        assert!(!fenced.after.active);
+        assert_eq!(fenced.after.access_epoch, 2);
+        assert_eq!(fenced.verify(Some(&binding())), Ok(()));
+        assert_eq!(
+            ReceiverTransition::apply(
+                Some(&fenced.after),
+                ReceiverIntent::Revoke,
+                ReceiverInitiator::System,
+                "again".into(),
+                3
+            ),
+            Err(ReceiverTransitionError::Conflict)
+        );
+        // Pairing and regranting remain a principal's.
+        assert_eq!(
+            ReceiverTransition::apply(
+                Some(&fenced.after),
+                ReceiverIntent::Regrant(CredentialId::new("second").unwrap()),
+                ReceiverInitiator::System,
+                "regrant".into(),
+                3
+            ),
+            Err(ReceiverTransitionError::Conflict)
         );
     }
 }

@@ -1,7 +1,7 @@
 //! Private key and pending recovery ports; these values confer no access authority.
 use crate::{
     application::ports::Clock,
-    domain::{pairing::PublicIntent, AudienceId},
+    domain::{pairing::PublicIntent, AudienceId, CredentialId, ResourceId},
 };
 use std::{error::Error, fmt};
 use zeroize::Zeroizing;
@@ -64,6 +64,71 @@ impl fmt::Debug for PendingEnrollment {
             .debug_struct("PendingEnrollment")
             .field("key", &self.key)
             .field("intent", &self.intent)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The device's issued credential, kept with the key and gateway pin it was
+/// issued for. It replaces the pending record when the gateway reports Active.
+///
+/// Holding it is not read authority: the gateway asks current Auth and the
+/// current receiver on every request, with fresh TLS proof of this key.
+pub struct DeviceCredential {
+    key: PrivateKeyMaterial,
+    gateway_pin: [u8; 44],
+    intent: PublicIntent,
+    credential: CredentialId,
+    receiver: ResourceId,
+}
+impl DeviceCredential {
+    /// Keep the enrollment's key, pin and correlation with what the gateway issued.
+    pub fn new(
+        enrollment: PendingEnrollment,
+        credential: CredentialId,
+        receiver: ResourceId,
+    ) -> Self {
+        let (key, gateway_pin, intent) = enrollment.into_parts();
+        Self {
+            key,
+            gateway_pin,
+            intent,
+            credential,
+            receiver,
+        }
+    }
+    /// Borrow the device key for signing a fresh TLS connection.
+    pub fn key(&self) -> &PrivateKeyMaterial {
+        &self.key
+    }
+    /// The gateway key this device trusts.
+    pub fn gateway_pin(&self) -> &[u8; 44] {
+        &self.gateway_pin
+    }
+    /// The invitation and attempt the credential was issued for.
+    pub fn intent(&self) -> PublicIntent {
+        self.intent
+    }
+    /// The issued credential's identifier. It is not a bearer secret.
+    pub fn credential(&self) -> &CredentialId {
+        &self.credential
+    }
+    /// The receiver the gateway paired with this credential.
+    pub fn receiver(&self) -> &ResourceId {
+        &self.receiver
+    }
+    /// Hand the key to the native signing owner with the pin and correlation.
+    pub fn into_enrollment(self) -> PendingEnrollment {
+        PendingEnrollment::new(self.key, self.gateway_pin, self.intent)
+    }
+}
+impl fmt::Debug for DeviceCredential {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output
+            .debug_struct("DeviceCredential")
+            .field("key", &self.key)
+            .field("intent", &self.intent)
+            .field("credential", &self.credential)
+            .field("receiver", &self.receiver)
             .finish_non_exhaustive()
     }
 }
@@ -213,9 +278,26 @@ pub trait GatewayKeyStore: Send + Sync {
 }
 
 /// Local client persistence injected into the pre-KE3 finish callback.
+///
+/// The client holds one enrollment record: pending until the gateway reports
+/// Active, then the issued credential in its place. The replacement is one
+/// atomic publication, so no state holds both or neither.
 pub trait ClientPendingStore: Send + Sync {
     /// Restore the atomic seed/pin/public correlation; absence is explicit.
+    /// Once the credential has replaced it, there is no pending record.
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError>;
+    /// Restore the issued credential with its key and pin; absence is explicit.
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError>;
+    /// Replace the pending record for exactly `expected` with the credential
+    /// the gateway issued for it, keeping its key, pin and correlation. An
+    /// exact retry acknowledges the same record; another credential, another
+    /// enrollment or no pending record is a conflict.
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError>;
     /// Publish or compare-and-swap exact prior metadata, preserving identity on retry.
     /// The calling application owns admission from a pinned terminal receipt.
     fn save_pending(

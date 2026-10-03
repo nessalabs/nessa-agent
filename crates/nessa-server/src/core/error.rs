@@ -16,7 +16,6 @@ use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
 use nessa_auth::application::pairing::PrivateStateError;
-#[cfg(unix)]
 use nessa_local_database::OpenError;
 use std::fmt;
 use std::io::{self, ErrorKind};
@@ -127,8 +126,8 @@ impl RunError {
     /// another version, not a database, a damaged page — is a
     /// [`RunError::Dataset`]; anything that can clear — a directory, I/O, a
     /// lock — stays `Agent`, which is retried. Conversations are composed
-    /// only on Unix, so this is too.
-    #[cfg(unix)]
+    /// only on Unix; the receiver-access store is also opened for native
+    /// pairing, on every OS.
     pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
         match cause {
             OpenError::Version { .. } | OpenError::Unreadable(_) | OpenError::Damaged(_) => {

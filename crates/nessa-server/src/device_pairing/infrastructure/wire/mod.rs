@@ -11,7 +11,7 @@ use nessa_auth::domain::{
         AttemptId, AttemptOutcome, DisclosedConsent, PairingError, PairingPhase, PairingRecord,
         PublicIntent, TerminalCause,
     },
-    CredentialId,
+    CredentialId, ResourceId,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -91,6 +91,10 @@ pub enum NativePairingStatus {
         consent: Box<DisclosedConsent>,
         /// Historical issued credential identifier, not a bearer secret.
         credential: CredentialId,
+        /// The receiver the gateway paired with the credential.
+        receiver: ResourceId,
+        /// That receiver's access epoch when this status was read.
+        access_epoch: u64,
     },
     /// Original claimed enrollment ended; it is not product authorization.
     Terminal {
@@ -221,7 +225,15 @@ pub fn encode_status(
         DevicePairingStatus::Claimed(record) => {
             let consent = DisclosedConsent::from_intent(public, record.intent())
                 .map_err(NativeWireError::Correlation)?;
-            return encode_claimed(public, record, &consent);
+            return encode_claimed(public, record, &consent, None);
+        }
+        DevicePairingStatus::Active {
+            record,
+            access_epoch,
+        } => {
+            let consent = DisclosedConsent::from_intent(public, record.intent())
+                .map_err(NativeWireError::Correlation)?;
+            return encode_claimed(public, record, &consent, Some(*access_epoch));
         }
     };
     encode(&WireReply::Status { status: value })
@@ -244,10 +256,13 @@ pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError>
         WireReply::Refused {} => Ok(NativePairingReply::Refused),
     }
 }
+/// `access_epoch` is the current epoch an Active status carries, and only an
+/// Active status: the record's phase and its presence must agree.
 fn encode_claimed(
     public: PublicIntent,
     record: &PairingRecord,
     consent: &DisclosedConsent,
+    access_epoch: Option<u64>,
 ) -> Result<Vec<u8>, NativeWireError> {
     if PublicIntent::from_record(record, public.attempt()).map_err(NativeWireError::Correlation)?
         != public
@@ -258,20 +273,35 @@ fn encode_claimed(
         return Err(NativeWireError::Correlation(PairingError::Conflict));
     }
     let consent = WireConsent::from_domain(consent);
-    let status = match record.phase() {
-        PairingPhase::Available => return Err(NativeWireError::Invalid),
-        PairingPhase::Claimed => WireStatus::Claimed { consent },
-        PairingPhase::Approved => WireStatus::Approved { consent },
-        PairingPhase::Staging => WireStatus::Staging { consent },
-        PairingPhase::Active => WireStatus::Active {
+    let status = match (record.phase(), access_epoch) {
+        (PairingPhase::Available, _)
+        | (PairingPhase::Active, None)
+        | (
+            PairingPhase::Claimed
+            | PairingPhase::Approved
+            | PairingPhase::Staging
+            | PairingPhase::Terminal,
+            Some(_),
+        ) => return Err(NativeWireError::Invalid),
+        (PairingPhase::Claimed, None) => WireStatus::Claimed { consent },
+        (PairingPhase::Approved, None) => WireStatus::Approved { consent },
+        (PairingPhase::Staging, None) => WireStatus::Staging { consent },
+        (PairingPhase::Active, Some(access_epoch)) => WireStatus::Active {
             consent,
             credential: record
                 .credential()
                 .ok_or(NativeWireError::Invalid)?
                 .as_str()
                 .into(),
+            receiver: record
+                .receiver_binding()
+                .ok_or(NativeWireError::Invalid)?
+                .0
+                .as_str()
+                .into(),
+            access_epoch,
         },
-        PairingPhase::Terminal => WireStatus::Terminal {
+        (PairingPhase::Terminal, None) => WireStatus::Terminal {
             consent,
             cause: record.terminal().ok_or(NativeWireError::Invalid)?.0.into(),
         },

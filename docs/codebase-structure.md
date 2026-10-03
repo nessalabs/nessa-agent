@@ -371,23 +371,29 @@ a live session's tool/permission consistency boundary into independent aggregate
 The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
 
 The native server consumer is `nessa-server/src/device_pairing/`. `application/`
-holds the owner use cases (`owner.rs`) and the device status query and its
-projection (`read_status.rs`, `status.rs`). `infrastructure/` holds the pure JSON
+holds the owner use cases (`owner.rs`), approval through to an issued credential
+(`activation.rs`), cleanup of ended stages (`cleanup.rs`), the receiver port
+(`receivers.rs`) and the device status query and its projection
+(`read_status.rs`, `status.rs`). `infrastructure/` holds the pure JSON
 codec (`wire/`), framing (`enrollment_channel.rs`), the gateway runtime
 (`runtime.rs`, with the single code-registration worker in `registration.rs`),
 connection workers and their shutdown wake-ups (`connection.rs`,
 `connection/wake.rs`), the listener, the device client, gateway identity
-restore, and `owner_commands.rs`, the owner-only handle the product socket holds.
+restore, `receivers.rs` (the receiver port over the conversation context's
+`LocalReceiverAuthority`), and `owner_commands.rs`, the owner-only handle the
+product socket holds.
 The owner product methods are `nessa-server/src/product/pairing.rs`; mounting is
 `nessa-server/src/composition/native_pairing.rs`, only when `config.json` names a
 native listen address. Public tests are under
 `nessa-server/tests/device_pairing/infrastructure/`, the owner routes in
-`tests/device_pairing/owner_routes.rs` and the composed process in
+`tests/device_pairing/owner_routes.rs`, activation and cleanup in
+`tests/device_pairing/infrastructure/activation.rs` and the composed process in
 `tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
 `tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`;
 composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
-Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1)
-and [owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a).
+Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
+[owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
+and [activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).

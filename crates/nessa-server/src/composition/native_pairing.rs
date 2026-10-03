@@ -4,20 +4,24 @@
 //!
 //! ```text
 //! prepare: native-pairing/ --> FilePairingState --> restore_gateway_identity
-//!                          --> GatewayPairing::open --> (PreparedNative, PairingOwnerCommands)
+//!                          --> GatewayPairing::open --> reconcile_cleanup
+//!                          --> (PreparedNative, PairingOwnerCommands)
 //! bind:    PreparedNative --> TcpEnrollmentAccept --> the one NativeEnrollmentConnections
 //! start:   BoundNative --> listener task (failed --> watch) --> RunningNative
-//! stop:    signal_stop --> join: listener drain, then GatewayPairing::shutdown
+//! stop:    signal_stop --> join: listener drain, then GatewayPairing::shutdown,
+//!          then reconcile_cleanup
 //! ```
 //! Arrows are construction and ownership handoffs, in order. Design rows
-//! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting").
+//! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
+//! and S7, S8, D5, D6 ("Activation and credential delivery").
 use super::runtime_config::NativeConfig;
 use crate::app::ports::Clock as MonotonicClock;
+use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
 use crate::device_pairing::infrastructure::{
-    restore_gateway_identity, GatewayPairing, InvitationEntropy, NativeEnrollmentConnections,
-    NativeEnrollmentListener, PairingOwnerCommands, PairingRuntimeDependencies,
-    TcpEnrollmentAccept,
+    restore_gateway_identity, ConversationReceivers, GatewayPairing, InvitationEntropy,
+    NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
+    PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
 use nessa_auth::{
     adapters::{
@@ -51,6 +55,8 @@ pub(super) struct NativeInputs {
     pub namespace: PathBuf,
     pub registry: Arc<LocalCredentialStore>,
     pub policy: Arc<dyn PolicyEvaluator>,
+    /// The receiver authority conversations read through, shared.
+    pub receivers: Arc<LocalReceiverAuthority>,
     pub clock: Arc<dyn Clock>,
     /// The gateway resource every invitation is for, from the registry.
     pub gateway: Resource,
@@ -64,11 +70,13 @@ pub(super) struct PreparedNative {
     address: SocketAddr,
 }
 
-/// Prepare native pairing before either socket is bound (design rows S3–S6):
+/// Prepare native pairing before either socket is bound (design rows S3–S8):
 /// the private directory and state, then the gateway key (restored, or first
 /// published through Auth's guarded publication), then `GatewayPairing::open`,
-/// which settles this gateway's unfinished enrollments. The owner commands are
-/// for the product socket; they give no way back to the runtime.
+/// which settles this gateway's unfinished enrollments, then the receivers of
+/// ended enrollments, lookup only. A cleanup that cannot complete refuses
+/// startup (row S8). The owner commands are for the product socket; they give
+/// no way back to the runtime.
 pub(super) async fn prepare(
     config: &NativeConfig,
     inputs: NativeInputs,
@@ -102,6 +110,7 @@ pub(super) async fn prepare(
             enrollments: registry.clone(),
             access: registry,
             policy: inputs.policy,
+            receivers: Arc::new(ConversationReceivers::new(inputs.receivers)),
             clock: inputs.clock,
             gateway: inputs.gateway,
             key_store: keys,
@@ -109,6 +118,10 @@ pub(super) async fn prepare(
         })
         .map_err(|error| RunError::Native(NativeFailure::Open(error)))?,
     );
+    gateway
+        .reconcile_cleanup()
+        .await
+        .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
     let commands = PairingOwnerCommands::new(
         gateway.clone(),
         Arc::new(|| Box::new(OsEntropy) as Box<dyn InvitationEntropy>),
@@ -201,9 +214,13 @@ impl RunningNative {
     }
 
     /// Wait for the listener to collect its peers and drain its connection
-    /// owner, then close create admission and wait for registration and any
-    /// admitted create. An accept failure was already published when it
-    /// happened; here only a fault of the listener task is a failure.
+    /// owner, then close create and owner-command admission and wait for
+    /// registration and every admitted command. Only then, with nothing left
+    /// that could hold a stage, settle ended enrollments' receivers (design
+    /// row D5). An accept failure was already published when it happened;
+    /// here a fault of the listener task is a failure, and with its drain
+    /// unknown no cleanup is attempted (row D6). A cleanup that does not
+    /// complete is reported and stays pending in the registry.
     pub(super) async fn join(mut self) -> Result<(), NativeShutdownFailure> {
         self.signal_stop();
         let drained = match self.task.await {
@@ -215,7 +232,11 @@ impl RunningNative {
             })),
         };
         self.gateway.shutdown().await;
-        drained
+        drained?;
+        self.gateway
+            .reconcile_cleanup()
+            .await
+            .map_err(NativeShutdownFailure::Cleanup)
     }
 }
 
