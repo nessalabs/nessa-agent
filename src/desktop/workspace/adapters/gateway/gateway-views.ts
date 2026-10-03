@@ -20,6 +20,7 @@ import { composerModels } from "../../../model/composer-options"
 import { decodeId, encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
+  ApprovalOrigin,
   Message,
   Part,
   StepKind,
@@ -123,6 +124,27 @@ export function modelFor(known: ModelRef | undefined): ModelRef {
  */
 export function approvalId(permission: ConversationPermission): string {
   return `${encodeId(permission.executionId)}/${encodeId(permission.permissionId)}`
+}
+
+/**
+ * Who asked for a review, as the workspace says it: the agent, or an MCP App
+ * naming the tool it asked to call. A total table, so a kind the protocol
+ * adds does not compile until it says who that is. The client refuses a view
+ * with an app's review that names no server or tool (`conversation-validate.ts`;
+ * its test "reads who asked for a review"), so the empty text below stands in
+ * for nothing a read can hold.
+ */
+const approvalOrigins: {
+  readonly [K in ConversationPermission["origin"]["kind"]]: (
+    origin: ConversationPermission["origin"],
+  ) => ApprovalOrigin
+} = {
+  harness: () => ({ kind: "agent" }),
+  app: (origin) => ({
+    kind: "app",
+    server: origin.server ?? "",
+    tool: origin.tool ?? "",
+  }),
 }
 
 /** The review an approval id names, or `null` for an id this adapter did not write. */
@@ -253,6 +275,7 @@ export function transcriptFrom(
         id: approvalId(asked),
         command: `${asked.toolName} ${asked.argumentsJson}`,
         reason: asked.title,
+        origin: approvalOrigins[asked.origin.kind](asked.origin),
       }
     : null
   return { sessionId: view.conversationId, messages, activity, approval, revision }

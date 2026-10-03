@@ -85,6 +85,7 @@ export const starredSamples: readonly SampleSession[] = [
       id: "signing-import",
       command: "security import build/nessa-dev.p12 -k release.keychain",
       reason: "Imports a signing certificate into the release keychain.",
+      origin: { kind: "agent" },
     },
     messages: exchange(
       "The macOS job fails at codesign since yesterday. Find out why.",
@@ -200,6 +201,7 @@ export const starredSamples: readonly SampleSession[] = [
         "xcrun notarytool submit Nessa_0.9.0_aarch64.dmg --keychain-profile nessa --wait",
       reason:
         "Uploads the signed build to Apple for notarization. This uses the release keychain profile.",
+      origin: { kind: "agent" },
     },
     messages: [["user", 14, [text("Notarize the 0.9.0 build once it is signed.")]]],
   },

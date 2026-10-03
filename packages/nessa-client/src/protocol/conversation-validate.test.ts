@@ -343,6 +343,9 @@ describe("conversation view agreement", () => {
       { kind: "plugin" },
       { kind: "app" },
       { kind: "app", server: "charts" },
+      { kind: "app", tool: "delete_rows" },
+      { kind: "app", server: "", tool: "delete_rows" },
+      { kind: "app", server: "charts", tool: "" },
       { kind: "harness", tool: "delete_rows" },
       { kind: "app", server: "charts", tool: "delete_rows", extra: true },
     ])

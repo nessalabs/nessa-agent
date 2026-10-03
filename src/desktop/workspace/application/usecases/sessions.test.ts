@@ -309,7 +309,12 @@ describe("what the person changes", () => {
   })
 
   it("holds an answer beside the approval while it is on its way, and why it failed", () => {
-    const approval = { id: "ap", command: "cargo test", reason: "Runs tests." }
+    const approval = {
+      id: "ap",
+      command: "cargo test",
+      reason: "Runs tests.",
+      origin: { kind: "agent" } as const,
+    }
     const state = transcriptLoaded(loaded(), {
       transcript: { ...emptyTranscript("b"), revision: 1, approval },
     })
@@ -357,7 +362,12 @@ describe("what the person changes", () => {
   })
 
   it("lets an answer go once the source's conversation no longer asks", () => {
-    const approval = { id: "ap", command: "cargo test", reason: "Runs tests." }
+    const approval = {
+      id: "ap",
+      command: "cargo test",
+      reason: "Runs tests.",
+      origin: { kind: "agent" } as const,
+    }
     const state = transcriptLoaded(openSession(loaded(), { sessionId: "b" }), {
       transcript: { ...emptyTranscript("b"), revision: 1, approval },
     })
