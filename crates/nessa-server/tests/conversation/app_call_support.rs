@@ -72,7 +72,9 @@ impl Apps {
     pub(crate) fn list(&self, tool: &str, ui: Option<UiVisibility>, hints: ToolHints) {
         let listed = ListedTool::new(
             McpTool::new(SERVER, tool).unwrap(),
-            ui.map(|visibility| ToolUi::new(UiResourceUri::new(URI).unwrap(), visibility)),
+            ui.map_or_else(ToolUi::default, |visibility| {
+                ToolUi::new(Some(UiResourceUri::new(URI).unwrap()), visibility)
+            }),
         )
         .with_hints(hints);
         self.listed.lock().unwrap().insert(tool.into(), listed);

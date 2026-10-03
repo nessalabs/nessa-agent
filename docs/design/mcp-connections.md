@@ -91,9 +91,12 @@ end of input (Nessa's own shell server) still does.
   answered by the gateway: `ping` with `{}`, anything else with `-32601`,
   since the gateway declared none of them.
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
-  `_meta.ui`: `resourceUri` (a `ui://` URI) and `visibility` (`model`, `app`;
-  both when absent). A tool whose `_meta.ui` cannot be read is kept without a
-  UI; a tool whose name cannot be one is left out. A session's list is read
+  `_meta.ui`: an optional `resourceUri` (a `ui://` URI) and `visibility`
+  (`model`, `app`; both when absent, or when there is no `_meta.ui`), each
+  read on its own. A tool whose `resourceUri` is absent or cannot be read is
+  kept without a UI, and keeps its `visibility` (#412); one whose
+  `visibility` is not an array of strings is the app's alone. A tool whose
+  name cannot be one is left out. A session's list is read
   when it opens and again on `notifications/tools/list_changed`.
 - **UI resources.** `resources/read` of a `ui://` URI must answer one content
   for that URI with MIME `text/html;profile=mcp-app` and `text` (or `blob`
