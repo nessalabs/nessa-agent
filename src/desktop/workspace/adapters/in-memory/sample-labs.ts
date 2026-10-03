@@ -1,5 +1,8 @@
 /** Sample sessions in Nessa Labs and Personal. */
-import { fixtureWidget } from "../../../widgets/app/fixture/fixture-widgets"
+import {
+  fixtureServer,
+  fixtureWidget,
+} from "../../../widgets/app/fixture/fixture-widgets"
 import { sampleWidgets } from "../../../widgets/fixture/sample-widgets"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
@@ -157,6 +160,29 @@ export const labsSamples: readonly SampleSession[] = [
       "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
       "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
       13,
+    ),
+  },
+  {
+    // An app's review, not the agent's: the card names the app (#436).
+    id: "app-review",
+    channelId: "gateway",
+    title: "Clean up the fixture table",
+    model: models.astra,
+    status: "needs-you",
+    updated: 14,
+    started: 30,
+    preview: "The fixture app asks to delete a row.",
+    now: "Waiting on the fixture app's request to delete a row",
+    approval: {
+      id: "app-delete-row",
+      command: "app_delete_row {}",
+      reason: `An app asks to run app_delete_row on ${fixtureServer}`,
+      origin: { kind: "app", server: fixtureServer, tool: "app_delete_row" },
+    },
+    messages: exchange(
+      "Clear the stale rows out of the fixture table.",
+      "The fixture app can delete them; it asked to run its delete tool, which waits on you.",
+      15,
     ),
   },
   {

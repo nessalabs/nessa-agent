@@ -418,6 +418,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
+- [ ] **An app's review names the app, not the agent**: the card's head says
+  "The <server> app wants to run <tool>" (`data-origin="app"`), and at the same
+  widths, with the tool's name short and a very long one word, the head stays
+  inside the card. _#436_ (`approvalAsks` in `approval-request.tsx`).
+  _Check:_ `responsive.mjs --only approval-card-app --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.

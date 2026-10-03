@@ -106,6 +106,7 @@ export const css = {
   approvalCard: ".workspace-approval", // class
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
+  approvalHead: ".workspace-approval-head", // class: who asks, and what
 
   // Agents overview (always offered: the sidebar's entry and ⌘0)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
@@ -298,6 +299,12 @@ export const names = {
   approvalSession: "Release build signing",
   /** Sample sessions (in-memory source) that each wait on one approval. */
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
+  /** A sample session (in-memory source) whose approval an MCP App asked for (#436). */
+  appApprovalSession: "Clean up the fixture table",
+  /** The channel it is in. */
+  appApprovalChannel: "gateway",
+  /** What its card's head says: the fixture server's app and the tool it named. */
+  appApprovalAsks: "The nessa-fixture app wants to run app_delete_row",
   /** A sample session (in-memory source) waiting on an approval after a long turn, by its id (data-overview-item). */
   storySessionId: "retry-budget",
   denyOnce: "Deny",
