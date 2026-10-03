@@ -235,6 +235,10 @@ test("the review app, inline, calls each of its tools once it has its tool resul
   assert.deepEqual(untold.calls, want)
   assert.equal(untold.attributes["data-review-mode"], "inline")
   assert.equal(untold.attributes["data-review-state"], "live")
+  // Nor with no host context at all.
+  const none = await runReviewApp(undefined)
+  assert.deepEqual(none.calls, want)
+  assert.equal(none.attributes["data-review-mode"], "inline")
 })
 
 test("the review app, fullscreen, makes no calls of its own", async () => {

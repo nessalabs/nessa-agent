@@ -93,16 +93,16 @@ export function allowOnce(view, permission, server) {
   return permission.options.find((option) => /^allow[-_]once$/i.test(option.id)) ?? null
 }
 
-/**
- * What to do about the view's open permissions, given those already answered
- * (keys `executionId:permissionId`, never answered twice): the ones to allow,
- * each with its allow-once option, and the ones declined because they are not
- * a call to `server`'s tools — which the run reports rather than answers.
- */
 /** A pending permission's identity in a view. */
 export const permissionKey = ({ executionId, permissionId }) =>
   `${executionId}:${permissionId}`
 
+/**
+ * What to do about the view's open permissions, given those already answered
+ * (keys `permissionKey`, never answered twice): the ones to allow,
+ * each with its allow-once option, and the ones declined because they are not
+ * a call to `server`'s tools — which the run reports rather than answers.
+ */
 export function permissionDecisions(view, answered, server) {
   const allow = []
   const declined = []
