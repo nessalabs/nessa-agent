@@ -1289,7 +1289,7 @@ async fn confirmed_retirement_survives_conservative_real_primary_reread_failure(
         };
         assert!(matches!(
             service.release(request(false)).await,
-            Err(crate::attachments::application::ReleaseError::Incomplete {
+            Err(ReleaseError::Incomplete {
                 storage_failures: 1,
                 audit_failures: 0
             })
