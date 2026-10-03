@@ -312,3 +312,40 @@ fn a10_a_persons_message_carrying_no_context_looks_nothing_up() {
     );
     judged(Vec::new(), text(), Ok(()));
 }
+
+#[test]
+fn a9_a_replayed_tool_call_rolled_back_with_its_unit_draws_no_app() {
+    use crate::application::agent_execution::sessions::records::continuation::Continuation;
+    let drawing = drawing_turn();
+    let log = record_log(&snapshot(vec![drawing.clone()]));
+    // Opened and the drawing turn's input; then its observations, which a
+    // unit that fails afterwards takes back with it.
+    let (opening, observed) = log.split_at(2);
+    let message = |id: &str| {
+        let mut record = turn(id, from(drawn()), Vec::new());
+        record.events.clear();
+        record.result = None;
+        record.local_outcome = None;
+        SessionChange::InputAccepted(Box::new(record))
+    };
+    let mut continuation = Continuation::empty();
+    continuation.apply_unit(opening).unwrap();
+    let mut failing = observed[..observed.len() - 2].to_vec();
+    failing.push(SessionChange::InputAccepted(Box::new({
+        let mut again = drawing.clone();
+        again.events.clear();
+        again.result = None;
+        again.local_outcome = None;
+        again
+    })));
+    assert!(continuation.apply_unit(&failing).is_err());
+    assert_eq!(
+        continuation.apply_unit(&[message("turn-2")]),
+        Err(StorageError::Corrupt(UnknownApp::NoMcpToolCall.to_string()))
+    );
+    // Applied for good, the same observations draw it.
+    continuation
+        .apply_unit(&observed[..observed.len() - 2])
+        .unwrap();
+    assert_eq!(continuation.apply_unit(&[message("turn-2")]), Ok(()));
+}

@@ -4,13 +4,15 @@
 //! ```text
 //! begin_record (admission) ──┐
 //! validation::continuation ──┼─> validate_app_sources(message, recorded)
-//! records InputAccepted ─────┘        └─> mcp_tool_calls(earlier invocation)
+//! records InputAccepted ─────┘
+//! recorded: admission scans the named saved turn (mcp_tool_calls);
+//!           restoration and replay ask each earlier turn's observation index
+//!           (validation::observations), built from the same mcp_tool_call
 //! ```
 //!
-//! Arrows show who asks. Each caller supplies the lookup over the turns before
-//! the message — the saved ones at admission, the earlier records on
-//! restoration — and every lookup reads tool calls through
-//! [`mcp_tool_calls`], so what counts as a recorded MCP tool call is decided
+//! Arrows show who asks. Each caller answers `recorded` from the turns before
+//! the message only, and every answer reads tool calls through
+//! [`mcp_tool_call`], so what counts as a recorded MCP tool call is decided
 //! once.
 #![deny(missing_docs)]
 
@@ -24,7 +26,8 @@ use crate::domain::agent_execution::{
 use std::fmt;
 
 /// Why a message's app is not one this session recorded. Nothing of the
-/// message is saved, queued or sent when admission answers this.
+/// message is saved, queued or sent when admission answers this, at any
+/// entry (`an_app_no_earlier_mcp_tool_call_drew_is_refused_at_every_entry`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnknownApp {
     /// No earlier turn of the session observed the named tool call as an MCP
@@ -45,19 +48,25 @@ impl fmt::Display for UnknownApp {
     }
 }
 
-/// The MCP tool calls `invocation` observed, each with the server and tool it
-/// named. A tool call names its MCP identity once (`ToolCall` refuses a
-/// different one), so a repeat carries the same identity.
+/// The MCP tool call `update` observes, with the server and tool it names:
+/// a tool observation that carries an MCP identity. A tool call names its MCP
+/// identity once (`ToolCall` refuses a different one), so a repeat carries
+/// the same identity.
+pub(crate) fn mcp_tool_call(update: &ExecutionUpdate) -> Option<(&ToolCallId, &McpTool)> {
+    match update {
+        ExecutionUpdate::Tool(update) => update.mcp_tool().map(|tool| (update.id(), tool)),
+        _ => None,
+    }
+}
+
+/// The MCP tool calls `invocation` observed, in order.
 pub(crate) fn mcp_tool_calls(
     invocation: &InvocationRecord,
 ) -> impl Iterator<Item = (&ToolCallId, &McpTool)> {
     invocation
         .events
         .iter()
-        .filter_map(|event| match event.update() {
-            ExecutionUpdate::Tool(update) => update.mcp_tool().map(|tool| (update.id(), tool)),
-            _ => None,
-        })
+        .filter_map(|event| mcp_tool_call(event.update()))
 }
 
 /// Whether every app `message` names — its writer, then each context's giver

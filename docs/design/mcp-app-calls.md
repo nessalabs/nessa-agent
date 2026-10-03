@@ -369,7 +369,10 @@ carries — is an MCP tool call recorded earlier in the session: the tool call
 whose server and tool are the app's. The SDK session owns the rule
 (`sessions::app_sources`): it is asked at admission, under the session's
 evidence lock, against the turns already saved, and of every restored
-snapshot and replayed record log, against the turns before the message. A
+snapshot and replayed record log, against the turns before the message,
+through each earlier turn's index of its MCP tool calls (built as its
+observations are validated, and taken back with a unit that fails), so a
+long history is not scanned once per app. A
 turn's own tool calls come after its message, so an app of the message's own
 turn is this rule's case too. A per-record decode cannot see the history and
 does not ask it. Refused, it is `AgentError::UnknownApp`; the gateway answers
@@ -386,7 +389,7 @@ transcript, so only a direct SDK caller or a stored record meets it.
 | A6 | — | an app naming the message's own turn | — | `UnknownApp(NoMcpToolCall)` |
 | A7 | a recorded writer | one carried context's app not recorded | — | refused as A2–A5; not admitted |
 | A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded in an earlier one — none, another server or tool, its own, a later one's | — | `Corrupt`; not restored |
-| A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it | — | `Corrupt` |
+| A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it, or recorded only by a unit that failed | — | `Corrupt` |
 | A10 | — | a person's message carrying no context | admitted | nothing looked up |
 
 Restoration checks the order of the turns, which is what a snapshot keeps:

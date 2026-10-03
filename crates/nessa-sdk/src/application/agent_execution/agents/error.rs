@@ -252,7 +252,8 @@ pub enum AgentError {
     InvalidInput(String),
     /// The message names an app — as its writer, or as the giver of a context
     /// it carries — that is no MCP tool call this session recorded before it.
-    /// Admission answers this before anything is saved, queued or sent.
+    /// Admission answers this before anything is saved, queued or sent, at
+    /// every entry (`an_app_no_earlier_mcp_tool_call_drew_is_refused_at_every_entry`).
     UnknownApp(UnknownApp),
     /// An image the message refers to could not be supplied intact, so the
     /// message was not dispatched. Nothing is sent without it.

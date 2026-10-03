@@ -15,6 +15,12 @@ use crate::domain::agent_execution::{
 /// shown.
 /// Nothing here is authenticated: an app speaks on the person's behalf, under
 /// their credential, and this says which app it was.
+///
+/// Building one checks only its own fields. A session admits a message that
+/// names it — as its writer, or as the giver of a context it carries — only
+/// when its tool call is an MCP tool call an earlier turn of that session
+/// observed, to this same server and tool; otherwise admission refuses the
+/// message (the session's `AgentError::UnknownApp`) and saves nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpAppSource {
     execution_id: ExecutionId,

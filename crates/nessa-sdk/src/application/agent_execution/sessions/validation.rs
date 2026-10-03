@@ -12,8 +12,11 @@ use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionUpdate,
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
-use crate::domain::agent_execution::executions::{
-    ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+use crate::domain::agent_execution::{
+    executions::{
+        ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+    },
+    tools::{McpTool, ToolCallId},
 };
 use observations::{ObservationUndo, Observations};
 use std::{collections::HashMap, fmt::Display};
@@ -134,6 +137,18 @@ impl InvocationContinuation {
         self.observations.restore(undo.observation);
         self.usage = undo.usage;
     }
+    /// The MCP tool `tool_id` was observed calling in `record`, the
+    /// invocation this continuation is of.
+    pub(super) fn mcp_tool<'a>(
+        &self,
+        record: &'a InvocationRecord,
+        tool_id: &ToolCallId,
+    ) -> Option<&'a McpTool> {
+        self.observations
+            .mcp_tool_call(tool_id)
+            .and_then(|index| app_sources::mcp_tool_call(record.events[index].update()))
+            .map(|(_, tool)| tool)
+    }
     pub(super) fn retained_bytes(&self) -> usize {
         self.observations
             .retained_bytes()
@@ -192,19 +207,16 @@ pub(super) fn continuation(
     let mut states = Vec::with_capacity(snapshot.invocations.len());
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
     let mut event_counts = HashMap::new();
-    // The MCP tool calls of the invocations already walked, so each message
-    // is asked against those before it in one lookup, not a scan per app.
-    let mut mcp_tool_calls = HashMap::new();
+    // The invocations already walked, by identity: a message is asked
+    // against those before it, through each one's observation index.
+    let mut positions = HashMap::with_capacity(snapshot.invocations.len());
     for invocation in &snapshot.invocations {
         app_sources::validate_app_sources(&invocation.request.user_message, |execution, tool| {
-            mcp_tool_calls.get(&(execution, tool)).copied()
+            positions.get(execution).and_then(|&index: &usize| {
+                InvocationContinuation::mcp_tool(&states[index], &snapshot.invocations[index], tool)
+            })
         })
         .map_err(corrupt)?;
-        for (tool, mcp) in app_sources::mcp_tool_calls(invocation) {
-            mcp_tool_calls
-                .entry((&invocation.request.execution_id, tool))
-                .or_insert(mcp);
-        }
         if let Some(offset) = invocation.target_event_offset {
             let target = invocation
                 .scheduling
@@ -249,6 +261,7 @@ pub(super) fn continuation(
                 }
             }
         }
+        positions.insert(&invocation.request.execution_id, states.len());
         states.push(state);
     }
     Ok(states)
