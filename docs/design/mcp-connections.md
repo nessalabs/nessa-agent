@@ -233,6 +233,12 @@ One per provider open of an SDK session (a conversation's, or a warm-up's).
 | Live | `S` is opened again (resumed) | Live, beside the new one | the new open's stand-ins carry the new token; the view reads `S`'s newest session; this one is revoked when its provider session ends |
 | — | the gateway restarts | none | every old token is refused; each conversation gets a new one when it opens |
 
+The relay socket: an exclusive lock on `<socket>.lock`, held for the
+gateway's lifetime, decides which gateway holds it. While another holds it
+the bind fails and MCP servers are off for that run; once none does, a socket
+an earlier run left is replaced. A gateway executable or socket
+path that is not UTF-8 also leaves MCP servers off.
+
 ### Forwarded results
 
 Claude's harness gives its model, and its ACP client, a result's
@@ -244,41 +250,43 @@ stand-in saw the object, and Claude's harness names the call it forwards
 (`toolCallId`). Each grant (`McpOwner`) owns a `ForwardedResults`; the gateway
 hands it to the binding with the grant (`StandInGrant::with_forwarded`), and
 the ACP worker attaches each result to its call
-(`acp::tools::wire::with_forwarded`), from where it is saved and projected as
-any structured result is. No race: the harness cannot report a result before
-it has it, and the stand-in keeps it before giving it.
+(`acp::tools::wire::attach_forwarded`), from where it is saved and projected
+as any structured result is. A call reported `completed` was answered, and
+the stand-in keeps its result before giving it (S1's test holds the stand-in
+inside that write), so the result is there to take. A call reported `failed`
+takes nothing (W7): Claude reports a call it gave up on — interrupted — as
+`failed` without its answer, and an answer arriving anyway was never the
+model's. So an `isError` result's structured content is not attached either;
+its text is.
 
 | # | Event | Effect |
 | --- | --- | --- |
-| S1 | a `tools/call` answered with a result holding `structuredContent`, its request naming a call id | its JSON text kept under that id, before the answer is written |
+| S1 | a `tools/call` answered with a result holding `structuredContent`, `isError` or not, its request naming a call id | its JSON text kept under that id, before the answer is written |
 | S2 | as S1, past 64 KiB | the "omitted: too large" text kept, never cut JSON; at 64 KiB exactly, kept |
 | S3 | a result without `structuredContent`, or `null` | nothing |
-| S4 | a JSON-RPC error, a failed call, or an answer too large for a frame (the harness gets `-32603`) | nothing |
-| S5 | no call id (Codex sends none), or one that is not a string, empty, or past 256 bytes | nothing |
-| S6 | the harness cancelled the call before its answer | nothing: the answer is dropped |
+| S4 | a JSON-RPC error answer, or an answer too large for a frame (the harness gets `-32603`) | nothing |
+| S5 | no call id (Codex sends none), or one the ACP binding would not accept as a tool call's id (`acp::fields::identifier`: a non-empty string of at most 256 bytes) | nothing |
+| S6 | the harness cancels the call while it waits, or after its answer is in but before the stand-in has given it | nothing; whichever the stand-in reads first decides, so a result is kept exactly when the harness was given it |
 | S7 | a call to a hidden tool, refused and never forwarded | nothing |
 | S8 | an answer to any other method | nothing |
 | S9 | 32 results kept already | the oldest dropped |
 | S10 | an id kept again | the later result, once |
 | S11 | a stand-in of one grant keeps a result | no other grant sees it, the same conversation's included |
-| W1 | the call's terminal update (`completed`, `failed`) carrying content, naming an MCP tool, with a result kept | the result taken and appended after its content |
-| W2 | an update without content (the PostToolUse frame) or not terminal | nothing taken: an update without content replaces none, and one before the end has no result yet |
+| W1 | the call's `completed` update carrying content, naming an MCP tool, with a result kept | the result taken and appended after its content |
+| W2 | an update without content (the PostToolUse frame) or before the end | nothing taken: an update without content replaces none, and one before the end has no result yet |
 | W3 | nothing kept for the call: the tool returned no `structuredContent` | the update as it was: the text alone |
-| W4 | a second terminal update of the call | nothing more: taken |
+| W4 | a second `completed` update of the call | nothing more: taken |
 | W5 | an update naming no MCP tool | nothing taken |
 | W6 | an open without a grant | the update as it was |
+| W7 | the call's `failed` update | nothing taken; the result waits to be dropped |
 
-A result kept and never reported — a call its harness abandons — waits until
-it is dropped (S9) or its grant is revoked. A process of the gateway's own
-user holding a live token (above) could keep a result under a call id it
-guesses. An MCP App's own `tools/call` does not pass through a stand-in and
-keeps nothing.
-
-The relay socket: an exclusive lock on `<socket>.lock`, held for the
-gateway's lifetime, decides which gateway holds it. While another holds it
-the bind fails and MCP servers are off for that run; once none does, a socket
-an earlier run left is replaced. A gateway executable or socket
-path that is not UTF-8 also leaves MCP servers off.
+A result kept and never taken — a call its harness abandons or reports
+`failed` — waits until it is dropped (S9) or its grant is revoked. A process
+of the gateway's own user holding a live token (above) could keep a result
+under a call id it guesses. An MCP App's own `tools/call` does not pass
+through a stand-in and keeps nothing. Appending a result counts toward the
+execution's retained tool bytes like any other content, as Codex's
+structured results already do.
 
 ## What one connection per harness session means
 
@@ -353,7 +361,9 @@ Each row above has at least one test, named after it:
   lets through, the launch configuration carrying them, the view keyed by its
   conversation's session, hello refusals (no, forged, and revoked tokens among
   them, a forged one starting nothing), a
-  token mapping to its conversation while its grant lives, a revoked grant
+  token mapping to its conversation while its grant lives, an open's grant
+  holding the forwarded results of the owner its token resolves to and no
+  other open's, a revoked grant
   ending the sessions it opened, two conversations on one server and a
   resumed one each on sessions of their own, no token when the random source
   fails (its stand-ins refused), a hello's `Debug`
@@ -361,10 +371,8 @@ Each row above has at least one test, named after it:
   its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
   process group, a relay exiting when its server ends with its stdin still
   open, the view's `resourceUri` and revision, the schema bound.
-- SDK, ACP: W1–W6 (`tests/infrastructure/acp/tools/wire.rs`), and Claude's
+- SDK, ACP: W1–W7 (`tests/infrastructure/acp/tools/wire.rs`), and Claude's
   recorded frame order through the worker with a grant holding a result
   (`contracts/tools.rs`).
-- Gateway: the binding holding an open's grant takes what that open's
-  stand-ins forwarded through the relay, and another open's grant does not.
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.
 - Live: `scripts/mcp-test-server/live-check.mjs` with Claude and Codex.

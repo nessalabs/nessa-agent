@@ -1,17 +1,22 @@
-//! What a grant keeps of the results its stand-ins forward: the "Stand-in,
-//! recording" rows of #435's table (S1–S11), each test named after its row.
+//! What a grant keeps of the results its stand-ins forward: rows S1–S11 of the
+//! "Forwarded results" table in `docs/design/mcp-connections.md`, each test
+//! named after its row.
 use super::super::{
     framing::MAX_FRAME_BYTES, ForwardedResults, McpOwner, McpSession, MAX_FORWARDED_RESULTS,
 };
 use super::fixture::{Behaviour, FixtureLauncher};
 use super::{conversation, servers, Harness};
 use crate::domain::agent_execution::tools::{ToolContent, MAX_STRUCTURED_RESULT_BYTES};
+use crate::infrastructure::acp::fields::MAX_IDENTIFIER_BYTES;
 use crate::infrastructure::mcp::STRUCTURED_RESULT_OMITTED;
 use serde_json::{json, Value};
 use std::{
     pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    task::{Context, Poll, Waker},
     time::Duration,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, DuplexStream, WriteHalf};
@@ -216,7 +221,12 @@ async fn s5_a_call_naming_no_usable_call_id_keeps_nothing() {
                       "params": { "name": "echo", "arguments": { "rows": 1 } } }))
         .await;
     harness.next().await.unwrap();
-    let unusable = [json!(7), json!(""), json!(null), json!("t".repeat(257))];
+    let unusable = [
+        json!(7),
+        json!(""),
+        json!(null),
+        json!("t".repeat(MAX_IDENTIFIER_BYTES + 1)),
+    ];
     for (id, unusable) in unusable.into_iter().enumerate() {
         harness
             .send(call(json!(id + 1), "echo", json!({ "rows": 1 }), unusable))
@@ -224,18 +234,18 @@ async fn s5_a_call_naming_no_usable_call_id_keeps_nothing() {
         harness.next().await.unwrap();
     }
     assert_eq!(owner.forwarded().len(), 0);
-    // 256 bytes is a usable id.
+    // At the ACP binding's bound, the id is usable.
     harness
         .send(call(
             json!(9),
             "echo",
             json!({ "rows": 1 }),
-            json!("t".repeat(256)),
+            json!("t".repeat(MAX_IDENTIFIER_BYTES)),
         ))
         .await;
     harness.next().await.unwrap();
     assert_eq!(
-        owner.forwarded().take(&"t".repeat(256)),
+        owner.forwarded().take(&"t".repeat(MAX_IDENTIFIER_BYTES)),
         Some(structured(r#"{"rows":1}"#))
     );
 }
@@ -267,6 +277,141 @@ async fn s6_a_call_cancelled_before_its_answer_keeps_nothing() {
         .await;
     assert_eq!(harness.next().await.unwrap()["id"], "a");
     assert_eq!(owner.forwarded().len(), 0);
+}
+
+#[tokio::test]
+async fn s1_an_is_error_result_is_kept_like_any_result() {
+    // The stand-in cannot know what the harness will report of it; a failed
+    // report takes nothing (W7), and the result waits to be dropped.
+    let (session, owner, launcher) = granted(silent("tools/call")).await;
+    let server = launcher.server(0);
+    let mut harness = Harness::attach(session);
+    harness
+        .send(call(json!(1), "echo", json!({}), json!("toolu_error")))
+        .await;
+    server.arrived("tools/call", 1).await;
+    let upstream = server.with_method("tools/call")[0]["id"].clone();
+    server.send(json!({ "jsonrpc": "2.0", "id": upstream, "result": {
+        "isError": true, "content": [], "structuredContent": { "reason": "busy" } } }));
+    assert_eq!(harness.next().await.unwrap()["result"]["isError"], true);
+    assert_eq!(
+        owner.forwarded().take("toolu_error"),
+        Some(structured(r#"{"reason":"busy"}"#))
+    );
+}
+
+/// A stand-in's output whose flush waits while `held` is set: the stand-in is
+/// kept inside one write while the test lines up what it finds next.
+struct GatedFlush {
+    output: WriteHalf<DuplexStream>,
+    held: Arc<AtomicBool>,
+    waiting: Arc<Mutex<Option<Waker>>>,
+}
+impl AsyncWrite for GatedFlush {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.output).poll_write(context, bytes)
+    }
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if self.held.load(Ordering::SeqCst) {
+            *self.waiting.lock().unwrap() = Some(context.waker().clone());
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.output).poll_shutdown(context)
+    }
+}
+
+#[tokio::test]
+async fn s6_a_call_finished_but_cancelled_before_its_answer_was_given_keeps_nothing() {
+    // Its answer is in and its cancellation is read before the stand-in has
+    // answered it: whichever the stand-in takes first decides, and the result
+    // is kept exactly when the harness was given it. Which comes first is the
+    // stand-in's `select!`'s to pick, so each order is reached over the runs.
+    let (session, owner, launcher) = granted(silent("tools/call")).await;
+    let server = launcher.server(0);
+    let held = Arc::new(AtomicBool::new(false));
+    let waiting = Arc::new(Mutex::new(None::<Waker>));
+    let (harness, served) = tokio::io::duplex(64 * 1024);
+    let (input, output) = tokio::io::split(served);
+    tokio::spawn(session.serve(
+        input,
+        GatedFlush {
+            output,
+            held: held.clone(),
+            waiting: waiting.clone(),
+        },
+    ));
+    let (read, write) = tokio::io::split(harness);
+    let mut harness = Harness {
+        lines: BufReader::new(read).lines(),
+        write,
+    };
+    let (mut given, mut withheld) = (0, 0);
+    for run in 0..32 {
+        let id = format!("a{run}");
+        let call_id = format!("toolu_{run}");
+        harness
+            .send(call(json!(id), "echo", json!({}), json!(call_id)))
+            .await;
+        server.arrived("tools/call", run + 1).await;
+        let upstream = server.with_method("tools/call")[run]["id"].clone();
+        // Hold the stand-in inside its answer to a ping.
+        held.store(true, Ordering::SeqCst);
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": format!("p{run}"), "method": "ping" }))
+            .await;
+        assert_eq!(harness.next().await.unwrap()["id"], format!("p{run}"));
+        // Meanwhile the call finishes, and the harness cancels it.
+        server.send(json!({ "jsonrpc": "2.0", "id": upstream,
+                            "result": { "content": [], "structuredContent": { "run": run } } }));
+        harness
+            .send(
+                json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+                          "params": { "requestId": id } }),
+            )
+            .await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        held.store(false, Ordering::SeqCst);
+        if let Some(waker) = waiting.lock().unwrap().take() {
+            waker.wake();
+        }
+        // Whatever it was given comes before the answer to the next ping.
+        let mut answered = false;
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": format!("z{run}"), "method": "ping" }))
+            .await;
+        loop {
+            let frame = harness.next().await.unwrap();
+            if frame["id"] == json!(id) {
+                answered = true;
+            } else if frame["id"] == format!("z{run}") {
+                break;
+            }
+        }
+        let kept = owner.forwarded().take(&call_id);
+        assert_eq!(kept.is_some(), answered, "run {run}");
+        if answered {
+            given += 1;
+        } else {
+            withheld += 1;
+        }
+    }
+    // Both orders were reached, so the cancelled one was tested.
+    assert!(
+        given > 0 && withheld > 0,
+        "{given} given, {withheld} withheld"
+    );
 }
 
 #[tokio::test]
@@ -311,7 +456,7 @@ async fn s8_an_answer_to_any_other_method_keeps_nothing() {
 
 #[test]
 fn s9_past_the_bound_the_oldest_result_is_dropped() {
-    let forwarded = ForwardedResults::default();
+    let forwarded = ForwardedResults::new();
     for call in 0..=MAX_FORWARDED_RESULTS {
         forwarded.record(format!("toolu_{call}"), structured(&call.to_string()));
     }
@@ -327,7 +472,7 @@ fn s9_past_the_bound_the_oldest_result_is_dropped() {
 
 #[test]
 fn s10_an_id_kept_again_holds_the_later_result_once() {
-    let forwarded = ForwardedResults::default();
+    let forwarded = ForwardedResults::new();
     forwarded.record("toolu_1".into(), structured("1"));
     forwarded.record("toolu_1".into(), structured("2"));
     assert_eq!(forwarded.len(), 1);

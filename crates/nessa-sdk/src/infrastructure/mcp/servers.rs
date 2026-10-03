@@ -92,12 +92,19 @@ pub struct McpOwner {
 /// (set, then take) are each one step: a session either is registered
 /// before the revocation, and is taken by it, or sees it and is refused —
 /// whichever [`McpServers`] it is opened and revoked through.
-#[derive(Default)]
 struct Grant {
     state: Mutex<GrantState>,
     /// What its sessions' stand-ins forwarded, until the binding holding the
     /// grant takes each for the tool call it was reported under.
     forwarded: ForwardedResults,
+}
+impl Default for Grant {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            forwarded: ForwardedResults::new(),
+        }
+    }
 }
 #[derive(Default)]
 struct GrantState {

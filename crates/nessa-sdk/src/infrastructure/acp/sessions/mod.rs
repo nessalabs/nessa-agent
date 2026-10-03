@@ -18,7 +18,8 @@
 //! connection of its own, never resuming the session it asks the agent to
 //! delete. `thought_level` reads the reasoning effort option an agent
 //! advertises, whatever it calls it. `stand_ins` holds the host's grant for
-//! one open, whose environment every MCP server process of that open gets.
+//! one open, whose environment every MCP server process of that open gets,
+//! and whose forwarded results the worker attaches to the calls they answer.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;

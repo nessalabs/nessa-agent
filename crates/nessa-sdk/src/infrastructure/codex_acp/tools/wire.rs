@@ -1,7 +1,7 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::{McpTool, ToolCallUpdate, ToolContent};
-use crate::infrastructure::acp::fields::{identifier, string};
+use crate::infrastructure::acp::fields::{identifier, json_fits, string};
 use crate::infrastructure::acp::tools::wire::{
     tool_call as acp_tool_call, UNSUPPORTED_TOOL_CONTENT,
 };
@@ -10,7 +10,6 @@ use crate::infrastructure::mcp::structured_result;
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{self, Write};
 
 /// The most tool calls one execution keeps an identity for. Matches the Claude
 /// profile's bound: with 256-byte identifiers and [`MAX_NAME_BYTES`] names, this
@@ -82,22 +81,6 @@ impl ObservedTools {
 // controller's permission and tool-observation retention budgets.
 const MAX_RETAINED_INPUT_BYTES: usize = 1024 * 1024;
 
-struct InputSize {
-    remaining: usize,
-}
-impl Write for InputSize {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > self.remaining {
-            return Err(io::Error::other("tool input retention limit exceeded"));
-        }
-        self.remaining -= bytes.len();
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn same_input(retained: &str, incoming: &Value) -> Result<(), AgentError> {
     let original: Value =
         serde_json::from_str(retained).map_err(|_| protocol("invalid retained tool input"))?;
@@ -123,11 +106,9 @@ fn new_input(
     }
     // Count encoded bytes before allocating the retained copy. Box<str> keeps
     // capacity equal to its charged length rather than retaining spare capacity.
-    let mut size = InputSize {
-        remaining: MAX_RETAINED_INPUT_BYTES - used,
-    };
-    serde_json::to_writer(&mut size, input)
-        .map_err(|_| protocol("tool input retention limit exceeded"))?;
+    if !json_fits(input, MAX_RETAINED_INPUT_BYTES - used) {
+        return Err(protocol("tool input retention limit exceeded"));
+    }
     let encoded = serde_json::to_string(input).map_err(|_| protocol("invalid tool input"))?;
     Ok(Some(encoded.into_boxed_str()))
 }

@@ -3,19 +3,25 @@
 //!
 //! ```text
 //! stand_in ──record(call id, result)──▶ ForwardedResults ◀──take(tool call id)── ACP worker
-//!                (before the harness is answered)            (the call's terminal update)
+//!                (before the harness is answered)            (the call's completed update)
 //! ```
 //!
 //! Arrows are calls. Claude's harness gives its model, and its ACP client,
-//! `structuredContent` only as JSON text, so the object a server returned is
-//! nowhere in what the harness reports. The stand-in saw it, and the harness
-//! names the call it forwarded (`_meta["claudecode/toolUseId"]`) by the id it
-//! reports that call under over ACP. The states and orderings are tabled in
-//! `docs/design/mcp-connections.md` ("Forwarded results"), each row tested in
-//! `tests/infrastructure/mcp/forwarded.rs`.
+//! `structuredContent` only as JSON text, in place of the result's own text,
+//! so no ACP frame says which text was structured. The stand-in saw the
+//! object, and the harness names the call it forwarded
+//! (`_meta["claudecode/toolUseId"]`) by the id it reports that call under over
+//! ACP. The key is read here, where the forwarded bytes pass; the take is the
+//! shared ACP worker's, since a profile cannot see the open's grant. A harness
+//! that names no call id (Codex, OpenCode) has nothing kept, and its takes
+//! find nothing. The states and orderings are tabled in
+//! `docs/design/mcp-connections.md` ("Forwarded results"): S1–S11 are tested
+//! in `tests/infrastructure/mcp/forwarded.rs`, W1–W7 in
+//! `tests/infrastructure/acp/tools/wire.rs`.
 #![deny(missing_docs)]
 
 use crate::domain::agent_execution::tools::ToolContent;
+use crate::infrastructure::acp::fields::identifier;
 use serde_json::Value;
 use std::{
     collections::VecDeque,
@@ -23,24 +29,31 @@ use std::{
 };
 
 /// The most results one grant keeps waiting for their tool call's report. A
-/// result is taken as soon as its call is reported, so only results the
-/// harness never reports wait; past this, the oldest is dropped.
+/// result is taken as soon as its call is reported completed, so only results
+/// the harness never reports so wait; past this, the oldest is dropped.
 pub const MAX_FORWARDED_RESULTS: usize = 32;
 
 /// Where Claude's harness puts its own id for the call in a forwarded
 /// `tools/call`: the id its ACP frames give the same call (`toolCallId`).
 const CALL_ID: &str = "claudecode/toolUseId";
 
-/// The longest call id kept: the ACP binding's bound on a tool call's id.
-const MAX_CALL_ID_BYTES: usize = 256;
-
 /// One grant's forwarded results, by the harness's id for each call. Clones
-/// share them.
-#[derive(Clone, Default)]
+/// share them, and two values are equal when they are the same store. Only
+/// the SDK writes and takes them: a host can hand them on
+/// ([`StandInGrant::with_forwarded`](crate::infrastructure::acp::sessions::StandInGrant::with_forwarded))
+/// and compare them, nothing else.
+#[derive(Clone)]
 pub struct ForwardedResults {
     results: Arc<Mutex<VecDeque<(String, ToolContent)>>>,
 }
 impl ForwardedResults {
+    /// An empty store, for a new grant.
+    pub(crate) fn new() -> Self {
+        Self {
+            results: Arc::default(),
+        }
+    }
+
     /// Keep `result` for the call the harness names `call`, replacing one kept
     /// under the same id, and dropping the oldest past
     /// [`MAX_FORWARDED_RESULTS`].
@@ -54,8 +67,9 @@ impl ForwardedResults {
     }
 
     /// The result forwarded for the tool call the harness reports as
-    /// `tool_call`, taken: a second take of the same id finds nothing.
-    pub fn take(&self, tool_call: &str) -> Option<ToolContent> {
+    /// `tool_call`, taken: a second take of the same id finds nothing. The ACP
+    /// worker is its one caller.
+    pub(crate) fn take(&self, tool_call: &str) -> Option<ToolContent> {
         let mut results = self.results.lock().expect("forwarded results");
         let index = results.iter().position(|(call, _)| call == tool_call)?;
         results.remove(index).map(|(_, result)| result)
@@ -67,6 +81,12 @@ impl ForwardedResults {
         self.results.lock().expect("forwarded results").len()
     }
 }
+impl PartialEq for ForwardedResults {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.results, &other.results)
+    }
+}
+impl Eq for ForwardedResults {}
 impl std::fmt::Debug for ForwardedResults {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Results are a server's data: counted, not printed.
@@ -77,13 +97,11 @@ impl std::fmt::Debug for ForwardedResults {
     }
 }
 
-/// The harness's id for a forwarded `tools/call`, from its `params`: a
-/// non-empty string of at most [`MAX_CALL_ID_BYTES`], or `None`.
+/// The harness's id for a forwarded `tools/call`, from its `params`: one the
+/// ACP binding would accept as a tool call's id
+/// ([`identifier`](crate::infrastructure::acp::fields::identifier)), or `None`.
 pub(crate) fn call_id(params: Option<&Value>) -> Option<String> {
-    params?
-        .get("_meta")?
-        .get(CALL_ID)?
-        .as_str()
-        .filter(|id| !id.is_empty() && id.len() <= MAX_CALL_ID_BYTES)
+    identifier(params?.get("_meta")?, CALL_ID)
+        .ok()
         .map(str::to_owned)
 }

@@ -8,7 +8,7 @@ use super::super::{
         cleanup::ProcessCleanup,
         thought_level, AcpConfig,
     },
-    tools::wire::with_forwarded,
+    tools::wire::attach_forwarded,
 };
 #[cfg(all(test, unix))]
 use super::failure::MAX_RETAINED_CATEGORY_FACTS;
@@ -2091,7 +2091,7 @@ impl<P: AcpProfile> Worker<P> {
             if !self.config.tools_enabled {
                 return Err(json_rpc::protocol("tool event in a text-only binding"));
             }
-            let tool = with_forwarded(
+            let tool = attach_forwarded(
                 self.profile.tool_call(update)?,
                 self.config.stand_ins.forwarded(),
             );

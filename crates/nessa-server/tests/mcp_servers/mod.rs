@@ -20,9 +20,9 @@ use super::infrastructure::{
 };
 use crate::conversation::application::McpToolUis;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
-use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolContent};
+use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::infrastructure::{
-    acp::sessions::{StandInGrant, StandInGrants, StandInSessions, StdioMcpServer},
+    acp::sessions::{StandInGrant, StandInGrants, StdioMcpServer},
     clock::RuntimeClock,
     mcp::{McpServerLaunch, McpServers},
 };
@@ -577,57 +577,26 @@ async fn the_relay_command_copies_both_ways_until_the_gateway_closes() {
     assert_eq!(running.unwrap(), Ok(()));
 }
 
-/// A harness reaches the real server through `mcp-relay` and the relay
-/// socket, on a session of its own, and the view's lookup reads that
-/// session's list; the session ends with the stand-in.
-#[tokio::test]
-async fn the_binding_holding_a_grant_takes_what_its_stand_ins_forwarded() {
-    // #435: the open's grant, as the ACP binding asks for it, holds the very
-    // results the relay's stand-ins under its token keep — and no other
-    // open's.
-    let server = fixture();
-    let (relay_side, _mcp, grants) = relay_for(vec![server.clone()]);
-    let conversation = SessionId::new("conversation").unwrap();
-    let stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
-    let (opened, grant) = stand_ins.opened(Some(&conversation));
-    let (other, _other_grant) = stand_ins.opened(Some(&conversation));
-    let token = grant
-        .as_ref()
-        .unwrap()
-        .environment()
-        .iter()
-        .find(|(name, _)| name == SESSION_VARIABLE)
-        .map(|(_, token)| token.clone())
-        .expect("a token");
-    let (stand_in, gateway) = tokio::io::duplex(1024 * 1024);
-    tokio::spawn(async move { relay_side.serve(gateway).await });
-    let (mut harness_in, input) = tokio::io::duplex(64 * 1024);
-    let (output, harness_out) = tokio::io::duplex(64 * 1024);
-    let configuration = digest(&server);
-    tokio::spawn(
-        async move { relay(stand_in, "fixture", &configuration, &token, input, output).await },
-    );
-    let mut answers = BufReader::new(harness_out).lines();
-    let mut answer = Value::Null;
-    for message in [
-        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {} }),
-        json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
-        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                "params": { "name": "where", "_meta": { "claudecode/toolUseId": "toolu_where" } } }),
-    ] {
-        let mut bytes = serde_json::to_vec(&message).unwrap();
-        bytes.push(b'\n');
-        harness_in.write_all(&bytes).await.unwrap();
-        answer = serde_json::from_str(&next_line(&mut answers).await).unwrap();
-    }
-    let said = answer["result"]["structuredContent"].to_string();
-    assert_eq!(other.forwarded().unwrap().take("toolu_where"), None);
+/// #435: an open's grant holds the very results the stand-ins its token lets
+/// through keep — those of the owner the relay resolves that token to — and
+/// another open's grant, of the same conversation, holds others.
+#[test]
+fn an_opens_grant_holds_what_the_stand_ins_under_its_token_forward() {
+    let (_, _, grants) = relay_for(vec![fixture()]);
+    let (grant, token) = granted(&grants, "conversation");
+    let (other, other_token) = granted(&grants, "conversation");
+    let owner = grants.owner(&token).expect("a live grant");
+    assert_eq!(grant.forwarded(), Some(&owner.forwarded()));
+    assert_ne!(other.forwarded(), Some(&owner.forwarded()));
     assert_eq!(
-        opened.forwarded().unwrap().take("toolu_where"),
-        Some(ToolContent::structured(said).unwrap())
+        other.forwarded(),
+        Some(&grants.owner(&other_token).unwrap().forwarded())
     );
 }
 
+/// A harness reaches the real server through `mcp-relay` and the relay
+/// socket, on a session of its own, and the view's lookup reads that
+/// session's list; the session ends with the stand-in.
 #[tokio::test]
 async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     let server = fixture();

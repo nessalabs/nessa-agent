@@ -161,7 +161,8 @@ pub(crate) async fn serve(
                     }
                     let answer = answer(&id, reply);
                     // Kept before the harness has it, so the harness cannot
-                    // report the call before its result is here to take.
+                    // report the call before its result is here to take
+                    // (`s1_…_before_the_harness_is_answered`).
                     if let Some(call) = call {
                         keep_structured(&forwarded, call, &answer);
                     }

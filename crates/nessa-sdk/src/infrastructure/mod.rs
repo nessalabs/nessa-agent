@@ -23,6 +23,12 @@
 //! host -> mcp::McpServers -> one connection per configured MCP server
 //!            ^                 (domain::mcp_apps values)
 //! stand-in --'  (a harness's MCP traffic, forwarded over that connection)
+//!    |
+//!    v keeps a tools/call result's structuredContent
+//! mcp::ForwardedResults <- take -- ACP worker (acp::tools::wire)
+//!
+//! acp <-> mcp: mcp reads acp's launch entries and field rules; acp's
+//! sessions carry, and its worker takes from, mcp's forwarded results.
 //! ```
 //! Arrows show calls and translation, not ownership shared between layers. The
 //! vendor `sessions` modules are alternatives, not a chain: a host reaches one

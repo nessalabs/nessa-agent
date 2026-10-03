@@ -117,7 +117,7 @@ fn call_update(
 
 /// Forwarded results holding one for `toolu_1`.
 fn forwarded_rows() -> ForwardedResults {
-    let forwarded = ForwardedResults::default();
+    let forwarded = ForwardedResults::new();
     forwarded.record("toolu_1".into(), rows());
     forwarded
 }
@@ -126,59 +126,54 @@ fn rows() -> ToolContent {
     ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap()
 }
 
+fn completed(content: Vec<ToolContent>) -> ToolCallUpdate {
+    call_update(Some(ToolStatus::Completed), Some(content), true)
+}
+
 #[test]
-fn w1_a_terminal_update_with_content_gets_its_forwarded_result_after_its_content() {
-    for status in [ToolStatus::Completed, ToolStatus::Failed] {
-        let forwarded = forwarded_rows();
-        let said = ToolContent::text(r#"{"rows":[1,2]}"#);
-        let update = with_forwarded(
-            call_update(Some(status), Some(vec![said.clone()]), true),
-            Some(&forwarded),
-        );
-        assert_eq!(update.content(), &Some(vec![said, rows()]));
-        // W4: taken, so a second terminal update gets nothing more.
-        let again = with_forwarded(
-            call_update(Some(status), Some(vec![]), true),
-            Some(&forwarded),
-        );
-        assert_eq!(again.content(), &Some(vec![]));
-    }
+fn w1_a_completed_update_with_content_gets_its_forwarded_result_after_its_content() {
+    let forwarded = forwarded_rows();
+    let said = ToolContent::text(r#"{"rows":[1,2]}"#);
+    let update = attach_forwarded(completed(vec![said.clone()]), Some(&forwarded));
+    assert_eq!(update.content(), &Some(vec![said, rows()]));
 }
 
 #[test]
 fn w2_an_update_without_content_or_before_the_end_leaves_the_result_waiting() {
     let forwarded = forwarded_rows();
-    // Claude's PostToolUse frame: terminal-looking or not, it has no content.
+    // Claude's PostToolUse frame: completed-looking or not, it has no content.
     for status in [None, Some(ToolStatus::Completed)] {
-        let update = with_forwarded(call_update(status, None, true), Some(&forwarded));
+        let update = attach_forwarded(call_update(status, None, true), Some(&forwarded));
         assert_eq!(update.content(), &None);
     }
     for status in [None, Some(ToolStatus::Pending), Some(ToolStatus::Running)] {
-        let update = with_forwarded(call_update(status, Some(vec![]), true), Some(&forwarded));
+        let update = attach_forwarded(call_update(status, Some(vec![]), true), Some(&forwarded));
         assert_eq!(update.content(), &Some(vec![]));
     }
-    // Still there for the terminal update.
-    let update = with_forwarded(
-        call_update(Some(ToolStatus::Completed), Some(vec![]), true),
-        Some(&forwarded),
-    );
+    // Still there for the completed update.
+    let update = attach_forwarded(completed(vec![]), Some(&forwarded));
     assert_eq!(update.content(), &Some(vec![rows()]));
 }
 
 #[test]
 fn w3_a_call_with_nothing_forwarded_keeps_its_text_alone() {
     let said = vec![ToolContent::text("Two rows")];
-    let update = with_forwarded(
-        call_update(Some(ToolStatus::Completed), Some(said.clone()), true),
-        Some(&ForwardedResults::default()),
-    );
+    let update = attach_forwarded(completed(said.clone()), Some(&ForwardedResults::new()));
     assert_eq!(update.content(), &Some(said));
+}
+
+#[test]
+fn w4_a_second_completed_update_gets_nothing_more() {
+    let forwarded = forwarded_rows();
+    attach_forwarded(completed(vec![]), Some(&forwarded));
+    let again = attach_forwarded(completed(vec![]), Some(&forwarded));
+    assert_eq!(again.content(), &Some(vec![]));
 }
 
 #[test]
 fn w5_a_call_naming_no_mcp_tool_takes_nothing() {
     let forwarded = forwarded_rows();
-    let update = with_forwarded(
+    let update = attach_forwarded(
         call_update(Some(ToolStatus::Completed), Some(vec![]), false),
         Some(&forwarded),
     );
@@ -188,9 +183,20 @@ fn w5_a_call_naming_no_mcp_tool_takes_nothing() {
 
 #[test]
 fn w6_an_open_without_forwarded_results_leaves_the_update_as_it_was() {
-    let update = with_forwarded(
-        call_update(Some(ToolStatus::Completed), Some(vec![]), true),
-        None,
-    );
+    let update = attach_forwarded(completed(vec![]), None);
     assert_eq!(update.content(), &Some(vec![]));
+}
+
+#[test]
+fn w7_a_failed_update_takes_nothing() {
+    // Claude reports an interrupted call `failed`, without its answer; one
+    // that arrived anyway was never the model's, and is not attached.
+    let forwarded = forwarded_rows();
+    let interrupted = vec![ToolContent::text("[Request interrupted by user]")];
+    let update = attach_forwarded(
+        call_update(Some(ToolStatus::Failed), Some(interrupted.clone()), true),
+        Some(&forwarded),
+    );
+    assert_eq!(update.content(), &Some(interrupted));
+    assert_eq!(forwarded.take("toolu_1"), Some(rows()));
 }

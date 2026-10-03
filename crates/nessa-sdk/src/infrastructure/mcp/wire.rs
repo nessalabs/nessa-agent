@@ -1,5 +1,6 @@
 //! MCP's JSON, read into the domain's values: the `initialize` answer, a
-//! `tools/list` page, and a `resources/read` of an MCP App.
+//! `tools/list` page, a `resources/read` of an MCP App, and a tool result's
+//! `structuredContent`.
 use super::McpError;
 use crate::domain::agent_execution::tools::{McpTool, ToolContent, MAX_STRUCTURED_RESULT_BYTES};
 use crate::domain::agent_execution::ExecutionError;
@@ -7,9 +8,9 @@ use crate::domain::mcp_apps::{
     ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
     UiVisibility, APP_MIME_TYPE, EXTENSION,
 };
+use crate::infrastructure::acp::fields::json_fits;
 use base64::Engine;
 use serde_json::{json, Value};
-use std::io::{self, Write};
 
 /// The protocol revision this client asks for.
 pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -47,29 +48,18 @@ pub(crate) fn initialized(result: &Value) -> Result<(), McpError> {
 pub(crate) const STRUCTURED_RESULT_OMITTED: &str = "[structured tool result omitted: too large]";
 
 /// A tool result's `structuredContent`, as observed content: its JSON text,
-/// or [`STRUCTURED_RESULT_OMITTED`] past [`MAX_STRUCTURED_RESULT_BYTES`] —
-/// never cut, since JSON cut short is not JSON. Counted before it is written
-/// out, so a result of any size costs no more than the bound.
+/// or [`STRUCTURED_RESULT_OMITTED`] past [`MAX_STRUCTURED_RESULT_BYTES`] in
+/// place of JSON cut short (at and past the bound:
+/// `s2_a_structured_result_past_the_bound_is_kept_as_said_never_cut`).
+/// Counted before it is written out, so a result of any size costs no more
+/// than the bound.
 ///
 /// # Errors
 ///
-/// What [`ToolContent::structured`] refuses, which the JSON text of a parsed
-/// value never is.
+/// What [`ToolContent::structured`] refuses. The stand-in then keeps nothing;
+/// Codex's adapter refuses the frame.
 pub(crate) fn structured_result(structured: &Value) -> Result<ToolContent, ExecutionError> {
-    struct Bounded(usize);
-    impl Write for Bounded {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0 = self
-                .0
-                .checked_sub(bytes.len())
-                .ok_or_else(|| io::Error::other("past the bound"))?;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-    if serde_json::to_writer(&mut Bounded(MAX_STRUCTURED_RESULT_BYTES), structured).is_err() {
+    if !json_fits(structured, MAX_STRUCTURED_RESULT_BYTES) {
         return Ok(ToolContent::text(STRUCTURED_RESULT_OMITTED));
     }
     ToolContent::structured(structured.to_string())

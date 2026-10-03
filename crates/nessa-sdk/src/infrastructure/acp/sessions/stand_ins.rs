@@ -1,5 +1,7 @@
 //! What every stand-in for an MCP server is given for one provider open: the
-//! host's grant for that SDK session.
+//! host's grant for that SDK session — the environment its MCP server
+//! processes get, and the results its stand-ins forward, which the ACP worker
+//! attaches to the tool calls the harness reports.
 #![deny(missing_docs)]
 
 use crate::domain::agent_execution::sessions::SessionId;
@@ -18,10 +20,11 @@ pub trait StandInGrants: Send + Sync {
     fn grant(&self, session: &SessionId) -> StandInGrant;
 }
 
-/// One open's grant: the environment its MCP server processes get, and what
-/// the host revokes when the grant is dropped — which happens on whichever
-/// task drops the provider session's last handle, so `held`'s `Drop` must not
-/// block either.
+/// One open's grant: the environment its MCP server processes get, the
+/// results its stand-ins forward when the host gives them
+/// ([`Self::with_forwarded`]), and what the host revokes when the grant is
+/// dropped — which happens on whichever task drops the provider session's
+/// last handle, so `held`'s `Drop` must not block either.
 pub struct StandInGrant {
     environment: Arc<[(String, String)]>,
     forwarded: Option<ForwardedResults>,
@@ -40,12 +43,17 @@ impl StandInGrant {
     /// This grant, with the results its stand-ins forward to their harness
     /// ([`McpOwner::forwarded`](crate::infrastructure::mcp::McpOwner::forwarded)
     /// for the owner it was granted as). The binding attaches each to the
-    /// tool call the harness reports it under, on that call's terminal update.
+    /// tool call the harness reports it under, on that call's completed
+    /// update. Without them, nothing is attached.
     pub fn with_forwarded(self, forwarded: ForwardedResults) -> Self {
         Self {
             forwarded: Some(forwarded),
             ..self
         }
+    }
+    /// The results this grant's stand-ins forward, when the host gave them.
+    pub fn forwarded(&self) -> Option<&ForwardedResults> {
+        self.forwarded.as_ref()
     }
     /// What each MCP server process of the open is given.
     pub fn environment(&self) -> &[(String, String)] {
@@ -62,9 +70,10 @@ impl fmt::Debug for StandInGrant {
     }
 }
 
-/// Where a binding's MCP stand-ins get their per-open environment: from a
-/// host's [`StandInGrants`], or nowhere. Outside the context fingerprint,
-/// like credentials, so a fresh grant on each open never changes it.
+/// Where a binding's MCP stand-ins get their per-open environment, and where
+/// the results they forward are taken from: a host's [`StandInGrants`], or
+/// nowhere. Outside the context fingerprint, like credentials, so a fresh
+/// grant on each open never changes it.
 #[derive(Clone, Default)]
 pub struct StandInSessions {
     grants: Option<Arc<dyn StandInGrants>>,
@@ -85,8 +94,8 @@ impl StandInSessions {
         }
     }
     /// For one open of `session` (none for an open that names no session):
-    /// these sessions with that open's environment, and the grant to hold
-    /// while the provider session lives. The ACP binding asks this itself; a
+    /// these sessions with that open's environment and forwarded results, and
+    /// the grant to hold while the provider session lives. The ACP binding asks this itself; a
     /// host calls it only to check what an open's entries carry.
     ///
     /// It is not inert: it asks the host's [`StandInGrants`] for a real grant
@@ -118,7 +127,7 @@ impl StandInSessions {
         &self.environment
     }
     /// The results this open's stand-ins forwarded, when its grant has them.
-    pub fn forwarded(&self) -> Option<&ForwardedResults> {
+    pub(crate) fn forwarded(&self) -> Option<&ForwardedResults> {
         self.forwarded.as_ref()
     }
 }

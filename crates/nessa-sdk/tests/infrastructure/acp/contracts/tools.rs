@@ -84,7 +84,7 @@ async fn a_forwarded_structured_result_reaches_the_terminal_update_of_its_call()
         command: "/bin/stand-in".into(),
         args: vec!["mcp-relay".into(), "mcptest".into()],
     }];
-    let forwarded = ForwardedResults::default();
+    let forwarded = ForwardedResults::new();
     forwarded.record(
         "toolu_rows".into(),
         ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap(),
