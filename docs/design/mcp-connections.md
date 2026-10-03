@@ -143,7 +143,7 @@ end of input (Nessa's own shell server) still does.
 | Change notices held for a stand-in or a session's list | 16 | the stand-in is sent all three `*/list_changed`; the list is read again |
 | Tool names whose visibility a session remembers | 4096 | only the names the list asked latest gave are kept (a list answered late cannot evict a later one's), then none if that list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
 | Live grants | one per open provider session | — |
-| Forwarded results a grant keeps | 32, each a call id of at most 256 bytes and a result of at most 64 KiB (`MAX_STRUCTURED_RESULT_BYTES`) | the oldest is dropped; a larger result is kept as the "omitted: too large" text |
+| Forwarded results a grant keeps | 32, each a call id of at most 256 bytes, the answering server's name (at most 64 bytes) and a result of at most 64 KiB (`MAX_STRUCTURED_RESULT_BYTES`) | the oldest is dropped; a larger result is kept as the "omitted: too large" text |
 | Sessions a grant remembers | its open ones, and those ended since its last opening | dropped as the next opens; all taken when it is revoked |
 | Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 
@@ -287,7 +287,11 @@ A result kept and never taken — a call its harness abandons or reports
 `failed` — waits until it is dropped (S9) or its grant is revoked. A process
 of the gateway's own user holding a live token (above) could keep a result
 under a call id it guesses — but only as the server its stand-in serves,
-so it attaches only to a call to that same server (W8). An MCP App's own `tools/call` does not pass
+so it attaches only to a call to that same server (W8). Keeping it replaces
+whatever was kept under that id (S10), whichever server kept it, so a guess
+can also make the real call show its text alone; such a process can already
+push every result out (S9), so it can lose an attachment, never forge one
+onto another server's call. An MCP App's own `tools/call` does not pass
 through a stand-in and keeps nothing. Appending a result counts toward the
 execution's retained tool bytes like any other content, as Codex's
 structured results already do.
