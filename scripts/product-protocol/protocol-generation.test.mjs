@@ -158,13 +158,13 @@ test("passive timing publishes changed phase values and their derived client flo
       assert.match(rust, new RegExp(`PASSIVE_${name}: u64 = ${value};`))
   }))
 
-test("MCP App timing publishes its parts, the client's deadlines, and the gateway's values", () =>
+test("MCP App call timing publishes its parts, the client's deadline, and the gateway's values", () =>
   fixture((path) => {
     edit(path, "protocol/product/v1.json", (schema) => {
-      schema["x-mcpAppTiming"] = {
-        reviewMs: 307,
-        callMs: 61,
-        readMs: 13,
+      schema["x-mcpAppCallTiming"] = {
+        reviewDeadlineMs: 307,
+        callTimeoutMs: 61,
+        readTimeoutMs: 13,
         clientAllowanceMs: 11,
       }
     })
@@ -175,41 +175,43 @@ test("MCP App timing publishes its parts, the client's deadlines, and the gatewa
       join(path, "crates/nessa-server/src/product_contract/generated.rs"),
       "utf8",
     )
-    const published = ts.slice(ts.indexOf("export const mcpAppTiming"))
-    assert.match(published, /reviewMs: 307/)
-    assert.match(published, /callMs: 61/)
+    const published = ts.slice(ts.indexOf("export const mcpAppCallTiming"))
+    assert.match(published, /reviewDeadlineMs: 307/)
+    assert.match(published, /callTimeoutMs: 61/)
+    assert.match(published, /readTimeoutMs: 13/)
     assert.match(published, /clientAllowanceMs: 11/)
-    assert.match(published, /readMs: 13/)
     assert.match(published, /callDeadlineMs: 379/)
-    assert.match(published, /readDeadlineMs: 24/)
-    assert.match(contract, /MCP_APP_REVIEW_MS: u64 = 307;/)
-    assert.match(contract, /MCP_APP_CALL_MS: u64 = 61;/)
-    assert.match(contract, /MCP_APP_READ_MS: u64 = 13;/)
+    assert.match(contract, /MCP_APP_REVIEW_DEADLINE_MS: u64 = 307;/)
+    assert.match(contract, /MCP_APP_CALL_TIMEOUT_MS: u64 = 61;/)
+    assert.match(contract, /MCP_APP_READ_TIMEOUT_MS: u64 = 13;/)
     assert.match(contract, /MCP_RESOURCE_TICKET_MS: u64 = \d+;/)
   }))
 
 for (const [name, value] of [
-  ["reviewMs", undefined],
-  ["reviewMs", 0],
-  ["callMs", "60000"],
-  ["callMs", 1.5],
-  ["readMs", null],
-  ["readMs", 0],
-  ["readMs", 2_147_483_647],
+  ["reviewDeadlineMs", undefined],
+  ["reviewDeadlineMs", 0],
+  ["callTimeoutMs", "60000"],
+  ["callTimeoutMs", 1.5],
+  ["readTimeoutMs", null],
+  ["readTimeoutMs", 0],
   ["clientAllowanceMs", -1],
   ["clientAllowanceMs", 2_147_483_647],
+  ["unknownMs", 1],
 ])
-  test(`invalid MCP App ${name} ${value} preserves unpublished artifacts`, () =>
+  test(`invalid MCP App call timing ${name} ${value} preserves unpublished artifacts`, () =>
     fixture((path) => {
       edit(path, "protocol/product/v1.json", (schema) => {
-        schema["x-mcpAppTiming"][name] = value
+        schema["x-mcpAppCallTiming"][name] = value
       })
       const result = unchanged(
         path,
         ["protocol/product/v1.json", ...productOutputs],
         () => generate(path, "generate-product-protocol"),
       )
-      assert.match(result.stderr, /Invalid MCP App timing|deadline exceeds/)
+      assert.match(
+        result.stderr,
+        /Invalid MCP App call timing|unknown fields|deadline exceeds/,
+      )
     }))
 
 for (const [name, value] of [

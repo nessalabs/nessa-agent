@@ -392,6 +392,17 @@ fn each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with() {
         McpAppError::Remote(Some((-32602, "bad".into()))),
     ] {
         let code = error.code();
-        assert_eq!(error_code(&ConversationError::McpApp(error)).as_str(), code);
+        assert_eq!(
+            error_code(&ConversationError::McpApp(error)).as_str(),
+            code.as_str()
+        );
+    }
+}
+
+#[test]
+fn every_code_audit_names_is_on_the_wire_as_itself() {
+    use crate::conversation::application::McpAppCode;
+    for code in McpAppCode::ALL {
+        assert_eq!(super::wire_code(code).as_str(), code.as_str());
     }
 }

@@ -1,7 +1,7 @@
 //! An MCP App's calls, answered by the SDK's `McpServers` on the
 //! conversation's own session of each server.
 use crate::conversation::application::{McpAppFailure, McpAppFuture, McpApps};
-use crate::product_contract::generated::{MCP_APP_CALL_MS, MCP_APP_READ_MS};
+use crate::product_contract::generated::{MCP_APP_CALL_TIMEOUT_MS, MCP_APP_READ_TIMEOUT_MS};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
 use nessa_sdk::infrastructure::mcp::{McpError, McpServers};
@@ -33,7 +33,7 @@ impl McpApps for SessionApps {
                     server,
                     name,
                     arguments,
-                    Duration::from_millis(MCP_APP_CALL_MS),
+                    Duration::from_millis(MCP_APP_CALL_TIMEOUT_MS),
                 )
                 .await
                 .map_err(failure)
@@ -47,7 +47,12 @@ impl McpApps for SessionApps {
     ) -> McpAppFuture<'a, UiResource> {
         Box::pin(async move {
             self.0
-                .read_app_resource(session, server, uri, Duration::from_millis(MCP_APP_READ_MS))
+                .read_app_resource(
+                    session,
+                    server,
+                    uri,
+                    Duration::from_millis(MCP_APP_READ_TIMEOUT_MS),
+                )
                 .await
                 .map_err(failure)
         })
@@ -63,17 +68,22 @@ pub(crate) fn failure(error: McpError) -> McpAppFailure {
         McpError::TooLarge(_) => McpAppFailure::TooLarge,
         McpError::NotAnApp => McpAppFailure::NotAnApp,
         McpError::Malformed(_) | McpError::Handshake(_) => McpAppFailure::Malformed,
-        // Ended, gone, stopped, or too busy to take it: the session cannot
-        // answer this call.
+        // As many requests waiting as it takes: nothing was sent, and it
+        // passes with time.
+        McpError::Busy => McpAppFailure::Busy,
+        // Ended, gone or stopped: the session cannot answer this call.
         McpError::ServerGone
         | McpError::Closed
         | McpError::Stopped
-        | McpError::Busy
         | McpError::Start(_)
         | McpError::InvalidConfiguration => McpAppFailure::SessionEnded,
     }
 }
 
+#[cfg(test)]
+#[path = "../../../tests/mcp_servers/apps.rs"]
+mod tests;
+
 #[cfg(all(test, unix))]
 #[path = "../../../tests/mcp_servers/session_apps.rs"]
-mod tests;
+mod budget_tests;

@@ -90,7 +90,7 @@ fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
 
 #[test]
 fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
-    use crate::conversation::application::{McpAppError, RESOURCE_TICKET_LIFETIME_MS};
+    use crate::conversation::application::{McpAppCode, RESOURCE_TICKET_LIFETIME_MS};
     use crate::mcp_servers::domain::{MAX_APP_ARGUMENTS_BYTES, MAX_APP_RESULT_BYTES};
     use nessa_sdk::domain::mcp_apps::MAX_UI_HTML_BYTES;
     let schema = schema();
@@ -118,25 +118,13 @@ fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
         read["expiresInMs"]["const"].as_u64(),
         Some(RESOURCE_TICKET_LIFETIME_MS)
     );
-    // Every refusal audit names is a code the protocol carries.
+    // Every code audit names a step with is one the protocol carries.
     let codes = defs["ConversationErrorCode"]["enum"].as_array().unwrap();
-    for error in [
-        McpAppError::AppUnknown,
-        McpAppError::ServerMismatch,
-        McpAppError::ToolNotForApp,
-        McpAppError::RequestTooLarge,
-        McpAppError::SessionUnavailable,
-        McpAppError::ApprovalDenied,
-        McpAppError::ApprovalExpired,
-        McpAppError::Cancelled,
-        McpAppError::ResultTooLarge,
-        McpAppError::TimedOut,
-        McpAppError::Remote(None),
-    ] {
+    for code in McpAppCode::ALL {
         assert!(
-            codes.iter().any(|code| code == error.code()),
+            codes.iter().any(|known| known == code.as_str()),
             "{}",
-            error.code()
+            code.as_str()
         );
     }
 }

@@ -129,7 +129,7 @@ end of input (Nessa's own shell server) still does.
 | CSP sources, the app's `domain` | 64 per list, 512 bytes each | `TooLarge` |
 | Opening a session: spawn to `initialize` answer | 30 s | `Timeout`, the process group is killed |
 | The gateway's own `tools/list`, `resources/read` | 10 s each | `Timeout`; the connection stays |
-| An MCP App's `tools/call`, `resources/read` (`call_tool`, `read_app_resource`) | the caller's budget: the gateway passes `x-mcpAppTiming.callMs` and `readMs` | `Timeout`; the connection stays |
+| An MCP App's `tools/call`, `resources/read` (`call_tool`, `read_app_resource`) | the caller's budget: the gateway passes `x-mcpAppCallTiming.callTimeoutMs` and `readTimeoutMs` | `Timeout`; the connection stays |
 | A forwarded request | none from the gateway | the harness's own deadline and cancellation |
 | Closing a session | stdin closed, 2 s, then the process group killed | — |
 | A refusal's message | 512 characters, control characters as spaces | — |

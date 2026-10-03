@@ -15,12 +15,16 @@
 //! the held bytes, and each is audited against the `mcp.readResource` call
 //! that read the bytes ([`HeldResource::record`]):
 //! - its issue by the conversation service (`TicketIssued`), naming the
-//!   ticket by [`ResourceTicketDigest::of`] the ticket `issue` answered;
+//!   ticket by [`ResourceTicketDigest::of`] the ticket `issue` answered,
+//!   while the ticket is still pending: not redeemable, and its end not the
+//!   store's to report;
 //! - its redemption by the route, which records [`Redemption::audit_record`]
 //!   (`TicketRedeemed`) and awaits it before it serves the bytes;
-//! - every unredeemed end through [`TicketEvents`] (`TicketExpired`,
-//!   initiated by the system), which composition points at
-//!   [`audit_ticket_ends`].
+//! - every unredeemed end of an active ticket through [`TicketEvents`]
+//!   (`TicketEnded`, by its cause and who caused it), which composition
+//!   points at [`audit_ticket_ends`];
+//! - a pending ticket's end by the conversation service, after its issue,
+//!   from what [`ResourceTickets::activate`] answers.
 //!
 //! Expiry is found on every call the store answers, and by
 //! [`ResourceTicketStore::sweep_periodically`] between them, so an
@@ -28,7 +32,7 @@
 //! sweep period of its deadline even when nothing else happens.
 use crate::conversation::application::{
     HeldResource, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
-    ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS,
+    ResourceTickets, TicketEnd, TicketRefusal, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS,
     RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::conversation::domain::ConversationId;
@@ -40,44 +44,31 @@ use std::{
     sync::{Arc, Mutex, PoisonError, Weak},
     time::Duration,
 };
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{
+    mpsc::{UnboundedReceiver, UnboundedSender},
+    oneshot,
+};
 
-/// How a ticket ended unredeemed. Each ticket ends once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TicketEnd {
-    /// Its lifetime passed.
-    Expired,
-    /// Its app's mount was let go of first (`release_app`).
-    AppReleased,
-    /// Its conversation was let go of first (`release_conversation`).
-    ConversationReleased,
-    /// The store itself was dropped, at shutdown.
-    StoreDropped,
-}
-
-/// One ticket's unredeemed end: the reading call's record, which ticket,
-/// and how it ended.
+/// One active ticket's unredeemed end: the reading call's record, which
+/// ticket, how it ended, and who ended it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketEvent {
     pub record: McpAppAuditRecord,
     pub ticket_digest: ResourceTicketDigest,
     pub end: TicketEnd,
+    pub by: McpAppInitiator,
 }
 impl TicketEvent {
-    /// The audit step this end is: `TicketExpired`, whichever way the ticket
-    /// ended unredeemed. Which way that was is [`TicketEvent::end`].
-    pub fn phase(&self) -> McpAppAuditPhase {
-        McpAppAuditPhase::TicketExpired {
-            ticket_digest: self.ticket_digest.to_hex(),
-        }
-    }
-
-    /// The reading call's record of this end: [`Self::phase`], taken by the
-    /// gateway itself — a deadline, a cleanup, or a shutdown, never the app.
+    /// The reading call's record of this end: `TicketEnded` by its cause,
+    /// taken by whoever ended it — the system for a deadline or a shutdown,
+    /// the releaser or the person who ended the conversation otherwise.
     pub fn audit_record(&self) -> McpAppAuditRecord {
         McpAppAuditRecord {
-            phase: self.phase(),
-            initiator: McpAppInitiator::System,
+            phase: McpAppAuditPhase::TicketEnded {
+                ticket_digest: self.ticket_digest.to_hex(),
+                cause: self.end,
+            },
+            initiator: self.by.clone(),
             ..self.record.clone()
         }
     }
@@ -134,8 +125,9 @@ impl TicketEvents for UnboundedSender<TicketEvent> {
 }
 
 /// Record each unredeemed end `events` receives, as
-/// [`TicketEvent::audit_record`], in the order they ended, until every
-/// sender is gone — the store's, which lives as long as the store.
+/// [`TicketEvent::audit_record`], in the order they ended — until every
+/// sender is gone, or `stop` says the gateway is stopping, when every end
+/// already sent is recorded before it returns.
 ///
 /// A record that cannot be committed is logged, by the ticket's digest and
 /// its call, never the ticket, and the next is tried: the held bytes are
@@ -143,17 +135,31 @@ impl TicketEvents for UnboundedSender<TicketEvent> {
 pub async fn audit_ticket_ends(
     mut events: UnboundedReceiver<TicketEvent>,
     audit: Arc<dyn McpAppAudit>,
+    mut stop: oneshot::Receiver<()>,
 ) {
-    while let Some(event) = events.recv().await {
-        if let Err(error) = audit.record(event.audit_record()).await {
-            tracing::error!(
-                ticket_digest = %event.ticket_digest.to_hex(),
-                call_id = %event.record.call_id,
-                end = ?event.end,
-                ?error,
-                "an MCP App resource ticket's end could not be audited"
-            );
+    loop {
+        // Ends first: stopping is taken only once none is waiting, so every
+        // end the conversations' ends already sent is recorded before it.
+        tokio::select! {
+            biased;
+            event = events.recv() => match event {
+                Some(event) => record_end(audit.as_ref(), event).await,
+                None => return,
+            },
+            _ = &mut stop => return,
         }
+    }
+}
+
+async fn record_end(audit: &dyn McpAppAudit, event: TicketEvent) {
+    if let Err(error) = audit.record(event.audit_record()).await {
+        tracing::error!(
+            ticket_digest = %event.ticket_digest.to_hex(),
+            call_id = %event.record.call_id,
+            end = ?event.end,
+            ?error,
+            "an MCP App resource ticket's end could not be audited"
+        );
     }
 }
 
@@ -171,11 +177,19 @@ struct Ticket {
     resource: HeldResource,
     /// Unix milliseconds from which it is refused.
     expires_at: u64,
+    /// Issued, and its issue not yet on record: not redeemable, and its end
+    /// not reported.
+    pending: bool,
 }
 
 #[derive(Default)]
 struct Held {
     tickets: HashMap<ResourceTicketDigest, Ticket>,
+    /// Pending tickets that ended before they were made redeemable, how and
+    /// by whom, for [`ResourceTickets::activate`] to answer — however long
+    /// their issue took to record. Taken by `activate` or `discard`, which
+    /// the issuer always reaches; at most one per app call running.
+    ended_pending: HashMap<ResourceTicketDigest, (TicketEnd, McpAppInitiator)>,
     /// Every ticket issued and not yet past its deadline, in issue order —
     /// which is deadline order, the lifetime being one constant — including
     /// some already ended otherwise, which the sweep passes over.
@@ -212,17 +226,41 @@ impl Held {
                 break;
             }
             self.deadlines.pop_front();
-            if let Some(ticket) = self.take(&digest) {
-                ended.push(event(ticket, digest, TicketEnd::Expired));
-            }
+            self.end(digest, TicketEnd::Expired, &McpAppInitiator::System, ended);
         }
     }
 
-    /// Let go of every ticket `which` selects, as having ended by `end`.
+    /// End the ticket `digest`, if it is held, as having ended by `end`,
+    /// which `by` caused: reported if it was active, kept for its issuer to
+    /// learn if it was pending.
+    fn end(
+        &mut self,
+        digest: ResourceTicketDigest,
+        end: TicketEnd,
+        by: &McpAppInitiator,
+        ended: &mut Vec<TicketEvent>,
+    ) {
+        let Some(ticket) = self.take(&digest) else {
+            return;
+        };
+        if ticket.pending {
+            self.ended_pending.insert(digest, (end, by.clone()));
+        } else {
+            ended.push(TicketEvent {
+                record: ticket.resource.record,
+                ticket_digest: digest,
+                end,
+                by: by.clone(),
+            });
+        }
+    }
+
+    /// End every ticket `which` selects, as having ended by `end`.
     fn release(
         &mut self,
         which: impl Fn(&HeldResource) -> bool,
         end: TicketEnd,
+        by: &McpAppInitiator,
         ended: &mut Vec<TicketEvent>,
     ) {
         let digests: Vec<_> = self
@@ -232,18 +270,8 @@ impl Held {
             .map(|(digest, _)| *digest)
             .collect();
         for digest in digests {
-            if let Some(ticket) = self.take(&digest) {
-                ended.push(event(ticket, digest, end));
-            }
+            self.end(digest, end, by, ended);
         }
-    }
-}
-
-fn event(ticket: Ticket, ticket_digest: ResourceTicketDigest, end: TicketEnd) -> TicketEvent {
-    TicketEvent {
-        record: ticket.resource.record,
-        ticket_digest,
-        end,
     }
 }
 
@@ -278,16 +306,24 @@ impl ResourceTicketStore {
         let redeemed = {
             let mut held = self.lock();
             held.sweep(now, &mut ended);
-            match held.take(&digest) {
-                Some(ticket) if ticket.expires_at > now => Some(Redemption {
-                    resource: ticket.resource,
-                    ticket_digest: digest,
-                }),
-                Some(ticket) => {
-                    ended.push(event(ticket, digest, TicketEnd::Expired));
+            match held.tickets.get(&digest) {
+                // Pending: not handed out yet, so not this caller's to spend.
+                None | Some(Ticket { pending: true, .. }) => None,
+                Some(ticket) if ticket.expires_at > now => {
+                    held.take(&digest).map(|ticket| Redemption {
+                        resource: ticket.resource,
+                        ticket_digest: digest,
+                    })
+                }
+                Some(_) => {
+                    held.end(
+                        digest,
+                        TicketEnd::Expired,
+                        &McpAppInitiator::System,
+                        &mut ended,
+                    );
                     None
                 }
-                None => None,
             }
         };
         self.report(ended);
@@ -386,6 +422,7 @@ impl ResourceTickets for ResourceTicketStore {
                     Ticket {
                         resource,
                         expires_at,
+                        pending: true,
                     },
                 );
                 Ok(ticket)
@@ -395,7 +432,32 @@ impl ResourceTickets for ResourceTicketStore {
         issued
     }
 
-    fn release_conversation(&self, conversation: &ConversationId) {
+    fn activate(&self, ticket: &str) -> Result<(), (TicketEnd, McpAppInitiator)> {
+        let digest = ResourceTicketDigest::of(ticket.as_bytes());
+        let mut held = self.lock();
+        if let Some(ended) = held.ended_pending.remove(&digest) {
+            return Err(ended);
+        }
+        match held.tickets.get_mut(&digest) {
+            Some(ticket) => {
+                ticket.pending = false;
+                Ok(())
+            }
+            // Neither held nor ended while pending: past its deadline and
+            // forgotten, which is an expiry the system caused.
+            None => Err((TicketEnd::Expired, McpAppInitiator::System)),
+        }
+    }
+
+    fn discard(&self, ticket: &str) {
+        let digest = ResourceTicketDigest::of(ticket.as_bytes());
+        let mut held = self.lock();
+        // Never issued on record, so nothing of it is reported.
+        held.ended_pending.remove(&digest);
+        held.take(&digest);
+    }
+
+    fn release_conversation(&self, conversation: &ConversationId, by: &McpAppInitiator) {
         let now = self.clock.unix_milliseconds();
         let mut ended = Vec::new();
         {
@@ -403,14 +465,15 @@ impl ResourceTickets for ResourceTicketStore {
             held.sweep(now, &mut ended);
             held.release(
                 |resource| resource.conversation_id() == conversation,
-                TicketEnd::ConversationReleased,
+                TicketEnd::ConversationEnded,
+                by,
                 &mut ended,
             );
         }
         self.report(ended);
     }
 
-    fn release_app(&self, conversation: &ConversationId, app: &McpAppRef) {
+    fn release_app(&self, conversation: &ConversationId, app: &McpAppRef, by: &McpAppInitiator) {
         let now = self.clock.unix_milliseconds();
         let mut ended = Vec::new();
         {
@@ -419,31 +482,26 @@ impl ResourceTickets for ResourceTicketStore {
             held.release(
                 |resource| resource.conversation_id() == conversation && resource.app() == app,
                 TicketEnd::AppReleased,
+                by,
                 &mut ended,
             );
         }
         self.report(ended);
     }
-
-    fn discard(&self, ticket: &str) {
-        let now = self.clock.unix_milliseconds();
-        let mut ended = Vec::new();
-        {
-            let mut held = self.lock();
-            held.sweep(now, &mut ended);
-            // Taken, and not reported: it was never issued on record.
-            held.take(&ResourceTicketDigest::of(ticket.as_bytes()));
-        }
-        self.report(ended);
-    }
 }
 
-/// At shutdown every ticket still held ends unredeemed, and is reported so.
+/// At shutdown every ticket still held ends unredeemed, by the system, and
+/// is reported so — once its conversation's end has not already let it go.
 impl Drop for ResourceTicketStore {
     fn drop(&mut self) {
         let held = self.held.get_mut().unwrap_or_else(PoisonError::into_inner);
         let mut ended = Vec::new();
-        held.release(|_| true, TicketEnd::StoreDropped, &mut ended);
+        held.release(
+            |_| true,
+            TicketEnd::ConversationEnded,
+            &McpAppInitiator::System,
+            &mut ended,
+        );
         held.deadlines.clear();
         self.report(ended);
     }

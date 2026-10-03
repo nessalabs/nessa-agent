@@ -347,7 +347,7 @@ SHA-256 are the ones `readResource` described. A destructive tool waits for the
 person's answer to a review with `origin: {kind: "app", server, tool}`, and
 `callTool` waits for the review, the call and an allowance:
 `mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds the longest each call can
-take the gateway, as the protocol publishes it (`x-mcpAppTiming`), for a host
+take the gateway, as the protocol publishes it (`x-mcpAppCallTiming`), for a host
 that bounds an app's requests. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
 bound throw `TypeError` before anything is sent.

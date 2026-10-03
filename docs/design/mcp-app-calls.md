@@ -36,6 +36,66 @@ for one mount of it. It is not authenticated beyond the caller's credential:
 every step is recorded as the app's, on behalf of that caller. A session token
 a stand-in presents is never taken as naming a conversation.
 
+## Who ends what
+
+Each step is recorded with who took it:
+
+| Who | Initiator |
+| --- | --- |
+| the app | the app, on behalf of the caller of `mcp.callTool` or `mcp.readResource` |
+| the person who answered a review | that person, with their request |
+| the caller of `mcp.releaseApp` | that caller, with their request |
+| the person who closed or deleted the conversation | that person, with their request |
+| a deadline, an automatic stop, the recovery of an approval-mode change that could not be applied, the gateway stopping | the system |
+| a refusal or failure because the mount was released, or the opening ended, before the call was admitted, sent or held | the system: the release or the end was another command, recorded as its caller's when it ended anything |
+
+## A conversation's apps
+
+Each conversation's apps have one state, kept by the service for as long as
+the gateway runs and the conversation is not deleted — not by its live
+agent, so it is there before an opening finishes and after a close. Under
+its one lock it holds the open reviews, the mounts released, and the
+conversation's openings: each opening of its agent is a new epoch, and its
+end ends that epoch.
+
+- Every app call takes the epoch of the opening it resolved. It is admitted,
+  a review opens for it, and a ticket is issued for it only under the lock,
+  and only while that epoch is the current one and not ended, and its mount
+  is not released.
+- Releasing a mount takes the lock, marks it released for the life of the
+  conversation's state — across a close and a reopening — and lets go of its
+  reviews and tickets. A release that comes before the conversation is open
+  is kept all the same.
+- Ending an opening takes the lock, ends that epoch, and lets go of every
+  review and ticket.
+
+An app call keeps only its conversation's apps and the epoch of the opening
+it was admitted in — never the live agent, so a call that runs a minute
+holds neither the conversation's history nor its reopening or deletion. It
+is checked once more just before it is handed to the session: a release or
+end that lands before that last check stops it — it is not sent, to that
+opening's session or a later one's. One that lands after it finds the call
+sent, as it finds any call already sent: the check and the send are not one
+step, and between them the call may wait for room in the session's queue,
+which the agent's own calls share, so that window is as long as that wait.
+The session was chosen before it, so the call never reaches a later
+opening's session. Its `Admitted` is
+on record before the last check, so the evidence of a release can come
+between them.
+
+So nothing is admitted, opened or issued for a mount or an opening once it
+has ended, whatever the interleaving, and nothing is sent once its last
+check finds it ended. A deleted conversation's apps are kept as that —
+deleted, ended, and holding nothing — once its agent's stop has been
+tried, so a release or an opening racing the delete finds them deleted and
+cannot build them afresh. A
+conversation remembers its last 1024 released mounts. A mount released
+longer ago than that is forgotten: a host gives each mount a fresh
+`instanceId` and never asks in a released one's name, so only a host that
+does can open work for it again. An opening whose close was asked for and
+failed is ended for its apps all the same: they take no more work until it
+is opened again.
+
 ## States
 
 ### A tool call
@@ -46,68 +106,129 @@ a stand-in presents is never taken as naming a conversation.
 | — | the app is no MCP tool call with a UI in this conversation | — | `Refused(mcp_app_unknown)` |
 | — | another server than the app's | — | `Refused(mcp_server_mismatch)` |
 | — | no open session of that server | — | `Refused(mcp_session_unavailable)` |
+| — | its mount released, or the opening it resolved ended (checked after the rows above) | — | `Refused(mcp_cancelled)`, by the system |
 | — | the tool is not listed, or its `visibility` excludes `app` | — | `Refused(mcp_tool_not_for_app)` |
 | — | arguments past 32 KiB | — | `Refused(mcp_request_too_large)` |
 | — | arguments that are not one JSON object | — | `Refused(invalid_request)` |
-| — | admitted, not destructive | Sending | `Admitted` |
-| — | admitted, destructive (`readOnlyHint` not true and `destructiveHint` not false) | Waiting | `ApprovalRequested`, then the review is shown |
-| — | admitted, destructive, 16 reviews already open | — | `Withdrawn(RequestCancelled)` by the system; `temporarily_unavailable` |
-| — | admitted, destructive, the conversation already ended | — | `Withdrawn(ConversationEnded)`; `mcp_cancelled` |
-| Waiting | the person allows | Sending | `Approved`, by that person and their request |
+| — | admitted, not destructive | Sending | `Admitted`; the arguments sent as parsed |
+| — | a request the schema refuses — a name, identity or URI past its bound, a malformed reference | — | `invalid_request`, before the service; nothing recorded, as nothing names a call |
+| — | admitted, destructive (`readOnlyHint` not true and `destructiveHint` not false) | Waiting | `ApprovalRequested`, then the review is shown, its arguments the canonical encoding of what will be sent |
+| — | admitted, destructive, its review past 16 000 bytes encoded | — | `Refused(mcp_request_too_large)`; no review |
+| — | admitted, destructive, the open app reviews already hold 16 000 bytes, or 16 reviews | — | `Withdrawn(RequestCancelled)` by the system; `temporarily_unavailable` |
+| — | admitted, destructive, its mount released or its opening ended meanwhile | — | `Withdrawn(AppTornDown)` or `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
+| Waiting | the person allows | Checking | `Approved`, by that person and their request |
 | Waiting | the person denies, or cancels the review | — | `Denied`, by that person; `mcp_approval_denied` |
-| Waiting | `x-mcpAppTiming.reviewMs` with no answer | — | `Expired`, by the system; `mcp_approval_expired` |
+| Waiting | `x-mcpAppCallTiming.reviewDeadlineMs` with no answer | — | `Expired`, by the system; `mcp_approval_expired` |
 | Waiting | the caller goes (its socket closes) | — | `Withdrawn(RequestCancelled)`, by the app; `mcp_cancelled` |
-| Waiting | `mcp.releaseApp` for its mount | — | `Withdrawn(AppTornDown)`, by the app; `mcp_cancelled` |
-| Waiting | the conversation closes, is deleted or stopped | — | `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
+| Waiting | `mcp.releaseApp` for its mount | — | `Withdrawn(AppTornDown)`, by the releaser; `mcp_cancelled` |
+| Waiting | the conversation is closed or deleted | — | `Withdrawn(ConversationEnded)`, by that person; `mcp_cancelled` |
+| Waiting | the conversation's agent is stopped otherwise — by the desktop, or to recover an approval-mode change that could not be applied — or the gateway stops | — | `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
 | Waiting | an answer and the deadline at once | — | whichever ended the review first; an answer is never lost to the expiry |
-| Sending | the server answers within 56 KiB | — | `Completed(Answered{isError, bytes})`; the answer verbatim |
-| Sending | past 56 KiB | — | `Completed(Failed(mcp_result_too_large))` |
-| Sending | a JSON-RPC error | — | `Completed(Failed(mcp_remote_error))`; its code and message as details |
+| Checking | the tool is still listed, for apps, and as destructive as it was | Sending | — |
+| Checking | its mount released or its opening ended since it was admitted, before its last check | — | `Refused(mcp_cancelled)`, by the system; nothing sent |
+| Sending, before its last check (not destructive) | its mount released or its opening ended since it was admitted | — | `Refused(mcp_cancelled)`, by the system; nothing sent |
+| Sending, past its last check | its mount released or its opening ended | Sending | nothing of it ended: it may still reach the server, and its own `Completed` is recorded |
+| Checking | it is not | — | `Refused(mcp_tool_not_for_app)`; nothing sent |
+| Sending | the session cannot take another request now; nothing is sent | — | `Refused(temporarily_unavailable)` |
+| Sending | the server answers within 56 KiB, measured as the JSON string the wire carries | — | `Completed(Answered{isError, bytes})`; the answer, re-encoded |
+| Sending | past 56 KiB so measured | — | `Completed(Failed(mcp_result_too_large))` |
+| Sending | a JSON-RPC error | — | `Completed(Failed(mcp_remote_error))`; its code, if within ±(2^53−1), and message as details |
 | Sending | an answer that is no MCP answer | — | `Completed(Failed(mcp_remote_error))`, no details |
-| Sending | no answer within `x-mcpAppTiming.callMs` | — | `Completed(Failed(mcp_timed_out))` |
+| Sending | no answer within `x-mcpAppCallTiming.callTimeoutMs` | — | `Completed(Failed(mcp_timed_out))` |
 | Sending | the session ends | — | `Completed(Failed(mcp_session_unavailable))` |
 | Sending | the caller goes | Sending | the call finishes on its own task and is recorded; the answer goes nowhere |
-| any | a record cannot be written | — | `audit_unavailable`; the step it would have recorded is not taken |
+| any but Sending | a record cannot be written | — | `audit_unavailable`; the step it would have recorded is not taken |
+| Sending | `Completed` cannot be written | — | `audit_unavailable`: the call was made, and its answer is withheld |
 
 ### A review
 
 Its answer: `conversation.answer` with `allow` or `deny`, or
 `conversation.cancel` (a denial). An answer to a review that has ended, or
 with an option it did not offer, or naming another execution, is
-`stale_permission` and changes nothing. Review identities are `app-<UUID>`, so
-none is taken for an agent's.
+`stale_permission` and changes nothing. An identity that names no open app
+review is the agent's to answer, so an agent's review is never mistaken for
+an app's, whatever it is named. An approval-mode change that is applied
+leaves the conversation's apps as they are: the mode is trust in the agent,
+not in an app.
+
+An app review is shown only in a view whose transcript is confirmed
+complete: the client refuses a view of unconfirmed history that offers any
+control. The agent's own reviews and questions come first, exactly as the
+view shows them with no app review open: an app's server must not be able to
+hide or displace them. The oldest app reviews that fit beside them are shown,
+at most 16 000 bytes together, room made out of the view's transcript, tool
+calls and queue. From the first that does not fit on, they wait unseen and
+expire if nobody answers them. The view says so where that notice fits beside
+the agent's own and the view says nothing more specific of its own; the
+notice's room, too, comes out of the transcript, tool calls and queue. The
+view's revision, an opaque token, is replaced by a digest of it, of every app
+review open, shown or not, and of how many are shown, no longer than the
+revision it replaces: the same on every read of the same state, and changed by
+any change in which are open or shown.
 
 ### A resource read
 
 | Event | Effect, and what is recorded |
 | --- | --- |
-| refused as a tool call is (app, server, session) | the same codes |
-| a URI that is no `ui://` resource | `Refused(invalid_request)` |
+| refused as a tool call is (app, server, mount released, opening ended) | the same codes |
+| a URI that is no `ui://` resource, or past 2048 bytes | `Refused(invalid_request)` |
+| admitted | `Admitted`; the resource read |
+| admitted, its mount released or its opening ended before its last check | `Refused(mcp_cancelled)`, by the system; nothing read |
+| no open session, or it ends | `Completed(Failed(mcp_session_unavailable))` |
 | read, and not an app's HTML | `Completed(Failed(mcp_app_unknown))` |
-| no answer within `x-mcpAppTiming.readMs` | `Completed(Failed(mcp_timed_out))` |
-| read | `Completed(Answered)`, then `TicketIssued{digest, size, sha256}`; the ticket answered |
-| no room to hold it: 16 MiB or 64 tickets per conversation | `Completed(Failed(temporarily_unavailable))` |
-| the issue cannot be recorded | the ticket is discarded, unreported; `audit_unavailable` |
+| no answer within `x-mcpAppCallTiming.readTimeoutMs` | `Completed(Failed(mcp_timed_out))` |
+| the session cannot take another request now; nothing is sent | `Refused(temporarily_unavailable)` |
+| read, its mount released or its opening ended meanwhile | `Completed(Failed(mcp_cancelled))`, by the system; nothing held |
+| read, its URI, CSP and domain past 48 KiB encoded, more than a response carries beside them | `Completed(Failed(mcp_result_too_large))`; nothing held |
+| read, no room to hold it: 16 MiB or 64 tickets per conversation | `Completed(Failed(temporarily_unavailable))` |
+| read and held, pending | `Completed(Answered)`, then `TicketIssued{digest, size, sha256}`, then the ticket is made redeemable and answered |
+| either record cannot be written | the pending ticket is discarded, unreported; `audit_unavailable` |
+| released between `TicketIssued` and being made redeemable | `TicketEnded` with that cause and initiator; `mcp_cancelled` |
 
 ### A ticket
 
+A ticket is pending from its issue until `TicketIssued` is on record: it
+cannot be redeemed, and if it is let go meanwhile its end is not reported by
+the store but by the read that issued it, after its issue — how and by whom
+it ended, kept until the read asks, however long its records took. So no
+ticket's end is ever on record before its issue. Its 60 s run from its issue,
+so the host has at most 60 s. An issuer that panics between holding its
+ticket and recording its issue leaves its pending end kept until the
+gateway stops; nothing reports it.
+
 | Event | Effect, and what is recorded |
 | --- | --- |
-| `GET /mcp-resources` with it, within its lifetime (`expiresInMs`) | `TicketRedeemed`, by the app, recorded before the bytes are served |
+| `GET /mcp-resources` with it, within its lifetime (`expiresInMs`) of its issue | `TicketRedeemed`, by the app, recorded before the bytes are served |
 | redeemed, and that cannot be recorded | `503`, nothing served, the ticket spent |
-| redeemed again, expired, released, never issued | the same empty `404` |
-| its lifetime passes | `TicketExpired`, by the system |
-| its mount released, or its conversation ended | `TicketExpired`, by the system |
+| redeemed again, expired, released, pending, never issued | the same empty `404` |
+| its lifetime passes | `TicketEnded(Expired)`, by the system |
+| its mount released | `TicketEnded(AppReleased)`, by the releaser |
+| its conversation closed or deleted | `TicketEnded(ConversationEnded)`, by that person |
+| its conversation's agent stopped otherwise, or the gateway stops | `TicketEnded(ConversationEnded)`, by the system |
+
+### The gateway stopping
+
+1. Every live conversation's apps are ended first, by the system: reviews
+   withdrawn, tickets released.
+2. The agents are stopped.
+3. The gateway waits up to 10 s for every app call's task to end, so each
+   records its last step.
+4. The ticket ends are recorded before the ticket recorder stops, for up to
+   10 s.
+
+Anything still running after that is logged as such.
 
 ## Lanes
 
 App calls have 4 slots on each socket. A destructive call holds its slot while
 it waits, so held calls can fill a socket's lane, but never the lanes
-`conversation.read` and `conversation.answer` use. `mcp.releaseApp` is a
+`conversation.read` and `conversation.answer` use, and their responses have
+room of their own in the socket's response queue. `mcp.releaseApp` is a
 control. A socket that goes aborts its app calls; each call's own task then
 withdraws its review on record, or finishes a call already sent. The 32
 gateway-wide slots are held by those tasks, not by the socket, so a caller
-that reconnects cannot start calls past them.
+that reconnects cannot start calls past them. They are not shared out by
+person: a gateway serves its one owner, whose apps they all are.
 
 ## Tests
 

@@ -11,7 +11,7 @@ import {
 } from "../application/mcp-resource-fetch.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
-import { mcpAppTiming } from "../generated/product.js"
+import { mcpAppCallTiming } from "../generated/product.js"
 import { createMcpAppsApi, mcpAppDeadlines } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
@@ -96,7 +96,9 @@ it("calls the app's tool with exactly its arguments, and waits as long as a revi
   // The review, the call, and the client's allowance, as the protocol
   // publishes them.
   expect(mcpAppDeadlines.callToolMs).toBe(
-    mcpAppTiming.reviewMs + mcpAppTiming.callMs + mcpAppTiming.clientAllowanceMs,
+    mcpAppCallTiming.reviewDeadlineMs +
+      mcpAppCallTiming.callTimeoutMs +
+      mcpAppCallTiming.clientAllowanceMs,
   )
 })
 
@@ -424,13 +426,18 @@ it("reads a resource and returns what the gateway holds, ticket and all", async 
   })
   expect(request).toHaveBeenCalledExactlyOnceWith(
     "mcp.readResource",
-    { conversationId, requestId: "read", app, server: "charts", uri },
+    {
+      conversationId,
+      requestId: "read",
+      app,
+      server: "charts",
+      uri,
+    },
+    // The gateway may open the conversation first: no shorter wait than a
+    // call's.
     { atLeastMs: mcpAppDeadlines.readResourceMs },
   )
-  // The server's read and the client's allowance, as the protocol publishes them.
-  expect(mcpAppDeadlines.readResourceMs).toBe(
-    mcpAppTiming.readMs + mcpAppTiming.clientAllowanceMs,
-  )
+  expect(mcpAppDeadlines.readResourceMs).toBe(mcpAppDeadlines.callToolMs)
   expect(answer).toEqual({ ...resource, domain: "app.example", prefersBorder: false })
   // Absent is absent: neither is invented when the app did not say.
   const plain = await api(async () => resource).readResource(

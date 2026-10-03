@@ -8,7 +8,7 @@ import {
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import {
   bounds,
-  mcpAppTiming,
+  mcpAppCallTiming,
   ProductMethod,
   type ConversationMutationResult,
   type McpAppReference,
@@ -33,7 +33,7 @@ import type { ConversationActionOptions } from "./conversation-api.js"
 
 /**
  * The longest each of {@link McpAppsApi}'s calls can take the gateway, in
- * milliseconds, as the protocol publishes it (`x-mcpAppTiming`, and the
+ * milliseconds, as the protocol publishes it (`x-mcpAppCallTiming`, and the
  * ticket's lifetime); nothing else spells them. A host that bounds an app's
  * request by these never drops an answer the gateway is still bound to send.
  */
@@ -46,12 +46,13 @@ export const mcpAppDeadlines = Object.freeze({
    * answer the gateway still sends, and would not withdraw the review: only
    * `releaseApp`, or the socket closing, does.
    */
-  callToolMs: mcpAppTiming.callDeadlineMs,
+  callToolMs: mcpAppCallTiming.callDeadlineMs,
   /**
-   * `readResource`: the server's budget for the read, and the client's
-   * allowance. The client waits at least this long, as for `callTool`.
+   * `readResource`: as long as a call. The gateway may open the conversation
+   * first, and records each step; a read never outlasts a call. The client
+   * waits at least this long, as for `callTool`.
    */
-  readResourceMs: mcpAppTiming.readDeadlineMs,
+  readResourceMs: mcpAppCallTiming.callDeadlineMs,
   /**
    * `fetchResource`: the ticket's own lifetime. The client gives up on the
    * request after this long; checking the bytes' SHA-256 follows.
@@ -88,7 +89,7 @@ export type McpAppsApi = {
    * first for the person's approval, as a review in the conversation's
    * `permissions` with `origin: {kind: "app", server, tool}`. The call is
    * answered when they answer, when the review expires
-   * (`x-mcpAppTiming.reviewMs`), or when it is withdrawn; this client waits
+   * (`x-mcpAppCallTiming.reviewDeadlineMs`), or when it is withdrawn; this client waits
    * for it (`mcpAppDeadlines.callToolMs`). At most 4 app
    * calls run at once per socket; past that they are refused
    * `temporarily_unavailable`.
@@ -122,9 +123,9 @@ export type McpAppsApi = {
   /**
    * Read a resource of the app's own server: once, held by the gateway as
    * exactly those bytes, and described with a ticket to fetch them. The server
-   * has its budget to answer the read (`x-mcpAppTiming.readMs`); this client
-   * waits that and its allowance
-   * (`mcpAppDeadlines.readResourceMs`).
+   * has `x-mcpAppCallTiming.readTimeoutMs` to answer the read, but the gateway
+   * may open the conversation first, so this client waits as long as for a
+   * call (`mcpAppDeadlines.readResourceMs`).
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.

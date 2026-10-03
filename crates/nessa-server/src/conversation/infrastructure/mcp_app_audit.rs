@@ -10,9 +10,9 @@
 //! ```
 //!
 //! Arrows are calls and writes. A step's identity is its conversation, its app
-//! (the tool call whose UI it is, and which mount of it acted), the app's
-//! request, and the kind of phase.
-//! Two phases of one request are two records; the same phase recorded again —
+//! (the tool call whose UI it is, and which mount of it acted), the call id
+//! the gateway minted for this one call, and the kind of phase. Two phases of
+//! one call are two records; the same phase recorded again —
 //! a retry — reconciles with the record already there, and anything else under
 //! that identity is contradictory evidence and fails closed.
 //!
@@ -27,7 +27,7 @@
 //! effect — and the first writer's observation is the one kept.
 use crate::conversation::application::{
     ConversationError, ConversationFuture, McpAppAsk, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppInitiator, McpAppOutcome, McpAppWithdrawal,
+    McpAppAuditRecord, McpAppInitiator, McpAppOutcome, McpAppWithdrawal, TicketEnd,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
@@ -243,7 +243,7 @@ fn initiator(initiator: &McpAppInitiator) -> Value {
 /// `every_phase_of_one_request_is_its_own_record` holds them to it.
 fn phase(phase: &McpAppAuditPhase) -> Value {
     match phase {
-        McpAppAuditPhase::Refused(code) => json!({"kind": "refused", "code": code}),
+        McpAppAuditPhase::Refused(code) => json!({"kind": "refused", "code": code.as_str()}),
         McpAppAuditPhase::Admitted => json!({"kind": "admitted"}),
         McpAppAuditPhase::ApprovalRequested { permission_id } => {
             json!({"kind": "approval_requested", "permissionId": permission_id})
@@ -271,7 +271,7 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
                 McpAppOutcome::Answered { is_error, bytes } => {
                     json!({"kind": "answered", "isError": is_error, "bytes": bytes})
                 }
-                McpAppOutcome::Failed(code) => json!({"kind": "failed", "code": code}),
+                McpAppOutcome::Failed(code) => json!({"kind": "failed", "code": code.as_str()}),
             },
         }),
         McpAppAuditPhase::TicketIssued {
@@ -287,9 +287,22 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
         McpAppAuditPhase::TicketRedeemed { ticket_digest } => {
             json!({"kind": "ticket_redeemed", "ticketDigest": ticket_digest})
         }
-        McpAppAuditPhase::TicketExpired { ticket_digest } => {
-            json!({"kind": "ticket_expired", "ticketDigest": ticket_digest})
-        }
+        McpAppAuditPhase::TicketEnded {
+            ticket_digest,
+            cause,
+        } => json!({
+            "kind": "ticket_ended",
+            "ticketDigest": ticket_digest,
+            "cause": ticket_end(*cause),
+        }),
+    }
+}
+
+fn ticket_end(cause: TicketEnd) -> &'static str {
+    match cause {
+        TicketEnd::Expired => "expired",
+        TicketEnd::AppReleased => "app_released",
+        TicketEnd::ConversationEnded => "conversation_ended",
     }
 }
 

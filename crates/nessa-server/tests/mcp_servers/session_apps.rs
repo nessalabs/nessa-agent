@@ -1,9 +1,9 @@
-//! [`SessionApps`] gives the SDK the protocol's budgets (`x-mcpAppTiming`):
-//! an app's call waits `MCP_APP_CALL_MS` and its read `MCP_APP_READ_MS`, over
+//! [`SessionApps`] gives the SDK the protocol's budgets (`x-mcpAppCallTiming`):
+//! an app's call waits `MCP_APP_CALL_TIMEOUT_MS` and its read `MCP_APP_READ_TIMEOUT_MS`, over
 //! a real server's session, measured on a clock that records every wait.
 use super::SessionApps;
 use crate::conversation::application::McpApps;
-use crate::product_contract::generated::{MCP_APP_CALL_MS, MCP_APP_READ_MS};
+use crate::product_contract::generated::{MCP_APP_CALL_TIMEOUT_MS, MCP_APP_READ_TIMEOUT_MS};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::UiResourceUri;
 use nessa_sdk::infrastructure::{
@@ -79,12 +79,12 @@ async fn an_apps_call_and_read_wait_the_protocols_budgets() {
         .await
         .unwrap();
     let waits = clock.take();
-    assert!(waited(&waits, MCP_APP_CALL_MS), "{waits:?}");
+    assert!(waited(&waits, MCP_APP_CALL_TIMEOUT_MS), "{waits:?}");
 
     let chart = UiResourceUri::new("ui://fixture/chart.html").unwrap();
     apps.read_resource(&conversation, "fixture", &chart)
         .await
         .unwrap();
     let waits = clock.take();
-    assert!(waited(&waits, MCP_APP_READ_MS), "{waits:?}");
+    assert!(waited(&waits, MCP_APP_READ_TIMEOUT_MS), "{waits:?}");
 }

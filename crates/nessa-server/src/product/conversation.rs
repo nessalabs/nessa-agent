@@ -21,9 +21,9 @@ use crate::{
     conversation::{
         application::{
             ConversationCaller, ConversationError, ConversationList,
-            ConversationView as ApplicationConversationView, DeletionFailures, McpAppError,
-            QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
-            SubmittedFile, SubmittedImage, SubmittedMessage,
+            ConversationView as ApplicationConversationView, DeletionFailures, McpAppCode,
+            McpAppError, QuestionChoiceInput, RequestedAgent, RequestedConversation,
+            SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
         },
         domain::{ConversationApprovalMode, ConversationId},
     },
@@ -473,21 +473,28 @@ pub(super) fn error_code(error: &ConversationError) -> ConversationErrorCode {
     }
 }
 
-/// The protocol code of an MCP App's refusal. `McpAppError::code` names the
-/// same code in audit; `tests/conversation/agreement.rs` holds them together.
+/// The protocol code of an MCP App's refusal: the code audit names it with
+/// (`McpAppCode`), as the wire's own enum; `tests/conversation/agreement.rs`
+/// holds the two sets together.
 fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
-    match error {
-        McpAppError::AppUnknown => ConversationErrorCode::McpAppUnknown,
-        McpAppError::ServerMismatch => ConversationErrorCode::McpServerMismatch,
-        McpAppError::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
-        McpAppError::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
-        McpAppError::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
-        McpAppError::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
-        McpAppError::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
-        McpAppError::Cancelled => ConversationErrorCode::McpCancelled,
-        McpAppError::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
-        McpAppError::TimedOut => ConversationErrorCode::McpTimedOut,
-        McpAppError::Remote(_) => ConversationErrorCode::McpRemoteError,
+    wire_code(error.code())
+}
+
+pub(super) fn wire_code(code: McpAppCode) -> ConversationErrorCode {
+    match code {
+        McpAppCode::AppUnknown => ConversationErrorCode::McpAppUnknown,
+        McpAppCode::ServerMismatch => ConversationErrorCode::McpServerMismatch,
+        McpAppCode::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
+        McpAppCode::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
+        McpAppCode::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
+        McpAppCode::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
+        McpAppCode::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
+        McpAppCode::Cancelled => ConversationErrorCode::McpCancelled,
+        McpAppCode::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
+        McpAppCode::TimedOut => ConversationErrorCode::McpTimedOut,
+        McpAppCode::RemoteError => ConversationErrorCode::McpRemoteError,
+        McpAppCode::InvalidRequest => ConversationErrorCode::InvalidRequest,
+        McpAppCode::TemporarilyUnavailable => ConversationErrorCode::TemporarilyUnavailable,
     }
 }
 
