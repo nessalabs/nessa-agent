@@ -95,8 +95,9 @@ end of input (Nessa's own shell server) still does.
   (`model`, `app`; both when absent, or when there is no `_meta.ui`), each
   read on its own. A tool whose `resourceUri` is absent or cannot be read is
   kept without a UI, and keeps its `visibility` (#412); one whose
-  `visibility` is not an array of strings is the app's alone. A tool whose
-  name cannot be one is left out. A session's list is read
+  `visibility` is not an array of strings is the app's alone, and keeps a
+  readable `resourceUri` as its UI. A tool whose name cannot be one is left
+  out. A session's list is read
   when it opens and again on `notifications/tools/list_changed`.
 - **UI resources.** `resources/read` of a `ui://` URI must answer one content
   for that URI with MIME `text/html;profile=mcp-app` and `text` (or `blob`

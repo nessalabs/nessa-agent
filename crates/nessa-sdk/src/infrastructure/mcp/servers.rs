@@ -369,13 +369,15 @@ impl McpServers {
         })
     }
 
-    /// The UI of the tool an observed call names, as `session`'s own session
-    /// of its server last listed it ([`ListedTool::ui_for`]): the one of its
-    /// sessions of that server registered last and still open. An SDK session
-    /// holds one provider attachment at a time, so that is the one its harness
-    /// talks to now; while a resumed open and the one it replaces briefly
-    /// overlap, it is the resumed one's once that has said hello. `None` when
-    /// it has none open, or that one has not listed its tools yet.
+    /// What the tool an observed call names declared in `_meta.ui` — its UI
+    /// resource, when it has one, and its visibility — as `session`'s own
+    /// session of its server last listed it ([`ListedTool::ui_for`]): the one
+    /// of its sessions of that server registered last and still open. An SDK
+    /// session holds one provider attachment at a time, so that is the one
+    /// its harness talks to now; while a resumed open and the one it replaces
+    /// briefly overlap, it is the resumed one's once that has said hello.
+    /// `None` when it has none open, when that one has not listed its tools
+    /// yet, or when its list names no one tool for the call.
     pub fn tool_ui(&self, session: &SessionId, call: &McpTool) -> Option<ToolUi> {
         let own = self.newest(session, call.server())?;
         let listed = own.tools.read().expect("tool list").clone()?;
@@ -564,7 +566,8 @@ impl McpSession {
             .and_then(ServerProcess::id)
     }
 
-    /// List the tools now, with each tool's UI, and keep the list for
+    /// List the tools now, with what each declared in `_meta.ui`, and keep
+    /// the list for
     /// [`McpServers::tool_ui`].
     ///
     /// # Errors

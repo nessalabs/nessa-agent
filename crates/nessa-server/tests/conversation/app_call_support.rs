@@ -69,14 +69,17 @@ impl Default for Gate {
     }
 }
 impl Apps {
+    /// `tool` listed with a UI seen by whom `ui` says, or with no `_meta.ui`
+    /// when `None`.
     pub(crate) fn list(&self, tool: &str, ui: Option<UiVisibility>, hints: ToolHints) {
-        let listed = ListedTool::new(
-            McpTool::new(SERVER, tool).unwrap(),
-            ui.map_or_else(ToolUi::default, |visibility| {
-                ToolUi::new(Some(UiResourceUri::new(URI).unwrap()), visibility)
-            }),
-        )
-        .with_hints(hints);
+        let ui = ui.map_or_else(ToolUi::default, |visibility| {
+            ToolUi::new(Some(UiResourceUri::new(URI).unwrap()), visibility)
+        });
+        self.list_declared(tool, ui, hints);
+    }
+    /// `tool` listed with `ui` as its `_meta.ui`.
+    pub(crate) fn list_declared(&self, tool: &str, ui: ToolUi, hints: ToolHints) {
+        let listed = ListedTool::new(McpTool::new(SERVER, tool).unwrap(), ui).with_hints(hints);
         self.listed.lock().unwrap().insert(tool.into(), listed);
     }
     pub(crate) fn calls(&self) -> usize {

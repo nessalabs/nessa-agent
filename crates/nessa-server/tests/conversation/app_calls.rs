@@ -18,7 +18,7 @@ use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
-use nessa_sdk::domain::mcp_apps::{ToolHints, UiCsp, UiResource, UiVisibility};
+use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -116,6 +116,12 @@ async fn each_policy_refusal_is_its_code_on_record_and_nothing_is_sent() {
         Some(UiVisibility::new(true, false)),
         ToolHints::new(Some(true), None),
     );
+    // Model-only with no UI of its own is refused all the same (#412).
+    fixture.apps.list_declared(
+        "model_only_undrawn",
+        ToolUi::new(None, UiVisibility::new(true, false)),
+        ToolHints::new(Some(true), None),
+    );
     let not_this_app = McpAppCall {
         app: McpAppRef {
             tool_id: "no-such-call".into(),
@@ -134,6 +140,10 @@ async fn each_policy_refusal_is_its_code_on_record_and_nothing_is_sent() {
         (another_server, McpAppError::ServerMismatch),
         (fixture.call("not_listed", None), McpAppError::ToolNotForApp),
         (fixture.call("model_only", None), McpAppError::ToolNotForApp),
+        (
+            fixture.call("model_only_undrawn", None),
+            McpAppError::ToolNotForApp,
+        ),
         (
             fixture.call("read_rows", Some(&past_the_bound)),
             McpAppError::RequestTooLarge,
