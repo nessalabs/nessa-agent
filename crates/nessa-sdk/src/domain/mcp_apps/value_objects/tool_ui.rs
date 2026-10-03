@@ -45,8 +45,9 @@ impl UiResourceUri {
     }
 }
 
-/// Who may see and call a tool with a UI (`_meta.ui.visibility`): the model,
-/// the app, or both. A tool that does not say is visible to both.
+/// Who may see and call a tool (`_meta.ui.visibility`): the model, the app,
+/// both, or neither. A tool that does not say, with or without a UI, is
+/// visible to both; one whose `visibility` cannot be read, to neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiVisibility {
     model: bool,
@@ -72,27 +73,38 @@ impl UiVisibility {
     }
 }
 
-/// What a tool declares about its UI (`_meta.ui`).
+/// What a tool declares in `_meta.ui`: the UI resource its result is drawn
+/// in, when it has one, and who may see and call it. Every listed tool has
+/// one; a tool that declares nothing has no UI and is visible to both
+/// ([`ToolUi::default`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolUi {
-    resource_uri: UiResourceUri,
+    resource_uri: Option<UiResourceUri>,
     visibility: UiVisibility,
 }
 impl ToolUi {
-    /// A tool whose UI is `resource_uri`, seen by whom `visibility` says.
-    pub fn new(resource_uri: UiResourceUri, visibility: UiVisibility) -> Self {
+    /// A tool drawn in `resource_uri`, when it names one, seen by whom
+    /// `visibility` says.
+    pub fn new(resource_uri: Option<UiResourceUri>, visibility: UiVisibility) -> Self {
         Self {
             resource_uri,
             visibility,
         }
     }
-    /// The UI resource the tool's result is drawn in.
-    pub fn resource_uri(&self) -> &UiResourceUri {
-        &self.resource_uri
+    /// The UI resource the tool's result is drawn in, or `None` when it has
+    /// no UI.
+    pub fn resource_uri(&self) -> Option<&UiResourceUri> {
+        self.resource_uri.as_ref()
     }
     /// Who may see and call the tool.
     pub fn visibility(&self) -> UiVisibility {
         self.visibility
+    }
+}
+impl Default for ToolUi {
+    /// What a tool with no `_meta.ui` declares: no UI, visible to both.
+    fn default() -> Self {
+        Self::new(None, UiVisibility::BOTH)
     }
 }
 
@@ -123,17 +135,17 @@ impl ToolHints {
 }
 
 /// One tool as its server listed it (`tools/list`): the server and the tool's
-/// own name, exactly as the server spelled it, its UI when it declared one,
-/// and what it said of its effects.
+/// own name, exactly as the server spelled it, what it declared in
+/// `_meta.ui`, and what it said of its effects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedTool {
     tool: McpTool,
-    ui: Option<ToolUi>,
+    ui: ToolUi,
     hints: ToolHints,
 }
 impl ListedTool {
-    /// `tool` as listed, with the UI it declared and no hints.
-    pub fn new(tool: McpTool, ui: Option<ToolUi>) -> Self {
+    /// `tool` as listed, with what it declared in `_meta.ui` and no hints.
+    pub fn new(tool: McpTool, ui: ToolUi) -> Self {
         Self {
             tool,
             ui,
@@ -152,20 +164,20 @@ impl ListedTool {
     pub fn tool(&self) -> &McpTool {
         &self.tool
     }
-    /// The UI the tool declared, if any.
-    pub fn ui(&self) -> Option<&ToolUi> {
-        self.ui.as_ref()
+    /// What the tool declared in `_meta.ui`.
+    pub fn ui(&self) -> &ToolUi {
+        &self.ui
     }
-    /// The UI of the one tool in `listed` that an observed call `call` names
-    /// ([`McpTool::names`]), or `None` when no listed tool is named, when the
-    /// one named declared no UI, or when more than one could be: a guess
-    /// would draw one tool's UI for another's call.
+    /// What the one tool in `listed` that an observed call `call` names
+    /// ([`McpTool::names`]) declared in `_meta.ui`, or `None` when no listed
+    /// tool is named, or when more than one could be: a guess would draw one
+    /// tool's UI for another's call.
     pub fn ui_for<'a>(listed: &'a [ListedTool], call: &McpTool) -> Option<&'a ToolUi> {
         let mut named = listed.iter().filter(|each| call.names(&each.tool));
         let only = named.next()?;
         if named.next().is_some() {
             return None;
         }
-        only.ui.as_ref()
+        Some(&only.ui)
     }
 }
