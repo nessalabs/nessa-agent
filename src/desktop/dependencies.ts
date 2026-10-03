@@ -102,7 +102,6 @@ function widgetRegistry(
         sandbox: apps.sandbox,
         timers: { after },
         page: () => readPageContext(document, apps.platform),
-        mountId: () => crypto.randomUUID(),
       }),
     )
   return registry

@@ -46,7 +46,6 @@ function app(
     sandbox: "sandbox" in options ? options.sandbox : sandbox,
     timers: { after: () => () => {} },
     page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
-    mountId: () => crypto.randomUUID(),
   })
   return options.server
     ? { ...plugin, ports: { ...plugin.ports, server: options.server } }

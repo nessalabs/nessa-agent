@@ -12,9 +12,5 @@ export const fixtureServer = "nessa-fixture"
 /** The UI resource its tool declares. */
 export const fixtureResourceUri = "ui://nessa-fixture/app.html"
 
-/** The execution and tool call ids of its one call. */
-export const fixtureExecutionId = "fixture-execution"
-export const fixtureToolId = "fixture-call"
-
 /** The widget its one call is drawn as. */
-export const fixtureWidget = appWidget(fixtureServer, fixtureExecutionId, fixtureToolId)
+export const fixtureWidget = appWidget(fixtureServer, "fixture-execution", "fixture-call")

@@ -248,7 +248,6 @@ describe("plugins registered while the window runs", () => {
               sandbox: undefined,
               timers: { after: () => () => {} },
               page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
-              mountId: () => crypto.randomUUID(),
             }).ports,
           }),
         ),
