@@ -5,7 +5,9 @@ use crate::conversation::application::{
 };
 use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::{
-    change_watch::{watch_principal, ProductWatchPermit, WatchPrincipal, WatchSelector},
+    change_watch::{
+        watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector,
+    },
     generated::{
         MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
     },
@@ -1357,11 +1359,15 @@ async fn actual_actor_replaces_unsent_dirty_after_observing_source_terminal_befo
     drop(owner);
     drop(reply.slot);
     // Actor-only completion signal; the earlier actual-Sink fixture separately
-    // proves that production sends it only after physical ACK flush.
-    assert!(matches!(
-        watches.next(&fixture.state, &fixture.session).await,
-        WatchOutcome::Progress
-    ));
+    // proves that production sends it only after physical ACK flush. Two ready
+    // steps, in either order: that acknowledgement, and the registration
+    // bound (row R7) the installed result cancelled.
+    for _ in 0..2 {
+        assert!(matches!(
+            watches.next(&fixture.state, &fixture.session).await,
+            WatchOutcome::Progress
+        ));
+    }
     authority.first.store(true, Ordering::SeqCst);
     fixture.commit().await;
     assert!(matches!(
@@ -1730,6 +1736,122 @@ async fn periodic_check_overdue_closes_the_connection_and_keeps_owners_until_it_
     let _ = fixture.storage.shutdown().await;
 }
 
+/// Row A3b, second half: an overdue periodic check whose watches have all
+/// been unwatched meanwhile is ignored, as a refusal for them would be.
+#[tokio::test]
+async fn periodic_check_overdue_is_ignored_once_its_watches_are_unwatched() {
+    let (fixture, work, authority) = held_receiver_fixture(Duration::from_millis(50)).await;
+    let _release = ReleaseHeld(work.clone());
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let acknowledged = text(peer.message().await);
+    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    authority.first.store(true, Ordering::SeqCst); // Hold the next periodic check.
+    tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+        .await
+        .unwrap();
+    fixture.send(&peer, "unwatch", "conversation.unwatch", json!({ "watchId": watch }));
+    assert_eq!(text(peer.message().await)["ok"], true);
+    tokio::time::pause();
+    tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1))
+        .await;
+    tokio::time::resume(); // Wait on the real clock, as in the test above.
+    peer.request("after-bound");
+    assert_success(peer.message().await, "after-bound");
+    work.release();
+    drop(peer);
+    socket.await.unwrap();
+    assert_eq!(fixture.state.drain_watches().await, Ok(()));
+    // The clock advance also expires the record storage's own deadlines.
+    let _ = fixture.storage.shutdown().await;
+}
+
+/// Row R7: a registration whose admission does not return by its request's
+/// deadline closes the connection as temporarily unavailable, rather than
+/// leaving the request unanswered; the task keeps its owner until the held
+/// adapter returns.
+#[tokio::test]
+async fn registration_admission_overdue_closes_the_connection_and_keeps_owners_until_it_returns() {
+    let (fixture, work, authority) = held_receiver_fixture(Duration::from_secs(3600)).await;
+    let _release = ReleaseHeld(work.clone());
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    authority.first.store(true, Ordering::SeqCst); // Hold the registration's admission.
+    fixture.watch(&peer, "held-install");
+    tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_secs(5)).await;
+    tokio::time::resume(); // Wait on the real clock: the adapter's worker is held.
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("an overdue registration must close the connection");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::TemporaryUnavailable.web_socket_code()
+    );
+    socket.await.unwrap();
+    assert_eq!(
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES - 1,
+        "the held registration keeps its owner"
+    );
+    assert_eq!(fixture.records.installed.load(Ordering::SeqCst), 0);
+    work.release();
+    assert_eq!(fixture.state.drain_watches().await, Ok(()));
+    assert_eq!(
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES
+    );
+    assert_eq!(fixture.records.installed.load(Ordering::SeqCst), 0);
+    // The clock advance also expires the record storage's own deadlines.
+    let _ = fixture.storage.shutdown().await;
+}
+
+/// Row B6: a watch reply the writer reaches after its deadline is replaced by
+/// a typed `temporary_unavailable` close; the reply is not sent and is not
+/// reported as written.
+#[tokio::test]
+async fn a_watch_reply_past_its_deadline_is_replaced_by_a_typed_close() {
+    let owners = Arc::new(WatchOwners::new(1, 1));
+    let owner = Arc::new(owners.try_acquire(&watch_principal("a")).unwrap());
+    let (completed, written) = tokio::sync::oneshot::channel();
+    let (mut socket, mut peer) = test_socket(None);
+    let deadline = Instant::now();
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let late = WireResponse::Watch(Box::new(QueuedWatch {
+        message: Box::new(success("late", &json!({}))),
+        acknowledgement: WatchAcknowledgement {
+            deadline,
+            completed,
+            owner,
+        },
+    }));
+    assert!(send_queued(Duration::from_secs(1), &mut socket, late)
+        .await
+        .is_err());
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("a late reply must be replaced by a typed close");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::TemporaryUnavailable.web_socket_code()
+    );
+    assert!(peer.output.try_recv().is_err());
+    assert!(written.await.is_err(), "the reply was never written");
+    assert_eq!(owners.available_permits(), 1);
+}
+
 /// Row A5: a refusal for a watch unwatched while its check ran is ignored, on
 /// the notice path and on the periodic path alike; the connection stays open.
 /// (A refusal for a live watch closes it on both paths: row A4.)
@@ -1752,14 +1874,23 @@ async fn refusal_for_an_unwatched_target_is_ignored_on_both_paths() {
         fixture.watch(&peer, "install");
         let acknowledged = text(peer.message().await);
         let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
-        authority.revoked.store(true, Ordering::SeqCst);
+        // Arm the hold before revoking, so no check already running refuses
+        // the watch while it is still live.
         authority.first.store(true, Ordering::SeqCst); // Hold the next check.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            if !through_notice {
+                work.entered.notified().await;
+            }
+        })
+        .await
+        .unwrap();
+        authority.revoked.store(true, Ordering::SeqCst);
         if through_notice {
             fixture.commit().await;
+            tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+                .await
+                .unwrap();
         }
-        tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
-            .await
-            .unwrap();
         fixture.send(&peer, "unwatch", "conversation.unwatch", json!({ "watchId": watch }));
         assert_eq!(text(peer.message().await)["ok"], true);
         work.release(); // The held check now returns its refusal.

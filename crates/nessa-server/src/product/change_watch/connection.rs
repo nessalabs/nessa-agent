@@ -56,9 +56,10 @@ struct Target {
     source_pending: bool,
     authority_pending: bool,
     accepted: bool,
-    // The registration request's own deadline, for its reply.
+    // The registration request's own deadline, for its reply; and the timer
+    // that closes the connection if admission has not returned by then (R7).
     registration_deadline: Instant,
-    retiring: bool,
+    registration_bound: Option<AbortHandle>,
     acknowledgements: usize,
 }
 
@@ -99,6 +100,9 @@ enum Progress {
     Rechecked {
         results: Vec<(u64, Result<(), WatchRefusal>)>,
     },
+    /// A registration's deadline passed before its admission returned
+    /// (`overdue`), or the timer was cancelled because it returned first.
+    RegistrationBound { key: u64, overdue: bool },
     /// The periodic re-check's bound passed (`overdue`), or the check returned
     /// first and the timer was cancelled.
     RecheckBound { generation: u64, overdue: bool },
@@ -134,6 +138,8 @@ pub(in crate::product) struct ConnectionWatches {
     // later one; and cancels that bound when the check returns.
     recheck_generation: u64,
     recheck_bound: Option<AbortHandle>,
+    // The watches the running periodic check covers.
+    recheck_keys: Vec<u64>,
     pub deliveries: Arc<WatchDeliveries>,
 }
 
@@ -147,6 +153,7 @@ impl ConnectionWatches {
             recheck_pending: false,
             recheck_generation: 0,
             recheck_bound: None,
+            recheck_keys: Vec::new(),
             deliveries: Arc::new(WatchDeliveries::new()),
         }
     }
@@ -208,12 +215,11 @@ impl ConnectionWatches {
                 });
             };
             let target = &mut self.targets[position];
-            target.retiring = true;
+            self.deliveries.retire(&target.id);
             target.interest.store(false, Ordering::Release);
             if let Some(wait) = target.source_wait.take() {
                 wait.abort();
             }
-            self.deliveries.retire(&target.id);
             let key = target.key;
             // Bounded by this unwatch request's own deadline, like any reply.
             return Some(self.reply(key, message, slot, deadline, false));
@@ -273,7 +279,7 @@ impl ConnectionWatches {
             authority_pending: true,
             accepted: false,
             registration_deadline: deadline,
-            retiring: false,
+            registration_bound: None,
             acknowledgements: 0,
         });
         let state = state.clone();
@@ -303,6 +309,18 @@ impl ConnectionWatches {
                     .map(|output| output.result)
                     .unwrap_or(Err(ChangeWatchErrorCode::TemporarilyUnavailable)),
             }
+        }));
+        // Admission must answer by the request's deadline (row R7); the task
+        // keeps its owner either way until the adapter returns.
+        let (abort, cancelled) = AbortHandle::new_pair();
+        if let Some(target) = self.targets.iter_mut().find(|target| target.key == key) {
+            target.registration_bound = Some(abort);
+        }
+        self.pending.push(Box::pin(async move {
+            let overdue = Abortable::new(tokio::time::sleep_until(deadline), cancelled)
+                .await
+                .is_ok();
+            Progress::RegistrationBound { key, overdue }
         }));
         None
     }
@@ -349,7 +367,7 @@ impl ConnectionWatches {
             .iter_mut()
             .find(|target| target.key == key)
             .expect("source retains original target");
-        if target.retiring {
+        if self.deliveries.retiring(&target.id) {
             return;
         }
         let (abort, cancelled) = AbortHandle::new_pair();
@@ -387,7 +405,7 @@ impl ConnectionWatches {
         let live: Vec<_> = self
             .targets
             .iter()
-            .filter(|target| target.accepted && !target.retiring)
+            .filter(|target| target.accepted && !self.deliveries.retiring(&target.id))
             .map(|target| (target.key, target.selector.clone(), target.owner.task()))
             .collect();
         if live.is_empty() {
@@ -397,6 +415,7 @@ impl ConnectionWatches {
         self.recheck_generation += 1;
         let generation = self.recheck_generation;
         let keys: Vec<u64> = live.iter().map(|(key, _, _)| *key).collect();
+        self.recheck_keys = keys.clone();
         let state_for_task = state.clone();
         let current = current.clone();
         let task = tokio::spawn(async move {
@@ -441,7 +460,7 @@ impl ConnectionWatches {
         self.targets
             .iter()
             .find(|target| target.key == key)
-            .filter(|target| !target.retiring)
+            .filter(|target| !self.deliveries.retiring(&target.id))
             .map(|_| refusal.close_reason())
     }
 
@@ -451,7 +470,7 @@ impl ConnectionWatches {
             .iter_mut()
             .find(|target| target.key == key)
             .expect("notice retains original target");
-        if target.authority_pending || target.retiring {
+        if target.authority_pending || self.deliveries.retiring(&target.id) {
             return;
         }
         target.authority_pending = true;
@@ -492,9 +511,12 @@ impl ConnectionWatches {
                     return WatchOutcome::Progress;
                 };
                 target.authority_pending = false;
+                if let Some(bound) = target.registration_bound.take() {
+                    bound.abort();
+                }
                 let deadline = target.registration_deadline;
                 match result {
-                    Ok(handle) if !target.retiring => {
+                    Ok(handle) if !self.deliveries.retiring(&target.id) => {
                         let previous = target.id.clone();
                         let id = self
                             .tokens
@@ -511,7 +533,7 @@ impl ConnectionWatches {
                         ))
                     }
                     result => {
-                        target.retiring = true;
+                        self.deliveries.retire(&target.id);
                         target.interest.store(false, Ordering::Release);
                         let code = match result {
                             Err(code) => code,
@@ -545,7 +567,24 @@ impl ConnectionWatches {
                 generation,
                 overdue,
             } => {
-                if overdue && self.recheck_pending && generation == self.recheck_generation {
+                // Like a refusal (A5), an overdue check matters only while one
+                // of the watches it covers is still live (A3b).
+                let live = self.recheck_keys.iter().any(|key| {
+                    self.targets
+                        .iter()
+                        .any(|target| target.key == *key && !self.deliveries.retiring(&target.id))
+                });
+                if overdue && self.recheck_pending && generation == self.recheck_generation && live
+                {
+                    return WatchOutcome::Close(SessionCloseReason::TemporaryUnavailable);
+                }
+                WatchOutcome::Progress
+            }
+            Progress::RegistrationBound { key, overdue } => {
+                let awaiting = self.targets.iter().any(|target| {
+                    target.key == key && !target.accepted && target.authority_pending
+                });
+                if overdue && awaiting {
                     return WatchOutcome::Close(SessionCloseReason::TemporaryUnavailable);
                 }
                 WatchOutcome::Progress
@@ -561,7 +600,9 @@ impl ConnectionWatches {
                             return WatchOutcome::Close(reason);
                         }
                     }
-                    Ok(()) if !target.retiring => self.deliveries.authorize(&target.id),
+                    Ok(()) if !self.deliveries.retiring(&target.id) => {
+                        self.deliveries.authorize(&target.id)
+                    }
                     Ok(()) => {}
                 }
                 self.collect_retired();
@@ -576,7 +617,7 @@ impl ConnectionWatches {
                 let Some((owned, terminal)) = result else {
                     return WatchOutcome::Progress;
                 };
-                if target.retiring {
+                if self.deliveries.retiring(&target.id) {
                     return WatchOutcome::Progress;
                 }
                 let notice = terminal.map(Notice::Ended).unwrap_or(Notice::Changed);
@@ -601,7 +642,7 @@ impl ConnectionWatches {
                 if result.is_err() {
                     return WatchOutcome::Close(SessionCloseReason::TemporaryUnavailable);
                 }
-                if activation && !target.retiring {
+                if activation && !self.deliveries.retiring(&target.id) {
                     self.deliveries.activate(&target.id);
                 }
                 self.collect_retired();
@@ -611,14 +652,13 @@ impl ConnectionWatches {
     }
 
     pub fn collect_retired(&mut self) {
-        for target in &mut self.targets {
-            if self.deliveries.terminal_sent(&target.id) {
-                target.retiring = true;
+        for target in &self.targets {
+            if self.deliveries.retiring(&target.id) {
                 target.interest.store(false, Ordering::Release);
             }
         }
         self.targets.retain(|target| {
-            let keep = !target.retiring
+            let keep = !self.deliveries.retiring(&target.id)
                 || target.authority_pending
                 || target.source_pending
                 || target.acknowledgements > 0

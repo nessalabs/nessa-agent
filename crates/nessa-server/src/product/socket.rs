@@ -1424,6 +1424,18 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 completed,
                 owner: _original_owner,
             } = acknowledgement;
+            // A reply the writer reaches after its deadline is replaced by a
+            // typed close, never a silent end (row B6). Expiry during the
+            // write abandons the socket like any cancelled write.
+            if Instant::now() >= deadline {
+                close_session(
+                    write_timeout,
+                    socket,
+                    SessionCloseReason::TemporaryUnavailable,
+                )
+                .await;
+                return Err(());
+            }
             within_deadline(deadline, send(write_timeout, socket, *message))
                 .await
                 .ok_or(())??;

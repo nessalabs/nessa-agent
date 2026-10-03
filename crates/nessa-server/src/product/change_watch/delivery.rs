@@ -157,13 +157,17 @@ impl WatchDeliveries {
         self.ready.notify_one();
     }
 
-    pub fn terminal_sent(&self, id: &str) -> bool {
+    /// Whether this watch is retiring: unwatched, failed to install, or its
+    /// terminal notice sent. The one owner of that fact; the connection asks.
+    /// A watch no longer held here has retired.
+    pub fn retiring(&self, id: &str) -> bool {
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .targets
             .iter()
-            .any(|target| target.id == id && target.terminal_sent)
+            .find(|target| target.id == id)
+            .is_none_or(|target| target.retiring || target.terminal_sent)
     }
 
     pub fn in_flight(&self, id: &str) -> bool {
