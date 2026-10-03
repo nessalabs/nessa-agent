@@ -53,6 +53,9 @@ const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
 const failure = (id, code, message) => send({ id, error: { code, message } })
 
+/** Every stand-in started, connected or still connecting: stopped when the agent's input closes. */
+const standIns = new Set()
+
 /** One MCP server over a stand-in's stdio: `request(method, params)` resolves with its result. */
 function mcpClient({ command, args, env }) {
   const child = spawn(command, args, {
@@ -62,6 +65,7 @@ function mcpClient({ command, args, env }) {
     },
     stdio: ["pipe", "pipe", "inherit"],
   })
+  standIns.add(child)
   const waiting = new Map()
   let next = 1
   let ended = null
@@ -204,7 +208,6 @@ createInterface({ input: process.stdin })
     }
   })
   .on("close", () => {
-    for (const { servers } of sessions.values())
-      for (const client of servers.values()) client.close()
+    for (const child of standIns) child.kill("SIGTERM")
     process.exit(0)
   })

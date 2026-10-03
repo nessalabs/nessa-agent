@@ -101,14 +101,15 @@ one real call of `<tool>`, with no arguments, through the stand-in the gateway
 gave it for `mcptest`. It then reports that call in the frames the harness was
 recorded sending, says DONE, and ends the turn. The frames are the recorded
 `show_chart` call from the parser fixtures above, value for value, with only
-the call's id, its tool's name and the server's result put in where the
-recording has its own (`scripted-frames.mjs`). It replays only what that
-call can stand for: a successful result with `structuredContent`, of a tool
-whose name no harness rewrites. A failure, a text-only result or a dotted
-name is refused, since the harnesses report those in frames of their own. So
-is a recording that holds the recorded result anywhere it should not. It
-does not ask permission for the call, as a harness does: the recordings hold
-no permission request.
+the call's id, its tool's name and the server's result written at the places
+that harness carries them (`scripted-frames.mjs`'s `PLACES`). The test checks
+those places against the recordings: a recording that carries the call
+anywhere else fails it. It replays only what that call can stand for: one of
+the test server's tools, under a name no harness rewrites, that succeeded
+with `content` and `structuredContent` and no `_meta`. A failure, a text-only
+result or a dotted name is refused, since the harnesses report those in
+frames of their own. It does not ask permission for the call, as a harness
+does: the recordings hold no permission request.
 
 It reads no credential: `startLocalGateway({ signedOut: true })` starts the
 gateway from `PATH`, `TMPDIR` and `RUST_LOG` alone, with a home of its own and

@@ -15,14 +15,19 @@ import {
   initialOptions,
   initializeResult,
   recordedCall,
+  PLACES,
   RECORDED_TOOL,
+  at,
+  recordedResult,
   recording,
+  withAt,
   setOption,
   unreplayable,
 } from "./scripted-frames.mjs"
 import { TOOLS } from "./server.mjs"
 
 const result = TOOLS.review_rows.call({})
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const call = (agent) =>
   callFrames(agent, recording(agent), { id: "call-1", tool: "review_rows", result })
 
@@ -46,27 +51,44 @@ describe("callFrames", () => {
       assert.doesNotMatch(text, /show_chart|series|Chart of two rows/)
     })
 
-    it(`${agent}: a recording that does not hold the result where ${agent} puts it is refused`, () => {
-      const recorded = recording(agent)
-      const frames = recordedCall(agent, recorded).map((frame) =>
-        "rawOutput" in frame ? { ...frame, rawOutput: "something else" } : frame,
+    it(`${agent}: the recording carries its call at the declared places and nowhere else`, () => {
+      const frames = recordedCall(agent, recording(agent))
+      const recordedId = frames[0].toolCallId
+      const result = recordedResult()
+      for (const place of PLACES[agent])
+        assert.ok(
+          frames.some((frame) => at(frame, place.path) !== undefined),
+          `no ${agent} frame has ${place.path.join(".")}`,
+        )
+      // Everything left once the places are taken away is copied as recorded:
+      // none of it may be the recorded call's.
+      const rest = frames.map((frame) =>
+        PLACES[agent].reduce(
+          (each, place) =>
+            at(each, place.path) === undefined ? each : withAt(each, place.path, "PLACE"),
+          frame,
+        ),
       )
-      const call = recordedCall(agent, recorded)
-      const name = Object.keys(recorded.calls).find((key) => recorded.calls[key] === call)
-      const altered = { ...recorded, calls: { ...recorded.calls, [name]: frames } }
-      if (agent === "claude") {
-        // Claude also says it in toolResponse and content: take those away too.
-        altered.calls[name] = frames.map((frame) => {
-          const { content, ...rest } = frame
-          const claudeCode = { ...frame._meta.claudeCode }
-          delete claudeCode.toolResponse
-          return { ...rest, _meta: { ...frame._meta, claudeCode } }
-        })
+      const found = []
+      const look = (value, where) => {
+        if (same(value, result.content) || same(value, result.structuredContent))
+          return found.push(`${where}: the recorded result`)
+        if (typeof value === "string") {
+          const marks = [
+            recordedId,
+            RECORDED_TOOL,
+            JSON.stringify(result.structuredContent),
+            ...result.content.map((block) => block.text),
+          ]
+          for (const mark of marks)
+            if (value.includes(mark)) found.push(`${where}: ${mark}`)
+          return
+        }
+        if (value !== null && typeof value === "object")
+          for (const [key, each] of Object.entries(value)) look(each, `${where}.${key}`)
       }
-      assert.throws(
-        () => callFrames(agent, altered, { id: "x", tool: "review_rows", result }),
-        /does not hold show_chart's result/,
-      )
+      rest.forEach((frame, index) => look(frame, `frame ${index}`))
+      assert.deepEqual(found, [])
     })
   }
 
@@ -120,45 +142,40 @@ describe("callFrames", () => {
       /no structuredContent/,
     )
     assert.match(refused("rows.get", TOOLS["rows.get"].call({ id: 2 })), /rewrite/)
+    assert.match(refused("no_such_tool", result), /not one of the test server's tools/)
+    assert.match(
+      refused("review_rows", { ...result, structuredContent: null }),
+      /no structuredContent/,
+    )
+    assert.match(refused("review_rows", { ...result, _meta: {} }), /_meta/)
+    assert.match(refused("review_rows", { structuredContent: {} }), /no content/)
     assert.equal(unreplayable("review_rows", result), null)
   })
 
-  it("claude: a recording still holding the recorded result after the replacing is refused", () => {
-    // The completion's text wrapped, as Claude wraps a failure: the whole
-    // value no longer matches, but the recorded JSON is still within it.
-    const recorded = recording("claude")
-    const call = recordedCall("claude", recorded)
-    const name = Object.keys(recorded.calls).find((key) => recorded.calls[key] === call)
-    const frames = call.map((frame, index) =>
-      index === call.length - 1
-        ? {
-            ...frame,
-            content: [
-              {
-                type: "content",
-                content: {
-                  type: "text",
-                  text: "```\n" + frame.content[0].content.text + "\n```",
-                },
-              },
-            ],
-          }
-        : frame,
-    )
-    assert.throws(
-      () =>
-        callFrames(
-          "claude",
-          { ...recorded, calls: { ...recorded.calls, [name]: frames } },
-          {
-            id: "x",
-            tool: "review_rows",
-            result,
-          },
-        ),
-      /does not hold show_chart's result/,
-    )
-  })
+  for (const agent of AGENTS)
+    it(`${agent}: a recording with no place for the result is refused`, () => {
+      const recorded = recording(agent)
+      const call = recordedCall(agent, recorded)
+      const name = Object.keys(recorded.calls).find((key) => recorded.calls[key] === call)
+      const frames = call.map(({ rawOutput, content, ...frame }) => {
+        const claudeCode = { ...frame._meta?.claudeCode }
+        delete claudeCode.toolResponse
+        return { ...frame, _meta: { ...frame._meta, claudeCode } }
+      })
+      assert.throws(
+        () =>
+          callFrames(
+            agent,
+            { ...recorded, calls: { ...recorded.calls, [name]: frames } },
+            {
+              id: "x",
+              tool: "review_rows",
+              result,
+            },
+          ),
+        /has no place for show_chart's result/,
+      )
+    })
 
   it("ids and names are put in literally, whatever they hold", () => {
     const frames = callFrames("codex", recording("codex"), {
@@ -170,12 +187,28 @@ describe("callFrames", () => {
   })
 })
 
+describe("at and withAt", () => {
+  it("read only what a frame holds, and copy rather than change", () => {
+    const frame = { rawOutput: { result: { content: [1] } }, list: ["a"] }
+    assert.deepEqual(at(frame, ["rawOutput", "result", "content"]), [1])
+    assert.equal(at(frame, ["list", 0]), "a")
+    // An inherited name is not a place the frame has.
+    assert.equal(at(frame, ["toString"]), undefined)
+    assert.equal(at(frame, ["rawOutput", "constructor"]), undefined)
+    const written = withAt(frame, ["list", 0], "b")
+    assert.deepEqual(written.list, ["b"])
+    assert.deepEqual(frame.list, ["a"])
+  })
+})
+
 describe("the handshake", () => {
   for (const agent of AGENTS)
     it(`${agent}: the pinned harness is the one the recording came from`, () => {
       const { name, version } = harnessInfo(agent)
-      assert.ok(
-        recording(agent).recorded.includes(`${name} ${version}`),
+      const escaped = `${name} ${version}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      assert.match(
+        recording(agent).recorded,
+        new RegExp(`${escaped}(?![\\w.])`),
         `the ${agent} recording is not of ${name} ${version}: record it again`,
       )
     })
@@ -219,6 +252,7 @@ describe("the handshake", () => {
       ],
     )
     assert.equal(setOption("codex", values, "colour", "red"), null)
+    assert.equal(setOption("codex", values, "constructor", "x"), null)
   })
 
   it("each harness has its own effort option, and not the other's", () => {

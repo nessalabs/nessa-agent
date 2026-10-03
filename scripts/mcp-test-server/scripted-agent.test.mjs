@@ -42,9 +42,9 @@ after(() => {
  * with the answer and the notifications before it, or rejects after 20 s: an
  * agent that never answers fails its test rather than hanging the suite.
  */
-function start(agent, env = {}) {
+function start(agent, env = {}, tool = "review_rows") {
   const script = join(here, "scripted-agent.mjs")
-  const child = spawn(process.execPath, [script, agent, "review_rows"], {
+  const child = spawn(process.execPath, [script, agent, tool], {
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "inherit"],
   })
@@ -295,19 +295,19 @@ test("an agent not named, or with no tool to call, exits 2 saying how to run it"
  * stopped is then the agent's doing. Returns its `session/new` entry and
  * `pid()`; it is killed after the test whatever happened.
  */
-function lingering(t) {
+function lingering(t, { answers = () => true, name = "lingering" } = {}) {
   const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
   const script = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line)
-  if (m.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: {} }) + "\\n")
+  if (m.id !== undefined && (${answers.toString()})(m.method)) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: {} }) + "\\n")
 })
 setInterval(() => {}, 1000)`
   const pid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null)
   t.after(() => {
     if (pid() !== null && alive(pid())) process.kill(pid(), "SIGKILL")
   })
-  return { server: { ...mcptest, name: "lingering", args: ["-e", script] }, pid }
+  return { server: { ...mcptest, name, args: ["-e", script] }, pid }
 }
 
 /** Waits up to 5 s for process `pid` to have gone; whether it has. */
@@ -342,4 +342,53 @@ test("an agent whose input closes stops its stand-ins", async (t) => {
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
   assert.equal(await gone(stand.pid()), true, "the stand-in outlived its agent")
+})
+
+test("closing the agent's input stops a stand-in still connecting", async (t) => {
+  const silent = lingering(t, { answers: () => false })
+  const agent = start("codex", codexEnv)
+  agent.request("session/new", { cwd: here, mcpServers: [silent.server] }).catch(() => {})
+  const end = Date.now() + 5000
+  while (silent.pid() === null && Date.now() < end) await sleep(50)
+  assert.notEqual(silent.pid(), null, "the stand-in never started")
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+  assert.equal(
+    await gone(silent.pid()),
+    true,
+    "the connecting stand-in outlived its agent",
+  )
+})
+
+test("a call its stand-in does not answer within the deadline fails the turn, and nothing is reported", async (t) => {
+  const stand = lingering(t, {
+    answers: (method) => method === "initialize",
+    name: "mcptest",
+  })
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [stand.server],
+  })
+  const turn = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.match(turn.error.message, /did not answer tools\/call within/)
+  assert.equal(turn.notes.length, 0)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a call the recorded one cannot stand for fails the turn, and nothing is reported", async () => {
+  const agent = start("codex", codexEnv, "always_fails")
+  const opened = await agent.request("session/new", { cwd: here, mcpServers: [mcptest] })
+  const turn = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.match(turn.error.message, /cannot replay: always_fails failed/)
+  assert.equal(turn.notes.length, 0)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
 })
