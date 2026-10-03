@@ -118,6 +118,7 @@ ends each step once its motion has, not after a fixed wait.
   something could not run (the server did not start, a browser is missing,
   what a step needs to begin was not on the page, an option or `--only` name
   the check does not have). `run-all` sums its checks by the same rule.
-- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser).
+- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser). CI
+  runs them in the frontend job, through `pnpm frontend:check`.
 
 Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-command-output).

@@ -30,8 +30,8 @@ after(() => rmSync(scratch, { recursive: true, force: true }))
  * answers `/health`. Told to stop, it exits at once, leaving a child of its
  * own — as the gateway leaves the agent and the MCP server stopping — that
  * writes its last words to the same output 300 ms later, so its exit
- * arrives first unless the parent stalls for those 300 ms. With `FAKE_NESSA_FAIL`, `server` says so and
- * exits at once.
+ * arrives first unless the parent stalls for those 300 ms. With
+ * `FAKE_NESSA_FAIL`, `server` says so and exits at once.
  */
 const FAKE = `#!${process.execPath}
 const { mkdirSync } = require("node:fs")

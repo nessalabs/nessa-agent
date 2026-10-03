@@ -323,7 +323,7 @@ test("the disposable user manager proves the same session bus and cleans its exa
   assert.equal(script.match(/print_manager_diagnostics/g)?.length, 5)
 })
 
-test("the frontend job owns top-level script tests and their just dependency", () => {
+test("the frontend job owns top-level script and verification-script tests, and their just dependency", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const gatewayStart = workflow.indexOf("  gateway-contract:")
@@ -340,7 +340,8 @@ test("the frontend job owns top-level script tests and their just dependency", (
     "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs",
   )
   assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
-  // The verification scripts' own tests, which hold #384's design table.
+  // Every verification-script test under verification/desktop/scripts/lib,
+  // #384's design table among them.
   assert.equal(
     root.scripts["verify:desktop:test"],
     "node --test verification/desktop/scripts/lib/*.test.mjs",
