@@ -105,10 +105,12 @@ the call's id, its tool's name and the server's result written at the places
 that harness carries them (`scripted-frames.mjs`'s `PLACES`). The test checks
 those places against the recordings: a recording that carries the call
 anywhere else fails it. It replays only what that call can stand for: one of
-the test server's tools, under a name no harness rewrites, that succeeded
-with `content` and `structuredContent` and no `_meta`. A failure, a text-only
-result or a dotted name is refused, since the harnesses report those in
-frames of their own. It does not ask permission for the call, as a harness
+the test server's tools, under a name no harness rewrites, with the recorded
+call's arguments, whose result is shaped as the recorded one is (the same
+keys, text blocks, an object of `structuredContent`). Anything else — a
+failure, a text-only result, a dotted name — is refused, since the harnesses
+report those in frames of their own. A cancel during the call ends the turn
+`cancelled` with nothing reported. It does not ask permission for the call, as a harness
 does: the recordings hold no permission request.
 
 It reads no credential: `startLocalGateway({ signedOut: true })` starts the

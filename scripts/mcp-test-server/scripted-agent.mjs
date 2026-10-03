@@ -34,6 +34,7 @@ import {
   configOptions,
   initialOptions,
   initializeResult,
+  recordedArguments,
   recording,
   setOption,
 } from "./scripted-frames.mjs"
@@ -48,6 +49,7 @@ if (!AGENTS.includes(agent) || !tool) {
   process.exit(2)
 }
 const recorded = recording(agent)
+const args = recordedArguments(agent, recorded)
 
 const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
@@ -55,6 +57,15 @@ const failure = (id, code, message) => send({ id, error: { code, message } })
 
 /** Every stand-in started, connected or still connecting: stopped when the agent's input closes. */
 const standIns = new Set()
+
+/** Stops every stand-in, and the agent. */
+function stop() {
+  for (const child of standIns) child.kill("SIGTERM")
+  process.exit(0)
+}
+
+// A gateway that stops reading the agent leaves it nothing to do.
+process.stdout.on("error", stop)
 
 /** One MCP server over a stand-in's stdio: `request(method, params)` resolves with its result. */
 function mcpClient({ command, args, env }) {
@@ -76,6 +87,8 @@ function mcpClient({ command, args, env }) {
   }
   child.on("error", (error) => end(`the stand-in did not start: ${error.message}`))
   child.on("exit", (code) => end(`the stand-in exited (${code})`))
+  // A stand-in that stops reading fails what waits on it, rather than the agent.
+  child.stdin.on("error", (error) => end(`the stand-in's input closed: ${error.message}`))
   createInterface({ input: child.stdout }).on("line", (line) => {
     let message
     try {
@@ -148,6 +161,9 @@ const handlers = {
 
   "session/new": async (params) => {
     const values = initialOptions(agent, process.env, params)
+    const names = (params.mcpServers ?? []).map((server) => server.name)
+    const twice = names.find((name, index) => names.indexOf(name) !== index)
+    if (twice !== undefined) throw new Error(`two MCP servers named ${twice}`)
     const servers = new Map()
     try {
       for (const server of params.mcpServers ?? [])
@@ -157,7 +173,7 @@ const handlers = {
       throw error
     }
     const sessionId = randomUUID()
-    sessions.set(sessionId, { values, servers })
+    sessions.set(sessionId, { values, servers, prompt: null })
     return { sessionId, configOptions: configOptions(agent, values) }
   },
 
@@ -170,9 +186,21 @@ const handlers = {
   },
 
   "session/prompt": async ({ sessionId }) => {
-    const server = sessionOf(sessionId).servers.get(SERVER)
+    const session = sessionOf(sessionId)
+    const server = session.servers.get(SERVER)
     if (!server) throw new Error(`the session has no ${SERVER} server`)
-    const result = await server.request("tools/call", { name: tool, arguments: {} })
+    if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
+    const prompt = { cancelled: false }
+    session.prompt = prompt
+    let result
+    try {
+      result = await server.request("tools/call", { name: tool, arguments: args })
+    } finally {
+      session.prompt = null
+    }
+    // Cancelled while the call was in flight: the turn ends so, and reports
+    // nothing (the recordings hold no cancelled call).
+    if (prompt.cancelled) return { stopReason: "cancelled" }
     const id =
       agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`
     const update = (update) =>
@@ -194,8 +222,13 @@ createInterface({ input: process.stdin })
     } catch {
       return
     }
-    // A notification (`session/cancel` among them) has nothing to answer;
-    // nothing is in flight between prompts to stop.
+    // A cancel marks the session's prompt in flight, if there is one; no
+    // notification is answered.
+    if (message.method === "session/cancel") {
+      const prompt = sessions.get(message.params?.sessionId)?.prompt
+      if (prompt) prompt.cancelled = true
+      return
+    }
     if (message.id === undefined || !message.method) return
     const handler = Object.hasOwn(handlers, message.method)
       ? handlers[message.method]
@@ -207,7 +240,4 @@ createInterface({ input: process.stdin })
       failure(message.id, -32603, error.message)
     }
   })
-  .on("close", () => {
-    for (const child of standIns) child.kill("SIGTERM")
-    process.exit(0)
-  })
+  .on("close", stop)

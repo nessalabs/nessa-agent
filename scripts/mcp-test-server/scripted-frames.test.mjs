@@ -14,20 +14,46 @@ import {
   harnessInfo,
   initialOptions,
   initializeResult,
-  recordedCall,
   PLACES,
   RECORDED_TOOL,
   at,
+  recordedArguments,
+  recordedCall,
   recordedResult,
   recording,
-  withAt,
   setOption,
   unreplayable,
+  withAt,
 } from "./scripted-frames.mjs"
 import { TOOLS } from "./server.mjs"
 
 const result = TOOLS.review_rows.call({})
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
+/**
+ * What of a result a recording may not hold outside its places: its text, its
+ * structured JSON, and every string, number and key within its
+ * `structuredContent`.
+ */
+function resultMarks(result) {
+  const strings = [
+    JSON.stringify(result.structuredContent),
+    ...result.content.map((b) => b.text),
+  ]
+  const numbers = []
+  const keys = []
+  const walk = (value) => {
+    if (typeof value === "string") strings.push(value)
+    else if (typeof value === "number") numbers.push(value)
+    else if (value !== null && typeof value === "object")
+      for (const [key, each] of Object.entries(value)) {
+        if (!Array.isArray(value)) keys.push(key)
+        walk(each)
+      }
+  }
+  walk(result.structuredContent)
+  return { strings, numbers, keys }
+}
 const call = (agent) =>
   callFrames(agent, recording(agent), { id: "call-1", tool: "review_rows", result })
 
@@ -48,7 +74,9 @@ describe("callFrames", () => {
       const frames = call(agent)
       const text = JSON.stringify(frames)
       for (const frame of frames) assert.equal(frame.toolCallId, "call-1")
-      assert.doesNotMatch(text, /show_chart|series|Chart of two rows/)
+      const marks = resultMarks(recordedResult())
+      for (const mark of [RECORDED_TOOL, ...marks.strings, ...marks.keys])
+        assert.ok(!text.includes(mark), mark)
     })
 
     it(`${agent}: the recording carries its call at the declared places and nowhere else`, () => {
@@ -70,22 +98,23 @@ describe("callFrames", () => {
         ),
       )
       const found = []
+      const marks = resultMarks(result)
       const look = (value, where) => {
         if (same(value, result.content) || same(value, result.structuredContent))
           return found.push(`${where}: the recorded result`)
         if (typeof value === "string") {
-          const marks = [
-            recordedId,
-            RECORDED_TOOL,
-            JSON.stringify(result.structuredContent),
-            ...result.content.map((block) => block.text),
-          ]
-          for (const mark of marks)
+          for (const mark of [recordedId, RECORDED_TOOL, ...marks.strings])
             if (value.includes(mark)) found.push(`${where}: ${mark}`)
           return
         }
+        if (typeof value === "number" && marks.numbers.includes(value))
+          return found.push(`${where}: ${value}`)
         if (value !== null && typeof value === "object")
-          for (const [key, each] of Object.entries(value)) look(each, `${where}.${key}`)
+          for (const [key, each] of Object.entries(value)) {
+            if (marks.keys.includes(key))
+              found.push(`${where}.${key}: a key of the recorded result`)
+            look(each, `${where}.${key}`)
+          }
       }
       rest.forEach((frame, index) => look(frame, `frame ${index}`))
       assert.deepEqual(found, [])
@@ -136,20 +165,66 @@ describe("callFrames", () => {
         return unreplayable(tool, result)
       })[0]
     // Claude reports these in frames of their own (its recordings of them).
-    assert.match(refused("always_fails", TOOLS.always_fails.call({})), /failed/)
-    assert.match(
-      refused("link_resources", TOOLS.link_resources.call({})),
-      /no structuredContent/,
-    )
+    assert.match(refused("always_fails", TOOLS.always_fails.call({})), /not shaped/)
+    assert.match(refused("link_resources", TOOLS.link_resources.call({})), /not shaped/)
     assert.match(refused("rows.get", TOOLS["rows.get"].call({ id: 2 })), /rewrite/)
     assert.match(refused("no_such_tool", result), /not one of the test server's tools/)
-    assert.match(
-      refused("review_rows", { ...result, structuredContent: null }),
-      /no structuredContent/,
-    )
-    assert.match(refused("review_rows", { ...result, _meta: {} }), /_meta/)
-    assert.match(refused("review_rows", { structuredContent: {} }), /no content/)
+    // Anything not shaped as the recorded result, whatever it adds or lacks.
+    for (const shaped of [
+      { ...result, isError: false },
+      { ...result, _meta: {} },
+      { ...result, extra: 1 },
+      { content: result.content },
+      { structuredContent: result.structuredContent },
+      null,
+    ])
+      assert.match(refused("review_rows", shaped), /not shaped/)
+    for (const content of [
+      [{ type: "image", data: "", mimeType: "image/png" }],
+      [{ type: "text", text: 1 }],
+      [{ type: "resource", text: "a" }],
+      [{ type: "text", text: "a", extra: 1 }],
+      "text",
+    ])
+      assert.match(refused("review_rows", { ...result, content }), /kind of block/)
+    for (const structuredContent of ["text", [1], null])
+      assert.match(
+        refused("review_rows", { ...result, structuredContent }),
+        /not an object/,
+      )
     assert.equal(unreplayable("review_rows", result), null)
+  })
+
+  for (const agent of AGENTS)
+    it(`${agent}: every recorded tool it admits replays as its own recording, value for value`, () => {
+      const recorded = recording(agent)
+      const admitted = Object.keys(TOOLS).filter((tool) => {
+        try {
+          recordedCall(agent, recorded, tool)
+        } catch {
+          return false
+        }
+        return unreplayable(tool, TOOLS[tool].call({})) === null
+      })
+      // More than the recorded call itself, or this shows nothing new.
+      assert.ok(admitted.length >= 2, `admitted: ${admitted.join(", ")}`)
+      for (const tool of admitted) {
+        const frames = recordedCall(agent, recorded, tool)
+        const replayed = callFrames(agent, recorded, {
+          id: frames[0].toolCallId,
+          tool,
+          result: TOOLS[tool].call({}),
+        })
+        assert.deepEqual(replayed, frames, tool)
+      }
+    })
+
+  it("a replayed call is made with the recorded arguments, the same for each harness", () => {
+    const [codex, claude] = AGENTS.map((agent) =>
+      recordedArguments(agent, recording(agent)),
+    )
+    assert.deepEqual(codex, {})
+    assert.deepEqual(claude, codex)
   })
 
   for (const agent of AGENTS)

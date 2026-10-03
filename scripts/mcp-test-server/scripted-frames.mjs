@@ -22,7 +22,7 @@ import { TOOLS } from "./server.mjs"
 /** The harnesses a scripted agent can stand in for. */
 export const AGENTS = ["codex", "claude"]
 
-/** The recorded call every reported call is shaped as. It took no arguments, and so does every call replayed. */
+/** The recorded call every reported call is shaped as. Every call replayed takes its arguments (`recordedArguments`). */
 export const RECORDED_TOOL = "show_chart"
 
 /** `agent`'s recorded frames, as the SDK's parser fixtures hold them. */
@@ -34,13 +34,27 @@ export function recording(agent) {
   return JSON.parse(readFileSync(file, "utf8"))
 }
 
-/** The recorded frames of the call this replays, from `recorded` (`recording(agent)`). */
-export function recordedCall(agent, recorded) {
-  const name = agent === "claude" ? `mcp__mcptest__${RECORDED_TOOL}` : RECORDED_TOOL
+/** The recorded frames of a call of `tool` (by default the one this replays), from `recorded` (`recording(agent)`). */
+export function recordedCall(agent, recorded, tool = RECORDED_TOOL) {
+  const name = agent === "claude" ? `mcp__mcptest__${tool}` : tool
   const frames = recorded.calls?.[name]
   if (!Array.isArray(frames) || frames.length === 0)
     throw new Error(`the ${agent} recording has no ${name} call`)
   return frames
+}
+
+/**
+ * The arguments the recorded call was made with, as its frames carry them:
+ * Codex's `rawInput.arguments`, Claude's last `rawInput` (its announcement's
+ * comes before the model's arguments). A replayed call is made with these,
+ * since the frames copy them from the recording.
+ */
+export function recordedArguments(agent, recorded) {
+  const inputs = recordedCall(agent, recorded)
+    .filter((frame) => frame.rawInput !== undefined)
+    .map((frame) => (agent === "codex" ? frame.rawInput.arguments : frame.rawInput))
+  if (inputs.length === 0) throw new Error(`the ${agent} recording has no arguments`)
+  return inputs.at(-1)
 }
 
 /**
@@ -113,29 +127,49 @@ export function setOption(agent, values, configId, value) {
   return { ...values, [configId]: value }
 }
 
+/** The recorded call's result: the test server's own answer for the recorded tool. */
+export const recordedResult = () => TOOLS[RECORDED_TOOL].call({})
+
+const plainObject = (value) =>
+  value !== null &&
+  typeof value === "object" &&
+  Object.getPrototypeOf(value) === Object.prototype
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+const sameKeys = (a, b) => same(Object.keys(a).sort(), Object.keys(b).sort())
+
 /**
  * Why a call of `tool` that returned `result` cannot be replayed in the
- * recorded call's frames, or `null` when it can. The recorded call is of one
- * of the test server's tools, whose name no harness rewrites, and succeeded
- * with `content` and `structuredContent` and no `_meta`. The harnesses report
- * anything else in frames of their own (Claude a failure in three frames, a
- * text result as blocks, `rows.get` as `rows_get`), which no replay of the
- * recorded call would match.
+ * recorded call's frames, or `null` when it can: it can when the tool is one
+ * of the test server's own, under a name no harness rewrites, and its result
+ * is shaped as the recorded call's is — the same keys, content blocks of the
+ * recorded block's keys and type with text, and `structuredContent` an
+ * object. Anything else (a failure, a text-only result, `_meta`, an image, a
+ * dotted name) a harness reports in frames of its own, which no replay of
+ * the recorded call would match.
  */
 export function unreplayable(tool, result) {
   if (!Object.hasOwn(TOOLS, tool)) return `${tool} is not one of the test server's tools`
   if (!/^[A-Za-z0-9_-]+$/.test(tool)) return `${tool}: a harness may rewrite this name`
-  if (!Array.isArray(result?.content)) return `${tool}'s result has no content`
-  if (result.isError) return `${tool} failed: the recorded call succeeded`
-  if (result.structuredContent === undefined || result.structuredContent === null)
-    return `${tool} has no structuredContent: the recorded call's result has`
-  if (result._meta !== undefined)
-    return `${tool}'s result has _meta: the recorded call's result has none`
+  const recorded = recordedResult()
+  if (!plainObject(result) || !sameKeys(result, recorded))
+    return `${tool}'s result is not shaped as the recorded call's (${Object.keys(recorded).join(", ")})`
+  const [block] = recorded.content
+  if (
+    !Array.isArray(result.content) ||
+    !result.content.every(
+      (each) =>
+        plainObject(each) &&
+        sameKeys(each, block) &&
+        each.type === block.type &&
+        typeof each.text === "string",
+    )
+  )
+    return `${tool}'s content is not the recorded call's kind of block`
+  if (!plainObject(result.structuredContent))
+    return `${tool}'s structuredContent is not an object, as the recorded call's is`
   return null
 }
-
-/** The recorded call's result: the test server's own answer for the recorded tool. */
-export const recordedResult = () => TOOLS[RECORDED_TOOL].call({})
 
 /** The recorded name, with the recorded tool's put in its place. */
 const renamed = (recorded, { tool }) => recorded.replaceAll(RECORDED_TOOL, () => tool)

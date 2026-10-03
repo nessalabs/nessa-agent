@@ -295,12 +295,32 @@ test("an agent not named, or with no tool to call, exits 2 saying how to run it"
  * stopped is then the agent's doing. Returns its `session/new` entry and
  * `pid()`; it is killed after the test whatever happened.
  */
-function lingering(t, { answers = () => true, name = "lingering" } = {}) {
+function lingering(
+  t,
+  {
+    answers = () => true,
+    refuses = () => false,
+    delayMs = 0,
+    deafAfterInitialize = false,
+    name = "lingering",
+  } = {},
+) {
   const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
+  // `answers(method)`: whether it answers; `refuses(method)`: with an error;
+  // `delayMs`: after how long; `deafAfterInitialize`: it stops reading its
+  // input once it has answered initialize, but keeps running.
   const script = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line)
-  if (m.id !== undefined && (${answers.toString()})(m.method)) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: {} }) + "\\n")
+  if (m.id === undefined || !(${answers.toString()})(m.method)) return
+  const answer = (${refuses.toString()})(m.method) ? { error: { code: -32000, message: "refused " + m.method } } : { result: {} }
+  setTimeout(() => {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, ...answer }) + "\\n")
+    if (${deafAfterInitialize} && m.method === "initialize") {
+      process.stdin.destroy()
+      try { require("node:fs").closeSync(0) } catch {}
+    }
+  }, m.method === "initialize" ? 0 : ${delayMs})
 })
 setInterval(() => {}, 1000)`
   const pid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null)
@@ -387,8 +407,95 @@ test("a call the recorded one cannot stand for fails the turn, and nothing is re
     sessionId: opened.result.sessionId,
     prompt: [],
   })
-  assert.match(turn.error.message, /cannot replay: always_fails failed/)
+  assert.match(turn.error.message, /cannot replay: always_fails/)
   assert.equal(turn.notes.length, 0)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a cancel while the call is in flight ends the turn cancelled, and nothing is reported", async (t) => {
+  const slow = lingering(t, { name: "mcptest", delayMs: 1500 })
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [slow.server],
+  })
+  const { sessionId } = opened.result
+  const turn = agent.request("session/prompt", { sessionId, prompt: [] })
+  await sleep(300)
+  agent.notify("session/cancel", { sessionId })
+  const answered = await turn
+  assert.deepEqual(answered.result, { stopReason: "cancelled" })
+  assert.equal(answered.notes.length, 0)
+  // The session goes on: a cancel with nothing in flight changes nothing.
+  agent.notify("session/cancel", { sessionId })
+  const unknown = await agent.request("session/set_config_option", {
+    sessionId: "nope",
+    configId: "mode",
+    value: "agent",
+  })
+  assert.match(unknown.error.message, /no session nope/)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a second prompt while one is in flight is refused", async (t) => {
+  const slow = lingering(t, { name: "mcptest", delayMs: 1500 })
+  const agent = start("codex", codexEnv)
+  const { sessionId } = (
+    await agent.request("session/new", { cwd: here, mcpServers: [slow.server] })
+  ).result
+  const first = agent.request("session/prompt", { sessionId, prompt: [] })
+  await sleep(300)
+  const second = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.match(second.error.message, /already in a prompt/)
+  // The stand-in answers {}, which the recorded call cannot stand for.
+  assert.match((await first).error.message, /cannot replay/)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a stand-in that stops reading fails the call, not the agent, and is stopped on close", async (t) => {
+  const deaf = lingering(t, { name: "mcptest", deafAfterInitialize: true })
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [deaf.server],
+  })
+  await sleep(300)
+  const turn = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.match(turn.error.message, /the stand-in's input closed/)
+  assert.equal(turn.notes.length, 0)
+  assert.equal(agent.child.exitCode, null, "the agent died")
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+  assert.equal(agent.child.exitCode, 0)
+  assert.equal(await gone(deaf.pid()), true, "the stand-in outlived its agent")
+})
+
+test("a stand-in that refuses initialize fails session/new, and is stopped", async (t) => {
+  const refusing = lingering(t, { refuses: (method) => method === "initialize" })
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [refusing.server],
+  })
+  assert.match(opened.error.message, /refused initialize/)
+  assert.equal(await gone(refusing.pid()), true)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("two MCP servers of one name are refused before either starts", async () => {
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [mcptest, { ...mcptest, command: join(here, "no-such-command") }],
+  })
+  assert.match(opened.error.message, /two MCP servers named mcptest/)
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })
