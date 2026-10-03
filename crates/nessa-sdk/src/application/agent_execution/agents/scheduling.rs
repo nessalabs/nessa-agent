@@ -213,9 +213,10 @@ impl Scheduler {
     // Nothing for a runner to select or settle. Cancellation drains the queue
     // before it settles each owner, so an owner whose settlement was cut short
     // stays in `pending` with no queue entry. A runner then takes the slot:
-    // it settles that owner if it is stopped, and otherwise passes over it and
-    // exits, leaving it to the next cancellation, which collects owners
-    // whether or not they are queued. Both orderings are rows of the table in
+    // it settles that owner if it is stopped. Otherwise, with nothing else
+    // queued, it passes over it and exits, leaving it to the next
+    // `cancel_pending`, which collects owners whether or not they are queued.
+    // Both orderings are rows of the table in
     // docs/agent_execution/scheduling.md, each with its test.
     fn has_no_work(&self) -> bool {
         self.queue.is_empty() && self.pending.is_empty()
