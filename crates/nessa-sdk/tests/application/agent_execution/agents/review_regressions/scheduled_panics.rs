@@ -442,7 +442,15 @@ impl InvocationHook for RejectPausedBeforeHook {
     fn before_invocation(&self, _: &InvocationContext<'_>) -> Result<(), HookError> {
         if let Some(entered) = self.entered.lock().unwrap().take() {
             entered.send(()).unwrap();
-            tokio::task::block_in_place(|| self.release.lock().unwrap().recv().unwrap());
+            // Bounded, so a test that never releases fails rather than parking
+            // this worker for the life of the runtime.
+            tokio::task::block_in_place(|| {
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("the test released the paused hook")
+            });
             return Err(HookError::Failed("stop before provider preparation".into()));
         }
         Ok(())
@@ -466,8 +474,18 @@ async fn dispatch_save_panic_does_not_inherit_previous_close_actor() {
     .await
     .unwrap();
     let (agent, backend) = probe_with_manager(false, manager).await;
-    agent.close(close_action()).await.unwrap();
-    reattach_after_explicit_close(&agent).await;
+    // Every wait from here is bounded, so a regression fails with the step
+    // that stalled instead of holding CI until its job limit (#366).
+    let bound = Duration::from_secs(5);
+    timeout(bound, agent.close(close_action()))
+        .await
+        .expect("the first close stalled")
+        .unwrap();
+    // Reattachment restarts the queue runner with nothing queued, and the
+    // direct invoke below can race it for the invocation slot.
+    timeout(bound, reattach_after_explicit_close(&agent))
+        .await
+        .expect("reattachment stalled");
     let (entered, waiting) = oneshot::channel();
     let (release, released) = std::sync::mpsc::channel();
     agent.add_invocation_hook(Arc::new(RejectPausedBeforeHook {
@@ -478,19 +496,46 @@ async fn dispatch_save_panic_does_not_inherit_previous_close_actor() {
         let agent = agent.clone();
         async move { agent.invoke(input("before-provider"), actor()).await }
     });
-    waiting.await.unwrap();
-    let queued = agent.enqueue(input("queued"), actor()).await.unwrap();
-    let tail = agent.enqueue(input("tail"), actor()).await.unwrap();
+    timeout(bound, waiting)
+        .await
+        .expect("the direct invoke never reached its before hook")
+        .unwrap();
+    let queued = timeout(bound, agent.enqueue(input("queued"), actor()))
+        .await
+        .expect("queued admission stalled")
+        .unwrap();
+    let tail = timeout(bound, agent.enqueue(input("tail"), actor()))
+        .await
+        .expect("tail admission stalled")
+        .unwrap();
     release.send(()).unwrap();
-    assert!(first.await.unwrap().is_err());
-    assert!(queued.wait().await.is_err());
-    assert_eq!(tail.wait().await, Err(AgentError::Closed));
+    let first = timeout(bound, first)
+        .await
+        .expect("the direct invoke did not settle")
+        .unwrap();
+    assert!(
+        matches!(first, Err(AgentError::BeforeInvocationHook(_))),
+        "{first:?}"
+    );
+    assert!(timeout(bound, queued.wait())
+        .await
+        .expect("the queued receipt did not settle")
+        .is_err());
+    assert_eq!(
+        timeout(bound, tail.wait())
+            .await
+            .expect("the tail receipt did not settle"),
+        Err(AgentError::Closed)
+    );
     let saved = storage.snapshot();
     let cancellation = saved.invocations[2].scheduling.last().unwrap();
     assert_eq!(cancellation.cause, SchedulingCause::RunnerStopped);
     assert!(cancellation.actor.is_none());
     assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
-    agent.close(actor()).await.unwrap();
+    timeout(bound, agent.close(actor()))
+        .await
+        .expect("close stalled")
+        .unwrap();
 }
 
 #[tokio::test]
