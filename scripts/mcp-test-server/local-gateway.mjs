@@ -83,7 +83,8 @@ export async function exited(child, ms) {
   if (child.exitCode !== null || child.signalCode !== null) return true
   return Promise.race([
     new Promise((done) => child.once("exit", () => done(true))),
-    sleep(ms).then(() => false),
+    // Unref'd: once the race is decided, the losing timer holds nothing open.
+    sleep(ms, false, { ref: false }),
   ])
 }
 
@@ -129,7 +130,7 @@ export async function startLocalGateway(o) {
       }
       // Its exit can arrive before the last of its output is read. A child
       // that kept the streams open does not hold the stop up for long.
-      if (stopped) await Promise.race([closed, sleep(2_000)])
+      if (stopped) await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
     }
     rmSync(directory, { recursive: true, force: true })
     return stopped

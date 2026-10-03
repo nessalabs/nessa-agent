@@ -1,7 +1,9 @@
 /**
- * `mcp-apps-gateway.mjs`'s reading of the gateway's view, one test at least
- * per row of its design table (#384): setup admits one call of the app tool,
- * and each step answers the review its own action opened.
+ * `mcp-apps-gateway.mjs`'s reading of the gateway's view, against the rows of
+ * its design table (#384) that are decided here: which permission setup
+ * answers and what it makes of the ended turn (A1–A6), and which review is a
+ * step's and when it has gone (R1–R5). When each step takes its baseline is
+ * the check's own, and is exercised only by running it.
  */
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
@@ -11,6 +13,7 @@ import {
   callsOf,
   newReview,
   reviewKeys,
+  setupOutcome,
   stillPending,
 } from "./gateway-view.mjs"
 
@@ -104,9 +107,49 @@ describe("callsOf", () => {
     )
   })
 
-  it("A6: one call is one", () => {
-    const view = { tools: [call("t1", "review_rows"), call("t1", "review_rows")] }
-    assert.equal(callsOf(view, "mcptest", "review_rows").length, 1)
+  it("keeps each call as the view first lists it", () => {
+    const view = {
+      tools: [
+        { ...call("t1", "review_rows"), status: "completed" },
+        { ...call("t1", "review_rows"), status: "running" },
+      ],
+    }
+    assert.equal(callsOf(view, "mcptest", "review_rows")[0].status, "completed")
+  })
+})
+
+describe("setupOutcome", () => {
+  const done = (toolId, extra = {}) => ({
+    ...call(toolId, "review_rows"),
+    status: "completed",
+    ...extra,
+    mcp: { server: "mcptest", tool: "review_rows", resourceUri: "ui://r", ...extra.mcp },
+  })
+  const ended = (tools, status = "completed") => ({ tools, messages: [{ status }] })
+  const outcome = (view) => setupOutcome(view, "mcptest", "review_rows")
+
+  it("A5: more than one distinct call is repeated, whatever their state", () => {
+    const { kind, calls } = outcome(ended([done("t1"), done("t1"), done("t2")]))
+    assert.equal(kind, "repeated")
+    assert.deepEqual(
+      calls.map((each) => each.toolId),
+      ["t1", "t2"],
+    )
+  })
+
+  it("A6: one completed call naming its resourceUri, in a completed turn, is ready", () => {
+    const view = ended([done("t1"), done("t1")])
+    assert.deepEqual(outcome(view), { kind: "ready", call: view.tools[0] })
+  })
+
+  it("A6: anything less is unusable — no call, a failed call, no resourceUri, a failed turn", () => {
+    for (const view of [
+      ended([]),
+      ended([done("t1", { status: "failed" })]),
+      ended([done("t1", { mcp: { resourceUri: undefined } })]),
+      ended([done("t1")], "failed"),
+    ])
+      assert.equal(outcome(view).kind, "unusable")
   })
 })
 

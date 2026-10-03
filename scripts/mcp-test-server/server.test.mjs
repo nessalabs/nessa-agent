@@ -172,8 +172,8 @@ test("the review app speaks the ui/* bridge and calls each of its tools by name"
 /**
  * The review app's own script, run against a stub host: the frame's parent,
  * whose posts are recorded, and a document with just what the app touches.
- * `initialize` answers `ui/initialize` with `hostContext`; `toolResult` sends
- * the tool result. Returns the methods the app posted and its body's attributes.
+ * The host answers the app's `ui/initialize` with `hostContext`, then sends
+ * the tool result. Returns the tools the app called and its body's attributes.
  */
 async function runReviewApp(hostContext) {
   const { text } = answer({

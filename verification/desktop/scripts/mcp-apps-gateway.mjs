@@ -43,10 +43,10 @@ import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
   admitOnce,
-  callsOf,
   newReview,
   permissionKey,
   reviewKeys,
+  setupOutcome,
   stillPending,
 } from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
@@ -96,7 +96,11 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
             that the person declined
   release   in a pane of its own (the app's fullscreen request), a third call
             left waiting; closing the pane takes the app away and withdraws its
-            review, and the inline app stays live`,
+            review, and the inline app stays live
+
+Each review step answers the review its own action opened, not one pending
+before it. The mount's first call is allow's: run deny or release without
+allow, and that call's review can be taken for theirs.`,
 }
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
@@ -116,6 +120,8 @@ async function startStack(options) {
     path: command.path,
     mcpServer: { command: process.execPath, args: [serverScript] },
   }).catch((error) => {
+    // What it said as it failed, on stderr; the result keeps one line.
+    if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
     throw new CannotRun(`the gateway did not start: ${error.message.split("\n")[0]}`)
   })
   timings.gatewayMs = Date.now() - started
@@ -169,7 +175,6 @@ async function startStack(options) {
       title,
       timings,
       token: () => readFileSync(gateway.token, "utf8").trim(),
-      gatewayLog: gateway.log,
     }
   } catch (error) {
     await close()
@@ -225,14 +230,11 @@ async function agentTurn(client, conversationId, agent) {
     }
     const last = view.messages.at(-1)
     if (last && !["running", "queued"].includes(last.status)) {
-      const calls = callsOf(view, SERVER, APP_TOOL)
-      if (calls.length > 1) throw once(calls.map((each) => each.toolId).join(", "))
-      const [tool] = calls
-      if (
-        last.status !== "completed" ||
-        tool?.status !== "completed" ||
-        !tool.mcp.resourceUri
-      )
+      const outcome = setupOutcome(view, SERVER, APP_TOOL)
+      if (outcome.kind === "repeated")
+        throw once(outcome.calls.map((each) => each.toolId).join(", "))
+      const tool = outcome.call
+      if (outcome.kind !== "ready")
         throw new CannotRun(
           `${agent}'s turn ended ${last.status}${last.error ? ` (${last.error.code ?? last.error})` : ""}; ` +
             `${APP_TOOL}: ${tool ? `${tool.status}, resourceUri ${tool.mcp.resourceUri ?? "none"}` : "not called"}; ` +

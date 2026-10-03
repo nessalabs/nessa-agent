@@ -48,12 +48,34 @@ export function admitOnce(view, admitted, answered, server, tool) {
   return { allow: null, extra: null }
 }
 
-/** The view's distinct calls of `tool` of `server` (design rows A5, A6). */
+/** The view's distinct calls of `tool` of `server`, each as the view first lists it. */
 export function callsOf(view, server, tool) {
   const calls = new Map()
   for (const call of view.tools)
-    if (isTool(call, server, tool)) calls.set(callKey(call), call)
+    if (isTool(call, server, tool) && !calls.has(callKey(call)))
+      calls.set(callKey(call), call)
   return [...calls.values()]
+}
+
+/**
+ * What setup makes of the view once the turn has ended (design rows A5, A6):
+ * `{ kind: "ready", call }` when the turn completed with exactly one call of
+ * `tool`, completed, naming its `resourceUri`; `{ kind: "repeated", calls }`
+ * when there was more than one; `{ kind: "unusable", call }` otherwise (`call`
+ * is the one call, or `undefined`).
+ */
+export function setupOutcome(view, server, tool) {
+  const calls = callsOf(view, server, tool)
+  if (calls.length > 1) return { kind: "repeated", calls }
+  const [call] = calls
+  const turn = view.messages.at(-1)
+  if (
+    turn?.status === "completed" &&
+    call?.status === "completed" &&
+    call.mcp.resourceUri
+  )
+    return { kind: "ready", call }
+  return { kind: "unusable", call }
 }
 
 /** The keys of the app's pending reviews: a step's baseline. */
