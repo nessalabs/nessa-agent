@@ -46,4 +46,7 @@ pub mod trusted_origin;
 pub use bootstrap::run;
 pub use error::{Dataset, DatasetRefusal, RunError};
 pub use launch::Launch;
-pub use shutdown::{PassiveReaderOutcomes, PassiveReaderShutdownFailure, ShutdownFailure};
+pub use shutdown::{
+    PassiveReaderOutcomes, PassiveReaderShutdownFailure, ShutdownFailure, WatchDrainOutcome,
+    WatchShutdownFailure,
+};

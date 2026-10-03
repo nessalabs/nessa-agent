@@ -3,7 +3,7 @@ use crate::conversation::application::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadScope,
     CatalogueReadSource, RecordHead, RecordReadValue,
 };
-use crate::product::change_watch::{Notice, WatchOwners};
+use crate::product::change_watch::{watch_principal, Notice, WatchOwners};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::Value;
 use std::{
@@ -1365,9 +1365,9 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
 
 #[tokio::test(start_paused = true)]
 async fn original_pending_watch_deadline_expires_during_another_physical_frame() {
-    let owners = Arc::new(WatchOwners::new(1));
+    let owners = Arc::new(WatchOwners::new(1, 1));
     let deliveries = Arc::new(WatchDeliveries::new());
-    let original = Arc::new(owners.try_acquire().unwrap());
+    let original = Arc::new(owners.try_acquire(&watch_principal("a")).unwrap());
     assert!(deliveries.reserve(
         "watch".into(),
         original.clone(),
@@ -1422,11 +1422,11 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
 
 #[tokio::test(start_paused = true)]
 async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls() {
-    let owners = Arc::new(WatchOwners::new(1));
+    let owners = Arc::new(WatchOwners::new(1, 1));
     let deliveries = Arc::new(WatchDeliveries::new());
     assert!(deliveries.reserve(
         "watch".into(),
-        Arc::new(owners.try_acquire().unwrap()),
+        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap()),
         Instant::now() + RECORD_SEND_TIMEOUT
     ));
     deliveries.activate("watch");
@@ -1474,5 +1474,74 @@ async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls
     assert_eq!(records_written.load(Ordering::SeqCst), 0);
     assert_eq!(owners.available_permits(), 0);
     deliveries.close();
+    assert_eq!(owners.available_permits(), 1);
+}
+
+/// Row U3: a notice is ready while the writer is busy with an ordinary frame,
+/// and an unwatch retires the watch before the writer chooses the notice.
+/// Nothing for that watch may follow the unwatch acknowledgement.
+#[tokio::test]
+async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement() {
+    let owners = Arc::new(WatchOwners::new(1, 1));
+    let deliveries = Arc::new(WatchDeliveries::new());
+    assert!(deliveries.reserve(
+        "watch".into(),
+        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap()),
+        Instant::now() + RECORD_SEND_TIMEOUT
+    ));
+    deliveries.activate("watch");
+    assert!(deliveries.notice("watch", Notice::Changed));
+    deliveries.authorize("watch"); // The hint is ready to send.
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let (socket, mut peer) = test_socket(Some(gate));
+    let (sink, _incoming) = socket.split();
+    let (control_send, controls) = mpsc::channel(4);
+    let (refusal_send, refusals) = mpsc::channel(1);
+    let (ordinary_send, ordinary) = mpsc::channel(16);
+    let (record_send, records) = mpsc::channel(1);
+    let slots = Arc::new(Semaphore::new(2));
+    let response = |id: &str| QueuedResponse {
+        message: WireResponse::ordinary(success(id, &json!({}))),
+        _slot: slots.clone().try_acquire_owned().unwrap().into(),
+        _record_work: None,
+    };
+    ordinary_send.send(response("ordinary")).await.unwrap();
+    let writer = tokio::spawn(write_authenticated(
+        sink,
+        controls,
+        refusals,
+        ordinary,
+        records,
+        Duration::from_secs(60),
+        deliveries.clone(),
+    ));
+    peer.writing.recv().await.unwrap(); // The ordinary frame is mid-flush.
+    // What `ConnectionWatches::begin` does for an unwatch: retire, then queue
+    // the acknowledgement on the ordinary lane.
+    deliveries.retire("watch", Instant::now() + RECORD_SEND_TIMEOUT);
+    ordinary_send.send(response("unwatch")).await.unwrap();
+    release.send(()).unwrap();
+    for expected in ["ordinary", "unwatch"] {
+        let Message::Text(text) = peer.message().await else {
+            panic!("expected {expected}")
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], expected, "{value}");
+    }
+    // With every lane closed, a locally held hint would be all that is left.
+    drop((control_send, refusal_send, ordinary_send, record_send));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        peer.output.try_recv().is_err(),
+        "no hint may follow the unwatch acknowledgement"
+    );
+    assert!(!writer.is_finished());
+    deliveries.close();
+    timeout(Duration::from_secs(1), writer)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(owners.available_permits(), 1);
 }

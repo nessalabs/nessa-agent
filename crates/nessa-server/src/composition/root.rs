@@ -12,6 +12,7 @@ use crate::{
     app::dependencies::RuntimeDependencies,
     core::{
         Launch, PassiveReaderOutcomes, PassiveReaderShutdownFailure, RunError, ShutdownFailure,
+        WatchDrainOutcome, WatchShutdownFailure,
     },
     env::UptimeBackend,
 };
@@ -434,17 +435,17 @@ enum ShutdownReport {
     /// The report retains each result as it is observed, including deadline evidence.
     DrainsPending {
         readers: PassiveReaderOutcomes,
-        watches: Option<Result<(), WatchTaskFault>>,
+        watches: WatchDrainOutcome,
     },
     /// Both physical drains completed; conversation cleanup has not returned.
     ConversationsPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchTaskFault>,
+        watches: Result<(), WatchShutdownFailure>,
     },
     /// Reader and conversation outcomes are known; MCP stop has not returned.
     ServersPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchTaskFault>,
+        watches: Result<(), WatchShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },
     /// All cleanup owners returned; at least one failed.
@@ -491,14 +492,17 @@ async fn passive_cleanup(
         slot,
         ShutdownReport::DrainsPending {
             readers: PassiveReaderOutcomes::default(),
-            watches: None,
+            watches: WatchDrainOutcome::default(),
         },
     );
     tokio::pin!(record, catalogue, watches);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
+    // One deadline covers every drain: it stays armed while any is pending and
+    // fires once, recording evidence only against the drains still pending.
+    let mut deadline_passed = false;
     loop {
-        let (record_pending, catalogue_pending, watch_pending, deadline_pending) = {
+        let (record_pending, catalogue_pending, watch_pending) = {
             let report = slot.lock().unwrap_or_else(PoisonError::into_inner);
             let ShutdownReport::DrainsPending {
                 readers: outcomes,
@@ -510,10 +514,10 @@ async fn passive_cleanup(
             (
                 outcomes.record().is_none(),
                 outcomes.catalogue().is_none(),
-                watches.is_none(),
-                !outcomes.deadline_exceeded() && !outcomes.complete(),
+                !watches.complete(),
             )
         };
+        let deadline_pending = !deadline_passed;
         if !record_pending && !catalogue_pending && !watch_pending {
             break;
         }
@@ -526,11 +530,20 @@ async fn passive_cleanup(
             result = &mut watches, if watch_pending => {
                 let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
                 let ShutdownReport::DrainsPending { watches, .. } = &mut *report else { unreachable!() };
-                *watches = Some(result);
+                watches.observe(result);
             },
             _ = &mut timeout, if deadline_pending => {
-                update_reader_report(slot, PassiveReaderOutcomes::observe_deadline);
-                tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
+                deadline_passed = true;
+                let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                let ShutdownReport::DrainsPending { readers, watches } = &mut *report else { unreachable!() };
+                if !readers.complete() {
+                    readers.observe_deadline();
+                    tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
+                }
+                if !watches.complete() {
+                    watches.observe_deadline();
+                    tracing::error!("watch shutdown exceeded deadline; retaining runtime until original watch tasks end");
+                }
             }
         }
     }
@@ -545,7 +558,7 @@ async fn passive_cleanup(
         };
         *report = ShutdownReport::ConversationsPending {
             readers: outcomes.into_result(),
-            watches: watches.expect("original watch drain returned"),
+            watches: watches.into_result(),
         };
     }
     let conversations = match conversations {

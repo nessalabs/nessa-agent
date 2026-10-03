@@ -66,6 +66,60 @@ impl PassiveReaderShutdownFailure {
     }
 }
 
+/// Observed watch drain: the first task fault it returned, or unknown while the
+/// original tasks are still running, and whether the shared shutdown deadline
+/// passed before it returned. Unknown is distinct from a successful drain.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct WatchDrainOutcome {
+    result: Option<Result<(), WatchTaskFault>>,
+    deadline_exceeded: bool,
+}
+impl WatchDrainOutcome {
+    /// The drain's result, or `None` while original watch tasks still run.
+    pub fn result(&self) -> Option<&Result<(), WatchTaskFault>> {
+        self.result.as_ref()
+    }
+    /// Whether the shutdown deadline passed before the drain returned.
+    pub fn deadline_exceeded(&self) -> bool {
+        self.deadline_exceeded
+    }
+    pub(crate) fn observe(&mut self, result: Result<(), WatchTaskFault>) {
+        assert!(self.result.is_none());
+        self.result = Some(result);
+    }
+    pub(crate) fn observe_deadline(&mut self) {
+        self.deadline_exceeded = true;
+    }
+    pub(crate) fn complete(&self) -> bool {
+        self.result.is_some()
+    }
+    pub(crate) fn into_result(self) -> Result<(), WatchShutdownFailure> {
+        assert!(
+            self.complete(),
+            "aggregate requires the watch drain outcome"
+        );
+        if self.deadline_exceeded || matches!(self.result, Some(Err(_))) {
+            Err(WatchShutdownFailure(self))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A returned watch drain with a task fault, a passed deadline, or both.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WatchShutdownFailure(WatchDrainOutcome);
+impl WatchShutdownFailure {
+    /// The completed drain result and the deadline evidence that caused failure.
+    pub fn outcome(&self) -> &WatchDrainOutcome {
+        &self.0
+    }
+    /// The first task fault the drain returned, if any.
+    pub fn fault(&self) -> Option<WatchTaskFault> {
+        self.0.result.and_then(Result::err)
+    }
+}
+
 /// Cleanup failures retain reader, original watch and conversation outcomes.
 /// Reader/conversation-only final variants establish successful watch drain.
 #[derive(Debug)]
@@ -73,22 +127,23 @@ pub enum ShutdownFailure {
     /// Cleanup owner ended while a reader or watch drain remained unknown. Conversation cleanup had not started.
     DrainsUnreported {
         outcomes: PassiveReaderOutcomes,
-        watches: Option<Result<(), WatchTaskFault>>,
+        watches: WatchDrainOutcome,
     },
     /// Both readers drained; conversation cleanup remains unknown.
     ConversationsUnreported {
         readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchTaskFault>,
+        watches: Result<(), WatchShutdownFailure>,
     },
     /// Reader and conversation outcomes are known; MCP stop remains unknown.
     ServersUnreported {
         readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchTaskFault>,
+        watches: Result<(), WatchShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },
-    /// Original watch resources returned with a retained fault; other results remain independent.
+    /// Original watch resources returned with a retained fault or after the
+    /// deadline; other results remain independent.
     Watches {
-        watches: WatchTaskFault,
+        watches: WatchShutdownFailure,
         readers: Result<(), PassiveReaderShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },

@@ -5,14 +5,18 @@ use crate::conversation::{
     },
     domain::ConversationId,
 };
+use crate::product::socket::close_reason;
 use crate::product::{
     generated::{
         product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
-        MAX_CHANGE_WATCH_ID_BYTES,
+        MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
     },
     state::ProductRouteState,
 };
-use crate::product_contract::generated::{ChangeWatchEndReason, ChangeWatchErrorCode};
+use crate::product_contract::generated::{
+    ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
+};
+use nessa_auth::application::ports::AccessError;
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
 use nessa_sdk::application::agent_execution::sessions::{
     ChangeWatchError, ChangeWatchState, CommittedChangeWatch,
@@ -117,6 +121,15 @@ impl WatchSelector {
         }
     }
 
+    /// How many targets of this kind one connection may hold, as published by
+    /// the product schema.
+    pub fn connection_limit(&self) -> usize {
+        match self {
+            Self::Records { .. } => MAX_CONNECTION_RECORD_WATCHES,
+            Self::Catalogue { .. } => MAX_CONNECTION_CATALOGUE_WATCHES,
+        }
+    }
+
     pub fn same_kind(&self, other: &Self) -> bool {
         matches!(
             (self, other),
@@ -132,15 +145,15 @@ impl WatchSelector {
         &self,
         state: &ProductRouteState,
         session: &AuthenticatedSession,
-    ) -> Result<Admitted, ChangeWatchErrorCode> {
+    ) -> Result<Admitted, WatchRefusal> {
         let current = super::super::socket::watch_identity(state, session)
             .await
-            .map_err(|error| admission_code(ReadRefusal::from(error)))?;
+            .map_err(WatchRefusal::Access)?;
         let session = &current;
         let (receivers, conversations) = state
             .passive_read
             .as_ref()
-            .ok_or(ChangeWatchErrorCode::TemporarilyUnavailable)?;
+            .ok_or(WatchRefusal::Unavailable)?;
         let admission = AdmitPassiveRead {
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
@@ -160,19 +173,19 @@ impl WatchSelector {
                 admission
                     .execute(session, conversation, receiver, *epoch)
                     .await
-                    .map_err(admission_code)?;
+                    .map_err(WatchRefusal::Read)?;
                 Admitted::Records(conversation.clone())
             }
             Self::Catalogue { receiver, epoch } => Admitted::Catalogue(
                 admission
                     .catalogue(session, receiver, *epoch)
                     .await
-                    .map_err(admission_code)?,
+                    .map_err(WatchRefusal::Read)?,
             ),
         };
         super::super::socket::watch_browser_present(state, session)
             .await
-            .map_err(|error| admission_code(ReadRefusal::from(error)))?;
+            .map_err(WatchRefusal::Access)?;
         Ok(admitted)
     }
 
@@ -180,7 +193,7 @@ impl WatchSelector {
         &self,
         state: &ProductRouteState,
         session: &AuthenticatedSession,
-    ) -> Result<(), ChangeWatchErrorCode> {
+    ) -> Result<(), WatchRefusal> {
         self.admit(state, session).await.map(|_| ())
     }
 
@@ -191,7 +204,10 @@ impl WatchSelector {
         interest: &AtomicBool,
     ) -> Result<WatchHandle, ChangeWatchErrorCode> {
         // Reuse the actual current snapshot owner without a head/read lease.
-        let admitted = self.admit(state, session).await?;
+        let admitted = self
+            .admit(state, session)
+            .await
+            .map_err(WatchRefusal::code)?;
         if !interest.load(Ordering::Acquire) {
             return Err(ChangeWatchErrorCode::WatchClosed);
         }
@@ -250,6 +266,40 @@ impl WatchHandle {
         }
     }
 }
+/// Why current authority refused a watch. An access error stays one, so that a
+/// closing connection reports it through the socket's single mapping.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::product) enum WatchRefusal {
+    /// The session's credential, membership or browser session is no longer current.
+    Access(AccessError),
+    /// Passive-read admission refused: grant, receiver binding, epoch or ownership.
+    Read(ReadRefusal),
+    /// The gateway has no passive-read authority composed, or the task failed.
+    Unavailable,
+}
+
+impl WatchRefusal {
+    /// The registration reply's code.
+    pub fn code(self) -> ChangeWatchErrorCode {
+        match self {
+            Self::Access(error) => admission_code(ReadRefusal::from(error)),
+            Self::Read(refusal) => admission_code(refusal),
+            Self::Unavailable => ChangeWatchErrorCode::TemporarilyUnavailable,
+        }
+    }
+
+    /// How a live connection closes when a notice or a periodic check is refused.
+    pub fn close_reason(self) -> SessionCloseReason {
+        match self {
+            Self::Access(error) => close_reason(error),
+            Self::Read(ReadRefusal::Unverifiable) | Self::Unavailable => {
+                SessionCloseReason::TemporaryUnavailable
+            }
+            Self::Read(_) => SessionCloseReason::AuthorizationLost,
+        }
+    }
+}
+
 fn admission_code(error: ReadRefusal) -> ChangeWatchErrorCode {
     match error {
         ReadRefusal::InvalidRequest => ChangeWatchErrorCode::InvalidRequest,

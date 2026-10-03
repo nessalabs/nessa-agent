@@ -1,4 +1,7 @@
-use super::{Notice, ProductWatchPermit, WatchDeliveries, WatchHandle, WatchSelector, WatchToken};
+use super::{
+    Notice, ProductWatchPermit, WatchDeliveries, WatchHandle, WatchPrincipal, WatchRefusal,
+    WatchSelector, WatchToken,
+};
 use crate::product::{
     generated::{
         product_method, ConversationUnwatchParams, ConversationWatchResult,
@@ -88,7 +91,8 @@ enum Progress {
     },
     Authorized {
         key: u64,
-        result: Result<(), ChangeWatchErrorCode>,
+        purpose: AuthorityCheck,
+        result: Result<(), WatchRefusal>,
     },
     Source {
         key: u64,
@@ -99,6 +103,17 @@ enum Progress {
         activation: bool,
         result: Result<(), oneshot::error::RecvError>,
     },
+}
+
+/// Why a target's authority is being asked. Either way it is the same single
+/// task per target; only what an allowed answer does differs.
+#[derive(Clone, Copy)]
+enum AuthorityCheck {
+    /// A notice is pending; an allowed answer lets the writer send it.
+    Notice,
+    /// The connection's periodic current-state check (row A3); an allowed
+    /// answer changes nothing, a refusal closes the connection.
+    Periodic,
 }
 
 type PendingProgress = Pin<Box<dyn Future<Output = Progress> + Send>>;
@@ -207,12 +222,12 @@ impl ConnectionWatches {
         {
             return Some(refused(ChangeWatchErrorCode::WatchDuplicate));
         }
-        if self.targets.len() >= MAX_CONNECTION_CHANGE_WATCHES
-            || self
-                .targets
-                .iter()
-                .any(|target| target.selector.same_kind(&selector))
-        {
+        let same_kind = self
+            .targets
+            .iter()
+            .filter(|target| target.selector.same_kind(&selector))
+            .count();
+        if same_kind >= selector.connection_limit() {
             return Some(refused(ChangeWatchErrorCode::WatchCapacity));
         }
         if !self.tokens.can_accept(
@@ -227,7 +242,10 @@ impl ConnectionWatches {
         let Some(key) = self.sequence.checked_add(1) else {
             return Some(refused(ChangeWatchErrorCode::WatchCapacity));
         };
-        let owner = match state.change_watches.try_acquire() {
+        let owner = match state
+            .change_watches
+            .try_acquire(&WatchPrincipal::of(session))
+        {
             Ok(owner) => Arc::new(owner),
             Err(code) => return Some(refused(code)),
         };
@@ -348,7 +366,27 @@ impl ConnectionWatches {
         }));
     }
 
-    fn authorize(&mut self, key: u64, state: &ProductRouteState, session: &AuthenticatedSession) {
+    /// Re-ask every live target's authority, from the connection's periodic
+    /// current-state check, so revoked access ends a watch without a commit.
+    pub fn recheck(&mut self, state: &ProductRouteState, session: &AuthenticatedSession) {
+        let live: Vec<u64> = self
+            .targets
+            .iter()
+            .filter(|target| target.accepted && !target.retiring && !target.authority_pending)
+            .map(|target| target.key)
+            .collect();
+        for key in live {
+            self.authorize(key, AuthorityCheck::Periodic, state, session);
+        }
+    }
+
+    fn authorize(
+        &mut self,
+        key: u64,
+        purpose: AuthorityCheck,
+        state: &ProductRouteState,
+        session: &AuthenticatedSession,
+    ) {
         let target = self
             .targets
             .iter_mut()
@@ -371,9 +409,8 @@ impl ConnectionWatches {
         self.pending.push(Box::pin(async move {
             Progress::Authorized {
                 key,
-                result: task
-                    .await
-                    .unwrap_or(Err(ChangeWatchErrorCode::TemporarilyUnavailable)),
+                purpose,
+                result: task.await.unwrap_or(Err(WatchRefusal::Unavailable)),
             }
         }));
     }
@@ -435,23 +472,28 @@ impl ConnectionWatches {
                     }
                 }
             }
-            Progress::Authorized { key, result } => {
+            Progress::Authorized {
+                key,
+                purpose,
+                result,
+            } => {
                 let Some(target) = self.targets.iter_mut().find(|target| target.key == key) else {
                     return WatchOutcome::Progress;
                 };
                 target.authority_pending = false;
                 if !target.retiring {
-                    match result {
-                        Ok(()) => self.deliveries.authorize(&target.id),
-                        Err(code) => {
-                            return WatchOutcome::Close(match code {
-                                ChangeWatchErrorCode::TemporarilyUnavailable
-                                | ChangeWatchErrorCode::Unverifiable => {
-                                    SessionCloseReason::TemporaryUnavailable
-                                }
-                                _ => SessionCloseReason::AuthorizationLost,
-                            });
+                    if let Err(refusal) = result {
+                        return WatchOutcome::Close(refusal.close_reason());
+                    }
+                    let id = target.id.clone();
+                    match purpose {
+                        AuthorityCheck::Notice => self.deliveries.authorize(&id),
+                        // A notice that arrived while this check ran still needs
+                        // its own authority, asked after the notice existed.
+                        AuthorityCheck::Periodic if self.deliveries.needs_authority(&id) => {
+                            self.authorize(key, AuthorityCheck::Notice, state, session)
                         }
+                        AuthorityCheck::Periodic => {}
                     }
                 }
                 self.collect_retired();
@@ -475,7 +517,7 @@ impl ConnectionWatches {
                     self.source(key, owned.handle);
                 }
                 if admission {
-                    self.authorize(key, state, session);
+                    self.authorize(key, AuthorityCheck::Notice, state, session);
                 }
                 WatchOutcome::Progress
             }

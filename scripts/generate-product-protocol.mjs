@@ -265,8 +265,16 @@ function agreeing(name, values) {
     throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
   return first
 }
+// Watch capacity is product policy. The server reads these constants and holds
+// no limit of its own; per-connection capacity is the sum of the per-kind limits.
 const watchLimits = schema["x-changeWatchLimits"]
-for (const name of ["globalOwners", "connectionTargets"]) {
+const watchLimitNames = [
+  "globalOwners",
+  "principalOwners",
+  "recordTargets",
+  "catalogueTargets",
+]
+for (const name of watchLimitNames) {
   if (
     !watchLimits ||
     !Object.hasOwn(watchLimits, name) ||
@@ -275,14 +283,20 @@ for (const name of ["globalOwners", "connectionTargets"]) {
   )
     throw new Error(`Invalid change watch limit: ${name}`)
 }
-if (Object.keys(watchLimits).length !== 2)
+if (Object.keys(watchLimits).length !== watchLimitNames.length)
   throw new Error("Invalid change watch limit: unknown policy key")
+if (watchLimits.principalOwners > watchLimits.globalOwners)
+  throw new Error("Invalid change watch limit: principalOwners exceeds globalOwners")
+const connectionWatches = watchLimits.recordTargets + watchLimits.catalogueTargets
 const watchId = schema.$defs.ChangeWatchId
 if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
   throw new Error("Invalid change watch ID publication")
 rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
 rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
-rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${watchLimits.connectionTargets};\n`
+rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
+rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
+rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
+rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
 ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
 ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
 ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`

@@ -13,7 +13,12 @@
     "readTimeoutMs": 10000,
     "clientAllowanceMs": 10000
   },
-  "x-changeWatchLimits": { "globalOwners": 64, "connectionTargets": 2 },
+  "x-changeWatchLimits": {
+    "globalOwners": 64,
+    "principalOwners": 8,
+    "recordTargets": 1,
+    "catalogueTargets": 1
+  },
   "$defs": {
     "SessionChallenge": {
       "type": "object",
@@ -3363,6 +3368,7 @@
         },
         "receiverId": {
           "type": "string",
+          "minLength": 1,
           "description": "Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read.",
           "x-core-utf8-bound": "id_max_utf8_bytes",
           "x-utf8MaxBytes": 128

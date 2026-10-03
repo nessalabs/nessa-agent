@@ -3,6 +3,7 @@ use super::super::{
         product_event, ConversationChanged, ConversationWatchEnded, MAX_CONNECTION_CHANGE_WATCHES,
     },
     passive_read::deadlines::RECORD_SEND_TIMEOUT,
+    socket::CHALLENGE_EVENT_SEQUENCE,
 };
 use super::owner::ProductWatchPermit;
 use crate::product_contract::generated::ChangeWatchEndReason;
@@ -58,7 +59,8 @@ impl WatchDeliveries {
         Self {
             state: Mutex::new(State {
                 targets: Vec::with_capacity(MAX_CONNECTION_CHANGE_WATCHES),
-                sequence: 0,
+                // Continue the socket's one event sequence after the challenge.
+                sequence: CHALLENGE_EVENT_SEQUENCE,
                 closed: false,
             }),
             ready: Notify::new(),
@@ -150,6 +152,18 @@ impl WatchDeliveries {
         }
         drop(state);
         self.ready.notify_one();
+    }
+
+    /// Whether this watch has a notice still waiting for its authority check.
+    pub fn needs_authority(&self, id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .targets
+            .iter()
+            .any(|target| {
+                target.id == id && target.pending.is_some_and(|pending| !pending.authorized)
+            })
     }
 
     pub fn registration_deadline(&self, id: &str) -> Option<Instant> {
@@ -303,14 +317,18 @@ mod tests {
     use super::*;
 
     fn reserve(deliveries: &WatchDeliveries, slots: &Arc<WatchOwners>) {
-        let owner = Arc::new(slots.try_acquire().unwrap());
+        let owner = Arc::new(
+            slots
+                .try_acquire(&super::super::owner::tests::principal("a"))
+                .unwrap(),
+        );
         assert!(deliveries.reserve("watch".into(), owner, Instant::now() + RECORD_SEND_TIMEOUT));
     }
 
     #[test]
     fn dirty_cannot_activate_before_ack_and_terminal_keeps_original_pending_deadline() {
         let deliveries = WatchDeliveries::new();
-        let slots = Arc::new(WatchOwners::new(1));
+        let slots = Arc::new(WatchOwners::new(1, 1));
         reserve(&deliveries, &slots);
         assert!(deliveries.notice("watch", Notice::Changed));
         deliveries.authorize("watch");
@@ -332,7 +350,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn selection_requires_current_authority_and_the_original_deadline() {
         let deliveries = WatchDeliveries::new();
-        let slots = Arc::new(WatchOwners::new(1));
+        let slots = Arc::new(WatchOwners::new(1, 1));
         reserve(&deliveries, &slots);
         deliveries.activate("watch");
         assert!(deliveries.notice("watch", Notice::Changed));
@@ -361,7 +379,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn coalesced_notices_keep_the_first_pending_deadline_as_time_passes() {
         let deliveries = WatchDeliveries::new();
-        let slots = Arc::new(WatchOwners::new(1));
+        let slots = Arc::new(WatchOwners::new(1, 1));
         reserve(&deliveries, &slots);
         deliveries.activate("watch");
         assert!(deliveries.notice("watch", Notice::Changed));
@@ -379,7 +397,7 @@ mod tests {
     #[test]
     fn in_flight_and_one_coalesced_pending_retain_the_same_original_charge() {
         let deliveries = WatchDeliveries::new();
-        let slots = Arc::new(WatchOwners::new(1));
+        let slots = Arc::new(WatchOwners::new(1, 1));
         reserve(&deliveries, &slots);
         deliveries.activate("watch");
         assert!(deliveries.notice("watch", Notice::Changed));

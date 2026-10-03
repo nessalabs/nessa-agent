@@ -7,9 +7,11 @@ mod delivery;
 mod owner;
 mod registration;
 pub(super) use delivery::{Notice, WatchDeliveries, WatchFrame};
-pub(super) use registration::{WatchHandle, WatchSelector, WatchToken};
+pub(super) use registration::{WatchHandle, WatchRefusal, WatchSelector, WatchToken};
 
-pub(super) use owner::{ProductWatchPermit, WatchOwners};
+#[cfg(test)]
+pub(super) use owner::tests::principal as watch_principal;
+pub(super) use owner::{ProductWatchPermit, WatchOwners, WatchPrincipal};
 
 pub(super) use connection::{ConnectionWatches, WatchAcknowledgement, WatchOutcome, WatchReply};
 

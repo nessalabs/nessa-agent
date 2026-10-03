@@ -5,7 +5,11 @@ use crate::conversation::application::{
 };
 use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::{
-    change_watch::ProductWatchPermit, generated::MAX_GLOBAL_CHANGE_WATCHES, WatchTaskFault,
+    change_watch::{watch_principal, ProductWatchPermit, WatchPrincipal},
+    generated::{
+        MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
+    },
+    WatchTaskFault,
 };
 use crate::product_contract::generated::ChangeWatchErrorCode;
 use futures_util::poll;
@@ -40,6 +44,8 @@ impl WatchRecords for CountingRecords {
 struct CountingReceiver {
     actual: RecordBinding,
     admitted: AtomicU64,
+    // An owner removed this receiver's binding.
+    revoked: AtomicBool,
 }
 impl ReceiverAuthority for CountingReceiver {
     fn resolve<'a>(
@@ -48,7 +54,15 @@ impl ReceiverAuthority for CountingReceiver {
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
     {
         self.admitted.fetch_add(1, Ordering::SeqCst);
-        self.actual.resolve(credential)
+        let revoked = self.revoked.load(Ordering::SeqCst);
+        Box::pin(async move {
+            // Revocation keeps the binding but marks it inactive, as
+            // `LocalReceiverAuthority::change` does.
+            Ok(self.actual.resolve(credential).await?.map(|binding| ReceiverBinding {
+                active: !revoked,
+                ..binding
+            }))
+        })
     }
 }
 
@@ -98,6 +112,7 @@ impl WatchFixture {
         let receiver = Arc::new(CountingReceiver {
             actual: RecordBinding,
             admitted: AtomicU64::new(0),
+            revoked: AtomicBool::new(false),
         });
         let reads = Arc::new(RecordAdmissionSpy(AtomicU64::new(0)));
         let (state, authority) = fixture(MembershipRole::Member);
@@ -277,6 +292,8 @@ async fn real_commit_waits_for_physical_ack_then_emits_only_opaque_watch_identit
     assert_eq!(notice["event"], "conversation.changed");
     assert_eq!(notice["payload"], json!({"watchId": watch}));
     assert_eq!(notice["stateVersion"], 0);
+    // Row E1: the challenge was this socket's event 1; watch events follow it.
+    assert_eq!(notice["seq"], CHALLENGE_EVENT_SEQUENCE + 1);
     fixture.finish(peer, socket).await;
 }
 
@@ -459,39 +476,78 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
     fixture.storage.shutdown().await.unwrap();
 }
 
+/// Row R4: the gateway total counts every principal's owners and both target
+/// kinds. Other principals hold all but one owner through the same
+/// `WatchOwners`; this connection's record watch takes the last one, its
+/// catalogue watch is refused although its principal is under its own limit,
+/// and one released owner admits it.
 #[tokio::test]
-async fn actual_shared_gateway_capacity_counts_both_source_kinds_until_connection_drop() {
+async fn gateway_capacity_counts_every_principal_and_both_kinds_until_release() {
     let fixture = WatchFixture::new().await;
+    let mut others = Vec::new();
+    for index in 0..MAX_GLOBAL_CHANGE_WATCHES - 1 {
+        let principal = watch_principal(&format!("other-{}", index / MAX_PRINCIPAL_CHANGE_WATCHES));
+        others.push(
+            fixture
+                .state
+                .change_watches
+                .try_acquire(&principal)
+                .unwrap(),
+        );
+    }
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "records");
+    let acknowledged = text(peer.message().await);
+    assert_eq!(acknowledged["ok"], true, "{acknowledged}");
+    assert_eq!(fixture.state.change_watches.available_permits(), 0);
+    let catalogue = json!({"receiverId": "receiver", "accessEpoch": "3"});
+    fixture.send(&peer, "catalogue-refused", "conversation.watchCatalogue", catalogue.clone());
+    let refused = text(peer.message().await);
+    assert_eq!(refused["error"]["code"], "watch_capacity", "{refused}");
+    assert_eq!(fixture.state.record_reads.available_permits(), 4);
+    drop(others.pop());
+    fixture.send(&peer, "catalogue", "conversation.watchCatalogue", catalogue);
+    let accepted = text(peer.message().await);
+    assert_eq!(accepted["id"], "catalogue");
+    assert_eq!(accepted["ok"], true, "{accepted}");
+    assert_eq!(fixture.state.change_watches.available_permits(), 0);
+    drop(others);
+    fixture.finish(peer, socket).await;
+}
+
+/// Row R4b: one principal cannot hold more than its published limit across
+/// connections while the gateway still has room; a released owner admits it.
+#[tokio::test]
+async fn one_principal_cannot_hold_more_than_its_watch_limit_across_connections() {
+    let fixture = WatchFixture::new().await;
+    let catalogue = json!({"receiverId": "receiver", "accessEpoch": "3"});
     let mut connections = Vec::new();
-    for index in 0..MAX_GLOBAL_CHANGE_WATCHES / 2 {
+    let mut held = 0;
+    while held < MAX_PRINCIPAL_CHANGE_WATCHES {
         let (socket, mut peer) = test_socket(None);
         let socket = tokio::spawn(run_authenticated(
             socket,
             fixture.state.clone(),
             fixture.session.clone(),
         ));
-        let records = format!("records-{index}");
-        fixture.watch(&peer, &records);
-        let acknowledged = text(peer.message().await);
-        assert_eq!(acknowledged["id"], records);
-        assert_eq!(acknowledged["ok"], true);
-        let catalogue = format!("catalogue-{index}");
-        fixture.send(
-            &peer,
-            &catalogue,
-            "conversation.watchCatalogue",
-            json!({"receiverId": "receiver", "accessEpoch": "3"}),
-        );
-        let acknowledged = text(peer.message().await);
-        assert_eq!(acknowledged["id"], catalogue);
-        assert_eq!(acknowledged["ok"], true);
+        fixture.watch(&peer, "records");
+        assert_eq!(text(peer.message().await)["ok"], true);
+        held += 1;
+        if held < MAX_PRINCIPAL_CHANGE_WATCHES {
+            fixture.send(&peer, "catalogue", "conversation.watchCatalogue", catalogue.clone());
+            assert_eq!(text(peer.message().await)["ok"], true);
+            held += 1;
+        }
         connections.push((peer, socket));
     }
-    assert_eq!(fixture.state.change_watches.available_permits(), 0);
-    assert_eq!(fixture.state.record_reads.available_permits(), 4);
     assert_eq!(
-        fixture.records.installed.load(Ordering::SeqCst),
-        (MAX_GLOBAL_CHANGE_WATCHES / 2) as u64
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES - MAX_PRINCIPAL_CHANGE_WATCHES
     );
     let (socket, mut peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
@@ -499,29 +555,53 @@ async fn actual_shared_gateway_capacity_counts_both_source_kinds_until_connectio
         fixture.state.clone(),
         fixture.session.clone(),
     ));
-    fixture.watch(&peer, "capacity-refusal");
+    fixture.watch(&peer, "over-limit");
     let refused = text(peer.message().await);
-    assert_eq!(refused["error"]["code"], "watch_capacity");
-    assert_eq!(
-        fixture.records.installed.load(Ordering::SeqCst),
-        (MAX_GLOBAL_CHANGE_WATCHES / 2) as u64
-    );
+    assert_eq!(refused["error"]["code"], "watch_capacity", "{refused}");
     let (removed, completion) = connections.pop().unwrap();
     drop(removed);
     completion.await.unwrap();
-    assert_eq!(fixture.state.change_watches.available_permits(), 2);
-    fixture.watch(&peer, "after-original-drop");
+    fixture.watch(&peer, "after-release");
     let accepted = text(peer.message().await);
-    assert_eq!(accepted["id"], "after-original-drop");
-    assert_eq!(accepted["ok"], true);
-    assert_eq!(fixture.state.change_watches.available_permits(), 1);
-    assert_eq!(
-        fixture.records.installed.load(Ordering::SeqCst),
-        (MAX_GLOBAL_CHANGE_WATCHES / 2 + 1) as u64
-    );
+    assert_eq!(accepted["id"], "after-release");
+    assert_eq!(accepted["ok"], true, "{accepted}");
     for (peer, socket) in connections {
         drop(peer);
         socket.await.unwrap();
+    }
+    fixture.finish(peer, socket).await;
+}
+
+/// Row R3: the number of record targets one connection may hold is the
+/// schema's, not a rule written in the server.
+#[tokio::test]
+async fn record_targets_per_connection_follow_the_published_limit() {
+    let fixture = WatchFixture::new().await;
+    let mut conversations = vec![fixture.id.clone()];
+    for creation in 0..MAX_CONNECTION_RECORD_WATCHES {
+        conversations.push(fixture.catalogue_commit(10 + creation as u64).await);
+    }
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    for (index, conversation) in conversations.iter().enumerate() {
+        let request = format!("records-{index}");
+        fixture.send(
+            &peer,
+            &request,
+            "conversation.watchRecords",
+            json!({"conversationId": conversation.to_string(), "receiverId": "receiver", "accessEpoch": "3"}),
+        );
+        let reply = text(peer.message().await);
+        assert_eq!(reply["id"], request);
+        if index < MAX_CONNECTION_RECORD_WATCHES {
+            assert_eq!(reply["ok"], true, "{reply}");
+        } else {
+            assert_eq!(reply["error"]["code"], "watch_capacity", "{reply}");
+        }
     }
     fixture.finish(peer, socket).await;
 }
@@ -1307,10 +1387,165 @@ async fn closing_watch_admission_closes_live_connections_and_refuses_new_watches
         fixture.state.change_watches.available_permits(),
         MAX_GLOBAL_CHANGE_WATCHES
     );
-    let refused = fixture.state.change_watches.try_acquire().err();
+    let refused = fixture
+        .state
+        .change_watches
+        .try_acquire(&WatchPrincipal::of(&fixture.session))
+        .err();
     assert_eq!(refused, Some(ChangeWatchErrorCode::WatchClosed));
     assert_eq!(fixture.state.drain_watches().await, Ok(()));
     fixture.storage.shutdown().await.unwrap();
+}
+
+/// Row R2b: watch requests wait behind the socket's ordinary current-authority
+/// check, like every other non-record input. Once the credential is revoked,
+/// neither a malformed watch nor an unwatch is answered; the connection closes
+/// for the revocation.
+#[tokio::test]
+async fn watch_requests_are_answered_only_after_the_current_authority_check() {
+    for (method, params) in [
+        ("conversation.watchRecords", json!({})),
+        ("conversation.unwatch", json!({"watchId": "not-minted"})),
+    ] {
+        let fixture = WatchFixture::new().await;
+        let (socket, mut peer) = test_socket(None);
+        let socket = tokio::spawn(run_authenticated(
+            socket,
+            fixture.state.clone(),
+            fixture.session.clone(),
+        ));
+        revoke(&fixture.authority);
+        fixture.send(&peer, "after-revoke", method, params);
+        let Message::Close(Some(close)) = peer.message().await else {
+            panic!("{method} must not be answered after revocation");
+        };
+        assert_eq!(
+            close.code,
+            SessionCloseReason::CredentialRevoked.web_socket_code()
+        );
+        socket.await.unwrap();
+        assert_eq!(fixture.records.installed.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fixture.state.change_watches.available_permits(),
+            MAX_GLOBAL_CHANGE_WATCHES
+        );
+        fixture.storage.shutdown().await.unwrap();
+    }
+}
+
+fn checked_every(interval: Duration) -> SessionSettings {
+    SessionSettings::new(Duration::from_secs(10), Duration::from_secs(5), interval).unwrap()
+}
+
+/// Row A3: the receiver binding is revoked and nothing is committed. The
+/// periodic current-state check re-asks the watch's authority, closes the
+/// connection, and the watch's permit is released, with no hint sent.
+#[tokio::test]
+async fn periodic_check_rechecks_watch_authority_and_releases_permits_without_a_commit() {
+    let fixture = WatchFixture::new().await;
+    let state = fixture
+        .state
+        .clone()
+        .with_settings(checked_every(Duration::from_millis(50)));
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(socket, state, fixture.session.clone()));
+    fixture.watch(&peer, "install");
+    assert_eq!(text(peer.message().await)["ok"], true);
+    assert_eq!(
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES - 1
+    );
+    fixture.receiver.revoked.store(true, Ordering::SeqCst);
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("a revoked binding must close the watching connection");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::AuthorizationLost.web_socket_code()
+    );
+    assert!(peer.output.try_recv().is_err());
+    fixture.finish(peer, socket).await;
+}
+
+/// Row A3, second half: a notice that arrives while a periodic check is still
+/// running gets its own authority check once that one allows, and its hint is
+/// sent; the periodic check's answer is not reused for it.
+#[tokio::test]
+async fn notice_during_a_periodic_check_is_authorized_by_its_own_check() {
+    let mut fixture = WatchFixture::new().await;
+    let work = Arc::new(HeldReceiverWork {
+        released: Mutex::new(false),
+        wake: Condvar::new(),
+        entered: Notify::new(),
+        completed: AtomicU64::new(0),
+    });
+    let _release = ReleaseHeld(work.clone());
+    let authority = Arc::new(HoldFirstReceiver {
+        actual: RecordBinding,
+        first: AtomicBool::new(false),
+        work: work.clone(),
+    });
+    let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    fixture.state = fixture
+        .state
+        .clone()
+        .with_passive_read(authority.clone(), metadata)
+        .with_settings(checked_every(Duration::from_millis(50)));
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let acknowledged = text(peer.message().await);
+    assert_eq!(acknowledged["ok"], true);
+    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    authority.first.store(true, Ordering::SeqCst); // Hold the next periodic check.
+    tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+        .await
+        .unwrap();
+    fixture.commit().await;
+    assert!(peer.output.try_recv().is_err());
+    work.release();
+    let notice = text(peer.message().await);
+    assert_eq!(notice["event"], "conversation.changed");
+    assert_eq!(notice["payload"], json!({ "watchId": watch }));
+    assert_eq!(work.completed.load(Ordering::SeqCst), 1);
+    fixture.finish(peer, socket).await;
+}
+
+/// Row A4: a revoked credential closes a watching connection the same way
+/// whether a notice's authority check or the periodic check finds it.
+#[tokio::test]
+async fn revoked_credential_closes_the_same_way_from_a_notice_and_from_the_periodic_check() {
+    let mut codes = Vec::new();
+    for through_notice in [true, false] {
+        let fixture = WatchFixture::new().await;
+        // A notice path that the periodic check cannot reach first, and a
+        // periodic path with no commit at all.
+        let interval = if through_notice {
+            Duration::from_secs(3600)
+        } else {
+            Duration::from_millis(50)
+        };
+        let state = fixture.state.clone().with_settings(checked_every(interval));
+        let (socket, mut peer) = test_socket(None);
+        let socket = tokio::spawn(run_authenticated(socket, state, fixture.session.clone()));
+        fixture.watch(&peer, "install");
+        assert_eq!(text(peer.message().await)["ok"], true);
+        revoke(&fixture.authority);
+        if through_notice {
+            fixture.commit().await;
+        }
+        let Message::Close(Some(close)) = peer.message().await else {
+            panic!("a revoked credential must close the watching connection");
+        };
+        codes.push(close.code);
+        fixture.finish(peer, socket).await;
+    }
+    let revoked = SessionCloseReason::CredentialRevoked.web_socket_code();
+    assert_eq!(codes, vec![revoked, revoked]);
 }
 
 #[tokio::test]
@@ -1424,7 +1659,13 @@ impl HostWatchFixture {
     pub(crate) async fn cancelled_task() -> Self {
         let inner = WatchFixture::new().await;
         inner.commit().await;
-        let owner = Arc::new(inner.state.change_watches.try_acquire().unwrap());
+        let owner = Arc::new(
+            inner
+                .state
+                .change_watches
+                .try_acquire(&WatchPrincipal::of(&inner.session))
+                .unwrap(),
+        );
         let guard = owner.task();
         let entered = Arc::new(Notify::new());
         let entry = entered.clone();

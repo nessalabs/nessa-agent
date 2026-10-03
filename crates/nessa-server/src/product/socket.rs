@@ -73,10 +73,11 @@ where
         nonce: nonce.clone(),
         expires_at: challenge_expires_at,
     };
-    let challenge = match EventFrame::push("session.challenge", &challenge, 1, 0) {
-        Ok(frame) => OutgoingMessage::Event(frame),
-        Err(_) => return,
-    };
+    let challenge =
+        match EventFrame::push("session.challenge", &challenge, CHALLENGE_EVENT_SEQUENCE, 0) {
+            Ok(frame) => OutgoingMessage::Event(frame),
+            Err(_) => return,
+        };
     let authenticated = timeout_at(deadline, async {
         send(state.settings.write_timeout(), &mut socket, challenge)
             .await
@@ -392,13 +393,7 @@ async fn write_authenticated<S>(
     // physical-send priority change. The retained-position bound is documented in
     // docs/design/authorized-record-reads.md, R62.
     let mut pending_record: Option<QueuedRecordResponse> = None;
-    let mut pending_watch: Option<WatchFrame> = None;
     loop {
-        if watches.is_closed() {
-            pending_watch = None;
-        } else if pending_watch.is_none() {
-            pending_watch = watches.take();
-        }
         let deadline = retained_delivery_deadline(&pending_record, &watches);
         let next = tokio::select! {
             biased;
@@ -415,8 +410,10 @@ async fn write_authenticated<S>(
             Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
             () = std::future::ready(()), if pending_record.is_some() =>
                 Some(Ok(WriterResponse::Record(Box::new(pending_record.take().expect("pending record selected"))))),
-            () = std::future::ready(()), if pending_watch.is_some() =>
-                Some(Ok(WriterResponse::Watch(Box::new(pending_watch.take().expect("pending watch selected"))))),
+            // A notice leaves WatchDeliveries only when this arm is chosen, so an
+            // unwatch that retires it before then also removes it (row U3).
+            Some(frame) = async { watches.take() }, if !watches.is_closed() =>
+                Some(Ok(WriterResponse::Watch(Box::new(frame)))),
             () = watches.changed(), if !watches.is_closed() => continue,
             else => None,
         };
@@ -481,6 +478,11 @@ async fn write_authenticated<S>(
         }
     }
 }
+
+/// The socket's event sequence: `session.challenge` is its first event, and
+/// every event after authentication (watch notices, from `WatchDeliveries`)
+/// continues from here, so one socket never repeats a sequence number.
+pub(super) const CHALLENGE_EVENT_SEQUENCE: u64 = 1;
 
 fn retained_delivery_deadline(
     record: &Option<QueuedRecordResponse>,
@@ -627,6 +629,7 @@ where
             }
             _ = current_state.tick(), if refresh.is_none() => {
                 refresh = Some(Box::pin(current_session_error(&state, &session)));
+                watches.recheck(&state, &session);
                 None
             }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
@@ -660,7 +663,7 @@ where
                     },
                 };
                 let record = matches!(ResponseClass::for_method(&frame.method), ResponseClass::Record);
-                if record || ConnectionWatches::method(&frame.method) {
+                if record {
                     Some((frame, Instant::now()))
                 } else {
                     // Every deferred input asks current authority independently;
@@ -1438,7 +1441,8 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         .ok_or(())?
 }
 
-fn close_reason(error: AccessError) -> SessionCloseReason {
+/// The one mapping from an access error to how a live connection closes.
+pub(super) fn close_reason(error: AccessError) -> SessionCloseReason {
     match error {
         AccessError::CredentialRevoked => SessionCloseReason::CredentialRevoked,
         AccessError::CredentialExpired => SessionCloseReason::CredentialExpired,

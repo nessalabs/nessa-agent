@@ -161,6 +161,7 @@ impl ProductRouteState {
             record_reads: Arc::new(Semaphore::new(4)),
             change_watches: Arc::new(WatchOwners::new(
                 super::generated::MAX_GLOBAL_CHANGE_WATCHES,
+                super::generated::MAX_PRINCIPAL_CHANGE_WATCHES,
             )),
             record_watches: None,
             catalogue_watches: None,

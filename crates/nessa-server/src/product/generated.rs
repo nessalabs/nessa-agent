@@ -1265,6 +1265,9 @@ pub struct ConversationWatchEnded {
 }
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const MAX_GLOBAL_CHANGE_WATCHES: usize = 64;
+pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = 8;
+pub const MAX_CONNECTION_RECORD_WATCHES: usize = 1;
+pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = 1;
 pub const MAX_CONNECTION_CHANGE_WATCHES: usize = 2;
 /// Published bound from the product schema.
 pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;

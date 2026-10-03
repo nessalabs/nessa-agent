@@ -1388,7 +1388,12 @@ export type ChangeWatchErrorCode =
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
-export const changeWatchLimits = { globalOwners: 64, connectionTargets: 2 } as const
+export const changeWatchLimits = {
+  globalOwners: 64,
+  principalOwners: 8,
+  recordTargets: 1,
+  catalogueTargets: 1,
+} as const
 /** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
 export const passiveReadTiming = {
   readTimeoutMs: 10000,

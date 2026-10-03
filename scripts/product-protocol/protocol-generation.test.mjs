@@ -317,7 +317,12 @@ test("watch policy and identity publish the same schema owner to both languages"
   fixture((path) => {
     const pattern = "^[a-z]+-[1-9][0-9]*$"
     edit(path, "protocol/product/v1.json", (schema) => {
-      schema["x-changeWatchLimits"] = { globalOwners: 17, connectionTargets: 1 }
+      schema["x-changeWatchLimits"] = {
+        globalOwners: 17,
+        principalOwners: 5,
+        recordTargets: 3,
+        catalogueTargets: 2,
+      }
       schema.$defs.ChangeWatchId.maxLength = 51
       schema.$defs.ChangeWatchId.pattern = pattern
     })
@@ -330,10 +335,16 @@ test("watch policy and identity publish the same schema owner to both languages"
     assert.match(ts, /maxChangeWatchIdBytes = 51/)
     assert.ok(ts.includes(`changeWatchIdPattern = ${JSON.stringify(pattern)}`))
     assert.match(ts, /globalOwners: 17/)
-    assert.match(ts, /connectionTargets: 1/)
+    assert.match(ts, /principalOwners: 5/)
+    assert.match(ts, /recordTargets: 3/)
+    assert.match(ts, /catalogueTargets: 2/)
     assert.match(rust, /MAX_CHANGE_WATCH_ID_BYTES: usize = 51;/)
     assert.match(rust, /MAX_GLOBAL_CHANGE_WATCHES: usize = 17;/)
-    assert.match(rust, /MAX_CONNECTION_CHANGE_WATCHES: usize = 1;/)
+    assert.match(rust, /MAX_PRINCIPAL_CHANGE_WATCHES: usize = 5;/)
+    assert.match(rust, /MAX_CONNECTION_RECORD_WATCHES: usize = 3;/)
+    assert.match(rust, /MAX_CONNECTION_CATALOGUE_WATCHES: usize = 2;/)
+    // Per-connection capacity is derived, never a second number to keep in step.
+    assert.match(rust, /MAX_CONNECTION_CHANGE_WATCHES: usize = 5;/)
     assert.match(ts, /export type ChangeWatchId = string/)
     assert.match(rust, /pub type ChangeWatchId = String;/)
     assert.match(rust, /pub reason: ChangeWatchEndReason/)
@@ -346,8 +357,10 @@ for (const [name, value] of [
   ["globalOwners", undefined],
   ["globalOwners", 0],
   ["globalOwners", "64"],
-  ["connectionTargets", -1],
-  ["connectionTargets", 1.5],
+  ["principalOwners", 65],
+  ["recordTargets", -1],
+  ["catalogueTargets", 1.5],
+  ["connectionTargets", 2],
   ["unknownOwners", 1],
 ])
   test(`invalid watch ${name} ${value} preserves every unpublished artifact`, () =>

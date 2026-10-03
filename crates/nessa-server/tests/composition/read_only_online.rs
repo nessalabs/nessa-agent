@@ -701,9 +701,10 @@ fn default_budget_consumes_cumulative_valid_rpcs() {
 }
 
 /// The finish line of #298 across real processes: a seeded receiver replays,
-/// registers before its final recheck, catches a commit that races the
-/// registration, follows live hints, recovers a hint lost while disconnected
-/// from its durable checkpoint, and ends with the same folded view a fresh
+/// registers before its final recheck, catches a commit made between the
+/// acknowledgement and that recheck, follows live hints, recovers a commit
+/// made while it was disconnected (so its hint was never sent) from its durable
+/// checkpoint, and ends with the same folded view a fresh
 /// full replay produces. Revocation stops hints and the next read is denied;
 /// a sleeping gateway leaves the saved view readable and the check failed.
 /// Rows L1–L7 of the delivery table in docs/design/committed-change-watches.md.
@@ -746,7 +747,9 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     // L1: seeded replay to a durable checkpoint.
     assert_eq!(facts(&sync(&cache)), "1");
 
-    // L2: register, then a commit lands before the final recheck. The recheck
+    // L2: register; a commit lands after the acknowledgement and before the
+    // final recheck (the install-to-acknowledgement window is the in-process
+    // row O2). The recheck
     // from the checkpoint catches it, and the hint for it still arrives,
     // because registration came first.
     let mut receiver = WireClient::connect(&root);
@@ -768,8 +771,8 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     hint(&mut receiver, &first_watch);
     assert_eq!(facts(&sync(&cache)), "3");
 
-    // L4: the receiver disconnects while the gateway keeps writing; that hint
-    // is lost. A new connection gets a new watch identity, the old one is
+    // L4: the receiver disconnects and the gateway commits meanwhile, so no
+    // hint for that commit is ever sent. A new connection gets a new watch identity, the old one is
     // foreign to it, and the recheck from the durable checkpoint recovers.
     drop(receiver);
     gateway.act("commit");
