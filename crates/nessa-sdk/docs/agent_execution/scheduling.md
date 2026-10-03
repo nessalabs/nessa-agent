@@ -100,7 +100,13 @@ the `application` test binary.
 | Start | An owner left in `pending` with no queue entry, after a cancellation's settlement was cut short, not yet stopped | With nothing else queued, takes the slot, passes over the owner, then clears `running` and exits. The next `cancel_pending` collects owners whether or not they are queued | `Busy` until the runner exits | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, second runner |
 | Start | The same owner, stopped | Takes the slot and settles it as stopped | `Busy` until the runner has settled it | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, third runner |
 | The slot, after removal, close or a stop emptied the queue while it waited | Nothing queued | Takes the slot, settles stopped owners, then clears `running` and exits | `Busy` until the runner has been polled: it held the slot for work that existed when it began waiting | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` (removal), `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, first runner |
-| A queued item settled | Any | Publishes the receipt's result, releases the slot, then loops to the pre-check | Can be `Busy` just after that receipt resolves | None yet. Open in #405, which also covers the pre-check on this next loop |
+
+The table lists orderings that have a test. One known ordering is not yet in
+it: after a queued item settles, the runner publishes the receipt's result
+before it releases the slot. A direct `invoke` sent just after that receipt
+resolves can therefore be `Busy`, and the pre-check on the runner's next loop
+sits inside the same window. This predates the table and is open in #405. It
+joins the table, with its test, when #405 changes it.
 
 ## Idempotent submission retries
 
