@@ -44,8 +44,8 @@ pub(super) fn execute_with_context(
         },
     )?;
     let expires_at = expiry_option(extra)?;
-    let chat_grants = option_value(&args[args.len().min(4)..], "--chat-grants")?
-        .unwrap_or("server.read,conversation.write,credential.manage");
+    let chat_grants =
+        option_value(&args[args.len().min(4)..], "--chat-grants")?.unwrap_or(OWNER_GRANTS);
     validate_grants(chat_grants)?;
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
@@ -80,8 +80,8 @@ pub(super) fn execute_with_context(
             credential_id,
             issued_at: now,
             expires_at,
-            grants: ["server.read", "conversation.write", "credential.manage"]
-                .into_iter()
+            grants: OWNER_GRANTS
+                .split(',')
                 .map(|action| CredentialGrantDto {
                     action: action.into(),
                     resource: ResourceDto {
@@ -136,6 +136,12 @@ fn validate_options(args: &[String], allowed: &[&str]) -> Result<(), RunError> {
     }
     Ok(())
 }
+/// What the local owner, and the default owner surface `nessa-panel`, may do:
+/// read the gateway, read and write its conversations, and manage credentials.
+/// Reading conversations is also what lets the owner propose a device's read
+/// consent when pairing (design row S17 in `docs/design/auth/device-pairing.md`).
+const OWNER_GRANTS: &str = "server.read,conversation.read,conversation.write,credential.manage";
+
 fn validate_grants(grants: &str) -> Result<(), RunError> {
     let mut seen = std::collections::HashSet::new();
     if !grants.split(',').all(|grant| {
@@ -196,7 +202,7 @@ fn provision_command(
     let surface =
         option_value(args, "--surface-id")?.ok_or_else(|| failure("--surface-id is required"))?;
     let defaults = if surface == "nessa-panel" {
-        "server.read,conversation.write,credential.manage"
+        OWNER_GRANTS
     } else {
         "server.read"
     };

@@ -198,7 +198,10 @@ fn refusal(error: PairingRuntimeError) -> &'static str {
     let code = match error {
         PairingRuntimeError::Owner(OwnerError::Authorization(error)) => {
             return match error {
-                AccessError::Denied | AccessError::IdentityMismatch => "forbidden",
+                AccessError::Denied => "forbidden",
+                // Another owner's invitation answers as an unknown one, so its
+                // existence is not disclosed (design row O3).
+                AccessError::IdentityMismatch => PairingErrorCode::PairingNotFound.as_str(),
                 AccessError::Unavailable | AccessError::StaleRevision => {
                     PairingErrorCode::PairingUnavailable.as_str()
                 }
@@ -207,7 +210,7 @@ fn refusal(error: PairingRuntimeError) -> &'static str {
                 | AccessError::CredentialExpired
                 | AccessError::InactiveMembership
                 | AccessError::Unsupported => "unauthorized",
-            }
+            };
         }
         PairingRuntimeError::Owner(OwnerError::Enrollment(error))
         | PairingRuntimeError::Enrollment(error) => store_refusal(error),

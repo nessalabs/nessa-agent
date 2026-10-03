@@ -21,14 +21,10 @@ use std::{
 };
 use tempfile::TempDir;
 
-/// A throwaway gateway namespace: its data directory, credentials and ports.
+/// A throwaway gateway namespace: its data directory, owner credential and ports.
 struct Gateway {
     root: TempDir,
-    /// The `auth init --local` owner credential, as provisioned by default.
-    default_owner: String,
-    /// An administrative surface credential that also carries
-    /// `conversation.read`, which Auth requires of whoever proposes a
-    /// conversation-read consent.
+    /// The owner credential `auth init --local` writes, as provisioned by default.
     token: String,
     product: SocketAddr,
     native: Option<SocketAddr>,
@@ -51,34 +47,10 @@ impl Gateway {
             "{}",
             String::from_utf8_lossy(&init.stderr)
         );
-        let default_owner = std::fs::read_to_string(&token_file)
+        let token = std::fs::read_to_string(&token_file)
             .unwrap()
             .trim()
             .to_owned();
-        let surface = command(&root.path().join("data"))
-            .args([
-                "auth",
-                "provision-surface",
-                "--local",
-                "--surface-id",
-                "pairing-owner",
-                "--grants",
-                "server.read,conversation.read,credential.manage",
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            surface.status.success(),
-            "{}",
-            String::from_utf8_lossy(&surface.stderr)
-        );
-        let token = std::fs::read_to_string(
-            root.path()
-                .join("data/ci/auth/surfaces/pairing-owner.token"),
-        )
-        .unwrap()
-        .trim()
-        .to_owned();
         let native = native.then(free_address);
         let config = match native {
             Some(address) => json!({"native": {"listenAddress": address.to_string()}}),
@@ -93,7 +65,6 @@ impl Gateway {
         file.sync_all().unwrap();
         Self {
             root,
-            default_owner,
             token,
             product: free_address(),
             native,
@@ -181,7 +152,7 @@ fn invitation(status: &Value) -> Value {
     status["invitationId"].clone()
 }
 
-/// Rows O1, S3, S12: the composed gateway enrolls a device to Approved, and a
+/// Rows O1, S3, S12, S17: the composed gateway enrolls a device to Approved, and a
 /// SIGTERM with a native peer still connected stops it cleanly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mounted_gateway_enrolls_a_device_to_approved() {
@@ -192,14 +163,7 @@ async fn mounted_gateway_enrolls_a_device_to_approved() {
         !gateway.key().is_empty(),
         "the first start publishes the key"
     );
-    // Auth admits a consent only for an owner whose credential allows what the
-    // consent grants (`conversation.read`); the default owner credential does
-    // not carry it, so it cannot propose one.
-    let refused = tokio::task::block_in_place(|| {
-        ProductClient::connect(gateway.product, &gateway.default_owner)
-            .refused("pairing.create", json!({}))
-    });
-    assert_eq!(refused, "forbidden");
+    // The default owner credential pairs devices (design row S17).
     let created = tokio::task::block_in_place(|| gateway.owner().ok("pairing.create", json!({})));
     let id = invitation(&created["status"]);
     let client_root = tempfile::tempdir().unwrap();

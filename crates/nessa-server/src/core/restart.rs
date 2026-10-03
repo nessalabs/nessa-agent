@@ -17,9 +17,11 @@
 //! else keeps the behaviour it had, because a service that retries too often is
 //! a worse bug than one that retries when it did not need to, but a service
 //! that gives up on a failure that would have cleared is worse than both.
+use crate::device_pairing::infrastructure::GatewayIdentityError;
 use nessa_auth::adapters::local::LocalStoreError;
+use nessa_auth::application::pairing::{PairingStoreError, PrivateStateError};
 
-use super::RunError;
+use super::{error::NativeFailure, RunError};
 
 /// What a fatal failure says about being started again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +73,18 @@ pub(super) fn restart(error: &RunError) -> Restart {
         // attempt reads unchanged, so retrying is the relaunch loop and not a
         // recovery.
         RunError::Usage(_) => Restart::Pointless,
+        // Native pairing state that contradicts itself, or a missing key with
+        // enrollment history: the same files refuse the same way next time
+        // (design row S16). Held locks, taken ports and the rest fall through.
+        RunError::Native(
+            NativeFailure::PrivateState(PrivateStateError::Corrupt | PrivateStateError::Conflict)
+            | NativeFailure::Identity(
+                GatewayIdentityError::PrivateState(
+                    PrivateStateError::Corrupt | PrivateStateError::Conflict,
+                )
+                | GatewayIdentityError::Registry(PairingStoreError::GatewayKeyHistoryExists),
+            ),
+        ) => Restart::Pointless,
         // Everything below is either transient by nature or carries no typed
         // cause to judge — an opaque message is not evidence of permanence, and
         // guessing wrong here strands a gateway that would have started.
@@ -80,9 +94,8 @@ pub(super) fn restart(error: &RunError) -> Restart {
         | RunError::Bind { .. }
         | RunError::Serve(_)
         | RunError::Shutdown(_)
-        // Native pairing follows the authentication setup, bind and serve
-        // failures it is reported as: a held private state, a taken port or a
-        // failed listener can clear.
+        // The rest of native pairing can clear: a held private state, a taken
+        // port, a failed listener, unavailable storage.
         | RunError::Native(_) => Restart::Worthwhile,
     }
 }
@@ -90,7 +103,6 @@ pub(super) fn restart(error: &RunError) -> Restart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::NativeFailure;
     use crate::env::{EnvironmentError, HOST};
     use std::io::{Error, ErrorKind};
 
@@ -115,6 +127,18 @@ mod tests {
                     problem: "is not a journal record",
                 },
             ),
+            // Native pairing state that refuses the same way next time (row S16).
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
+                PairingStoreError::GatewayKeyHistoryExists,
+            ))),
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::PrivateState(
+                PrivateStateError::Corrupt,
+            ))),
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::PrivateState(
+                PrivateStateError::Conflict,
+            ))),
+            RunError::Native(NativeFailure::PrivateState(PrivateStateError::Corrupt)),
+            RunError::Native(NativeFailure::PrivateState(PrivateStateError::Conflict)),
         ] {
             assert_eq!(restart(&error), Restart::Pointless, "{error}");
         }
@@ -148,6 +172,16 @@ mod tests {
                 address: "127.0.0.1:47650".parse().unwrap(),
                 source: Error::from(ErrorKind::AddrInUse),
             }),
+            RunError::Native(NativeFailure::PrivateState(PrivateStateError::Locked)),
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::PrivateState(
+                PrivateStateError::Unavailable,
+            ))),
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
+                PairingStoreError::Unavailable,
+            ))),
+            RunError::Native(NativeFailure::Directory(Error::from(
+                ErrorKind::PermissionDenied,
+            ))),
         ] {
             assert_eq!(restart(&error), Restart::Worthwhile, "{error}");
         }

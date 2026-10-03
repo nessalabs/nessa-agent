@@ -198,7 +198,8 @@ impl CompositionRoot {
         // bind failure drops the browser listener unserved (design row S10).
         let native = match native {
             Some(prepared) => {
-                let bound = super::native_pairing::bind(prepared).await?;
+                let bound =
+                    super::native_pairing::bind(prepared, dependencies.clock.clone()).await?;
                 tracing::info!(
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
@@ -351,16 +352,18 @@ impl CompositionRoot {
                 }
             });
         }
-        // An accept failure that ends the native listener stops the whole gateway
-        // through the same path as a process signal (design row S14).
+        // An accept failure that ends the native listener, or its task ending
+        // any other way, stops the whole gateway through the same path as a
+        // process signal (design rows S14, S15).
         let (native_failure, native_failed) = tokio::sync::watch::channel(None);
         let mut native = native.map(|bound| super::native_pairing::start(bound, native_failure));
+        let native_watch = native.as_ref().map(|_| native_failed.clone());
         // Admission stops independently of physical reader drain. The process
         // joins the cleanup owner and carries its retained report into its exit.
         // A panic before publication leaves the report unconfirmed.
         let report: Arc<Mutex<ShutdownReport>> = Arc::new(Mutex::new(ShutdownReport::Unreported));
         let slot = report.clone();
-        let stop = stop_signal(shutdown_signal(), native_failed.clone());
+        let stop = stop_signal(shutdown_signal(), native_watch);
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).
@@ -458,17 +461,26 @@ fn serve_outcome(
     unconfirmed
 }
 
-/// Resolves on a process signal, or when the native listener publishes a
-/// failure that ended it. The root stops the whole gateway on either.
+/// Resolves on a process signal, or when the native listener's channel changes:
+/// a published failure (row S14), or its closing because the listener task
+/// ended without being asked to, as on a panic (row S15). With native pairing
+/// off there is no channel, and only the process signal stops the gateway.
 async fn stop_signal(
     signal: impl Future<Output = ()>,
-    mut native_failed: tokio::sync::watch::Receiver<Option<std::io::ErrorKind>>,
+    native: Option<tokio::sync::watch::Receiver<Option<std::io::ErrorKind>>>,
 ) {
+    let native_ended = async {
+        match native {
+            // Either outcome means the listener is no longer serving.
+            Some(mut native) => {
+                let _ = native.changed().await;
+            }
+            None => std::future::pending().await,
+        }
+    };
     tokio::select! {
         () = signal => {}
-        // A closed channel means no listener remains to fail; only the
-        // process signal can stop the gateway then.
-        Ok(_) = native_failed.wait_for(Option::is_some) => {}
+        () = native_ended => {}
     }
 }
 
@@ -1605,7 +1617,7 @@ mod tests {
     #[tokio::test]
     async fn native_listener_failure_stops_the_gateway_and_is_the_process_result() {
         let (failure, failed) = tokio::sync::watch::channel(None);
-        let stop = tokio::spawn(stop_signal(std::future::pending(), failed.clone()));
+        let stop = tokio::spawn(stop_signal(std::future::pending(), Some(failed.clone())));
         tokio::task::yield_now().await;
         assert!(!stop.is_finished(), "nothing has failed yet");
         failure.send_replace(Some(std::io::ErrorKind::InvalidInput));
@@ -1626,24 +1638,43 @@ mod tests {
             matches!(*report.lock().unwrap(), ShutdownReport::Unreported),
             "the report was read before the listener failure was returned"
         );
-        // A listener that ended without failing closes the channel; only the
-        // process signal stops the gateway then.
-        let (failure, failed) = tokio::sync::watch::channel(None);
-        drop(failure);
+        // With native pairing off there is no channel; only the process
+        // signal stops the gateway.
         let (signal, signalled) = oneshot::channel::<()>();
         let stop = tokio::spawn(stop_signal(
             async {
                 let _ = signalled.await;
             },
-            failed,
+            None,
         ));
         tokio::task::yield_now().await;
-        assert!(!stop.is_finished(), "a closed channel is not a failure");
+        assert!(!stop.is_finished(), "nothing native can stop it");
         signal.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(2), stop)
             .await
             .unwrap()
             .unwrap();
+    }
+
+    /// Row S15: a native listener task that ends without publishing a failure,
+    /// as on a panic, drops its sender; that also stops the gateway.
+    #[tokio::test]
+    async fn a_vanished_native_listener_stops_the_gateway() {
+        let (failure, failed) = tokio::sync::watch::channel(None);
+        let listener = tokio::spawn(async move {
+            let _failure = failure;
+            panic!("native listener fault");
+        });
+        assert!(listener.await.unwrap_err().is_panic());
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            stop_signal(std::future::pending(), Some(failed.clone())),
+        )
+        .await
+        .expect("a vanished listener resolves the stop signal");
+        // It is no listener failure: the shutdown report carries the fault.
+        let report = Mutex::new(ShutdownReport::Confirmed);
+        assert!(serve_outcome(Ok(()), *failed.borrow(), &report).is_ok());
     }
 
     #[test]

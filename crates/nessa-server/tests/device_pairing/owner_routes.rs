@@ -317,6 +317,64 @@ async fn owner_route_approve_exact_claim_before_effect() {
     listener.await.unwrap().unwrap();
 }
 
+/// Row O3: another administrator of the same organization cannot tell another
+/// owner's invitation from an unknown one, and cannot change it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_route_hides_another_owners_invitation() {
+    let fixture = Fixture::new().await;
+    // A second admin principal in the same organization, with the same grants.
+    let IssueCredentialOutcome::Issued { evidence, .. } = fixture
+        .registry
+        .provision_surface(
+            "second-owner",
+            "second-owner-request".into(),
+            "second-owner-credential".into(),
+            vec!["credential.manage".into(), "conversation.read".into()],
+            100,
+            None,
+        )
+        .unwrap()
+    else {
+        panic!("a new admin surface credential is issued");
+    };
+    let second = String::from_utf8(evidence.expose_bytes().to_vec()).unwrap();
+    let address = serve(&fixture, true).await;
+    let token = fixture.owner_token.clone();
+    let owned =
+        blocking(|| ProductClient::connect(address, &token).ok("pairing.create", json!({})));
+    let id = invitation(&owned["status"]);
+    let before = fixture.registry.pending_pairings().unwrap();
+    blocking(|| {
+        let mut other = ProductClient::connect(address, &second);
+        for (method, params) in [
+            ("pairing.status", json!({"invitationId": id})),
+            ("pairing.cancel", json!({"invitationId": id})),
+            ("pairing.deny", json!({"invitationId": id})),
+            (
+                "pairing.approve",
+                json!({"invitationId": id, "deviceKey": vec![7; 32]}),
+            ),
+        ] {
+            assert_eq!(
+                other.refused(method, params.clone()),
+                other.refused(method, {
+                    let mut unknown = params;
+                    unknown["invitationId"] = json!(vec![9; 16]);
+                    unknown
+                }),
+                "{method}: another owner's invitation must read as unknown"
+            );
+        }
+        assert_eq!(
+            other.refused("pairing.status", json!({"invitationId": id})),
+            "pairing_not_found"
+        );
+        // Listing shows only the caller's own enrollments.
+        assert_eq!(other.ok("pairing.pending", json!({}))["items"], json!([]));
+    });
+    assert_eq!(fixture.registry.pending_pairings().unwrap(), before);
+}
+
 /// Row O3: an administrator whose credential does not allow what the consent
 /// grants (`conversation.read`) passes socket admission and is refused by
 /// Auth's exact consent check, as `forbidden`, with nothing created.

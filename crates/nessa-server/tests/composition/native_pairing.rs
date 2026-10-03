@@ -2,6 +2,7 @@
 //! and private state (design rows S4, S10, S12 in
 //! `docs/design/auth/device-pairing.md`, "Owner routes and mounting").
 use super::*;
+use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use nessa_auth::{
@@ -177,7 +178,7 @@ async fn native_bind_failure_preserves_key_and_history() {
     let Err(RunError::Native(NativeFailure::Bind {
         address: refused,
         source,
-    })) = bind(prepared).await
+    })) = bind(prepared, RuntimeDependencies::default().clock).await
     else {
         panic!("a taken native address must refuse startup");
     };
@@ -195,7 +196,9 @@ async fn native_bind_failure_preserves_key_and_history() {
     let (prepared, _commands) = prepare(&loopback(), namespace.inputs(namespace.registry()))
         .await
         .unwrap();
-    bind(prepared).await.unwrap();
+    bind(prepared, RuntimeDependencies::default().clock)
+        .await
+        .unwrap();
     assert_eq!(std::fs::read(namespace.key_file()).unwrap(), key);
 }
 
@@ -208,7 +211,9 @@ async fn native_shutdown_joins_a_held_peer() {
     let (prepared, commands) = prepare(&loopback(), namespace.inputs(namespace.registry()))
         .await
         .unwrap();
-    let bound = bind(prepared).await.unwrap();
+    let bound = bind(prepared, RuntimeDependencies::default().clock)
+        .await
+        .unwrap();
     let address = bound.local_address();
     let (failure, failed) = watch::channel(None);
     let mut running = start(bound, failure);

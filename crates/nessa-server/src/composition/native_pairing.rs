@@ -12,7 +12,7 @@
 //! Arrows are construction and ownership handoffs, in order. Design rows
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting").
 use super::runtime_config::NativeConfig;
-use crate::app::dependencies::RuntimeDependencies;
+use crate::app::ports::Clock as MonotonicClock;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
 use crate::device_pairing::infrastructure::{
     restore_gateway_identity, GatewayPairing, InvitationEntropy, NativeEnrollmentConnections,
@@ -137,17 +137,17 @@ impl BoundNative {
 }
 
 /// Bind the configured address and build this gateway's only connection owner
-/// (design rows S10, S13). A bind failure leaves the key and enrollment history
-/// as `prepare` found them.
-pub(super) async fn bind(prepared: PreparedNative) -> Result<BoundNative, RunError> {
+/// (design rows S10, S13), on the root's monotonic clock for its deadlines. A
+/// bind failure leaves the key and enrollment history as `prepare` found them.
+pub(super) async fn bind(
+    prepared: PreparedNative,
+    clock: Arc<dyn MonotonicClock>,
+) -> Result<BoundNative, RunError> {
     let PreparedNative { gateway, address } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
     let bound = socket.local_address().map_err(bind_failed)?;
-    let connections = Arc::new(NativeEnrollmentConnections::new(
-        gateway.clone(),
-        RuntimeDependencies::default().clock,
-    ));
+    let connections = Arc::new(NativeEnrollmentConnections::new(gateway.clone(), clock));
     Ok(BoundNative {
         gateway,
         listener: NativeEnrollmentListener::new(socket, connections),
@@ -162,9 +162,10 @@ pub(super) struct RunningNative {
     task: JoinHandle<IoResult<()>>,
 }
 
-/// Start serving. An accept failure that ends the listener is published on `failure`
-/// before the listener drains (design rows P67, S14); the root stops the whole
-/// gateway on it.
+/// Start serving. An accept failure that ends the listener is published on
+/// `failure` before the listener drains (design rows P67, S14). The sender lives
+/// inside the listener task, so a panic closes the channel (row S15); the root
+/// stops the whole gateway on either.
 pub(super) fn start(
     bound: BoundNative,
     failure: watch::Sender<Option<ErrorKind>>,

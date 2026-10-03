@@ -118,7 +118,10 @@ The gateway serves authenticated WebSocket sessions at `/session`. The panel use
 this protocol and automatically loads its own credential through the native host.
 `auth init` assigns it a distinct principal and private file at
 `auth/surfaces/nessa-panel.token`, with all currently implemented permissions:
-`server.read`, `conversation.write`, and `credential.manage`.
+`server.read`, `conversation.read`, `conversation.write`, and `credential.manage`.
+The owner credential `auth init` writes carries the same four; `conversation.read`
+is what lets it pair a device, whose consent is to read conversations. A credential
+issued before this keeps its grants; provision a new one to pair devices with it.
 Use `auth init --local --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
 to restrict initial chat access. Client metadata never grants permissions.
 
@@ -211,7 +214,7 @@ Stop the gateway, then provision or replace the credential assigned to a surface
 
 ```sh
 target/debug/nessa auth provision-surface --local --surface-id terminal --grants server.read
-target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.write,credential.manage
+target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.read,conversation.write,credential.manage
 ```
 
 Each surface has a distinct principal, membership, and token. Reprovisioning revokes
