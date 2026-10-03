@@ -82,9 +82,9 @@ storage, or whose presence cannot be checked, remains observed and returns
 Queued work and direct `invoke` share one invocation slot. `invoke` takes it
 without waiting and returns `Busy` if it is held. The queue runner waits for it.
 An attachment that completes starts the runner, and the runner loops after each
-item, whether or not anything is queued. A runner that finds nothing queued
-exits without taking the slot. That check, `running`, and admission share the
-scheduler lock.
+item, whether or not anything is queued. A runner with nothing queued and no
+pending owner to settle exits without taking the slot. That check, `running`,
+and admission share the scheduler lock.
 
 Tests in the table are named from the crate's test roots. The unit tests are
 `application::agent_execution::agents::scheduling::tests` in the library. The
@@ -94,9 +94,10 @@ the `application` test binary.
 
 | Runner reaches | Scheduler, read under its lock | Runner does | A direct `invoke` at that moment | Test |
 | --- | --- | --- | --- | --- |
-| Start, or the next loop | Nothing queued | Clears `running` and exits without the slot | Is not refused as `Busy` by the runner | `scheduling::tests::an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke`, `scheduled_panics::dispatch_save_panic_does_not_inherit_previous_close_actor` |
+| Start, or the next loop | Nothing queued and no pending owner | Clears `running` and exits without the slot | Is not refused as `Busy` by the runner | `scheduling::tests::an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke`, `scheduled_panics::dispatch_save_panic_does_not_inherit_previous_close_actor` |
 | Start, or the next loop | Queued input, while a direct invocation holds the slot | Waits for the slot, then selects under the scheduler lock | The direct invocation already holds the slot | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops`, `scheduled_panics::dispatch_save_panic_does_not_inherit_previous_close_actor` |
-| An admission after the runner exited | `running` is false | Admission starts a new runner under the same lock | Unaffected | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` |
+| An admission while no runner is running | `running` is false | Admission starts a new runner under the same lock | Unaffected | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` |
+| Start, or the next loop | A stopped owner left in `pending` with no queue entry, after a cancellation's settlement was cut short | Takes the slot and settles it as stopped | `Busy` until the runner has settled it | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued` |
 | The slot, after removal, close or a stop emptied the queue while it waited | Nothing queued | Takes the slot, settles stopped owners, then clears `running` and exits | `Busy` until the runner has been polled: it held the slot for work that existed when it began waiting | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` |
 | A queued item settled | Any | Publishes the receipt's result, then releases the slot | Can be `Busy` just after that receipt resolves | None yet. Open in #405 |
 
