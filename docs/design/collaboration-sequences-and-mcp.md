@@ -17,7 +17,8 @@ The second call goes through the same public API and access checks as other call
 flowchart LR
     UI[Surface] --> C[NessaClient]
     C <--> G[Gateway]
-    G --> R[nessa-sdk coordinator]
+    G --> I[SDK principal command owner]
+    I -->|ADR 0008 binding resolved| R[nessa-sdk coordinator]
     R <-->|Run and report results with IDs| B[ACP binding]
     B <--> A[External agent]
     R -->|Append| S[Event stream and local store]
@@ -46,20 +47,36 @@ updates from the same agent run.
 sequenceDiagram
     participant A as Client A
     participant G as Gateway
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as SDK coordinator
     participant P as ACP binding
     participant S as Shared stream runtime
     participant B as Client B
     A->>G: Authenticated conversation.open(requestId, binding, workspace)
     G->>G: Authorize creation and verify caller context
-    G->>R: Create with verified caller details
-    R->>R: Resolve receipt, then check configuration for new creation
-    R->>S: Save creation acceptance and IDs
-    S-->>R: Saved
-    R->>P: Initialize configured provider
-    P-->>R: Actual supported features
-    R->>S: Save creation outcome
-    R-->>G: Same creation ID and readiness
+    G->>I: Create with verified caller details
+    I->>K: Resolve creation through ADR 0008
+    Note over I,K: New creation saves binding, acceptance and IDs together
+    K-->>I: Committed new or original creation acceptance
+    alt New creation or explicit exact retry of original pending creation
+        I->>R: Reconcile original creation ID with supplied matching configuration
+        R->>S: Resolve or reconcile target configuration through ADR 0008
+        S-->>R: Confirmed target configuration, deleted, or unresolved
+        R->>K: Resolve original initialization progress
+        K-->>R: Not started, original attempt evidence, or unresolved
+        alt Configuration confirmed, target allowed, initialization established not started
+            R->>P: Initialize configured provider under original supervised creation
+            P-->>R: Actual supported features
+            R->>K: Save non-content creation outcome
+            R-->>G: Creation ID and readiness
+        else Deleted, unresolved, or initialization may have started
+            R-->>G: Original identity and deleted, pending, or recovered outcome
+            Note over R,P: Reconcile original attempt, pending alone never repeats initialization
+        end
+    else Existing finished creation or read-only lookup
+        I-->>G: Original creation ID and saved readiness without initialization
+    end
     G-->>A: conversationId C
     B->>G: Authenticated conversation.get(C)
     G->>G: Authorize resource read
@@ -73,8 +90,15 @@ sequenceDiagram
     Note over B,S: B applies records once. The summary does not replace history
     A->>G: Subscribe to the same stream
     A->>G: turn.prompt(requestId, C, input)
-    G->>R: Command with verified caller details
-    R->>R: Check current access, existing receipt, and idle state
+    G->>G: Authorize prompt and verify caller context
+    G->>I: Prompt with verified caller details
+    I->>K: Resolve or commit request binding through ADR 0008
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends before target admission
+    I->>R: Exact bound prompt
+    R->>S: Resolve committed acceptance for this binding
+    S-->>R: Complete lookup establishes no acceptance
+    R->>R: Check capabilities and idle state using verified context
     R->>S: Save one turn acceptance record
     S-->>R: Saved turnId T and receipt
     R-->>G: Accepted T
@@ -112,6 +136,8 @@ sequenceDiagram
     participant M as Optional MCP adapter
     participant C as Sender's NessaClient
     participant G as Gateway
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as Target SDK coordinator
     participant S as Target conversation stream
     participant O as Authorized turn starter
@@ -120,8 +146,14 @@ sequenceDiagram
     M->>C: conversation.message(X, target, next_turn, body)
     C->>G: Authenticated product request
     G->>G: Authorize message and verify source
-    G->>R: Command with verified source details
-    R->>R: Resolve duplicates and check inbox limits
+    G->>I: Message with verified source details
+    I->>K: Resolve or commit X binding through ADR 0008
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends before target admission
+    I->>R: Exact bound message
+    R->>S: Resolve committed acceptance for X
+    S-->>R: Complete lookup establishes no acceptance
+    R->>R: Check inbox limits using verified context
     R->>S: Save message M and its fixed acceptance receipt
     S-->>R: Saved cursor
     R-->>G: Accepted M, pending
@@ -131,7 +163,12 @@ sequenceDiagram
     Note over E,R: Tool returns now. No turn starts or is awaited
     O->>G: Explicit turn.prompt(Y, target, input)
     G->>G: Authorize starter and candidate source access
-    G->>R: Turn command with verified context and authorized candidate IDs
+    G->>I: Prompt Y with verified context and authorized candidate IDs
+    I->>K: Resolve or commit Y binding through ADR 0008
+    K-->>I: Matching committed binding
+    I->>R: Exact bound prompt Y
+    R->>S: Resolve committed acceptance for Y
+    S-->>R: Complete lookup establishes no acceptance
     R->>R: Check capabilities and select still-pending candidates by domain rules
     R->>S: Save accepted turn T with message M assigned to it
     S-->>R: Saved
@@ -167,17 +204,28 @@ receipt. Reusing the same request ID finds what Nessa already accepted.
 sequenceDiagram
     participant C as NessaClient
     participant G as Gateway
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as SDK coordinator
     participant S as Stream runtime
     actor Owner
     C->>G: State-changing command with requestId X
-    G->>R: Command with access checked
+    G->>I: Command with access checked
+    I->>K: Resolve or commit X binding through ADR 0008
+    K-->>I: Matching committed binding
+    I->>R: Exact bound command X
+    R->>S: Resolve committed acceptance for X
+    S-->>R: Complete lookup establishes no acceptance
     R->>S: Save acceptance and receipt
     S-->>R: Saved
     Note over C,G: Connection fails before receipt reaches C
     C->>G: Reauthenticate and explicitly retry X with identical input
-    G->>R: Current access check and same requestId
-    R->>R: Find existing receipt before accepting new work
+    G->>I: Current access check and same requestId
+    I->>K: Resolve X through ADR 0008
+    K-->>I: Original matching committed binding
+    I->>R: Resolve acceptance for exact bound X
+    R->>S: Read committed acceptance
+    S-->>R: Original acceptance and receipt
     R-->>G: Original identity and acceptance receipt
     G-->>C: Original receipt, inspect current state separately
     Owner->>G: Revoke credential
@@ -267,10 +315,10 @@ Nessa command ID, target, message body, and delivery intent.
 }
 ```
 
-The calls find the same receipt only if they have the same allowed principal,
-operation, target, and canonical input (the agreed standard form). Their transport
-IDs may differ. Keep `request-review-17` after an uncertain result; do not generate
-another ID when retrying the same logical command.
+Both calls resolve through ADR 0008's
+[request binding and receipt contract](../adr/todo/0008-agent-client-api.md#one-durable-record-source).
+Their transport IDs may differ. The example keeps `request-review-17` when
+checking the uncertain result of that command.
 
 A successful MCP result can return the product receipt through its declared
 output schema:

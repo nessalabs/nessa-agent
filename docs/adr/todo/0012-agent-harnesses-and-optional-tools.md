@@ -49,7 +49,9 @@ skip the API by calling private command handlers.
 ## One operation implementation
 
 The SDK behind the gateway owns product commands, state changes, and receipts
-(the saved responses proving which commands were accepted). `NessaClient` owns
+(the saved responses proving which commands were accepted), through ADR 0008's
+[request binding and target acceptance owners](0008-agent-client-api.md#one-durable-record-source).
+`NessaClient` owns
 typed calls, connections, wire validation, and matching replies to requests.
 The MCP/CLI adapter has four jobs: validate its arguments, check its enabled tool
 list, call NessaClient, and format the result.

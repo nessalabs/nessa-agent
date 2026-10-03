@@ -128,9 +128,11 @@ The integration must demonstrate:
   subscriber that falls behind. Socket sequence numbers are not saved-history
   cursors. The creation control stream and conversation streams have no shared
   ordering or transaction.
-- Keep receipts and duplicate-detection history for the store's lifetime in this
-  delivery. If storage reaches its limit, return a typed error. Do not silently
-  delete history or make earlier retry IDs stop working.
+- Apply [ADR 0008's request identity/retention contract](0008-agent-client-api.md#request-bindings-retain-identity-not-conversation-content)
+  together with [ADR 182's conversation erasure](../done/182-conversation-deletion.md).
+  Ordinary capacity pressure must not silently evict identity or history: return
+  a typed error at the limit. Retention tests must exercise the actual binding and
+  deletion consumers, not only generic append/read behavior.
 
 Pin a reviewed library revision and test these requirements. Fix missing behavior
 in the library or revise the architecture before relying on it. Do not build a

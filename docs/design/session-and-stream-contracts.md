@@ -57,9 +57,10 @@ work deadlines.
    allowed by the server, and requested settings/features. It cannot supply
    executable paths, arbitrary provider methods, or credentials.
 4. The host authorizes each request before SDK access, including retries. The
-   SDK returns the existing creation for an identical retry. For a new request,
-   check configuration and capability requirements, then save acceptance and allocated
-   IDs before initializing the provider.
+   SDK resolves creation through ADR 0008's
+   [principal request owner](../adr/todo/0008-agent-client-api.md#one-durable-record-source).
+   An accepted creation is restored before initializing its provider; an identical
+   retry observes that original creation.
 5. Supervise startup and give it a deadline. Keep pending/ready/failed creation
    state available under the same ID. Clean up partial setup on failure. Waiting
    for readiness must not block other commands or subscriptions. Initialization
@@ -130,21 +131,11 @@ ADR 0011 phase B adds `conversation.message` and `message.status`. Credential
 administration already exists under ADR 0010. Finalize signatures in the schema;
 do not add a second attachment API or combined message-and-start operation.
 
-A **mutation** is a command that changes state. Give it a stable `requestId`,
-separate from the RPC ID for each network attempt. Look for duplicates within the
-same principal, operation, and target, comparing canonical input (the standard
-form) and validated caller/surface details. Check an existing receipt before
-allocating IDs or testing whether a new turn would be busy. Identical retries
-return the original acceptance; changed input returns `idempotency_conflict`.
-Every retry still requires current permission.
-
-ADR 0008 saves one acceptance record with the canonical input, origin details,
-allocated IDs, and acceptance response. Save before effects. Build state and
-receipt lookups from these records. Creation uses a control stream for the
-principal before initializing the provider. Later turn records use the
-conversation's primary stream. These streams have no shared transaction or order.
-If an append result is uncertain, check the store using the same event ID/bytes
-before accepting affected new work.
+A mutation uses ADR 0008's
+[identity, binding, acceptance and recovery contract](../adr/todo/0008-agent-client-api.md#identity-durability-and-failure-behavior).
+This stream adapter supplies the committed reads and append outcomes that owner
+requires; concrete producer implementation must establish its state/order table.
+Transport attempt IDs remain part of the wire envelope.
 
 For example, losing the reply after a saved prompt does not mean the prompt
 failed. Checking or retrying with its original `requestId` finds the same turn.
@@ -246,9 +237,12 @@ scope. The binding privately maps these Nessa choices to actual provider options
 It cannot grant permission itself or invent a required interaction the protocol
 cannot represent. Report that failure explicitly.
 
-`approval.respond` checks current access, whether the approval is still pending,
-the exact turn/choice, and `requestId`. Save the winning decision before forwarding
-it. Identical retries return its receipt. Conflicting, stale, or expired responses
+`approval.respond` follows ADR 0008's
+[request owner](../adr/todo/0008-agent-client-api.md#one-durable-record-source)
+before target admission. The host checks current access before routing. The target
+coordinator consumes that verified context, checks the exact pending turn/choice,
+and saves the winning decision before forwarding it.
+Identical accepted retries return their receipt; stale or expired new responses
 fail. Denial and cancellation remain different outcomes.
 
 A waiting provider callback must not block the coordinator needed to answer it.
@@ -284,8 +278,10 @@ stream implementation or an interface for every library feature.
   must be checked using the original append identity.
 - Saved records never change and are ordered within one stream incarnation
   (one lifetime of that stream). Return typed errors for another incarnation,
-  a cursor ahead of the store, or missing history. Keep receipt and duplicate-
-  detection history for the store's lifetime; no automatic retention cleanup.
+  a cursor ahead of the store, or missing history. Request identity/retention
+  follows [ADR 0008's binding owner](../adr/todo/0008-agent-client-api.md#request-bindings-retain-identity-not-conversation-content),
+  with conversation erasure owned by [ADR 182](../adr/done/182-conversation-deletion.md).
+  Ordinary capacity pressure does not silently evict history.
 - The library handles the change from replay to live delivery. Test that writes
   during this changeover cause no gaps or reordering. Do not combine a separate
   history query and event bus. Notifications may be combined into one wakeup

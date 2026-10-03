@@ -191,7 +191,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    H["Host authorizes action"] --> C["SDK resolves existing receipt"]
+    H["Host authorizes action"] --> I["Principal control-stream owner resolves binding"]
+    I --> C["Target coordinator resolves acceptance"]
     C --> V["New command: validate capabilities"]
     V --> D["Conversation checks lifecycle rules"]
     D --> S["Commit, then execute"]
@@ -399,17 +400,30 @@ only loses that client's view. The following assumes the server stays running:
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant R as SDK runtime
+    participant G as Authorized host application
+    participant I as Principal command owner
+    participant K as Principal control stream
+    participant R as SDK coordinator
+    participant S as Conversation records
     participant A as Agent
-    C->>R: Send prompt with requestId
-    R->>R: Save acceptance and turnId T
+    C->>G: Send prompt with requestId
+    G->>G: Authorize and verify context
+    G->>I: Prompt with verified context
+    I->>K: Resolve through request binding owner
+    K-->>I: Matching committed binding
+    I->>R: Exact bound prompt
+    R->>S: Resolve acceptance, then save a permitted new turn T
+    S-->>R: Committed acceptance
     R-->>C: Accepted T
     R->>A: Run T
     Note over C,R: Client disconnects
     A-->>R: More updates for T
-    R->>R: Save updates
-    C->>R: Reconnect and read T after last applied cursor
-    R-->>C: Missed records, then live updates
+    R->>S: Save updates
+    C->>G: Reconnect and read T after last applied cursor
+    G->>G: Authorize bounded observation
+    G->>S: Read committed records
+    S-->>G: Missed records, then live updates
+    G-->>C: Authorized record batches
 ```
 
 An explicit Stop can end work. So can an execution failure, shutdown, or an
@@ -430,8 +444,10 @@ flowchart LR
     Q["UI queue: B, then C"] --> G["T ends and binding is ready"]
     T --> G
     G --> B["Send B with its requestId"]
-    B --> N["Accepted as new turn U"]
-    H["Steer: focus on SQLite"] --> T
+    B --> I["Host authorization and principal request owner"]
+    I --> N["Target admission: accepted as new turn U or refused"]
+    H["Steer: focus on SQLite"] --> J["Host authorization and principal request owner"]
+    J --> T
 ```
 
 The queue belongs to that surface, not the server. Do not promise it survives UI
@@ -554,7 +570,8 @@ flowchart LR
     V --> P["Probe supported host or provider signals"]
     P --> H
     H --> D["Configured policy requests Stop"]
-    D --> C["Same coordinator and stopping flow"]
+    D --> I["Host authorization and principal request owner"]
+    I --> C["Target coordinator and stopping flow"]
 ```
 
 Health does not add `stuck`, `inactive`, or `recovering` turn states. A supervisor
@@ -582,7 +599,8 @@ allow turn work to detach and become ownerless. An idle harness may remain alive
 for its conversation. Supporting a long-lived user service needs a separate,
 explicit owner and lifetime first.
 
-Stopping follows these steps, with deadlines and safe repeated requests:
+After [request binding and acceptance resolution](#one-durable-record-source),
+stopping follows these steps, with deadlines and safe repeated requests:
 
 1. Save acceptance of Stop for the exact turn. Close that turn to new tool work
    and approvals, then signal cancellation. If resource creation races with Stop,
@@ -612,14 +630,22 @@ sequenceDiagram
     participant C as Caller
     participant R as SDK coordinator
     participant G as Gateway or host application
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant S as Record store
     participant B as Binding
     participant H as Host process facilities
     C->>G: Stop exact turn T with requestId
     G->>G: Authorize resource action and verify context
     Note over C,G: Denial ends here, before SDK access
-    G->>R: Authorized Stop with verified context
-    R->>R: Resolve receipt first, then exact-turn domain rules for a new Stop
+    G->>I: Authorized Stop with verified context
+    I->>K: Resolve or commit request binding
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends command admission here
+    I->>R: Exact bound Stop
+    R->>S: Resolve committed acceptance
+    S-->>R: Original acceptance, complete absence, or unresolved
+    R->>R: Exact-turn domain rules only for complete absence
     Note over R,H: A stale Stop never targets a newer turn
     alt New allowed Stop on active T
         R->>S: Save Stop acceptance, actor, cause, and stopping state
@@ -646,6 +672,8 @@ sequenceDiagram
         R-->>C: Final outcome and binding readiness, or persistence fault
     else Denied, duplicate, or already final
         R-->>C: Error, original receipt, or existing outcome
+    else Acceptance unresolved or unavailable
+        R-->>C: Unknown or unavailable, no new command acceptance
     end
 ```
 
@@ -825,6 +853,16 @@ answers. Advanced callers can supply one. The RPC envelope's `id` identifies eac
 network attempt. Keep `requestId` as the single mutation-ID name in SDK and wire
 contracts, and do not embed one ID inside another.
 
+The mutation namespace is `(principal, requestId)`. Its first durable binding
+fixes the operation, target, a non-content fingerprint of the canonical input,
+and verified origin. Reusing that identity with different bound facts conflicts;
+changing the operation or target does not select a different receipt. Lookup is authorized for that principal and
+does not disclose another principal's binding or acceptance.
+
+This namespace covers the conversation-runtime mutations defined here.
+Credential administration keeps its request-identity owner in
+[ADR 0010](../done/0010-local-authentication.md).
+
 ### One durable record source
 
 Use the external stream library and its verified local adapter for saved
@@ -839,21 +877,120 @@ source. Do not independently write a conversation database, a receipt database,
 and an event stream, or add another journal/cursor allocator. Existing auth and
 host-settings storage remain unchanged.
 
-The coordinator processes these acceptance steps one at a time per conversation:
+The principal's control-stream owner serializes request binding. The conversation
+coordinator serializes acceptance in the target conversation. A binding and an
+acceptance are distinct committed facts; there is no cross-stream transaction.
+Each command attempt, including an explicit retry, first passes the host's
+[current authorization snapshot](../done/0010-local-authentication.md#requests-after-connection-setup).
+The SDK receives that verified context and has no authorization read port.
+The SDK routes a command through these owners in order:
 
-1. Validate the caller, operation, and origin information. Look up `requestId`
-   within that principal, operation, and target before allocating IDs or checking
-   whether a new turn can start. A **receipt** is the saved acceptance response.
-   An identical retry returns it. Different canonical input (input in the agreed
-   standard form) or different attribution fails. A caller cannot retrieve
-   another caller's receipt.
-2. Check turn state and allocate `turnId` for a new accepted prompt. Append one
+1. Validate the caller, operation, target, canonical input and origin. Resolve
+   `(principal, requestId)` in the principal's committed control stream. An
+   existing binding must match the operation, target, input fingerprint and
+   verified origin. For a new identity, commit that non-content immutable binding
+   before target admission; retries keep its event ID and bytes. The supplied
+   input remains owned by this attempt until target acceptance. Binding alone
+   is not acceptance and cannot start a provider.
+2. Respect the target's deletion fence under
+   [ADR 182](../done/182-conversation-deletion.md), then resolve acceptance for
+   that exact bound command from the target's committed records before allocating
+   a turn or checking whether a new turn can start. Erased acceptance evidence
+   does not establish an available target or permission to recreate it.
+   A **receipt** is the saved acceptance response. An identical accepted retry
+   returns it. A bound command with incomplete or unavailable acceptance evidence
+   remains unresolved. Read-only lookup never admits or dispatches work.
+3. For an explicit exact retry or first attempt whose complete lookup establishes
+   no acceptance, consume the host-verified context and check capability/readiness
+   and turn state, then allocate `turnId`
+   for a new accepted prompt. Append one
    record containing the canonical command, validated origin, allocated IDs, and
    acceptance response. The adapter must save the whole record or none of it.
    Keep its event ID unchanged on append retries.
-3. Apply the saved record to runtime state, reply with acceptance, and start the
+4. Apply the saved record to runtime state, reply with acceptance, and start the
    provider. The commit authorizes execution. Work proceeds even if the reply
    never reaches the caller.
+
+A crash after binding but before acceptance preserves the original target and
+input fingerprint as a bound unresolved command. The original input cannot be
+reconstructed from the binding: an explicit exact retry supplies it and matches
+its fingerprint before reconciling that same command. Lookup does not turn
+uncertainty into a new invocation. Restoring the principal binding source precedes
+new admission, including commands competing
+for the same request identity across different conversations.
+
+### Request bindings retain identity, not conversation content
+
+The principal control stream retains only request identity, operation, target,
+verified attribution and a fixed-size collision-resistant fingerprint of the
+validated canonical command facts. It must not store prompt/message text, steering
+or interaction-answer content, file contents, or creation configuration in raw
+or losslessly encoded form. ADR 0008's command producer owns the one canonical
+fingerprint construction and comparison; its concrete canonical encoding and
+equality/conflict tests must be settled before source implementation. A fingerprint
+supports equality/conflict detection. It is not an encrypted backup, authorization,
+or proof of erasure, and no dictionary-attack secrecy is claimed.
+
+Content-bearing acceptance and configuration records belong to the target
+conversation's primary stream. Its deletion owner erases them through
+[ADR 182](../done/182-conversation-deletion.md). Retained request identity and
+permitted audit attribution remain for the store lifetime and survive that erasure;
+the original content-bearing receipt need not. A retry against a deleted target returns the target's deleted
+meaning or a binding conflict, rather than reconstructing erased input, returning
+its old content, or initializing another provider. Read-only lookup also respects
+that fence. No second receipt/content store or control-stream redaction journal
+is introduced.
+
+| Request binding / acceptance ordering | Required result | Owning implementation evidence to establish |
+| --- | --- | --- |
+| Two conversations compete for one principal/request identity | One immutable binding; conflicting target refused before target admission | Principal control-stream producer plus affected target consumers, real concurrent/reopen test |
+| Different operations concurrently compete for one principal/request identity | One immutable binding; conflicting operation refused before either losing target effect | Principal control-stream producer plus affected target consumers, real concurrent/reopen test |
+| Existing binding; changed operation, input or verified origin | Conflict; original binding and acceptance unchanged | Binding constructor/comparison and actual admission refusal test |
+| Binding saved; crash before target acceptance | Bound unresolved command survives; no provider execution inferred | Separate durable sources and process-restart test |
+| Exact explicit retry; complete target lookup establishes no acceptance | Host authorizes this attempt before routing; reconcile original binding, then target capability/state checks and one acceptance | Host entry point, target coordinator and admission/dispatch ordering test |
+| Host allows a snapshot; revocation commits while binding or acceptance lookup waits | Preserve ADR 0010's already-allowed-operation meaning; no second SDK access read | Real host snapshot/revocation barriers plus delayed binding/acceptance consumers and direct embedding host without a gateway auth port |
+| Next explicit retry arrives after revocation | Host refuses before SDK binding or target admission | Same host/consumer fixture, denied retry with no new binding, acceptance or provider effect |
+| Acceptance saved; response lost | Original turn/receipt returned; no repeated provider work | Committed acceptance lookup and real lost-reply test |
+| Acceptance lookup incomplete or source unavailable | Unresolved/unavailable; read-only lookup performs no admission or dispatch | Bounded committed reader and provider-free lookup test |
+| Creation before target stream exists | Non-content binding, acceptance and IDs saved together in control stream; target configuration must commit before provider initialization | Creation producer and separate-control/target commit barriers, lost-reply and restart tests |
+| Control-stream creation acceptance saved; target configuration missing or uncertain | Pending creation; no provider initialization or reconstructed input. Matching explicit retry reconciles the original configuration under its original IDs; read-only lookup performs no effects | Actual two-source crash/reopen test through existing-pending creation retry; no provider effect before confirmed target configuration |
+| Creation initialization may already have started | Reconcile its original saved progress and supervised attempt; pending readiness alone cannot authorize another initialization | Real lost-start/outcome/restart test with one original provider attempt or an honest unresolved result |
+| Conversation deleted after prompt/message/steer/answer acceptance | Target content erased through ADR 182; principal stream retains identity/fingerprint and permitted attribution only | Actual sensitive-marker persistence scan after delete/reopen across both sources, including compound input and creation configuration |
+| Exact or conflicting old request retried after target deletion | Preserve identity/conflict meaning; deleted target remains fenced even though its content/receipt was erased | Real deletion/admission race and reopened same-ID/different-input tests with no new acceptance, provider effect or resurrection |
+| Conversation erasure incomplete or uncertain | Preserve ADR 182's incomplete-erasure result; fingerprints do not prove content removal | Actual failed-erasure/retry test and physical persistence inspection |
+
+The producer tests must enter through both affected command consumers with one
+principal/request ID and different targets or operations. Gate both contenders
+before binding, observe one committed winner, and verify that the losing target
+has no acceptance or provider effect. Reopen both sources and preserve that same
+binding and receipt outcome. These tests are required implementation evidence,
+not results established by this proposal.
+
+```mermaid
+sequenceDiagram
+    participant A as Authorized command A
+    participant B as Authorized command B
+    participant I as Principal command owner
+    participant K as Principal control stream
+    participant T as Target coordinator
+    participant S as Target conversation records
+    par Same principal and requestId
+        A->>I: Operation and target A, verified context
+    and Conflicting bound facts
+        B->>I: Operation or target B, verified context
+    end
+    I->>K: Resolve and commit one immutable binding
+    K-->>I: Binding A committed
+    I-->>B: Conflict before target B admission
+    I->>T: Exact bound command A
+    T->>S: Resolve committed acceptance for A
+    S-->>T: Complete lookup establishes no acceptance
+    T->>T: Consume verified context, check capability and domain state
+    T->>S: Commit permitted acceptance and receipt
+    S-->>T: Committed
+    T-->>A: Acceptance receipt
+    Note over I,T: Binding-only crash is unresolved, not execution
+```
 
 For example, a connection may drop after a prompt was saved but before its reply
 arrived. Retrying the same `requestId` returns the original `turnId` and receipt.
@@ -867,7 +1004,8 @@ store cannot establish whether acceptance was saved, keep affected commands
 blocked. Do not invent a final record or repeat an external action to guess the
 answer.
 
-The acceptance record is also the recoverable receipt, so there is only one write.
+The acceptance record is also the recoverable receipt: acceptance and its receipt
+are one write, separate from the preceding immutable request binding.
 Later lifecycle and normalized provider records use the same stream. Save
 interaction decisions and normal Stop requests before forwarding them to the
 binding. If storage fails, protective stop/cleanup must still run within a deadline;
@@ -876,15 +1014,27 @@ outcome when the commit failed or is uncertain. The SDK's ordered command handli
 resolves acceptance and interaction races; duplicate-record detection alone cannot.
 
 Creation needs a record before the conversation's own stream exists. Process
-creation requests one at a time per principal. Save acceptance, allocated IDs,
-and unchanging origin in that principal's **control stream** before initializing
-the provider. Rebuild the conversation index from these records. Later turn and
-provider records go in the conversation's **primary stream**.
+creation requests through the same principal request namespace. Save its binding,
+non-content acceptance response, allocated IDs and unchanging origin together in
+that principal's **control stream**. Rebuild the conversation index from these
+records. Content-bearing creation configuration then commits in the conversation's
+**primary stream** before initializing the provider. If that second commit is
+missing or uncertain, creation remains pending; an explicit matching retry supplies
+the original configuration, and initialization waits for confirmed target content.
+A restored creation cannot infer that configuration from its fingerprint. Its
+target deletion fence still prevents initialization. An explicit exact retry of
+an existing pending creation enters that same configuration reconciliation with
+its original IDs. Read-only lookup performs no such effects. If initialization
+may already have started, reconcile its original saved progress and supervised
+attempt; pending readiness alone does not authorize another initialization.
+Later turn and provider records also go in the primary stream.
 
-Save creation progress and outcome too, so retries find the same pending or
-finished creation instead of initializing another provider. Control records are
-internal and do not appear in public transcripts. Both streams use the same record
-infrastructure, but there is no transaction or ordering across them. Restore
+Save non-content creation progress and outcome too, so retries find the same
+pending or finished creation instead of initializing another provider. Raw
+configuration and content-bearing failure diagnostics stay with target records;
+control records use typed status and permitted identity metadata. Control records
+are internal and do not appear in public transcripts. Both streams use the same
+record infrastructure, but there is no transaction or ordering across them. Restore
 creation state before accepting work after restart.
 
 [ADR 0009](0009-reusable-event-stream-crate.md) must verify this behavior using a
