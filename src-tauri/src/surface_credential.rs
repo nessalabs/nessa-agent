@@ -269,7 +269,9 @@ mod tests {
     use std::{
         fs,
         io::Write,
-        sync::{Arc, Mutex},
+        sync::{mpsc::channel, Arc, Mutex},
+        thread,
+        time::Duration,
     };
 
     struct FixedEndpoint(Option<GatewayEndpoint>);
@@ -441,21 +443,31 @@ mod tests {
         let credential = FakeCredentials::holding("fixture-only");
         let (gateway, host, entered, release) =
             recording_gateway_held(Ok(reconciled_registration()));
-        // What the window was told while startup ran, gathered before the
-        // registration is released, so a failing assertion cannot leave the
-        // start waiting for a release that never comes.
-        let (while_starting, registered, read) = std::thread::scope(|scope| {
+        // What the window was told while startup ran. The window's asks run on
+        // a thread of their own with a deadline, and the registration is
+        // released whatever they did, so a window that joined the
+        // reconciliation fails here rather than waiting on it forever.
+        let (while_starting, registered, read) = thread::scope(|scope| {
             let starting = scope.spawn(|| tauri::async_runtime::block_on(gateway.start()));
             entered.recv().unwrap();
-            let told: Vec<_> = (0..3)
-                .map(|_| load(DESKTOP_WINDOW, Some(&gateway), &credential))
-                .collect();
+            let (told_tx, told_rx) = channel();
+            let (window_gateway, window_credential) = (&gateway, &credential);
+            let asking = scope.spawn(move || {
+                let told: Vec<_> = (0..3)
+                    .map(|_| load(DESKTOP_WINDOW, Some(window_gateway), window_credential))
+                    .collect();
+                told_tx.send(told).unwrap();
+            });
+            let told = told_rx.recv_timeout(Duration::from_secs(5));
             let registered = *host.registrations.lock().unwrap();
             let read = credential.reads();
             release.send(()).unwrap();
+            asking.join().unwrap();
             starting.join().unwrap().unwrap();
             (told, registered, read)
         });
+        let while_starting =
+            while_starting.expect("the window's asks waited on the host's startup");
         for told in while_starting {
             assert_eq!(
                 told.err(),

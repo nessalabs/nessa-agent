@@ -6,7 +6,9 @@ import { readFailureCopy } from "../failure-copy"
 /**
  * What the workspace shows when there is no conversation to show: its
  * sessions could not be read. It says so plainly — signed out, or no answer
- * from the local server, never the sample in its place (#419) — and offers
+ * from the local server; in the desktop app this is drawn instead of the
+ * sample, which `verification/desktop/scripts/gateway-states.mjs` checks
+ * (#419) — and offers
  * the one thing to do next. (No pane shows a session that is not there: a
  * removal starts the last pane over — `usecases/updates.ts`.)
  */

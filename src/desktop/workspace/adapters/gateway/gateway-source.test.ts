@@ -812,6 +812,20 @@ describe("a connection that could not be made says why (#419)", () => {
     expect(kinds(updates)).toContain("resync")
   })
 
+  it("S13: a connect that succeeds after dispose is closed unused, and its callers hear unavailable at once", async () => {
+    const late = fakeGateway()
+    const arriving = deferred<FakeGateway["client"]>()
+    const { source } = started(late, () => arriving.promise)
+    const index = source.index().catch((error: unknown) => error)
+    await flush()
+    source.dispose()
+    arriving.resolve(late.client)
+    await flush()
+    expect(await index).toMatchObject({ reason: "unavailable" })
+    expect(late.closed()).toBe(true)
+    expect(late.count("list")).toBe(0)
+  })
+
   it("S13: a connect refused after dispose is unavailable, and nothing is said of it", async () => {
     const warn = quiet()
     const refusing = deferred<FakeGateway["client"]>()

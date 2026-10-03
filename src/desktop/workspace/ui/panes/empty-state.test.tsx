@@ -2,7 +2,8 @@
 /**
  * The workspace with nothing to show (#419): an index the window could not
  * read says why — signed out, or no answer from the local server — and Try
- * Again reads it again. Never the sample in its place.
+ * Again reads it again. (That the desktop app draws this rather than the
+ * sample is `gateway-states.mjs`'s to check, in a browser.)
  */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"

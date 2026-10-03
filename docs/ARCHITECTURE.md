@@ -896,7 +896,9 @@ committed state. Only auth mutations serialize; network writes share no admissio
 only liveness, without product state.
 
 The panel authenticates using its distinct private surface credential loaded by
-the native host. The SDK supports injected credential storage and a Node file
+the native host; the desktop window connects under the same credential
+(`nessa-panel`, surface kind `desktop`), served once the gateway is ready
+(#419). The SDK supports injected credential storage and a Node file
 source. Composition loads namespace `config.json` and injects registry limits
 and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * The desktop app's window when it cannot read the local gateway (#419):
- * signed out, the host refusing the credential, or no gateway listening. Each
+ * signed out, the host refusing the credential, the gateway not ready yet, or
+ * no gateway listening. Each
  * says why in the chat area, offers Try Again, and never shows the sample in
  * its place.
  *
@@ -264,8 +265,12 @@ await main(
                   `the window asked the host ${recovered} times between ${quietMs}ms and ${recoveredMs}ms after its last ask, not once`,
                 )
             }
-            // Try Again reads the index again: the status goes while it reads,
-            // which no poll does. Then it says the same while nothing changed.
+            // Try Again reads the index again — the status goes while it reads,
+            // which no poll does — and connects at once though the poller
+            // waits (S12): the click lands inside the five-round wait, so an
+            // ask after it is Try Again's. Then it says the same while
+            // nothing changed.
+            const asksBefore = (await measure(page)).asked.load_gateway_endpoint
             await page.evaluate((empty) => {
               window.__statusLeft = false
               new MutationObserver(() => {
@@ -280,6 +285,18 @@ await main(
                 () => false,
               )
             if (!read) failures.push("Try Again did not read the index again")
+            const connected = await page
+              .waitForFunction(
+                (count) => window.__fakeHostAsked.load_gateway_endpoint > count,
+                asksBefore,
+                { timeout: 3_000 },
+              )
+              .then(
+                () => true,
+                () => false,
+              )
+            if (!connected)
+              failures.push("Try Again did not connect while the poller waited")
             await page.waitForSelector(css.workspaceEmpty, { timeout: 10_000 })
             const again = await measure(page)
             failures.push(

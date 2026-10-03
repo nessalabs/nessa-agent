@@ -116,9 +116,29 @@ export interface GatewayClock {
 /**
  * Who asks for the gateway's client, which decides whether it may connect
  * when none is held (`client`): a person, the poller's list, an MCP App, or
- * the poller's reads, which use only what is held.
+ * a read that uses only what is held — the poller's reads, and the read that
+ * follows an answer.
  */
 type Caller = "person" | "poller" | "app" | "held"
+
+/**
+ * What each caller may do when no client is held and none is connecting:
+ * connect `always`, `unless-waiting` out a failed connect, or `never`; and
+ * whether its refusal while waiting counts the wait down a round. Total, so a
+ * caller added later does not compile until its rule is chosen (gate 11).
+ */
+const callerRules: Record<
+  Caller,
+  {
+    readonly connects: "always" | "unless-waiting" | "never"
+    readonly countsDown: boolean
+  }
+> = {
+  person: { connects: "always", countsDown: false },
+  poller: { connects: "unless-waiting", countsDown: true },
+  app: { connects: "unless-waiting", countsDown: false },
+  held: { connects: "never", countsDown: false },
+}
 
 export interface GatewayTiming {
   /** How long any call may take before it settles as `unavailable`. */
@@ -150,7 +170,8 @@ export interface GatewaySource<
   /**
    * The client this source holds, or one connecting, within the call budget:
    * rejects `unavailable` once disposed, when none connects in time, or
-   * while the source waits out a failed connect (S14).
+   * while the source waits out a failed connect (S14); and `signed-out` when
+   * the connect it made or joined is refused that way.
    */
   connected(): Promise<C>
   /** Stops polling, refuses every later call, and closes the client it connected. */
@@ -328,9 +349,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (disposed) return Promise.reject(new WorkspaceSourceError("unavailable"))
     if (current) return Promise.resolve(current.client)
     if (connecting) return connecting
-    if (who === "held") return Promise.reject(new WorkspaceSourceError("unavailable"))
-    if (roundsToWait > 0 && who !== "person") {
-      if (who === "poller") roundsToWait -= 1
+    const rule = callerRules[who]
+    if (rule.connects === "never")
+      return Promise.reject(new WorkspaceSourceError("unavailable"))
+    if (rule.connects === "unless-waiting" && roundsToWait > 0) {
+      if (rule.countsDown) roundsToWait -= 1
       return Promise.reject(new WorkspaceSourceError("unavailable"))
     }
     const attempt = new Promise<C>((resolve, reject) => {
