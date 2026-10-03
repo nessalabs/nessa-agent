@@ -29,6 +29,8 @@ const noGateway = "ws://127.0.0.1:7498"
 const unread = "Nessa couldn’t read the local server’s conversations just now."
 const signedOut = "This window isn’t signed in to the local server."
 const quietMs = 4_000
+// By then the five-round wait is over and the poller has connected once more.
+const recoveredMs = 8_000
 
 const scenarios = [
   {
@@ -241,6 +243,7 @@ await main(
             // The poller waits out a failed connect (S10): for `quietMs` after
             // the last ask — inside the five-round wait — nothing asks the host.
             let quiet
+            let recovered
             if (scenario.cadence) {
               const { count, since } = await page.evaluate(() => ({
                 count: window.__fakeHostAsked.load_gateway_endpoint,
@@ -251,6 +254,14 @@ await main(
               if (quiet > 0)
                 failures.push(
                   `the window asked the host ${quiet} times within ${quietMs}ms of its last ask, unprompted`,
+                )
+              // And then it does connect again, unprompted, exactly once (S16).
+              await page.waitForTimeout(recoveredMs - quietMs)
+              recovered =
+                (await measure(page)).asked.load_gateway_endpoint - count - quiet
+              if (recovered !== 1)
+                failures.push(
+                  `the window asked the host ${recovered} times between ${quietMs}ms and ${recoveredMs}ms after its last ask, not once`,
                 )
             }
             // Try Again reads the index again: the status goes while it reads,
@@ -280,7 +291,7 @@ await main(
                 (error) => !(scenario.endpoint === noGateway && error.includes(refused)),
               ),
             )
-            return { failures, measured: { first, again, quiet } }
+            return { failures, measured: { first, again, quiet, recovered } }
           } finally {
             await opened.close()
           }

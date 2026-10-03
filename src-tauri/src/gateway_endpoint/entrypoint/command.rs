@@ -37,7 +37,7 @@ pub async fn load_gateway_endpoint(
 mod tests {
     use super::*;
     use crate::desktop_window::DESKTOP_WINDOW;
-    use crate::gateway::application::testing::{reconciled_gateway, recording_gateway};
+    use crate::gateway::application::testing::{reconciled_registration, recording_gateway};
     use crate::panel;
     use nessa_gateway_endpoint::application::EndpointDiscovery;
     use nessa_gateway_endpoint::domain::{EndpointIdentity, GatewayEndpoint};
@@ -86,7 +86,7 @@ mod tests {
         }
     }
 
-    /// The desktop window finds the gateway the panel brought up, once it is
+    /// The desktop window finds a gateway startup brought up, once it is
     /// ready, and its asking starts nothing (H4′, #419).
     #[test]
     fn the_desktop_window_discovers_a_ready_gateway_and_starts_none() {
@@ -94,7 +94,7 @@ mod tests {
             calls: AtomicUsize::new(0),
         });
         let endpoint = Arc::new(GatewayEndpointAccess::new("ci".into(), discovery.clone()));
-        let (gateway, host) = recording_gateway(Ok(reconciled_gateway()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
 
         let refused = tauri::async_runtime::block_on(load_for(
             DESKTOP_WINDOW,

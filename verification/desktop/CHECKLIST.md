@@ -580,8 +580,9 @@ says why where the conversations would be.
   reads the index again (the status goes while it reads, which no poll does),
   and says the same while nothing changed. While signed out, and while the
   gateway is not ready, the window does not ask the host at all for four
-  seconds after its last ask: after a failed connect it waits five poll rounds
-  rather than asking the host every second.
+  seconds after its last ask, then asks exactly once by eight seconds: after a
+  failed connect it waits five poll rounds rather than asking the host every
+  second, and then tries again on its own.
   _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a

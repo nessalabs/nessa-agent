@@ -25,7 +25,11 @@ and [surface credential loading](../../../src-tauri/src/surface_credential.rs);
 the requesting setup composition is [main.tsx](../../../src/main.tsx). The
 updated `another_window_is_refused_before_the_gateway_is_asked_for_anything`
 test uses an unrelated window; positive setup tests reconcile trusted admission
-with the existing readiness, stage and endpoint checks.
+with the existing readiness, stage and endpoint checks. Since
+[#419](https://github.com/nessalabs/nessa-agent/issues/419) the same two
+commands also admit the desktop window, as a reader served only once startup is
+ready (`GatewayReader` in
+[commands.rs](../../../src-tauri/src/gateway/infrastructure/commands.rs)).
 
 R2 and R4 originate in
 [use-file-attachments.ts](../../../src/panel/ui/use-file-attachments.ts). R3's

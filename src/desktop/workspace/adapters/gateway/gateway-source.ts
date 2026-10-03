@@ -309,15 +309,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * when there is neither, whether to connect, by who is asking: the one
    * place that is decided (#419).
    *
-   * - `person`: a call somebody made (the index, opening a session, a
-   *   message, an answer and the read after it, an archive) connects at once.
+   * - `person`: a foreground call — the index (Try Again, or the store's
+   *   own re-read on a resync), opening a session, a message, an answer and
+   *   the read of its review, an archive — connects at once.
    * - `poller`: the poller's list connects unless the source is waiting out
    *   a failed connect; each list refused while it waits counts the wait
    *   down a round (S10).
    * - `app`: an MCP App connects unless the source is waiting, and its
    *   refusals count nothing (S14).
-   * - `held`: the poller's reads use the client its list found, and never
-   *   connect in its place (S15).
+   * - `held`: the poller's reads, and the read that follows an answer, use
+   *   the client held and never connect in its place (S15, W3′).
    *
    * Any of them joins a connect already on its way (S6, S18). An attempt has
    * the call budget too: one that outlasts it is given up — and counts as a
@@ -336,7 +337,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       let over = false
       const giveUp = (reason: WorkspaceFailureReason = "unavailable") => {
         over = true
-        if (!disposed) connectFailed()
+        connectFailed()
         reject(new WorkspaceSourceError(reason))
       }
       const cancel = clock.after(timing.callMs, () => giveUp())
@@ -674,10 +675,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       )
       // Taken: the call resolves now, and the conversation after the answer
       // follows as an update (`ports.ts`). Read once more for it, not awaited,
-      // so a slow read cannot report a taken answer failed; if it fails, the
-      // answer still stands, and the next list resyncs (W3b, W3c) — unless
-      // the session is gone, which is no gap (S5).
-      read(sessionId, "person").catch((error: unknown) => {
+      // so a slow read cannot report a taken answer failed; if it fails — or
+      // the client has closed, which it does not connect again for (W3′) —
+      // the answer still stands, and the next list resyncs (W3b, W3c) —
+      // unless the session is gone, which is no gap (S5).
+      read(sessionId, "held").catch((error: unknown) => {
         if (!gone(error)) gap = true
       })
     })
@@ -689,6 +691,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           gap = true
           throw error
         })
+        // The index is the resync: what any gap missed is read now (S20).
+        gap = false
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
           channels: [gatewayChannel],

@@ -1374,6 +1374,7 @@ pub(crate) mod testing {
         path::Path,
         sync::{
             atomic::{AtomicU64, Ordering},
+            mpsc::{channel, Receiver, Sender},
             Arc, Mutex,
         },
         time::Instant,
@@ -1420,11 +1421,16 @@ pub(crate) mod testing {
     }
 
     /// A background service host that registers, or refuses to, without
-    /// launchd, and writes down each registration and who asked for it.
+    /// launchd, and writes down each registration and who asked for it. Its
+    /// first registration can be held open (`recording_gateway_held`), so a
+    /// test can ask while a reconciliation is in flight. (`main.rs` keeps its
+    /// own host fake, which also stops agents.)
     pub(crate) struct RecordingGatewayHost {
         registration: Result<ReconciledGateway, GatewayError>,
         pub(crate) registrations: Mutex<u32>,
         pub(crate) initiators: Mutex<Vec<ReconciliationInitiator>>,
+        /// Told when a held registration is entered, then waited on to let it finish.
+        hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
     }
 
     impl GatewayHost for RecordingGatewayHost {
@@ -1441,6 +1447,13 @@ pub(crate) mod testing {
                 .lock()
                 .unwrap()
                 .push(attempt.origin().evidence().initiator());
+            let held = self.hold.lock().unwrap().take();
+            if let Some((entered, release)) = held {
+                entered
+                    .send(())
+                    .expect("the test waits for the registration");
+                release.recv().expect("the test releases the registration");
+            }
             let target = match &self.registration {
                 Ok(gateway) => gateway.audit_identity()?.target().clone(),
                 Err(_) => ReconciliationTarget::new(
@@ -1481,10 +1494,29 @@ pub(crate) mod testing {
     pub(crate) fn recording_gateway(
         registration: Result<ReconciledGateway, GatewayError>,
     ) -> (Gateway, Arc<RecordingGatewayHost>) {
+        gateway_over(registration, None)
+    }
+
+    /// As [`recording_gateway`], with the first registration held open: the
+    /// first receiver hears when it is entered, and the sender lets it finish.
+    pub(crate) fn recording_gateway_held(
+        registration: Result<ReconciledGateway, GatewayError>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>, Receiver<()>, Sender<()>) {
+        let (entered, on_entered) = channel();
+        let (release, on_release) = channel();
+        let (gateway, host) = gateway_over(registration, Some((entered, on_release)));
+        (gateway, host, on_entered, release)
+    }
+
+    fn gateway_over(
+        registration: Result<ReconciledGateway, GatewayError>,
+        hold: Option<(Sender<()>, Receiver<()>)>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>) {
         let host = Arc::new(RecordingGatewayHost {
             registration,
             registrations: Mutex::new(0),
             initiators: Mutex::new(Vec::new()),
+            hold: Mutex::new(hold),
         });
         (
             Gateway::bootstrap(
@@ -1500,8 +1532,8 @@ pub(crate) mod testing {
         )
     }
 
-    /// A gateway the host reports registered and running.
-    pub(crate) fn reconciled_gateway() -> ReconciledGateway {
+    /// A registration the host reports done, its gateway running.
+    pub(crate) fn reconciled_registration() -> ReconciledGateway {
         ReconciledGateway::new(
             "com.nessa.gateway".into(),
             "a".repeat(64),

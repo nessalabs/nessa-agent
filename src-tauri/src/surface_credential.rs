@@ -257,7 +257,7 @@ mod tests {
     use super::*;
     use crate::desktop_window::DESKTOP_WINDOW;
     use crate::gateway::application::{
-        testing::{reconciled_gateway, recording_gateway},
+        testing::{reconciled_registration, recording_gateway, recording_gateway_held},
         GatewayError,
     };
     use crate::gateway::domain::value_objects::{BundledSurface, ReconciliationInitiator};
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn the_bundled_panel_waits_for_the_gateway_and_gets_its_token() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = recording_gateway(Ok(reconciled_gateway()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
 
         assert_eq!(
             load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap(),
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn the_bundled_setup_waits_for_the_gateway_and_gets_its_token() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = recording_gateway(Ok(reconciled_gateway()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
         assert_eq!(
             load(panel::SETUP_WINDOW, Some(&gateway), &credential).unwrap(),
             "fixture-only"
@@ -383,13 +383,13 @@ mod tests {
         );
     }
 
-    /// The desktop window reads the gateway the panel brought up, under the
+    /// The desktop window reads a gateway that startup brought up, under the
     /// panel's credential: once it is ready, the token is read and nothing is
     /// registered or reconciled on the window's behalf (H1′, #419).
     #[test]
     fn the_desktop_window_reads_a_ready_gateway_without_reconciling() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = recording_gateway(Ok(reconciled_gateway()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
         load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap();
         let registered = *host.registrations.lock().unwrap();
         let initiators = host.initiators.lock().unwrap().len();
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn the_desktop_window_is_refused_until_the_gateway_is_ready_and_starts_nothing() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = recording_gateway(Ok(reconciled_gateway()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
         for _ in 0..3 {
             assert_eq!(
                 load(DESKTOP_WINDOW, Some(&gateway), &credential).err(),
@@ -430,6 +430,49 @@ mod tests {
         );
         assert_eq!(*host.registrations.lock().unwrap(), registered);
         assert_eq!(credential.reads(), 0);
+    }
+
+    /// The host's own launch startup is in flight: the desktop window is
+    /// refused, starts no second reconciliation and reads nothing; once that
+    /// startup is ready the window is served, the panel never having asked
+    /// (H2″, H9).
+    #[test]
+    fn the_desktop_window_waits_out_the_hosts_own_startup_without_joining_it() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host, entered, release) =
+            recording_gateway_held(Ok(reconciled_registration()));
+        // What the window was told while startup ran, gathered before the
+        // registration is released, so a failing assertion cannot leave the
+        // start waiting for a release that never comes.
+        let (while_starting, registered, read) = std::thread::scope(|scope| {
+            let starting = scope.spawn(|| tauri::async_runtime::block_on(gateway.start()));
+            entered.recv().unwrap();
+            let told: Vec<_> = (0..3)
+                .map(|_| load(DESKTOP_WINDOW, Some(&gateway), &credential))
+                .collect();
+            let registered = *host.registrations.lock().unwrap();
+            let read = credential.reads();
+            release.send(()).unwrap();
+            starting.join().unwrap().unwrap();
+            (told, registered, read)
+        });
+        for told in while_starting {
+            assert_eq!(
+                told.err(),
+                Some("The local server isn't ready yet".to_string())
+            );
+        }
+        assert_eq!(registered, 1);
+        assert_eq!(read, 0);
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(
+            *host.initiators.lock().unwrap(),
+            vec![ReconciliationInitiator::DesktopHost]
+        );
     }
 
     /// A build without a managed gateway does not wait for one, for the
@@ -479,7 +522,7 @@ mod tests {
     #[test]
     fn another_window_is_refused_before_the_gateway_is_asked_for_anything() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = recording_gateway(Ok(reconciled_gateway()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
 
         assert_eq!(
             load("untrusted", Some(&gateway), &credential).err(),
