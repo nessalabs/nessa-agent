@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 use crate::domain::agent_execution::sessions::SessionId;
+use crate::infrastructure::mcp::ForwardedResults;
 use std::{fmt, sync::Arc};
 
 /// The host's side of keying MCP stand-ins by session. For each provider
@@ -23,6 +24,7 @@ pub trait StandInGrants: Send + Sync {
 /// block either.
 pub struct StandInGrant {
     environment: Arc<[(String, String)]>,
+    forwarded: Option<ForwardedResults>,
     _held: Box<dyn Send + Sync>,
 }
 impl StandInGrant {
@@ -31,7 +33,18 @@ impl StandInGrant {
     pub fn new(environment: Vec<(String, String)>, held: Box<dyn Send + Sync>) -> Self {
         Self {
             environment: environment.into(),
+            forwarded: None,
             _held: held,
+        }
+    }
+    /// This grant, with the results its stand-ins forward to their harness
+    /// ([`McpOwner::forwarded`](crate::infrastructure::mcp::McpOwner::forwarded)
+    /// for the owner it was granted as). The binding attaches each to the
+    /// tool call the harness reports it under, on that call's terminal update.
+    pub fn with_forwarded(self, forwarded: ForwardedResults) -> Self {
+        Self {
+            forwarded: Some(forwarded),
+            ..self
         }
     }
     /// What each MCP server process of the open is given.
@@ -44,6 +57,7 @@ impl fmt::Debug for StandInGrant {
         // Its values are the host's secrets: never printed.
         f.debug_struct("StandInGrant")
             .field("variables", &self.environment.len())
+            .field("forwarded", &self.forwarded)
             .finish_non_exhaustive()
     }
 }
@@ -55,6 +69,7 @@ impl fmt::Debug for StandInGrant {
 pub struct StandInSessions {
     grants: Option<Arc<dyn StandInGrants>>,
     environment: Arc<[(String, String)]>,
+    forwarded: Option<ForwardedResults>,
 }
 impl StandInSessions {
     /// No grants: MCP server processes get no per-open environment.
@@ -66,6 +81,7 @@ impl StandInSessions {
         Self {
             grants: Some(grants),
             environment: Arc::new([]),
+            forwarded: None,
         }
     }
     /// For one open of `session` (none for an open that names no session):
@@ -87,10 +103,12 @@ impl StandInSessions {
         let environment = grant
             .as_ref()
             .map_or_else(|| Arc::from([]), |grant| grant.environment.clone());
+        let forwarded = grant.as_ref().and_then(|grant| grant.forwarded.clone());
         (
             Self {
                 grants: self.grants.clone(),
                 environment,
+                forwarded,
             },
             grant,
         )
@@ -99,12 +117,17 @@ impl StandInSessions {
     pub fn environment(&self) -> &[(String, String)] {
         &self.environment
     }
+    /// The results this open's stand-ins forwarded, when its grant has them.
+    pub fn forwarded(&self) -> Option<&ForwardedResults> {
+        self.forwarded.as_ref()
+    }
 }
 impl fmt::Debug for StandInSessions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StandInSessions")
             .field("granted", &self.grants.is_some())
             .field("variables", &self.environment.len())
+            .field("forwarded", &self.forwarded.is_some())
             .finish()
     }
 }

@@ -81,6 +81,9 @@ impl StandInGrants for ConversationGrants {
             .lock()
             .expect("grants")
             .insert(digest, owner.clone());
+        // What this open's stand-ins forward, for the binding to attach to
+        // the tool calls its harness reports (#435).
+        let forwarded = owner.forwarded();
         StandInGrant::new(
             vec![(SESSION_VARIABLE.to_owned(), token)],
             Box::new(Revoke {
@@ -89,6 +92,7 @@ impl StandInGrants for ConversationGrants {
                 owner,
             }),
         )
+        .with_forwarded(forwarded)
     }
 }
 

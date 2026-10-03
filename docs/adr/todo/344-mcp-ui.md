@@ -306,6 +306,9 @@ where before a finished Codex MCP call showed nothing. Only Codex's announcement
 carries the MCP marker; its completion, which carries the result, does not
 (`index.js:25123-25130`), so the adapter remembers the marking per call. Both reach the window on
 `ConversationTool` (`mcp`, `structuredContent`).
+Claude's `structuredContent`, which no ACP frame carries, is taken from the
+gateway's own connection instead: its stand-in keeps each forwarded result
+for the call it was reported under (#435, [forwarded results](../../design/mcp-connections.md#forwarded-results)).
 
 What it does not: **no harness passes the tool's UI resource through ACP**, so a
 tool's `_meta.ui.resourceUri` comes from the server itself, over the gateway's

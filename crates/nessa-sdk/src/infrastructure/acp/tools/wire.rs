@@ -4,6 +4,7 @@ use crate::domain::agent_execution::tools::{
     FileLocation, FilePath, ToolCallId, ToolCallUpdate, ToolContent, ToolKind, ToolStatus,
 };
 use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::mcp::ForwardedResults;
 use serde_json::Value;
 
 /// Bounded display text for a structurally valid tool result Nessa cannot render.
@@ -126,6 +127,36 @@ pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
         locations,
         content,
     ))
+}
+
+/// `update`, with the result its stand-in forwarded for the call appended
+/// after its content, when it is the terminal update (`completed` or
+/// `failed`) of a call naming an MCP tool, carries content, and a result was
+/// forwarded under its id. The result is taken then, and only then: an update
+/// without content (Claude's PostToolUse frame) would replace the call's text
+/// with the result alone, and one before the end has no result yet.
+pub(crate) fn with_forwarded(
+    update: ToolCallUpdate,
+    forwarded: Option<&ForwardedResults>,
+) -> ToolCallUpdate {
+    let terminal = matches!(
+        update.status(),
+        Some(ToolStatus::Completed | ToolStatus::Failed)
+    );
+    let (Some(forwarded), Some(content), true, true) = (
+        forwarded,
+        update.content(),
+        terminal,
+        update.mcp_tool().is_some(),
+    ) else {
+        return update;
+    };
+    let Some(result) = forwarded.take(update.id().as_str()) else {
+        return update;
+    };
+    let mut content = content.clone();
+    content.push(result);
+    update.with_content(content)
 }
 
 pub(crate) fn path(value: impl Into<String>) -> Result<FilePath, AgentError> {

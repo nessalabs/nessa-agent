@@ -4,6 +4,7 @@
 //! harness ──initialize──────────────▶ answered here, from the upstream's own answer
 //!         ──request (its id)────────▶ Connection::call (an id of the connection's)
 //!         ◀─answer (its id)─────────┘   tools/list: without the model's hidden tools
+//!                                           tools/call: structuredContent kept first
 //!         ──notifications/cancelled─▶ that call dropped: cancelled upstream
 //!         ◀─*/list_changed────────── the connection's notices
 //! ```
@@ -13,6 +14,7 @@
 //! connection ends. Its calls still waiting are dropped then, unanswered; the
 //! session closing after it ends them upstream by closing the server's stdin.
 use super::connection::{Connection, Reply};
+use super::forwarded::{self, ForwardedResults};
 use super::framing::{self, Frames, MAX_FRAME_BYTES};
 use super::{wire, McpError};
 use serde_json::{json, Value};
@@ -30,13 +32,15 @@ use tokio::{
 };
 
 /// What a finished call hands back: the harness's key and id for it, the
-/// server's reply, and, for a `tools/list`, the order it was asked in and
-/// which of the tools its answer named it hid from the model.
+/// server's reply, for a `tools/list` the order it was asked in and which of
+/// the tools its answer named it hid from the model, and for a `tools/call`
+/// the harness's own id for the call, when it named one.
 type Finished = (
     String,
     Value,
     Result<Reply, McpError>,
     Option<(u64, Vec<(String, bool)>)>,
+    Option<String>,
 );
 
 /// What a stand-in sends a harness that fell too far behind the server's
@@ -121,11 +125,14 @@ impl Visibility {
 /// either ends. `initialized` is the upstream's answer to the client's own
 /// `initialize`; the harness gets it, without `resources.subscribe`.
 /// `visibility` is the session's: what its lists, and this stand-in's, said
-/// the model may not see.
+/// the model may not see. `forwarded` is its grant's: where a `tools/call`
+/// result's `structuredContent` is kept, under the harness's id for the call,
+/// before the harness is answered.
 pub(crate) async fn serve(
     connection: Arc<Connection>,
     initialized: Arc<Value>,
     visibility: Arc<Visibility>,
+    forwarded: ForwardedResults,
     input: impl AsyncRead + Unpin,
     mut output: impl AsyncWrite + Unpin,
 ) {
@@ -144,7 +151,7 @@ pub(crate) async fn serve(
             frame = frames.next() => frame,
             Some(done) = calls.join_next_with_id(), if !calls.is_empty() => {
                 // An aborted call has nothing to answer: its harness cancelled it.
-                if let Ok((task, (key, id, reply, listed))) = done {
+                if let Ok((task, (key, id, reply, listed, call))) = done {
                     if !answered_by(&waiting, &key, task) {
                         continue;
                     }
@@ -152,7 +159,13 @@ pub(crate) async fn serve(
                     if let Some((order, listed)) = listed {
                         visibility.listed(order, listed);
                     }
-                    if !send(&mut output, &answer(&id, reply)).await {
+                    let answer = answer(&id, reply);
+                    // Kept before the harness has it, so the harness cannot
+                    // report the call before its result is here to take.
+                    if let Some(call) = call {
+                        keep_structured(&forwarded, call, &answer);
+                    }
+                    if !send(&mut output, &answer).await {
                         return;
                     }
                 }
@@ -224,6 +237,11 @@ pub(crate) async fn serve(
                 let method = method.to_owned();
                 let params = message.get("params").cloned();
                 let order = (method == "tools/list").then(|| visibility.ask());
+                let call = if method == "tools/call" {
+                    forwarded::call_id(params.as_ref())
+                } else {
+                    None
+                };
                 let call = calls.spawn({
                     let key = key.clone();
                     async move {
@@ -235,7 +253,7 @@ pub(crate) async fn serve(
                             }
                             (other, _) => (other, None),
                         };
-                        (key, id, reply, listed)
+                        (key, id, reply, listed, call)
                     }
                 });
                 waiting.insert(key, call);
@@ -257,6 +275,22 @@ pub(crate) async fn serve(
 /// `key`: not when it was cancelled, or its id reused since.
 pub(super) fn answered_by(waiting: &HashMap<String, AbortHandle>, key: &str, task: Id) -> bool {
     waiting.get(key).is_some_and(|call| call.id() == task)
+}
+
+/// Keep the `structuredContent` of `answer` — the harness's answer, as it will
+/// be written — under `call`, when it is a result that has one. An error,
+/// including a result too large for a frame ([`answer`]), keeps nothing.
+fn keep_structured(forwarded: &ForwardedResults, call: String, answer: &Value) {
+    let Some(structured) = answer
+        .get("result")
+        .and_then(|result| result.get("structuredContent"))
+        .filter(|structured| !structured.is_null())
+    else {
+        return;
+    };
+    if let Ok(result) = wire::structured_result(structured) {
+        forwarded.record(call, result);
+    }
 }
 
 /// The upstream's `initialize` answer as a harness is given it: without

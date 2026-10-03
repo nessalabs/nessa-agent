@@ -1,6 +1,6 @@
 //! Tool wire parsing and atomic sparse-update validation at the adapter boundary.
 use super::*;
-use crate::domain::agent_execution::tools::ToolObservation;
+use crate::domain::agent_execution::tools::{McpTool, ToolObservation};
 use serde_json::json;
 #[test]
 fn standard_tool_updates_preserve_sparse_content_without_provider_metadata() {
@@ -92,4 +92,105 @@ fn tool_wire_preserves_empty_text_and_unknown_versus_empty_prior_diff() {
             ])
         );
     }
+}
+
+/// A call's update with `status` and `content`, naming an MCP tool when `mcp`.
+fn call_update(
+    status: Option<ToolStatus>,
+    content: Option<Vec<ToolContent>>,
+    mcp: bool,
+) -> ToolCallUpdate {
+    let update = ToolCallUpdate::new(
+        ToolCallId::new("toolu_1").unwrap(),
+        None,
+        None,
+        status,
+        None,
+        content,
+    );
+    if mcp {
+        update.with_mcp_tool(McpTool::new("mcptest", "report_rows").unwrap())
+    } else {
+        update
+    }
+}
+
+/// Forwarded results holding one for `toolu_1`.
+fn forwarded_rows() -> ForwardedResults {
+    let forwarded = ForwardedResults::default();
+    forwarded.record("toolu_1".into(), rows());
+    forwarded
+}
+
+fn rows() -> ToolContent {
+    ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap()
+}
+
+#[test]
+fn w1_a_terminal_update_with_content_gets_its_forwarded_result_after_its_content() {
+    for status in [ToolStatus::Completed, ToolStatus::Failed] {
+        let forwarded = forwarded_rows();
+        let said = ToolContent::text(r#"{"rows":[1,2]}"#);
+        let update = with_forwarded(
+            call_update(Some(status), Some(vec![said.clone()]), true),
+            Some(&forwarded),
+        );
+        assert_eq!(update.content(), &Some(vec![said, rows()]));
+        // W4: taken, so a second terminal update gets nothing more.
+        let again = with_forwarded(
+            call_update(Some(status), Some(vec![]), true),
+            Some(&forwarded),
+        );
+        assert_eq!(again.content(), &Some(vec![]));
+    }
+}
+
+#[test]
+fn w2_an_update_without_content_or_before_the_end_leaves_the_result_waiting() {
+    let forwarded = forwarded_rows();
+    // Claude's PostToolUse frame: terminal-looking or not, it has no content.
+    for status in [None, Some(ToolStatus::Completed)] {
+        let update = with_forwarded(call_update(status, None, true), Some(&forwarded));
+        assert_eq!(update.content(), &None);
+    }
+    for status in [None, Some(ToolStatus::Pending), Some(ToolStatus::Running)] {
+        let update = with_forwarded(call_update(status, Some(vec![]), true), Some(&forwarded));
+        assert_eq!(update.content(), &Some(vec![]));
+    }
+    // Still there for the terminal update.
+    let update = with_forwarded(
+        call_update(Some(ToolStatus::Completed), Some(vec![]), true),
+        Some(&forwarded),
+    );
+    assert_eq!(update.content(), &Some(vec![rows()]));
+}
+
+#[test]
+fn w3_a_call_with_nothing_forwarded_keeps_its_text_alone() {
+    let said = vec![ToolContent::text("Two rows")];
+    let update = with_forwarded(
+        call_update(Some(ToolStatus::Completed), Some(said.clone()), true),
+        Some(&ForwardedResults::default()),
+    );
+    assert_eq!(update.content(), &Some(said));
+}
+
+#[test]
+fn w5_a_call_naming_no_mcp_tool_takes_nothing() {
+    let forwarded = forwarded_rows();
+    let update = with_forwarded(
+        call_update(Some(ToolStatus::Completed), Some(vec![]), false),
+        Some(&forwarded),
+    );
+    assert_eq!(update.content(), &Some(vec![]));
+    assert_eq!(forwarded.take("toolu_1"), Some(rows()));
+}
+
+#[test]
+fn w6_an_open_without_forwarded_results_leaves_the_update_as_it_was() {
+    let update = with_forwarded(
+        call_update(Some(ToolStatus::Completed), Some(vec![]), true),
+        None,
+    );
+    assert_eq!(update.content(), &Some(vec![]));
 }

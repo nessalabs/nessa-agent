@@ -167,7 +167,7 @@ for line in sys.stdin:
         # carried, by method, for the test to read back; otherwise none.
         if mode == "stand-ins":
             record("mcp-servers-" + method.split("/")[1], json.dumps(servers))
-        else:
+        elif mode != "forwarded-result":
             assert servers == []
         assert options["settings"]["allowedMcpServers"] == [{"serverName": server["name"]} for server in servers]
         response = configs("alias" if mode == "wrong-model" else model, approval_mode)
@@ -298,6 +298,29 @@ for line in sys.stdin:
                     "status": "completed", "content": opaque + [
                         {"type": "content", "content": {"type": "text", "text": "after"}}
                     ]})
+            text("continued:" + user_text)
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
+        elif mode == "forwarded-result":
+            # The frames Claude ACP 0.76.0 sends for an MCP call, as recorded
+            # live (#435): the result only as JSON text, in `rawOutput`, the
+            # content, and the PostToolUse frame's `toolResponse`, which has
+            # no content. `toolu_rows` has a forwarded result; `toolu_plain`
+            # has none.
+            for call in ("toolu_rows", "toolu_plain"):
+                name = "mcp__mcptest__report_rows"
+                said = '{"rows":[1,2]}'
+                meta = {"claudeCode": {"toolName": name}}
+                update({"_meta": meta, "toolCallId": call, "sessionUpdate": "tool_call",
+                        "rawInput": {}, "status": "pending", "title": name, "kind": "other",
+                        "content": []})
+                update({"_meta": meta, "toolCallId": call, "sessionUpdate": "tool_call_update",
+                        "rawInput": {}, "title": name, "kind": "other", "content": []})
+                update({"_meta": {"claudeCode": {"toolResponse": said, "toolName": name}},
+                        "toolCallId": call, "sessionUpdate": "tool_call_update"})
+                update({"_meta": meta, "toolCallId": call, "sessionUpdate": "tool_call_update",
+                        "status": "completed", "rawOutput": said,
+                        "content": [{"type": "content", "content": {"type": "text", "text": said}}]})
             text("continued:" + user_text)
             result(pending, {"stopReason": "end_turn"})
             pending = None
