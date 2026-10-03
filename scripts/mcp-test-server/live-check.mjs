@@ -81,6 +81,8 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
   let gateway = null
   let client = null
   let failed = false
+  // A failed start leaves no gateway, but its output on the error.
+  let startError = null
   try {
     gateway = await startLocalGateway({
       agent,
@@ -103,6 +105,9 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
           serverScript,
         ],
       },
+    }).catch((error) => {
+      startError = error
+      throw error
     })
     const token = gateway.token
     const port = Number(new URL(gateway.url).port)
@@ -202,14 +207,17 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     console.error((gateway?.log() ?? error?.gatewayLog ?? "").slice(-6000))
   } finally {
     client?.close()
-    const log = gateway?.log() ?? ""
     if (gateway && !(await gateway.stop())) {
       failed = true
       console.error(
         `[${agent}:FAILED] the gateway (pid ${gateway.server.pid}) did not exit`,
       )
     }
-    writeFileSync(join(evidence, "gateway.log"), log)
+    // Read after the stop, so it holds what the gateway said as it stopped.
+    writeFileSync(
+      join(evidence, "gateway.log"),
+      gateway?.log() ?? startError?.gatewayLog ?? "",
+    )
   }
   process.exit(failed ? 1 : 0)
 }

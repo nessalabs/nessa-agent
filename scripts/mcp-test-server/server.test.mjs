@@ -169,6 +169,80 @@ test("the review app speaks the ui/* bridge and calls each of its tools by name"
   assert.ok(!text.includes("${"))
 })
 
+/**
+ * The review app's own script, run against a stub host: the frame's parent,
+ * whose posts are recorded, and a document with just what the app touches.
+ * `initialize` answers `ui/initialize` with `hostContext`; `toolResult` sends
+ * the tool result. Returns the methods the app posted and its body's attributes.
+ */
+async function runReviewApp(hostContext) {
+  const { text } = answer({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "resources/read",
+    params: { uri: REVIEW_URI },
+  }).result.contents[0]
+  const script = text.match(/<script>([\s\S]*)<\/script>/)[1]
+  const posted = []
+  const parent = { postMessage: (message) => posted.push(message) }
+  const listeners = []
+  const attributes = {}
+  const element = () => ({ textContent: "", addEventListener() {} })
+  const document = {
+    body: { setAttribute: (name, value) => (attributes[name] = value) },
+    documentElement: { scrollWidth: 0, scrollHeight: 0 },
+    getElementById: element,
+    querySelector: element,
+  }
+  const window = {
+    parent,
+    addEventListener: (type, listener) => type === "message" && listeners.push(listener),
+  }
+  const { runInNewContext } = await import("node:vm")
+  runInNewContext(script, {
+    window,
+    document,
+    Promise,
+    ResizeObserver: class {
+      observe() {}
+    },
+  })
+  const deliver = (data) =>
+    listeners.forEach((listener) => listener({ source: parent, data }))
+  const initialize = posted.find((message) => message.method === "ui/initialize")
+  deliver({ jsonrpc: "2.0", id: initialize.id, result: { hostContext } })
+  await new Promise((done) => setImmediate(done))
+  deliver({
+    jsonrpc: "2.0",
+    method: "ui/notifications/tool-result",
+    params: { structuredContent: { rows: [1, 2] } },
+  })
+  return {
+    calls: posted
+      .filter((message) => message.method === "tools/call")
+      .map((message) => message.params.name),
+    attributes,
+  }
+}
+
+test("the review app, inline, calls each of its tools once it has its tool result", async () => {
+  const want = [APP_CALLS.destructive, APP_CALLS.hiddenNoUi, APP_CALLS.hiddenWithUi]
+  const told = await runReviewApp({ displayMode: "inline" })
+  assert.deepEqual(told.calls, want)
+  assert.equal(told.attributes["data-review-mode"], "inline")
+  // A host context with no display mode is the spec's default: inline.
+  const untold = await runReviewApp({})
+  assert.deepEqual(untold.calls, want)
+  assert.equal(untold.attributes["data-review-mode"], "inline")
+  assert.equal(untold.attributes["data-review-state"], "live")
+})
+
+test("the review app, fullscreen, makes no calls of its own", async () => {
+  const { calls, attributes } = await runReviewApp({ displayMode: "fullscreen" })
+  assert.deepEqual(calls, [])
+  assert.equal(attributes["data-review-mode"], "fullscreen")
+})
+
 test("unknown tools, resources and methods are JSON-RPC errors; notifications get no answer", () => {
   const error = (message) => answer({ jsonrpc: "2.0", id: 7, ...message }).error.code
   assert.equal(error({ method: "tools/call", params: { name: "nope" } }), -32602)

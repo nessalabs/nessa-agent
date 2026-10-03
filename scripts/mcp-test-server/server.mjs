@@ -131,8 +131,9 @@ const REVIEW_HTML = `<!doctype html>
     protocolVersion: "2026-01-26"
   }).then(function (answer) {
     if (answer.error) { body.setAttribute("data-review-state", "refused"); return; }
-    mode = answer.result.hostContext && answer.result.hostContext.displayMode || null;
-    if (mode) body.setAttribute("data-review-mode", mode);
+    // A host may leave the display mode out; it is then the spec's default, inline.
+    mode = answer.result.hostContext && answer.result.hostContext.displayMode || "inline";
+    body.setAttribute("data-review-mode", mode);
     body.setAttribute("data-review-state", "live");
     tell("ui/notifications/initialized", {});
     reportSize();

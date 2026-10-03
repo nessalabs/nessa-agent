@@ -101,7 +101,9 @@ export async function exited(child, ms) {
  * @param {{ command: string, args: string[] }} o.mcpServer how the gateway starts `mcptest`
  * @returns the gateway: `{ directory, token, url, log, server, stop }`. `token`
  *   is the owner token file's path; `log()` the gateway's output so far; `stop()`
- *   stops it, waits for it, and removes its directory, and says whether it exited.
+ *   stops it, waits for it and for the rest of its output (up to 2 s more), and
+ *   removes its directory, and says whether it exited. On a failed start, the
+ *   error carries the gateway's output as `gatewayLog`.
  */
 export async function startLocalGateway(o) {
   const nessa = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
@@ -112,6 +114,8 @@ export async function startLocalGateway(o) {
   const directory = mkdtempSync(join(tmpdir(), `nessa-mcp-live-${o.agent}-`))
   const output = []
   let server = null
+  // Its output streams closed: everything it wrote has been read.
+  let closed = null
   const stop = async () => {
     let stopped = true
     // Stop the gateway, and wait for it, before its directory is removed: it
@@ -123,6 +127,9 @@ export async function startLocalGateway(o) {
         server.kill("SIGKILL")
         stopped = await exited(server, 5_000)
       }
+      // Its exit can arrive before the last of its output is read. A child
+      // that kept the streams open does not hold the stop up for long.
+      if (stopped) await Promise.race([closed, sleep(2_000)])
     }
     rmSync(directory, { recursive: true, force: true })
     return stopped
@@ -167,6 +174,7 @@ export async function startLocalGateway(o) {
     )
     chmodSync(configPath, 0o600)
     server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
+    closed = new Promise((done) => server.once("close", done))
     for (const stream of [server.stdout, server.stderr])
       stream.on("data", (chunk) => output.push(chunk.toString()))
     const log = () => output.join("")

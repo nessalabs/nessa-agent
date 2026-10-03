@@ -12,7 +12,8 @@
  * - a dev server whose `/browser` proxy is that gateway.
  *
  * It asks the agent, through `NessaClient`, to call the server's app tool
- * (`review_rows`) once, and allows that call alone. Then, in each engine, it
+ * (`review_rows`) once, and allows that call alone; an agent that calls it
+ * more than once leaves the run "could not run". Then, in each engine, it
  * signs the page in with the gateway's owner token through `/browser/login`
  * from the page, opens the conversation, and checks the review app the
  * server serves. Shown inline, the app calls the server's destructive tool
@@ -40,6 +41,14 @@ import {
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
+import {
+  admitOnce,
+  callsOf,
+  newReview,
+  permissionKey,
+  reviewKeys,
+  stillPending,
+} from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
 import { css, names } from "./lib/selectors.mjs"
 import { freePort, startDevServer } from "./lib/server.mjs"
@@ -171,7 +180,8 @@ async function startStack(options) {
 /**
  * Asks `agent` to call the app tool once, allows that call alone, and waits
  * for the turn to end. A gateway with no sign-in for the agent refuses the
- * conversation: that is "could not run".
+ * conversation, and an agent that calls the app tool more than once leaves
+ * the steps nothing unambiguous to read: both are "could not run".
  */
 async function agentTurn(client, conversationId, agent) {
   try {
@@ -188,34 +198,36 @@ async function agentTurn(client, conversationId, agent) {
       `the gateway refused the ${agent} conversation (is ${agent} signed in on this machine?): ${error.message}`,
     )
   }
+  const once = (calls) =>
+    new CannotRun(
+      `${agent} called ${APP_TOOL} more than once (${calls}); the check admits exactly one call`,
+    )
+  // The one call of the app tool allowed, and the permissions answered for it.
+  let admitted = null
   const answered = new Set()
   for (let i = 0; i < 300; i += 1) {
     await sleep(1000)
     const view = await client.conversation.read(conversationId)
-    for (const permission of view.permissions) {
-      const key = `${permission.executionId}:${permission.permissionId}`
-      if (answered.has(key) || permission.origin.kind !== "harness") continue
-      const tool = view.tools.find(
-        (each) =>
-          each.executionId === permission.executionId &&
-          each.toolId === permission.toolId,
-      )
-      const option = permission.options.find((each) => each.effect === "allow")
-      // Only the app tool is allowed, and only once; anything else stays unanswered.
-      if (tool?.mcp?.server !== SERVER || tool.mcp.tool !== APP_TOOL || !option) continue
-      answered.add(key)
+    // Only the app tool is allowed, and only one call of it; anything else
+    // stays unanswered.
+    for (;;) {
+      const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)
+      if (extra) throw once(`${admitted} and ${extra}`)
+      if (!allow) break
+      admitted = allow.call
+      answered.add(permissionKey(allow.permission))
       await client.conversation.answer(
         conversationId,
-        permission.executionId,
-        permission.permissionId,
-        option.id,
+        allow.permission.executionId,
+        allow.permission.permissionId,
+        allow.option.id,
       )
     }
     const last = view.messages.at(-1)
     if (last && !["running", "queued"].includes(last.status)) {
-      const tool = view.tools.find(
-        (each) => each.mcp?.server === SERVER && each.mcp.tool === APP_TOOL,
-      )
+      const calls = callsOf(view, SERVER, APP_TOOL)
+      if (calls.length > 1) throw once(calls.map((each) => each.toolId).join(", "))
+      const [tool] = calls
       if (
         last.status !== "completed" ||
         tool?.status !== "completed" ||
@@ -293,17 +305,33 @@ async function approvalNaming(page, tool, ms = 10_000) {
   }
 }
 
+/** The keys of the app's reviews pending now: a baseline taken before an action. */
+const pendingReviews = async (stack) =>
+  reviewKeys(await appReviews(stack.client, stack.conversationId))
+
+/** Waits up to `ms` for an app review not in `baseline`: the one the action opened. */
+const reviewOpened = (stack, baseline, ms = 15_000) =>
+  waitFor(
+    async () => newReview(await appReviews(stack.client, stack.conversationId), baseline),
+    ms,
+  )
+
+/** Waits up to `ms` for `review` to be pending no longer; whether it went. */
+const reviewGone = (stack, review, ms) =>
+  waitFor(
+    async () =>
+      !stillPending(await appReviews(stack.client, stack.conversationId), review),
+    ms,
+  )
+
 /**
  * Waits for the app's review of a destructive call in the gateway's view and
  * in the window, answers it in the window with `button`, and returns what was
- * seen. `before` is the review keys already answered, so a new one is told
- * apart.
+ * seen. `baseline` is the app's reviews pending before the call was made, so
+ * the call's own is told apart from any left from before.
  */
-async function reviewAndAnswer(page, stack, button, failures) {
-  const review = await waitFor(
-    async () => (await appReviews(stack.client, stack.conversationId))[0],
-    15_000,
-  )
+async function reviewAndAnswer(page, stack, baseline, button, failures) {
+  const review = await reviewOpened(stack, baseline)
   if (!review) {
     failures.push(
       "no review of the app's destructive call reached the conversation's permissions",
@@ -329,15 +357,16 @@ async function reviewAndAnswer(page, stack, button, failures) {
   }
   seen.card = (await card.innerText()).replace(/\s+/g, " ").trim()
   await card.getByRole("button", { name: button, exact: true }).click()
-  const gone = await waitFor(
-    async () => (await appReviews(stack.client, stack.conversationId)).length === 0,
-    10_000,
-  )
+  const gone = await reviewGone(stack, review, 10_000)
   if (!gone) failures.push(`the review is still pending after ${button}`)
   return seen
 }
 
-/** Signs the page's origin in with the gateway's owner token, then opens the conversation. */
+/**
+ * Signs the page's origin in with the gateway's owner token, then opens the
+ * conversation. With the page, returns `reviewsBefore`: the app's reviews
+ * pending before this page mounted the app.
+ */
 async function openConversation(browser, stack, layout) {
   const opened = await openPage(browser, { url: stack.url, layout })
   const { page } = opened
@@ -371,11 +400,14 @@ async function openConversation(browser, stack, layout) {
     await opened.close()
     throw new CannotRun(`no session row "${stack.title}" in the window`)
   }
+  // The app's reviews pending before this page mounts it: whatever a
+  // previous engine's page left, not yet withdrawn, is not this page's.
+  const reviewsBefore = await pendingReviews(stack)
   await row.click()
   // The conversation's transcript, which the app's card is drawn in.
   await need(page, css.appView, "the app's view in the conversation", 30_000)
   await settled(page)
-  return opened
+  return { ...opened, reviewsBefore }
 }
 
 const checks = {
@@ -444,13 +476,20 @@ const checks = {
     return { seen, failures }
   },
 
-  allow: async (page, stack) => {
+  allow: async (page, stack, shot, opened) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
     const before = await said(app, "first")
     if (before !== "pending")
       failures.push(`the destructive call was answered before its review: "${before}"`)
-    const review = await reviewAndAnswer(page, stack, names.allowOnce, failures)
+    // The first call was made as the app mounted.
+    const review = await reviewAndAnswer(
+      page,
+      stack,
+      opened.reviewsBefore,
+      names.allowOnce,
+      failures,
+    )
     const answer = await output(app, "first")
     if (answer !== "ok: Deleted row 2.")
       failures.push(`after Allow Once the app shows "${answer}"`)
@@ -460,13 +499,14 @@ const checks = {
   deny: async (page, stack) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
+    const baseline = await pendingReviews(stack)
     await app.click(css.reviewControl("delete"))
     const before = await said(app, "again")
     if (before !== "pending")
       failures.push(
         `the second destructive call was answered before its review: "${before}"`,
       )
-    const review = await reviewAndAnswer(page, stack, names.denyOnce, failures)
+    const review = await reviewAndAnswer(page, stack, baseline, names.denyOnce, failures)
     const answer = await output(app, "again")
     if (answer !== `error: ${names.gatewayRefused.declined}`)
       failures.push(`after Deny the app shows "${answer}"`)
@@ -488,11 +528,9 @@ const checks = {
     )
     if (paneMode !== "fullscreen") failures.push(`the pane's app is told ${paneMode}`)
     // The pane's own mount: its tool result arrives, and it makes no calls of its own.
+    const baseline = await pendingReviews(stack)
     await pane.app.click(css.reviewControl("delete"))
-    const waiting = await waitFor(
-      async () => (await appReviews(stack.client, stack.conversationId))[0],
-      15_000,
-    )
+    const waiting = await reviewOpened(stack, baseline)
     if (!waiting) {
       failures.push("the pane app's destructive call reached no review")
       return { seen: { paneMode }, failures }
@@ -515,10 +553,7 @@ const checks = {
     )
     if (await page.$(css.appFrameIn("pane")))
       failures.push("the pane's app frame is still on the page after its close")
-    const withdrawn = await waitFor(
-      async () => (await appReviews(stack.client, stack.conversationId)).length === 0,
-      15_000,
-    )
+    const withdrawn = await reviewGone(stack, waiting, 15_000)
     const withdrawnMs = Date.now() - closedAt
     if (!withdrawn) failures.push("the review was not withdrawn when the pane closed")
     const cardGone = !(await approvalNaming(page, DESTRUCTIVE, 5000).then(
@@ -595,6 +630,7 @@ await main(
                 stack,
                 options.shots &&
                   join(options.shots, `mcp-apps-gateway-${engine}-${layout}-${name}.png`),
+                opened,
               )
             } catch (error) {
               result = { failures: [], error: error.message.split("\n")[0] }

@@ -32,8 +32,8 @@ The review app's own calls are what the desktop's real-gateway check
 (`verification/desktop/scripts/mcp-apps-gateway.mjs`) reads in the window.
 
 Arguments outside a tool's schema return an `isError` result and are never
-echoed back. The server's tests are `server.test.mjs`, run by
-`pnpm scripts:test`.
+echoed back. The server's tests are `server.test.mjs`, and the local
+gateway's are `local-gateway.test.mjs`, both run by `pnpm scripts:test`.
 
 To use it from an agent, configure it as a stdio MCP server, for example in a
 gateway's `config.json`:
@@ -68,7 +68,7 @@ MCP_LIVE_OPENCODE=/path/to/opencode-1.18.31 \
 | `mcp.jsonl` | every MCP frame between the gateway and the test server, the harness's forwarded calls among them |
 | `view.json` | the conversation view the window reads at the end of the turn |
 | `summary.json` | the tool frames' shapes, the view's MCP tools with their `resourceUri`, every `ui://` the harness sent, the MCP calls made, the servers the harness was given (stand-ins), and the widget parts the desktop transcript makes of the view |
-| `gateway.log` | the gateway's own log |
+| `gateway.log` | the gateway's own log, read once it has stopped (or, if it failed to start, what it said then) |
 
 It uses the sign-in each agent already has on this machine — Claude's
 credential from the keychain the gateway reads, Codex's own home, OpenCode's
