@@ -118,7 +118,7 @@ async fn tools_are_read_across_pages_and_unreadable_ones_are_handled_one_by_one(
             vec![
                 // A `resourceUri` that cannot be read: kept without a UI.
                 json!({ "name": "b", "_meta": { "ui": { "resourceUri": "https://not-ui" } } }),
-                // A `visibility` that cannot be read: the app's alone.
+                // A `visibility` that cannot be read: no one's, UI or not.
                 json!({ "name": "c", "_meta": { "ui": { "resourceUri": "ui://f/c", "visibility": "app" } } }),
                 // No UI, and visibility all the same (#412).
                 json!({ "name": "d", "_meta": { "ui": { "visibility": ["model"] } } }),
@@ -136,13 +136,14 @@ async fn tools_are_read_across_pages_and_unreadable_ones_are_handled_one_by_one(
         .collect();
     assert_eq!(names, ["a", "b", "c", "d", "e", "f"]);
     let uri = |value: &str| Some(UiResourceUri::new(value).unwrap());
-    let (app_only, model_only) = (
+    let (app_only, model_only, nobody) = (
         UiVisibility::new(false, true),
         UiVisibility::new(true, false),
+        UiVisibility::new(false, false),
     );
     assert_eq!(tools[0].ui(), &ToolUi::new(uri("ui://f/a"), app_only));
     assert_eq!(tools[1].ui(), &ToolUi::default());
-    assert_eq!(tools[2].ui(), &ToolUi::new(uri("ui://f/c"), app_only));
+    assert_eq!(tools[2].ui(), &ToolUi::new(uri("ui://f/c"), nobody));
     assert_eq!(tools[3].ui(), &ToolUi::new(None, model_only));
     assert_eq!(tools[4].ui(), &ToolUi::new(uri("ui://f/e"), model_only));
     assert_eq!(tools[5].ui(), &ToolUi::new(None, app_only));
@@ -161,7 +162,14 @@ fn a_listed_tools_visibility_is_the_one_the_model_is_hidden_by() {
             json!({ "name": "model_only", "_meta": { "ui": { "visibility": ["model"] } } }),
             json!({ "name": "app_only", "_meta": { "ui": { "visibility": ["app"] } } }),
             json!({ "name": "nobody", "_meta": { "ui": { "visibility": [] } } }),
+            // A `visibility` that cannot be read is no one's (#412): not one
+            // that names the model as a string, nor an array naming the app
+            // beside something that is not a string, nor `null`.
             json!({ "name": "unreadable", "_meta": { "ui": { "visibility": { "app": true } } } }),
+            json!({ "name": "model_string", "_meta": { "ui": { "visibility": "model" } } }),
+            json!({ "name": "app_string", "_meta": { "ui": { "visibility": "app" } } }),
+            json!({ "name": "app_and_number", "_meta": { "ui": { "visibility": ["app", 1] } } }),
+            json!({ "name": "null", "_meta": { "ui": { "visibility": null } } }),
             json!({ "name": "drawn", "_meta": { "ui": { "resourceUri": "ui://f/d", "visibility": ["model"] } } }),
         ] }),
     )
@@ -173,7 +181,11 @@ fn a_listed_tools_visibility_is_the_one_the_model_is_hidden_by() {
         ("model_only", UiVisibility::new(true, false), false),
         ("app_only", UiVisibility::new(false, true), false),
         ("nobody", UiVisibility::new(false, false), false),
-        ("unreadable", UiVisibility::new(false, true), false),
+        ("unreadable", UiVisibility::new(false, false), false),
+        ("model_string", UiVisibility::new(false, false), false),
+        ("app_string", UiVisibility::new(false, false), false),
+        ("app_and_number", UiVisibility::new(false, false), false),
+        ("null", UiVisibility::new(false, false), false),
         ("drawn", UiVisibility::new(true, false), true),
     ];
     assert_eq!(page.tools.len(), expected.len());

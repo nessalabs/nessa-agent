@@ -122,6 +122,13 @@ async fn each_policy_refusal_is_its_code_on_record_and_nothing_is_sent() {
         ToolUi::new(None, UiVisibility::new(true, false)),
         ToolHints::new(Some(true), None),
     );
+    // No one's, as a `visibility` that cannot be read is read (#412): refused
+    // even with a UI of its own.
+    fixture.apps.list(
+        "unreadable",
+        Some(UiVisibility::new(false, false)),
+        ToolHints::new(Some(true), None),
+    );
     let not_this_app = McpAppCall {
         app: McpAppRef {
             tool_id: "no-such-call".into(),
@@ -144,6 +151,7 @@ async fn each_policy_refusal_is_its_code_on_record_and_nothing_is_sent() {
             fixture.call("model_only_undrawn", None),
             McpAppError::ToolNotForApp,
         ),
+        (fixture.call("unreadable", None), McpAppError::ToolNotForApp),
         (
             fixture.call("read_rows", Some(&past_the_bound)),
             McpAppError::RequestTooLarge,

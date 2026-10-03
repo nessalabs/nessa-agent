@@ -96,8 +96,9 @@ pub(crate) fn model_may_see(tool: &Value) -> bool {
 }
 
 /// `_meta.ui.visibility`: absent is both; an array of strings names who.
-/// Anything else cannot be read, and is the app's alone: an app's own tool is
-/// not shown to the model by mistake.
+/// Anything else cannot be read, and is no one's: it cannot be read to
+/// include `model` or `app`, so the model is not shown the tool and an app's
+/// call to it is refused (#412).
 fn visibility(declared: Option<&Value>) -> UiVisibility {
     match declared {
         None => UiVisibility::BOTH,
@@ -105,7 +106,7 @@ fn visibility(declared: Option<&Value>) -> UiVisibility {
             let says = |name: &str| who.iter().any(|each| each.as_str() == Some(name));
             UiVisibility::new(says("model"), says("app"))
         }
-        Some(_) => UiVisibility::new(false, true),
+        Some(_) => UiVisibility::new(false, false),
     }
 }
 

@@ -46,8 +46,8 @@ impl UiResourceUri {
 }
 
 /// Who may see and call a tool (`_meta.ui.visibility`): the model, the app,
-/// or both. A tool that does not say, with or without a UI, is visible to
-/// both.
+/// both, or neither. A tool that does not say, with or without a UI, is
+/// visible to both; one whose `visibility` cannot be read, to neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiVisibility {
     model: bool,
