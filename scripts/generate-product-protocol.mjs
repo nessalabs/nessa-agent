@@ -8,10 +8,15 @@ import {
   coreWireContract,
   applyCoreWireBounds,
 } from "./product-protocol/core-contract.mjs"
+import { pairingValueSchema } from "./product-protocol/pairing-values.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
+const pairing = pairingValueSchema(
+  JSON.parse(readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8")),
+)
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
@@ -518,6 +523,14 @@ const formattedContract = spawnSync("rustfmt", ["--edition", "2021"], {
 })
 if (formattedContract.status !== 0) throw new Error(formattedContract.stderr)
 const outputs = [
+  [`${pairingDirectory}/wire_values.rs`, pairing.rust],
+  [
+    "protocol/product/pairing-values.generated.json",
+    await format(JSON.stringify(pairing.schema), {
+      ...(await resolveConfig(resolve(root, "prettier.config.js"))),
+      parser: "json",
+    }),
+  ],
   ...(schemaOutput === undefined ? [] : [["protocol/product/v1.json", schemaOutput]]),
   ["packages/nessa-client/src/generated/product.ts", ts],
   ["crates/nessa-server/src/product/generated.rs", formatted.stdout],

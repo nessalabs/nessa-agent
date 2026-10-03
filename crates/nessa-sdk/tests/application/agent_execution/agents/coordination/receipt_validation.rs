@@ -3,7 +3,10 @@ use super::*;
 use crate::application::agent_execution::{
     executions::{ExecutionEvent, ExecutionUpdate},
     permissions::{ApprovalAttribution, ApprovalBasis, CancellationOrigin},
-    sessions::{SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture},
+    sessions::{
+        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
+        SessionStorage, SessionStorageLease, StorageFuture,
+    },
     tools::ToolReviewInput,
 };
 use crate::domain::agent_execution::{
@@ -40,17 +43,22 @@ impl SessionStorage for Storage {
     }
 }
 impl SessionStorageLease for Lease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async {
             let gate = self.gate.lock().unwrap().take();
             if let Some((entered, release)) = gate {
                 entered.send(()).unwrap();
                 release.await.unwrap();
             }
-            self.backing.save(snapshot).await
+            self.backing.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

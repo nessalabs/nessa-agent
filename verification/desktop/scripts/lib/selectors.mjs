@@ -93,6 +93,10 @@ export const css = {
   fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
   messageAuthor: ".workspace-message-author", // class: which app wrote a message of the person's (#390)
   bubble: ".workspace-bubble", // class: a message of the person's
+  // The test MCP server's review app (scripts/mcp-test-server/server.mjs), as a real server serves it
+  reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
+  reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
+  reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -328,6 +332,15 @@ export const names = {
   fixtureTool: "show_fixture",
   fixtureServer: "nessa-fixture",
   fixtureMessage: "Plot May next to April",
+  /**
+   * What an app is told of a refused call to a real server through the
+   * gateway (`widgets/app/adapters/gateway/mcp-app-server.ts`), by why.
+   */
+  gatewayRefused: {
+    notForApp: "This app may not use that tool",
+    declined: "The person declined this action",
+    withdrawn: "The request was withdrawn",
+  },
   /** What the fixture app says on its body (`fixture-app.ts`), by the field it says it in. */
   fixtureSays: {
     state: "data-fixture-state",

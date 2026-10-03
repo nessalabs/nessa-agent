@@ -67,13 +67,21 @@ async function createHarness() {
       },
     )
     children.push(child)
+    let stderr = ""
+    child.stderr.on("data", (bytes) => {
+      stderr = `${stderr}${bytes.toString()}`.slice(-16_000)
+    })
     const output = createInterface({ input: child.stdout, crlfDelay: Infinity })[
       Symbol.asyncIterator
     ]()
     const send = (value) => child.stdin.write(`${JSON.stringify(value)}\n`)
     const next = async () => {
       const item = await bounded(output.next(), "fixture response")
-      assert.equal(item.done, false, "fixture stdout ended before its response")
+      assert.equal(
+        item.done,
+        false,
+        `fixture stdout ended before its response: ${stderr}`,
+      )
       return JSON.parse(item.value)
     }
     return { child, send, next }
@@ -276,4 +284,212 @@ test("fixture harness reaps its child after a failed assertion", async () => {
     assert.AssertionError,
   )
   assert.ok(child.exitCode !== null || child.signalCode !== null)
+})
+
+async function openFixture({ directory, launch }) {
+  const current = launch()
+  current.send({ id: 1, method: "initialize", params: {} })
+  assert.equal((await current.next()).result.agentInfo.version, "0.76.0")
+  current.send({ id: 2, method: "session/new", params: { cwd: directory } })
+  const opened = await current.next()
+  assert.equal(opened.id, 2)
+  return { ...current, providerSessionId: opened.result.sessionId }
+}
+
+function sendCancellation(current, sessionId = current.providerSessionId) {
+  current.send({ method: "session/cancel", params: { sessionId } })
+}
+
+async function configurationBarrier(current, id) {
+  current.send({
+    id,
+    method: "session/set_config_option",
+    params: { sessionId: current.providerSessionId, configId: "mode", value: "default" },
+  })
+  const response = await current.next()
+  assert.equal(response.id, id, "cancellation notifications do not produce replies")
+  assert.equal(response.result.configOptions[1].currentValue, "default")
+}
+
+function sendPrompt(current, id, executionId) {
+  current.send({
+    id,
+    method: "session/prompt",
+    params: {
+      sessionId: current.providerSessionId,
+      prompt: [{ type: "text", text: `fixtureCorrelation:${executionId}` }],
+    },
+  })
+}
+
+async function finishFixture(current) {
+  const exit = once(current.child, "exit")
+  current.child.stdin.end()
+  return (await bounded(exit, "fixture EOF exit"))[0]
+}
+
+function fixtureEvents(directory) {
+  return readFileSync(join(directory, "evidence.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+}
+
+test("Claude fixture keeps a known idle session usable across repeated cancellation", async () => {
+  await withHarness(async (harness) => {
+    const current = await openFixture(harness)
+    sendCancellation(current)
+    sendCancellation(current)
+    await configurationBarrier(current, 3)
+    sendPrompt(current, 4, "execution-after-stop")
+    assert.equal(
+      (await current.next()).params.update.content.text,
+      "running:execution-after-stop",
+    )
+    const completed = await current.next()
+    assert.equal(completed.id, 4)
+    assert.deepEqual(completed.result, { stopReason: "end_turn" })
+    sendCancellation(current)
+    sendCancellation(current)
+    await configurationBarrier(current, 5)
+    assert.equal(await finishFixture(current), 0)
+    const events = fixtureEvents(harness.directory)
+    assert.deepEqual(
+      events.filter((event) => event.type === "cancel"),
+      [],
+    )
+    assert.deepEqual(
+      events.filter((event) => event.type === "fixture-failure"),
+      [],
+    )
+    assert.deepEqual(
+      events.filter((event) => event.type === "terminal"),
+      [
+        {
+          type: "terminal",
+          providerSessionId: current.providerSessionId,
+          expectedExecutionId: "execution-after-stop",
+          stopReason: "end_turn",
+        },
+      ],
+    )
+  })
+})
+
+test("Claude fixture cancels the original active prompt once and accepts the next prompt", async () => {
+  await withHarness(async (harness) => {
+    const current = await openFixture(harness)
+    sendPrompt(current, 3, "execution-cancel")
+    assert.equal(
+      (await current.next()).params.update.content.text,
+      "running:execution-cancel",
+    )
+    sendCancellation(current)
+    sendCancellation(current)
+    const cancelled = await current.next()
+    assert.equal(cancelled.id, 3)
+    assert.deepEqual(cancelled.result, { stopReason: "cancelled" })
+    await configurationBarrier(current, 4)
+    sendPrompt(current, 5, "execution-after-stop")
+    assert.equal(
+      (await current.next()).params.update.content.text,
+      "running:execution-after-stop",
+    )
+    const completed = await current.next()
+    assert.equal(completed.id, 5)
+    assert.deepEqual(completed.result, { stopReason: "end_turn" })
+    assert.equal(await finishFixture(current), 0)
+    const events = fixtureEvents(harness.directory)
+    assert.deepEqual(
+      events.filter((event) => event.type === "fixture-failure"),
+      [],
+    )
+    assert.deepEqual(
+      events.filter((event) => event.type === "cancel"),
+      [
+        {
+          type: "cancel",
+          providerSessionId: current.providerSessionId,
+          expectedExecutionId: "execution-cancel",
+        },
+      ],
+    )
+    assert.deepEqual(
+      events.filter((event) => event.type === "terminal"),
+      [
+        {
+          type: "terminal",
+          providerSessionId: current.providerSessionId,
+          expectedExecutionId: "execution-cancel",
+          stopReason: "cancelled",
+        },
+        {
+          type: "terminal",
+          providerSessionId: current.providerSessionId,
+          expectedExecutionId: "execution-after-stop",
+          stopReason: "end_turn",
+        },
+      ],
+    )
+  })
+})
+
+for (const state of ["idle", "active"]) {
+  test(`Claude fixture refuses a foreign ${state} session cancellation`, async () => {
+    await withHarness(async (harness) => {
+      const current = await openFixture(harness)
+      if (state === "active") {
+        sendPrompt(current, 3, "execution-cancel")
+        assert.equal(
+          (await current.next()).params.update.content.text,
+          "running:execution-cancel",
+        )
+      }
+      sendCancellation(current, "foreign-provider-session")
+      assert.equal(await finishFixture(current), 1, "foreign cancellation is refused")
+      const events = fixtureEvents(harness.directory)
+      assert.equal(events.filter((event) => event.type === "fixture-failure").length, 1)
+      assert.deepEqual(
+        events.filter((event) => event.type === "cancel"),
+        [],
+      )
+      assert.deepEqual(
+        events.filter((event) => event.type === "terminal"),
+        [],
+      )
+      const ended = events.filter((event) => event.type === "process-end")
+      assert.equal(ended.length, 1)
+      assert.equal(ended[0].processId, current.child.pid)
+      assert.equal(ended[0].providerSessionId, current.providerSessionId)
+    })
+  })
+}
+
+test("Claude fixture refuses cancellation before session establishment", async () => {
+  await withHarness(async ({ directory, launch }) => {
+    const current = launch()
+    current.send({ id: 1, method: "initialize", params: {} })
+    await current.next()
+    current.send({ method: "session/cancel", params: {} })
+    assert.equal(await finishFixture(current), 1, "unestablished cancellation is refused")
+    const events = fixtureEvents(directory)
+    const failures = events.filter((event) => event.type === "fixture-failure")
+    assert.equal(failures.length, 1)
+    assert.equal(failures[0].message, "cancellation requires a known provider session")
+    assert.deepEqual(
+      events.filter((event) => event.type === "cancel"),
+      [],
+    )
+    assert.deepEqual(
+      events.filter((event) => event.type === "terminal"),
+      [],
+    )
+    assert.deepEqual(
+      events.filter((event) => event.type === "session-new"),
+      [],
+    )
+    const ended = events.filter((event) => event.type === "process-end")
+    assert.equal(ended.length, 1)
+    assert.equal(ended[0].processId, current.child.pid)
+  })
 })

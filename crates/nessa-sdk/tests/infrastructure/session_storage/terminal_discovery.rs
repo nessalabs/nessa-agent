@@ -1,18 +1,30 @@
 //! Real SQLite bounded discovery, lifetime, refusal and work-accounting evidence.
 
-use super::super::stream_fact::{self, FramedFact};
+use super::super::{
+    save_group::{Header, SaveIdentity, EMPTY_CHAIN},
+    stream_fact::{self, FramedFact},
+};
 use super::*;
 use crate::application::agent_execution::sessions::SessionStorage;
 use crate::{
-    application::agent_execution::sessions::records::{FactKey, FactKind},
-    domain::agent_execution::sessions::SessionId,
+    application::agent_execution::{
+        providers::ProviderIdentity,
+        sessions::{
+            records::{FactKey, FactKind},
+            SessionChange, SessionSaveBackend, SessionSaveGeneration,
+        },
+    },
+    domain::agent_execution::sessions::{ProviderContext, SessionId},
     infrastructure::session_storage::RecordStorage,
 };
 use event_stream::{
     AdvanceRetentionFloor, EnableRetryPolicy, EventSink, IncarnationId, LifecycleAction,
-    LifecycleOperationId, LifecycleRequest, Payload, RetentionOperationId, StreamId,
+    LifecycleOperationId, LifecycleRequest, NewEvent, Payload, RetentionOperationId, StreamId,
 };
-use nessa_sync::replication::domain::{Id, PageRequest, Scope};
+use nessa_sync::replication::{
+    application::RecordSource,
+    domain::{Id, PageRequest, Scope},
+};
 use std::{env, panic, process::Command, sync::atomic::Ordering, thread};
 
 fn sid(value: &str) -> Id {
@@ -33,33 +45,91 @@ async fn head(storage: &RecordStorage, id: &SessionId) -> RecordReadStatus<u64> 
     .await
     .unwrap()
 }
-async fn append_fact(
+// The blocking head captures the physical tail as its fixed ceiling.
+async fn captured_head(storage: &RecordStorage, id: &SessionId) -> u64 {
+    let mut source = storage
+        .record_source(id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let scope = source.scope(sid("receiver"), sid("epoch"));
+    tokio::task::spawn_blocking(move || {
+        thread::spawn(move || source.head(&scope).unwrap())
+            .join()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+// These discovery fixtures exercise the actual save envelope and typed payload
+// syntax. Canonical semantic application is separately checked by writer/fold tests.
+fn save_facts(stream: &StreamKey, base: u64, generation: u64, bytes: usize) -> [FramedFact; 2] {
+    let change = if generation == 0 {
+        SessionChange::Opened {
+            id: SessionId::new(stream.id.as_str()).unwrap(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        }
+    } else {
+        SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Absent,
+        }
+    };
+    let mut payload = super::super::snapshot::encode_semantic_batch(&[change]).unwrap();
+    // JSON trailing whitespace preserves the typed unit while controlling the
+    // physical piece budget without inventing an unsupported semantic codec.
+    payload.resize(payload.len().max(bytes), b' ');
+    let binding = SessionSaveGeneration::new(
+        SessionSaveBackend::Record {
+            stream: sid(stream.id.as_str()),
+            incarnation: stream.incarnation.0,
+        },
+        base,
+        generation,
+    );
+    let identity = SaveIdentity::binding(&binding).unwrap();
+    let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
+    let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+    [
+        FramedFact {
+            key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+            body: unit.encode(&payload),
+        },
+        FramedFact {
+            key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+            body: complete.encode(&[]),
+        },
+    ]
+}
+fn save_frames(
+    stream: &StreamKey,
+    base: u64,
+    generation: u64,
+    bytes: usize,
+    start: u64,
+) -> Vec<NewEvent> {
+    let mut frames = Vec::new();
+    for fact in save_facts(stream, base, generation, bytes) {
+        frames.extend(stream_fact::frame_fact(&fact, start + frames.len() as u64).unwrap());
+    }
+    frames
+}
+async fn append_save(
     storage: &RecordStorage,
     stream: &StreamKey,
-    ordinal: u64,
+    generation: u64,
     bytes: usize,
 ) -> u64 {
     let runtime = storage.runtime().await.unwrap();
-    let start = runtime.bounds(stream).await.unwrap().tail.offset + 1;
-    let fact = FramedFact {
-        key: FactKey::new(
-            if ordinal == 0 {
-                FactKind::SessionOpen
-            } else {
-                FactKind::ProviderContext
-            },
-            None,
-            ordinal,
-        )
-        .unwrap(),
-        body: vec![b'x'; bytes],
-    };
-    let frames = stream_fact::frame_fact(&fact, start).unwrap();
-    for frame in frames {
+    let base = runtime.bounds(stream).await.unwrap().tail.offset;
+    for frame in save_frames(stream, base, generation, bytes, base + 1) {
         runtime.append(stream, frame).await.unwrap();
     }
     runtime.bounds(stream).await.unwrap().tail.offset
 }
+
+// Unlike raw envelope fixtures, these saves pass the canonical semantic fold.
 
 #[tokio::test]
 async fn recreated_sources_resume_bounded_large_fact_validation_and_pages_do_not_rescan() {
@@ -71,7 +141,7 @@ async fn recreated_sources_resume_bounded_large_fact_validation_and_pages_do_not
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let target = append_fact(&storage, &stream, 0, 2 * 1024 * 1024).await;
+    let target = append_save(&storage, &stream, 0, 2 * 1024 * 1024).await;
     assert!(target > 16);
     let mut calls = 0;
     loop {
@@ -158,7 +228,7 @@ async fn long_inline_history_enforces_frame_step_limit_and_unchanged_head_does_n
         .unwrap();
     let mut target = 0;
     for index in 0..129 {
-        target = append_fact(&storage, &stream, index, 8).await;
+        target = append_save(&storage, &stream, index, 8).await;
     }
     loop {
         let before = storage
@@ -183,7 +253,7 @@ async fn long_inline_history_enforces_frame_step_limit_and_unchanged_head_does_n
             .terminal_cache
             .returned_records
             .load(Ordering::SeqCst),
-        129
+        258
     );
     assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(target));
     assert_eq!(
@@ -191,7 +261,7 @@ async fn long_inline_history_enforces_frame_step_limit_and_unchanged_head_does_n
             .terminal_cache
             .returned_records
             .load(Ordering::SeqCst),
-        129
+        258
     );
     storage.shutdown().await.unwrap();
 }
@@ -208,9 +278,9 @@ async fn discovery_finishes_captured_tail_under_new_writes_then_discovers_later_
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let first = append_fact(&storage, &stream, 0, 2 * 1024 * 1024).await;
+    let first = append_save(&storage, &stream, 0, 2 * 1024 * 1024).await;
     assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
-    let later = append_fact(&storage, &stream, 1, 8).await;
+    let later = append_save(&storage, &stream, 1, 8).await;
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
@@ -241,11 +311,8 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let fact = FramedFact {
-        key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-        body: vec![b'x'; 2 * 1024 * 1024],
-    };
-    let frames = stream_fact::frame_fact(&fact, 1).unwrap();
+    let [unit, complete] = save_facts(&stream, 0, 0, 2 * 1024 * 1024);
+    let frames = stream_fact::frame_fact(&unit, 1).unwrap();
     for frame in frames.iter().take(frames.len() - 1) {
         runtime.append(&stream, frame.clone()).await.unwrap();
     }
@@ -283,16 +350,78 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
         .append(&stream, frames.last().unwrap().clone())
         .await
         .unwrap();
+    loop {
+        match head(&storage, &id).await {
+            RecordReadStatus::Preparing => {}
+            RecordReadStatus::Ready(value) => {
+                assert_eq!(value, 0, "a Unit seal is not a save completion");
+                break;
+            }
+        }
+    }
+    // The deliberately invalid historical target has its own bounded validation
+    // reads. Measure only the new completion, against the now captured Unit tail.
+    let before_completion = storage
+        .terminal_cache
+        .returned_records
+        .load(Ordering::SeqCst);
+    let terminal = stream_fact::commit_fact(
+        runtime,
+        &stream,
+        &Cursor::new(stream.clone(), frames.len() as u64),
+        &complete,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         head(&storage, &id).await,
-        RecordReadStatus::Ready(frames.len() as u64)
+        RecordReadStatus::Ready(terminal.offset)
     );
     assert_eq!(
         storage
             .terminal_cache
             .returned_records
             .load(Ordering::SeqCst),
-        frames.len()
+        before_completion + 1
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_head_inside_validated_partial_tail_does_no_read_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let runtime = storage.runtime().await.unwrap();
+    let stream = runtime
+        .create_stream(&StreamId::new(id.as_str()).unwrap())
+        .await
+        .unwrap();
+    let [unit, _] = save_facts(&stream, 0, 0, 2 * 1024 * 1024);
+    let frames = stream_fact::frame_fact(&unit, 1).unwrap();
+    assert!(
+        frames.len() > 16,
+        "the partial tail needs several bounded steps"
+    );
+    for frame in frames.iter().take(frames.len() - 1) {
+        runtime.append(&stream, frame.clone()).await.unwrap();
+    }
+    assert_eq!(captured_head(&storage, &id).await, 0);
+    let validated = storage
+        .terminal_cache
+        .returned_records
+        .load(Ordering::SeqCst);
+    // The unchanged tail lies inside the forward scan's validated range above
+    // its last publication; its answer is that publication, with no replay.
+    for _ in 0..3 {
+        assert_eq!(captured_head(&storage, &id).await, 0);
+    }
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        validated
     );
     storage.shutdown().await.unwrap();
 }
@@ -307,7 +436,7 @@ async fn abandoned_answer_retains_progress_and_cold_cache_repeats_only_bounded_s
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let target = append_fact(&storage, &stream, 0, 2 * 1024 * 1024).await;
+    let target = append_save(&storage, &stream, 0, 2 * 1024 * 1024).await;
     let source = storage
         .record_source(&id, sid("origin"))
         .await
@@ -369,7 +498,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    append_fact(&storage, &stream, 0, 8).await;
+    append_save(&storage, &stream, 0, 8).await;
     let owner = storage.terminal_cache.acquire(&stream).unwrap();
     assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
     let mut occupied = vec![owner];
@@ -389,7 +518,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
         .create_stream(&StreamId::new(another.as_str()).unwrap())
         .await
         .unwrap();
-    append_fact(&storage, &second, 0, 8).await;
+    append_save(&storage, &second, 0, 8).await;
     assert_eq!(head(&storage, &another).await, RecordReadStatus::Preparing);
     assert_eq!(
         storage
@@ -400,7 +529,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
     );
     assert_eq!(storage.terminal_cache.entries.lock().unwrap().len(), 16);
     drop(occupied);
-    assert_eq!(head(&storage, &another).await, RecordReadStatus::Ready(1));
+    assert_eq!(head(&storage, &another).await, RecordReadStatus::Ready(2));
     storage.shutdown().await.unwrap();
 }
 
@@ -414,7 +543,7 @@ async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    append_fact(&storage, &stream, 0, 8).await;
+    append_save(&storage, &stream, 0, 8).await;
     let mut source = storage
         .record_source(&id, sid("origin"))
         .await
@@ -432,7 +561,7 @@ async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
     let request = PageRequest {
         scope,
         after: 0,
-        target: 1,
+        target: 2,
         max_records: 0,
         max_payload_bytes: 128,
         max_record_bytes: 128,
@@ -459,7 +588,7 @@ async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
             .load(Ordering::SeqCst),
         0
     );
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(1));
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(2));
     storage.shutdown().await.unwrap();
 }
 
@@ -473,7 +602,7 @@ async fn cached_old_incarnation_and_pruned_prefix_are_typed_refusals() {
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    append_fact(&storage, &stream, 0, 2 * 1024 * 1024).await;
+    append_save(&storage, &stream, 0, 2 * 1024 * 1024).await;
     assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
     let mut old = storage
         .record_source(&id, sid("origin"))
@@ -503,8 +632,8 @@ async fn cached_old_incarnation_and_pruned_prefix_are_typed_refusals() {
         .await
         .unwrap()
         .unwrap();
-    append_fact(&storage, &replacement, 0, 8).await;
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(1));
+    append_save(&storage, &replacement, 0, 8).await;
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(2));
     runtime
         .enable_retry_policy(EnableRetryPolicy {
             operation_id: RetentionOperationId::new("enable-prune").unwrap(),
@@ -548,11 +677,8 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let fact = FramedFact {
-        key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-        body: vec![b'x'; 2 * 1024 * 1024],
-    };
-    let frames = stream_fact::frame_fact(&fact, 1).unwrap();
+    let [unit, complete] = save_facts(&stream, 0, 0, 2 * 1024 * 1024);
+    let frames = stream_fact::frame_fact(&unit, 1).unwrap();
     for frame in frames.iter().take(20) {
         runtime.append(&stream, frame.clone()).await.unwrap();
     }
@@ -567,18 +693,25 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
             .await
             .unwrap()
             .offset;
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(aborted));
-    let valid = append_fact(&storage, &stream, 1, 8).await;
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(valid));
-    let mut invalid = stream_fact::frame_fact(
-        &FramedFact {
-            key: FactKey::new(FactKind::ProviderContext, None, 2).unwrap(),
-            body: vec![b'x'; 8],
-        },
-        valid + 1,
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(0));
+    // An Abort retires a physical attempt, not its original save binding. Retry
+    // the exact original unit before its original completion can publish.
+    let retry = stream_fact::commit_fact(
+        runtime,
+        &stream,
+        &Cursor::new(stream.clone(), aborted),
+        &unit,
     )
-    .unwrap()
-    .remove(0);
+    .await
+    .unwrap();
+    let valid = stream_fact::commit_fact(runtime, &stream, &retry, &complete)
+        .await
+        .unwrap()
+        .offset;
+    while head(&storage, &id).await != RecordReadStatus::Ready(valid) {}
+    let mut invalid = stream_fact::frame_fact(&save_facts(&stream, valid, 1, 8)[0], valid + 1)
+        .unwrap()
+        .remove(0);
     invalid.payload = Payload::copy_from_slice(&[99]);
     runtime.append(&stream, invalid).await.unwrap();
     let mut source = storage
@@ -604,9 +737,9 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
             .state
             .as_ref()
             .unwrap();
-        assert_eq!(saved.terminal, valid);
+        assert_eq!(saved.forward.groups.published(), valid);
         assert_eq!(
-            saved.validator.offset(),
+            saved.forward.validator.offset(),
             valid,
             "invalid framing does not publish progress"
         );
@@ -624,15 +757,9 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let mut invalid = stream_fact::frame_fact(
-        &FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body: vec![b'x'; 8],
-        },
-        1,
-    )
-    .unwrap()
-    .remove(0);
+    let mut invalid = stream_fact::frame_fact(&save_facts(&stream, 0, 0, 8)[0], 1)
+        .unwrap()
+        .remove(0);
     invalid.payload = Payload::copy_from_slice(&[]);
     let payload = vec![99; 1024 * 1024 - invalid.accounted_bytes()];
     invalid.payload = Payload::copy_from_slice(&payload);
@@ -659,7 +786,13 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
     {
         let cache = storage.terminal_cache.entries.lock().unwrap();
         let saved = cache.front().unwrap().state.as_ref().unwrap();
-        assert_eq!((saved.validator.offset(), saved.terminal), (0, 0));
+        assert_eq!(
+            (
+                saved.forward.validator.offset(),
+                saved.forward.groups.published()
+            ),
+            (0, 0)
+        );
     }
     storage.shutdown().await.unwrap();
 }
@@ -710,7 +843,7 @@ async fn restarted_process_revalidates_durable_stream_in_bounded_steps() {
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let target = append_fact(&storage, &stream, 0, 2 * 1024 * 1024).await;
+    let target = append_save(&storage, &stream, 0, 2 * 1024 * 1024).await;
     while head(&storage, &id).await != RecordReadStatus::Ready(target) {}
     storage.shutdown().await.unwrap();
     drop(storage);
@@ -784,11 +917,7 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             .unwrap();
         // Sixteen candidate frames fit the count cap, but fifteen pieces plus
         // their start consume the byte cap before the next piece can return.
-        let fact = FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
-            body: vec![b'x'; 2 * 1024 * 1024],
-        };
-        let mut frames = stream_fact::frame_fact(&fact, 1).unwrap();
+        let mut frames = save_frames(&stream, 0, 0, 2 * 1024 * 1024, 1);
         let first_count = frames[16..]
             .iter()
             .scan(0usize, |bytes, frame| {
@@ -854,8 +983,11 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             assert_eq!(result, Err(SourceError::Unavailable));
             let cache = storage.terminal_cache.entries.lock().unwrap();
             let progress = cache.front().unwrap().state.as_ref().unwrap();
-            assert_eq!(progress.validator.offset(), (16 + first_count) as u64);
-            assert_eq!(progress.terminal, 0);
+            assert_eq!(
+                progress.forward.validator.offset(),
+                (16 + first_count) as u64
+            );
+            assert_eq!(progress.forward.groups.published(), 0);
         } else {
             assert!(matches!(result, Ok(RecordReadStatus::Ready(_))));
         }

@@ -65,7 +65,7 @@ lifecycle the registry actually stores. A file edited by hand fails the same
 way a bad live write would.
 
 Causes are exactly the commands that exist: bootstrap, admin issue, surface
-provisioning, owner recovery, explicit revocation, and supersession by
+provisioning, exact device pairing, owner recovery, explicit revocation, and supersession by
 provisioning or by owner recovery. Expiry is not a cause; nothing happens at
 expiry and the instant is already in the issuance record. Automatic
 revocations carry the initiator of the command that triggered them, and their
@@ -115,6 +115,28 @@ Never expose product handlers based solely on successful authentication.
 The auth `Clock::unix_seconds` measures absolute expiry time. The existing server
 `Clock::elapsed_ms` measures uptime. They are separate context-owned ports with
 different semantics; do not use uptime for expiration.
+
+## Pairing producer contracts
+
+`domain/pairing/` owns immutable exact consent, invitation state and device
+binding values. `application/pairing/` owns entropy, clock, receiver staging,
+private state and durable consent ports. `adapters/pairing/` owns the pinned
+OPAQUE profile, actual TLS possession proof and shared private-storage consumer;
+`adapters/local/registry/pairing/` commits pairing and credential evidence with
+its coherent registry. Cryptographic transport carries raw messages; a server
+consumer owns its application framing, listener and action admission.
+
+Private acknowledgement compares bytes and named identity against the original
+published file. Restart uses a writable existing-file handle, reflushes and
+reconciles under the original directory/lock. No acknowledgement manufactures a
+missing canonical file. Public adapter tests cover exact intent, same-save retry and restart. Direct
+original-handle failed acknowledgement and writable-helper reflush evidence are
+withdrawn; their source contracts remain with the shared storage owner. Supported
+platform consumer gates are required independently of shared storage tests.
+
+Target and current producer disposition: [device pairing](../../docs/design/auth/device-pairing.md).
+Native listener and protected product activation remain subsequent consumers;
+this producer alone establishes no protected connection or resource acceptance.
 
 ## Follow-on work and parallel ownership
 

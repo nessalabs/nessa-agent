@@ -19,3 +19,9 @@ sha2 = "0.10"
 subtle = "2.6"
 tempfile = "3"
 libc = "0.2"
+
+# One reviewed protocol profile; parameters live in the pairing crypto owner.
+opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristretto255", "argon2"] }
+zeroize = "=1.9.0"
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
+ring = "=0.17.14"

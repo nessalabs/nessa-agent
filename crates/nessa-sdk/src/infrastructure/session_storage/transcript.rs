@@ -3,20 +3,23 @@
 #![deny(missing_docs)]
 
 use super::{
-    physical_record_schema, snapshot,
+    physical_record_schema,
+    save_group::{GroupCheckpoint, GroupProgress, HEADER_BYTES},
+    snapshot,
     stream_fact::{self, FrameStep, FrameValidator},
 };
 use crate::{
     application::agent_execution::sessions::{
-        records, CommittedFreshness, CommittedSession, CommittedStatus, CommittedTransactionState,
-        CommittedTranscript, CommittedViewState, SessionSnapshot, StorageError,
+        records::FactKind, CommittedFreshness, CommittedSession, CommittedStatus,
+        CommittedTransactionState, CommittedTranscript, CommittedViewState, SessionSnapshot,
+        StorageError,
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
 use event_stream::{EventId, NewEvent, Payload};
 use nessa_sync::replication::domain::{Id, Record, Scope};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 mod pending;
 use pending::PendingBody;
 mod checkpoint;
@@ -53,6 +56,7 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     applied: u64,
     facts: u64,
     snapshot: Option<S>,
+    group: Option<GroupCheckpoint>,
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
@@ -67,6 +71,9 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
 pub struct TranscriptFold {
     scope: Scope,
     committed: CommittedTranscript,
+    published: Option<Arc<SessionSnapshot>>,
+    published_facts: u64,
+    groups: GroupProgress,
     pending: PendingBody,
     frames: FrameValidator,
     #[cfg(test)]
@@ -88,6 +95,9 @@ impl TranscriptFold {
         Ok(Self {
             scope,
             committed: CommittedTranscript::default(),
+            published: None,
+            published_facts: 0,
+            groups: GroupProgress::after(0),
             pending: PendingBody::default(),
             frames: FrameValidator::after(0),
             #[cfg(test)]
@@ -97,6 +107,8 @@ impl TranscriptFold {
         })
     }
 
+    /// Seed an allocation-only cache fixture; this supplies no source lineage
+    /// or restorable checkpoint evidence. Physical fixtures use real frames.
     #[cfg(test)]
     pub(super) fn from_test_snapshot(
         scope: Scope,
@@ -104,7 +116,10 @@ impl TranscriptFold {
         applied: u64,
     ) -> Self {
         let mut fold = Self::new(scope).unwrap();
+        fold.published = Some(Arc::new(snapshot.clone()));
+        fold.published_facts = applied;
         fold.committed = CommittedTranscript::restore(Some(snapshot), applied, applied).unwrap();
+        fold.groups = GroupProgress::after(applied);
         fold.frames = FrameValidator::after(applied);
         fold.loaded = true;
         fold
@@ -171,8 +186,9 @@ impl TranscriptFold {
     /// Apply the next contiguous physical suffix. The receiver journal owns
     /// exact duplicate byte validation; already downloaded positions, gaps and
     /// invalid facts leave this fold unchanged.
-    /// Each complete fact advances `applied` with its SDK validated snapshot in
-    /// the same in-memory publication. An abort advances it without a decision.
+    /// Complete units update only the private canonical continuation. The outer
+    /// save completion advances `applied` and its public snapshot together.
+    /// A physical abort publishes no semantic progress.
     /// Accepted nonempty input invalidates Current to Unknown; Stale and Unknown
     /// remain unconfirmed until an explicit authenticated source-head observation.
     ///
@@ -216,6 +232,9 @@ impl TranscriptFold {
         let backup = ReceiverBackup {
             semantic: Some(self.committed.begin_transaction()),
             frames: self.frames.clone(),
+            published: self.published.clone(),
+            published_facts: self.published_facts,
+            groups: self.groups.clone(),
             pending: self.pending.clone(),
             loaded: self.loaded,
             freshness: self.freshness,
@@ -268,7 +287,7 @@ impl TranscriptFold {
             }
             FrameStep::Aborted => {
                 self.pending.clear();
-                self.committed.abort(record.position);
+                self.groups.reset_frame();
             }
             FrameStep::Complete {
                 key: physical_key,
@@ -282,34 +301,50 @@ impl TranscriptFold {
                         &assembled
                     }
                 };
-                let context = self.snapshot().map_or(ProviderContext::Absent, |state| {
-                    state.provider_context.clone()
-                });
-                #[cfg(test)]
-                {
-                    self.semantic_decodes += 1;
-                }
-                let changes = snapshot::decode_semantic_batch(
-                    body,
-                    physical_key.kind() == records::FactKind::AtomicTransition,
-                    &context,
-                )
-                .map_err(TranscriptError::Decision)?;
-                let key = self
-                    .committed
-                    .key(&changes)
+                self.groups.piece(body).map_err(TranscriptError::Decision)?;
+                let header = self
+                    .groups
+                    .complete(&physical_key, record.position)
                     .map_err(TranscriptError::Decision)?;
-                if physical_key != key {
-                    return Err(TranscriptError::Frame);
-                }
-                self.committed
-                    .stage_apply(record.position, &changes, semantic)
-                    .map_err(TranscriptError::Decision)?;
-                if self
-                    .snapshot()
-                    .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
-                {
+                if !header.identity.matches_scope(
+                    self.scope.stream().as_str(),
+                    self.scope.incarnation().as_str(),
+                ) {
                     return Err(TranscriptError::Scope);
+                }
+                match physical_key.kind() {
+                    FactKind::SaveUnit => {
+                        let context = self
+                            .committed
+                            .snapshot()
+                            .map_or(ProviderContext::Absent, |state| {
+                                state.provider_context.clone()
+                            });
+                        #[cfg(test)]
+                        {
+                            self.semantic_decodes += 1;
+                        }
+                        let changes =
+                            snapshot::decode_semantic_batch(&body[HEADER_BYTES..], &context)
+                                .map_err(TranscriptError::Decision)?;
+                        self.committed
+                            .stage_apply(record.position, &changes, semantic)
+                            .map_err(TranscriptError::Decision)?;
+                        if self
+                            .committed
+                            .snapshot()
+                            .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
+                        {
+                            return Err(TranscriptError::Scope);
+                        }
+                    }
+                    FactKind::SaveComplete => {
+                        // One immutable publication per outer save. Units mutate
+                        // only the private canonical continuation with touched undo.
+                        self.published = self.committed.snapshot_handle();
+                        self.published_facts = self.committed.fact_count();
+                        self.committed.abort(record.position);
+                    }
                 }
                 self.pending.clear();
             }
@@ -336,7 +371,8 @@ impl TranscriptFold {
             self.scope.incarnation().clone(),
             self.downloaded(),
             observed_head,
-            &self.committed,
+            self.applied(),
+            self.published.clone(),
             self.status(),
         )
     }
@@ -361,8 +397,14 @@ impl TranscriptFold {
         std::mem::size_of::<Self>()
             .saturating_add(scope)
             .saturating_add(self.committed.retained_bytes())
+            .saturating_add(
+                self.published
+                    .as_ref()
+                    .map_or(0, |snapshot| snapshot.retained_bytes()),
+            )
             .saturating_add(self.pending.retained_bytes())
             .saturating_add(self.frames.allocation_bytes())
+            .saturating_add(self.groups.allocation_bytes())
     }
 
     /// Exact receiver/source identity used for this fold.
@@ -375,19 +417,19 @@ impl TranscriptFold {
         self.frames.offset()
     }
 
-    /// Last validated complete fact or abort position.
+    /// Last validated durable outer-save completion position.
     pub fn applied(&self) -> u64 {
-        self.committed.applied()
+        self.groups.published()
     }
 
-    /// Number of validated complete logical facts; aborts do not add one.
+    /// Number of semantic units in published saves; completion envelopes and aborts add none.
     pub fn fact_count(&self) -> u64 {
-        self.committed.fact_count()
+        self.published_facts
     }
 
     /// Complete SDK semantic state. Display limits must be applied separately.
     pub fn snapshot(&self) -> Option<&SessionSnapshot> {
-        self.committed.snapshot()
+        self.published.as_deref()
     }
 
     /// Current read status. A partial fact leaves the prior committed snapshot
@@ -421,8 +463,10 @@ impl TranscriptFold {
         self.freshness = CommittedFreshness::Unknown;
     }
 
-    /// Encode a complete continuation. The caller must save these bytes with
-    /// its receiver acknowledgement; this method does not make it durable.
+    /// Encode the last published continuation and bounded completion identity.
+    /// The receiver journal restages downloaded unpublished units after restore.
+    /// The caller saves these bytes with its receiver acknowledgement; this
+    /// method does not make them durable.
     ///
     /// # Errors
     /// Returns `Checkpoint` if serialization fails.
@@ -466,6 +510,7 @@ impl TranscriptFold {
             applied: self.applied(),
             facts: self.fact_count(),
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
+            group: self.groups.checkpoint(),
         };
         let mut output = ChunkWriter::with_limit(max_bytes);
         if serde_json::to_writer(&mut output, &saved).is_err() {
@@ -528,6 +573,16 @@ impl TranscriptFold {
             return Err(TranscriptError::Checkpoint);
         }
         let mut fold = Self::new(scope)?;
+        fold.published = snapshot.as_ref().map(|snapshot| Arc::new(snapshot.clone()));
+        fold.published_facts = saved.facts;
+        fold.groups = GroupProgress::restore(
+            saved.applied,
+            saved.group,
+            fold.scope.stream().as_str(),
+            fold.scope.incarnation().as_str(),
+            saved.facts,
+        )
+        .map_err(|_| TranscriptError::Checkpoint)?;
         fold.committed = CommittedTranscript::restore(snapshot, saved.applied, saved.facts)
             .map_err(|_| TranscriptError::Checkpoint)?;
         // Pending downloaded frames belong to the receiver journal. Resume at
@@ -542,6 +597,9 @@ impl TranscriptFold {
 struct ReceiverBackup {
     semantic: Option<CommittedTransactionState>,
     frames: FrameValidator,
+    published: Option<Arc<SessionSnapshot>>,
+    published_facts: u64,
+    groups: GroupProgress,
     pending: PendingBody,
     loaded: bool,
     freshness: CommittedFreshness,
@@ -572,6 +630,9 @@ impl TranscriptTransaction<'_> {
                 .committed
                 .restore_transaction(backup.semantic.expect("transaction semantic backup"));
             self.fold.frames = backup.frames;
+            self.fold.published = backup.published;
+            self.fold.published_facts = backup.published_facts;
+            self.fold.groups = backup.groups;
             self.fold.pending = backup.pending;
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
@@ -670,10 +731,14 @@ mod tests {
             agents::AgentError,
             executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
             permissions::{ActionContext, CancellationOrigin, PermissionCancellation},
-            providers::ProviderIdentity,
+            providers::{
+                CloseOutcome, ExecutionReport, FinalizedExecutionProjection, ProviderIdentity,
+                ProviderSessionState, ResourceCleanup,
+            },
             sessions::{
-                CommittedCompleteness, InvocationRecord, InvocationSchedulingEvent,
-                QueueHistoryRecord, SessionChange, StorageShutdownFailure,
+                records::FactKey, CommittedCompleteness, InvocationCancellationEvent,
+                InvocationRecord, InvocationSchedulingEvent, QueueHistoryRecord, SessionChange,
+                SessionSaveBackend, SessionSaveGeneration, StorageShutdownFailure,
                 SubmissionAcknowledgement, SNAPSHOT_ACCOUNTING_CALLS, VALIDATION_CALLS,
             },
             tools::ToolReviewInput,
@@ -692,10 +757,14 @@ mod tests {
             sessions::{ExecutionSession, ExecutionSessionId, SessionId},
             tools::{ToolCallId, ToolCallUpdate, ToolObservation},
         },
-        infrastructure::session_storage::stream_fact::FramedFact,
+        infrastructure::session_storage::{
+            save_group::{Header, SaveIdentity, EMPTY_CHAIN},
+            stream_fact::FramedFact,
+        },
     };
     use serde_json::Value;
     use std::panic::AssertUnwindSafe;
+    use uuid::Uuid;
 
     fn id(value: &str) -> Id {
         Id::new(value).unwrap()
@@ -706,7 +775,7 @@ mod tests {
             id("receiver"),
             id("origin"),
             id("conversation"),
-            id("incarnation"),
+            id("00000000-0000-0000-0000-000000000001"),
             physical_record_schema(),
             id("access"),
         )
@@ -737,15 +806,128 @@ mod tests {
         }
     }
 
-    fn fact(
-        prior: Option<&SessionSnapshot>,
-        change: SessionChange,
-        position: u64,
-    ) -> Vec<NewEvent> {
-        let key =
-            records::key_for_changes(prior, std::slice::from_ref(&change), position - 1).unwrap();
-        let body = snapshot::encode_semantic_change(&change).unwrap();
-        stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap()
+    // Actual current grouped wire evidence for checkpoint representation fixtures.
+    // Unlike the cache-allocation helper, this produces real publication lineage.
+    fn save_frames(change: SessionChange, base: u64, generation: u64) -> Vec<NewEvent> {
+        let payload = snapshot::encode_semantic_batch(&[change]).unwrap();
+        save_payload_frames(&payload, base, generation)
+    }
+
+    fn save_payload_frames(payload: &[u8], base: u64, generation: u64) -> Vec<NewEvent> {
+        let scope = scope();
+        let binding = SessionSaveGeneration::new(
+            SessionSaveBackend::Record {
+                stream: scope.stream().clone(),
+                incarnation: *Uuid::parse_str(scope.incarnation().as_str())
+                    .unwrap()
+                    .as_bytes(),
+            },
+            base,
+            generation,
+        );
+        let identity = SaveIdentity::binding(&binding).unwrap();
+        let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, payload);
+        let mut frames = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: unit.encode(payload),
+            },
+            base + 1,
+        )
+        .unwrap();
+        let terminal = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+        frames.extend(
+            stream_fact::frame_fact(
+                &FramedFact {
+                    key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                    body: terminal.encode(&[]),
+                },
+                base + frames.len() as u64 + 1,
+            )
+            .unwrap(),
+        );
+        frames
+    }
+
+    fn checkpoint_fixture(state: SessionSnapshot) -> TranscriptFold {
+        // Existing allocation fixtures now obtain their valid checkpoint lineage
+        // from the same public lease and source API used by consumers.
+        std::thread::spawn(move || {
+            use crate::application::agent_execution::sessions::{SessionSaveUnit, SessionStorage};
+            use crate::infrastructure::session_storage::{
+                RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            };
+            use nessa_sync::replication::{
+                application::RecordSource, domain::PageRequest, infrastructure::MAX_PAGE_PAYLOAD,
+            };
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let directory = tempfile::tempdir().unwrap();
+                let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+                let session = state.id.clone();
+                let lease = storage.open(session.clone()).await.unwrap();
+                let opening = SessionChange::Opened {
+                    id: session.clone(),
+                    provider: state.provider.clone(),
+                    context: state.provider_context.clone(),
+                };
+                let units = std::iter::once(opening)
+                    .chain(
+                        state
+                            .invocations
+                            .iter()
+                            .cloned()
+                            .map(|record| SessionChange::InputAccepted(Box::new(record))),
+                    )
+                    .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
+                    .collect();
+                let binding = lease.load().await.unwrap().binding().clone();
+                lease
+                    .save_changes(binding, state.clone(), units)
+                    .await
+                    .unwrap();
+                let source = storage
+                    .record_source(&session, id("origin"))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let fold = tokio::task::spawn_blocking(move || {
+                    let mut source = source;
+                    let scope = source.scope(id("receiver"), id("access"));
+                    let head = source.head(&scope).unwrap();
+                    let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+                    let mut after = 0;
+                    while after < head {
+                        let page = source
+                            .page(&PageRequest {
+                                scope: scope.clone(),
+                                after,
+                                target: head,
+                                max_records: 64,
+                                max_payload_bytes: MAX_PAGE_PAYLOAD,
+                                max_record_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                            })
+                            .unwrap();
+                        assert!(!page.records.is_empty());
+                        after = page.records.last().unwrap().position;
+                        fold.apply(&page.records).unwrap();
+                    }
+                    drop(source);
+                    fold
+                })
+                .await
+                .unwrap();
+                assert_eq!(fold.snapshot(), Some(&state));
+                drop(lease);
+                storage.shutdown().await.unwrap();
+                fold
+            })
+        })
+        .join()
+        .unwrap()
     }
 
     fn accepted_input(name: &str) -> SessionChange {
@@ -771,67 +953,21 @@ mod tests {
     }
 
     #[test]
-    fn each_fact_refuses_queue_context_and_target_contradictions_before_later_evidence() {
-        let scope = scope();
-        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
-            .unwrap();
-        fold.apply(&records(
-            &scope,
-            2,
-            &fact(fold.snapshot(), accepted_input("output"), 2),
-        ))
-        .unwrap();
-        let before = fold.checkpoint().unwrap();
-        let queue = SessionChange::QueueDecision(QueueHistoryRecord {
-            mutation: QueueMutation::Selected {
-                id: ExecutionId::new("output").unwrap(),
-            },
-            actor: None,
-            scheduling_length: Some(0),
-        });
-        let mut target = accepted_input("steer");
-        let SessionChange::InputAccepted(record) = &mut target else {
-            unreachable!()
-        };
-        record.target_event_offset = Some(0);
-        let invalid = [
-            records(&scope, 3, &fact(fold.snapshot(), queue, 3)),
-            vec![message_record(&scope, 0, 3, 1024)],
-            records(&scope, 3, &fact(fold.snapshot(), target, 3)),
-        ];
-        for mut suffix in invalid {
-            let context = SessionChange::ProviderContext {
-                before: ProviderContext::Absent,
-                after: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
-            };
-            suffix.extend(records(&scope, 4, &fact(fold.snapshot(), context, 4)));
-            assert!(matches!(
-                fold.apply(&suffix),
-                Err(TranscriptError::Decision(_))
-            ));
-            assert_eq!(fold.checkpoint().unwrap(), before);
-            assert_eq!((fold.applied(), fold.downloaded()), (2, 2));
-            fold.committed.assert_retained_accounting();
-        }
-    }
-
-    #[test]
     fn receiver_guard_rolls_back_drop_unwind_external_failure_and_late_refusal() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
-        fold.observe_source_head(&scope, 1).unwrap();
+        fold.observe_source_head(&scope, 2).unwrap();
         let before = fold.checkpoint().unwrap();
         let status = fold.status();
         let published = fold.committed.snapshot_handle().unwrap();
-        let suffix = records(&scope, 2, &fact(fold.snapshot(), accepted_input("next"), 2));
+        let suffix = records(&scope, 3, &save_frames(accepted_input("next"), 2, 1));
         {
             let mut staged = fold.transaction();
             staged.apply(&suffix).unwrap();
-            staged.observe_source_head(&scope, 2).unwrap();
-            assert_eq!(staged.applied(), 2);
+            staged.observe_source_head(&scope, 4).unwrap();
+            assert_eq!(staged.applied(), 4);
             assert_eq!(staged.snapshot().unwrap().invocations.len(), 1);
             let _checkpoint_for_external_transaction = staged.checkpoint().unwrap();
             // Simulated external data/audit commit failure drops the same guard.
@@ -846,7 +982,7 @@ mod tests {
         assert!(unwind.is_err());
         assert_eq!(fold.checkpoint().unwrap(), before);
         let mut late_invalid = suffix.clone();
-        late_invalid.extend(records(&scope, 3, &fact(None, opened(), 3)));
+        late_invalid.extend(records(&scope, 5, &save_frames(opened(), 4, 2)));
         assert!(fold.apply(&late_invalid).is_err());
         assert_eq!(fold.checkpoint().unwrap(), before);
         assert_eq!(fold.status(), status);
@@ -855,10 +991,10 @@ mod tests {
         {
             let mut staged = fold.transaction();
             staged.apply(&suffix).unwrap();
-            staged.observe_source_head(&scope, 2).unwrap();
+            staged.observe_source_head(&scope, 4).unwrap();
             staged.commit().unwrap();
         }
-        assert_eq!(fold.applied(), 2);
+        assert_eq!(fold.applied(), 4);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
         fold.committed.assert_retained_accounting();
         assert_eq!(published.invocations.len(), 0);
@@ -868,12 +1004,12 @@ mod tests {
     fn receiver_guard_replaces_and_restores_typed_failed_acknowledgement() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         fold.apply(&records(
             &scope,
-            2,
-            &fact(fold.snapshot(), accepted_input("output"), 2),
+            3,
+            &save_frames(accepted_input("output"), 2, 1),
         ))
         .unwrap();
         let failure = StorageError::ShutdownFailures(Box::new(
@@ -889,19 +1025,15 @@ mod tests {
             before: SubmissionAcknowledgement::Pending,
             after: failed.clone(),
         };
-        fold.apply(&records(
-            &scope,
-            3,
-            &fact(fold.snapshot(), failed_change, 3),
-        ))
-        .unwrap();
+        fold.apply(&records(&scope, 5, &save_frames(failed_change, 4, 2)))
+            .unwrap();
         let checkpoint = fold.checkpoint().unwrap();
         let replacement = SessionChange::ReceiptUpdated {
             execution_id: ExecutionId::new("output").unwrap(),
             before: failed.clone(),
             after: SubmissionAcknowledgement::Acknowledged,
         };
-        let batch = records(&scope, 4, &fact(fold.snapshot(), replacement, 4));
+        let batch = records(&scope, 7, &save_frames(replacement, 6, 3));
         {
             let mut staged = fold.transaction();
             staged.apply(&batch).unwrap();
@@ -916,7 +1048,7 @@ mod tests {
             fold.snapshot().unwrap().invocations[0].acknowledgement,
             failed
         );
-        let restored = TranscriptFold::restore(scope, 3, &checkpoint).unwrap();
+        let restored = TranscriptFold::restore(scope, 6, &checkpoint).unwrap();
         restored.committed.assert_retained_accounting();
         let SubmissionAcknowledgement::Failed {
             storage: Some(StorageError::ShutdownFailures(causes)),
@@ -970,28 +1102,6 @@ mod tests {
         assert!(staged.commit().is_err());
     }
 
-    fn message_record(scope: &Scope, ordinal: usize, position: u64, bytes: usize) -> Record {
-        let event = ExecutionEvent::new(
-            ExecutionId::new("output").unwrap(),
-            ExecutionUpdate::Message(MessageChunk::text("x".repeat(bytes))),
-        );
-        let key = records::FactKey::new(
-            records::FactKind::ProviderObservation,
-            Some(event.execution_id().clone()),
-            ordinal as u64,
-        )
-        .unwrap();
-        let body =
-            snapshot::encode_semantic_change(&SessionChange::ProviderObservation(event)).unwrap();
-        let frames = stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap();
-        assert_eq!(
-            frames.len(),
-            1,
-            "fixture is one published codec inline frame"
-        );
-        records(scope, position, &frames).pop().unwrap()
-    }
-
     #[test]
     fn growing_output_pages_copy_only_suffix_and_checkpoint_borrows_canonical_history() {
         let scope = scope();
@@ -1001,39 +1111,41 @@ mod tests {
             unreachable!()
         };
         *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+        fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
             &scope,
-            2,
-            &fact(fold.snapshot(), accepted_input("output"), 2),
+            3,
+            &save_frames(accepted_input("output"), 2, 1),
         ))
         .unwrap();
-        let prefix: Vec<_> = (0..512)
-            .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 32 * 1024))
-            .collect();
+        let message = |bytes| {
+            SessionChange::ProviderObservation(ExecutionEvent::new(
+                ExecutionId::new("output").unwrap(),
+                ExecutionUpdate::Message(MessageChunk::text("x".repeat(bytes))),
+            ))
+        };
+        let prefix = group_suffix(&fold, (0..512).map(|_| message(32 * 1024)), 2, true);
         fold.apply(&prefix).unwrap();
         fold.committed.assert_retained_accounting();
-        MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
-        let published = fold.committed.snapshot_handle().unwrap();
-        assert_eq!(
-            MESSAGE_CLONES.with(|counter| counter.get()),
-            (512, 512 * 32 * 1024)
-        );
         for page in 0..4 {
-            let ordinal = 512 + page * 64;
-            let suffix: Vec<_> = (ordinal..ordinal + 64)
-                .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 4096))
-                .collect();
+            let base = fold.applied();
+            let suffix = group_suffix(&fold, (0..64).map(|_| message(4096)), page + 3, true);
+            let terminal = suffix.len() - 1;
             MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
             VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
             SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
             if page == 0 {
                 fold.apply(&suffix[..1]).unwrap();
-                fold.apply(&suffix[1..]).unwrap();
+                fold.apply(&suffix[1..terminal]).unwrap();
             } else {
-                fold.apply(&suffix).unwrap();
+                fold.apply(&suffix[..terminal]).unwrap();
             }
+            assert_eq!(fold.applied(), base);
+            assert_eq!(
+                fold.snapshot().unwrap().invocations[0].events.len(),
+                512 + page as usize * 64
+            );
             assert_eq!(
                 MESSAGE_CLONES.with(|counter| counter.get()),
                 (64, 64 * 4096)
@@ -1046,20 +1158,28 @@ mod tests {
                 MESSAGE_CLONES.with(|counter| counter.get()),
                 (64, 64 * 4096)
             );
-            assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
             fold.committed.assert_retained_accounting();
+            fold.apply(&suffix[terminal..]).unwrap();
+            let total = 512 + (page as usize + 1) * 64;
+            // One whole-snapshot materialization belongs to this outer completion.
+            assert_eq!(
+                MESSAGE_CLONES.with(|counter| counter.get()),
+                (
+                    64 + total,
+                    64 * 4096 + 512 * 32 * 1024 + (page as usize + 1) * 64 * 4096
+                )
+            );
+            assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), total);
         }
-        assert_eq!(published.invocations[0].events.len(), 512);
         let before = fold.checkpoint().unwrap();
-        let ordinal = 768;
-        let mut rejected: Vec<_> = (ordinal..ordinal + 64)
-            .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 4096))
-            .collect();
-        rejected.extend(records(
-            &scope,
-            ordinal as u64 + 67,
-            &fact(None, opened(), ordinal as u64 + 67),
-        ));
+        let rejected = group_suffix(
+            &fold,
+            (0..64)
+                .map(|_| message(4096))
+                .chain(std::iter::once(opened())),
+            7,
+            false,
+        );
         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
         VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
         SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
@@ -1151,26 +1271,6 @@ mod tests {
                 ),
             )
         }
-        fn observation(
-            scope: &Scope,
-            event: ExecutionEvent,
-            ordinal: u64,
-            position: u64,
-        ) -> Vec<Record> {
-            let key = records::FactKey::new(
-                records::FactKind::ProviderObservation,
-                Some(event.execution_id().clone()),
-                ordinal,
-            )
-            .unwrap();
-            let body = snapshot::encode_semantic_change(&SessionChange::ProviderObservation(event))
-                .unwrap();
-            records(
-                scope,
-                position,
-                &stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap(),
-            )
-        }
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         let mut open = opened();
@@ -1178,33 +1278,40 @@ mod tests {
             unreachable!()
         };
         *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+        fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
             &scope,
-            2,
-            &fact(fold.snapshot(), accepted_input("output"), 2),
+            3,
+            &save_frames(accepted_input("output"), 2, 1),
         ))
         .unwrap();
         let earlier = review("earlier");
         let later = review("later");
         let close_earlier = cancelled(&earlier);
         let close_later = cancelled(&later);
-        fold.apply(&observation(&scope, earlier, 0, 3)).unwrap();
-        fold.apply(&observation(&scope, later, 1, fold.downloaded() + 1))
-            .unwrap();
+        let first_review = group_suffix(
+            &fold,
+            [SessionChange::ProviderObservation(earlier)],
+            2,
+            true,
+        );
+        fold.apply(&first_review).unwrap();
+        let second_review =
+            group_suffix(&fold, [SessionChange::ProviderObservation(later)], 3, true);
+        fold.apply(&second_review).unwrap();
         let applied = fold.applied();
         let downloaded = fold.downloaded();
         let facts = fold.fact_count();
-        let accepted_later = observation(&scope, close_later, 2, downloaded + 1);
-        let rejected_earlier = observation(
-            &scope,
-            close_earlier,
-            3,
-            accepted_later.last().unwrap().position + 1,
+        let both = group_suffix(
+            &fold,
+            [
+                SessionChange::ProviderObservation(close_later.clone()),
+                SessionChange::ProviderObservation(close_earlier.clone()),
+            ],
+            4,
+            true,
         );
-        let mut both = accepted_later.clone();
-        both.extend(rejected_earlier.clone());
         assert!(matches!(
             fold.apply(&both),
             Err(TranscriptError::Decision(_))
@@ -1215,8 +1322,20 @@ mod tests {
         );
         assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 2);
         fold.committed.assert_retained_accounting();
+        let accepted_later = group_suffix(
+            &fold,
+            [SessionChange::ProviderObservation(close_later)],
+            4,
+            true,
+        );
         fold.apply(&accepted_later).unwrap();
         let after_later = fold.applied();
+        let rejected_earlier = group_suffix(
+            &fold,
+            [SessionChange::ProviderObservation(close_earlier)],
+            5,
+            true,
+        );
         assert!(matches!(
             fold.apply(&rejected_earlier),
             Err(TranscriptError::Decision(_))
@@ -1230,7 +1349,7 @@ mod tests {
     fn malformed_typed_shutdown_receipt_preserves_applied_evidence() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = InvocationRecord {
@@ -1254,15 +1373,11 @@ mod tests {
         };
         fold.apply(&records(
             &scope,
-            2,
-            &fact(
-                fold.snapshot(),
-                SessionChange::InputAccepted(Box::new(input)),
-                2,
-            ),
+            3,
+            &save_frames(SessionChange::InputAccepted(Box::new(input)), 2, 1),
         ))
         .unwrap();
-        fold.observe_source_head(&scope, 2).unwrap();
+        fold.observe_source_head(&scope, 4).unwrap();
         let diagnostic = "x".repeat(StorageError::DIAGNOSTIC_BYTES + 904);
         let mut plain = fold.clone();
         let plain_change = SessionChange::ReceiptUpdated {
@@ -1273,8 +1388,8 @@ mod tests {
                 storage: None,
             },
         };
-        let plain_frames = fact(plain.snapshot(), plain_change, 3);
-        plain.apply(&records(&scope, 3, &plain_frames)).unwrap();
+        let plain_frames = save_frames(plain_change, 4, 2);
+        plain.apply(&records(&scope, 5, &plain_frames)).unwrap();
         assert!(matches!(
             &plain.snapshot().unwrap().invocations[0].acknowledgement,
             SubmissionAcknowledgement::Failed { audit: Some(AgentError::Storage(StorageError::Io(text))), .. }
@@ -1292,48 +1407,32 @@ mod tests {
                 storage: Some(storage.clone()),
             },
         };
-        let key =
-            records::key_for_changes(fold.snapshot(), std::slice::from_ref(&change), 2).unwrap();
-        let body = snapshot::encode_semantic_change(&change).unwrap();
+        let body = snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap();
         for invalid in [
             serde_json::json!("old diagnostic string"),
             serde_json::json!({"Io": "x".repeat(StorageError::DIAGNOSTIC_BYTES + 1)}),
         ] {
             let mut value: Value = serde_json::from_slice(&body).unwrap();
-            value["ReceiptUpdated"]["after"]["Failed"]["storage"]["ShutdownFailures"]["read"] =
-                invalid;
-            let frames = stream_fact::frame_fact(
-                &FramedFact {
-                    key: key.clone(),
-                    body: serde_json::to_vec(&value).unwrap(),
-                },
-                3,
-            )
-            .unwrap();
+            value["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"]
+                ["ShutdownFailures"]["read"] = invalid;
+            let frames = save_payload_frames(&serde_json::to_vec(&value).unwrap(), 4, 2);
             let before = fold.snapshot().unwrap() as *const SessionSnapshot;
-            assert!(fold.apply(&records(&scope, 3, &frames)).is_err());
-            assert_eq!(fold.applied(), 2);
-            assert_eq!(fold.downloaded(), 2);
+            assert!(fold.apply(&records(&scope, 5, &frames)).is_err());
+            assert_eq!(fold.applied(), 4);
+            assert_eq!(fold.downloaded(), 4);
             assert_eq!(fold.snapshot().unwrap() as *const SessionSnapshot, before);
             assert_eq!(fold.status().freshness(), CommittedFreshness::Current);
         }
         let mut oversized_ack: Value = serde_json::from_slice(&body).unwrap();
-        oversized_ack["ReceiptUpdated"]["after"]["Failed"]["storage"] =
+        oversized_ack["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"] =
             serde_json::json!({"Io": diagnostic});
-        let frames = stream_fact::frame_fact(
-            &FramedFact {
-                key: key.clone(),
-                body: serde_json::to_vec(&oversized_ack).unwrap(),
-            },
-            3,
-        )
-        .unwrap();
+        let frames = save_payload_frames(&serde_json::to_vec(&oversized_ack).unwrap(), 4, 2);
         let before = fold.snapshot().unwrap() as *const SessionSnapshot;
-        assert!(fold.apply(&records(&scope, 3, &frames)).is_err());
-        assert_eq!((fold.applied(), fold.downloaded()), (2, 2));
+        assert!(fold.apply(&records(&scope, 5, &frames)).is_err());
+        assert_eq!((fold.applied(), fold.downloaded()), (4, 4));
         assert_eq!(fold.snapshot().unwrap() as *const SessionSnapshot, before);
-        let valid = fact(fold.snapshot(), change, 3);
-        fold.apply(&records(&scope, 3, &valid)).unwrap();
+        let valid = save_frames(change, 4, 2);
+        fold.apply(&records(&scope, 5, &valid)).unwrap();
         assert!(
             matches!(&fold.snapshot().unwrap().invocations[0].acknowledgement, SubmissionAcknowledgement::Failed { storage: Some(saved), .. } if saved == &storage)
         );
@@ -1350,15 +1449,15 @@ mod tests {
                 let mut fold = TranscriptFold::new(scope.clone()).unwrap();
                 fold.observe_source_head(&scope, 0).unwrap();
                 let frames = if phase == "inline" {
-                    fact(None, opened(), 1)
+                    save_frames(opened(), 0, 0)
                 } else {
                     let mut body = vec![b' '; 100_000];
-                    body.extend_from_slice(&snapshot::encode_semantic_change(&opened()).unwrap());
-                    let key = records::key_for_changes(None, &[opened()], 0).unwrap();
-                    stream_fact::frame_fact(&FramedFact { key, body }, 1).unwrap()
+                    body.extend_from_slice(&snapshot::encode_semantic_batch(&[opened()]).unwrap());
+                    save_payload_frames(&body, 0, 0)
                 };
                 let head = if phase == "abort" {
-                    3
+                    // A later exact retry still needs its own unit seal and completion.
+                    3 + frames.len() as u64
                 } else {
                     frames.len() as u64
                 };
@@ -1395,22 +1494,23 @@ mod tests {
                     Err(TranscriptError::Position)
                 );
                 assert_eq!(fold.status(), saved.status());
-                // Even arrival at an earlier observed head is not a new head observation.
-                fold.observe_source_head(&scope, fold.downloaded()).unwrap();
-                assert_eq!(fold.status().freshness(), CommittedFreshness::Current);
-                assert_eq!(
-                    fold.status().completeness(),
-                    if phase == "partial" {
-                        CommittedCompleteness::Partial
-                    } else if phase == "abort" {
-                        CommittedCompleteness::CompleteEmpty
-                    } else {
+                // Only an actual outer completion can be the current source head.
+                // Partial/aborted physical prefixes remain short of a valid known completion.
+                if phase == "partial" || phase == "abort" {
+                    fold.observe_source_head(&scope, head).unwrap();
+                    assert_eq!(fold.status().freshness(), CommittedFreshness::Stale);
+                    assert_eq!(fold.status().completeness(), CommittedCompleteness::Partial);
+                } else {
+                    fold.observe_source_head(&scope, fold.downloaded()).unwrap();
+                    assert_eq!(fold.status().freshness(), CommittedFreshness::Current);
+                    assert_eq!(
+                        fold.status().completeness(),
                         CommittedCompleteness::Complete
-                    }
-                );
-                fold.observe_source_head(&scope, fold.downloaded() + 1)
-                    .unwrap();
-                assert_eq!(fold.status().freshness(), CommittedFreshness::Stale);
+                    );
+                    fold.observe_source_head(&scope, fold.downloaded() + 2)
+                        .unwrap();
+                    assert_eq!(fold.status().freshness(), CommittedFreshness::Stale);
+                }
             }
         }
     }
@@ -1441,35 +1541,35 @@ mod tests {
     #[test]
     fn duplicate_conflict_gap_and_invalid_decision_leave_the_candidate_unchanged() {
         let scope = scope();
-        let frames = fact(None, opened(), 1);
+        let frames = save_frames(opened(), 0, 0);
         let first = records(&scope, 1, &frames);
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&first).unwrap();
-        assert_eq!(fold.applied(), 1);
+        assert_eq!(fold.applied(), 2);
         assert_eq!(fold.apply(&first), Err(TranscriptError::Position));
-        assert_eq!(fold.downloaded(), 1);
+        assert_eq!(fold.downloaded(), 2);
 
         let mut changed = first.clone();
         changed[0].payload.push(7);
         assert_eq!(fold.apply(&changed), Err(TranscriptError::Position));
         let mut gap = first.clone();
-        gap[0].position = 3;
+        gap[0].position = 4;
         assert_eq!(fold.apply(&gap), Err(TranscriptError::Position));
         let mut zero = first[0].clone();
         zero.position = 0;
         assert_eq!(fold.apply(&[zero]), Err(TranscriptError::Position));
 
-        let second = records(&scope, 2, &fact(fold.snapshot(), opened(), 2));
+        let second = records(&scope, 3, &save_frames(opened(), 2, 1));
         assert!(matches!(
             fold.apply(&second),
             Err(TranscriptError::Decision(_))
         ));
-        assert_eq!(fold.downloaded(), 1);
-        assert_eq!(fold.applied(), 1);
+        assert_eq!(fold.downloaded(), 2);
+        assert_eq!(fold.applied(), 2);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
 
         let mut foreign_scope = first[0].clone();
-        foreign_scope.position = 2;
+        foreign_scope.position = 3;
         foreign_scope.scope = Scope::new(
             id("receiver"),
             id("origin"),
@@ -1480,44 +1580,44 @@ mod tests {
         );
         assert_eq!(fold.apply(&[foreign_scope]), Err(TranscriptError::Scope));
         let mut unknown_schema = first[0].clone();
-        unknown_schema.position = 2;
+        unknown_schema.position = 3;
         unknown_schema.payload[0] = 99;
         assert_eq!(fold.apply(&[unknown_schema]), Err(TranscriptError::Frame));
-        assert_eq!(fold.downloaded(), 1);
+        assert_eq!(fold.downloaded(), 2);
     }
 
     #[test]
     fn checkpoint_suffix_matches_full_replay_and_rejects_stale_scope() {
         let scope = scope();
-        let first = records(&scope, 1, &fact(None, opened(), 1));
+        let first = records(&scope, 1, &save_frames(opened(), 0, 0));
         let mut full = TranscriptFold::new(scope.clone()).unwrap();
         full.apply(&first).unwrap();
         let checkpoint = full.checkpoint().unwrap();
-        let mut resumed = TranscriptFold::restore(scope.clone(), 1, &checkpoint).unwrap();
+        let mut resumed = TranscriptFold::restore(scope.clone(), 2, &checkpoint).unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         };
-        let suffix = records(&scope, 2, &fact(full.snapshot(), context, 2));
+        let suffix = records(&scope, 3, &save_frames(context, 2, 1));
         full.apply(&suffix).unwrap();
         resumed.apply(&suffix).unwrap();
         assert_eq!(full.snapshot(), resumed.snapshot());
         assert_eq!(full.applied(), resumed.applied());
         assert_eq!(full.checkpoint(), resumed.checkpoint());
 
-        let mut old = TranscriptFold::restore(scope.clone(), 1, &checkpoint).unwrap();
+        let mut old = TranscriptFold::restore(scope.clone(), 2, &checkpoint).unwrap();
         assert_eq!(old.apply(&first), Err(TranscriptError::Position));
-        assert_eq!(old.applied(), 1);
+        assert_eq!(old.applied(), 2);
         let changed_scope = Scope::new(
             id("receiver"),
             id("origin"),
             id("conversation"),
-            id("incarnation"),
+            scope.incarnation().clone(),
             physical_record_schema(),
             id("new-access"),
         );
         assert!(matches!(
-            TranscriptFold::restore(changed_scope, 1, &checkpoint),
+            TranscriptFold::restore(changed_scope, 2, &checkpoint),
             Err(TranscriptError::Scope)
         ));
     }
@@ -1526,36 +1626,39 @@ mod tests {
     fn partial_and_abort_advance_physical_progress_without_semantic_change() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        let opened_frames = fact(None, opened(), 1);
+        let opened_frames = save_frames(opened(), 0, 0);
         fold.apply(&records(&scope, 1, &opened_frames)).unwrap();
-        let start = 2;
-        let partial_fact = FramedFact {
-            key: records::key_for_changes(fold.snapshot(), &[opened(), opened()], 1).unwrap(),
-            body: vec![b'x'; 100_000],
-        };
-        let frames = stream_fact::frame_fact(&partial_fact, start).unwrap();
+        let start = 3;
+        let mut input = accepted_input("pending");
+        if let SessionChange::InputAccepted(record) = &mut input {
+            record.request.user_message =
+                UserMessage::text_only(PromptText::new("x".repeat(100_000)).unwrap());
+        }
+        let frames = save_frames(input, 2, 1);
         fold.apply(&records(&scope, start, &frames[..2])).unwrap();
         assert_eq!(fold.view_state(), CommittedViewState::Unknown);
-        assert_eq!(fold.applied(), 1);
-        assert_eq!(fold.downloaded(), 3);
+        assert_eq!(fold.applied(), 2);
+        assert_eq!(fold.downloaded(), 4);
         fold.mark_stale();
         assert_eq!(fold.status().completeness(), CommittedCompleteness::Partial);
         assert_eq!(fold.status().freshness(), CommittedFreshness::Stale);
         let checkpoint = fold.checkpoint().unwrap();
-        fold = TranscriptFold::restore(scope.clone(), 1, &checkpoint).unwrap();
+        fold = TranscriptFold::restore(scope.clone(), 2, &checkpoint).unwrap();
         assert_eq!(fold.view_state(), CommittedViewState::Stale);
         fold.apply(&records(&scope, start, &frames[..2])).unwrap();
-        let abort = stream_fact::test_abort_event(&frames[0], 3);
+        let abort = stream_fact::test_abort_event(&frames[0], 4);
         assert!(fold.pending.retained_bytes() > 0);
-        fold.apply(&records(&scope, 4, &[abort])).unwrap();
+        fold.apply(&records(&scope, 5, &[abort])).unwrap();
         assert_eq!(fold.pending.retained_bytes(), 0);
         assert_eq!(fold.frames.allocation_bytes(), 0);
         assert_eq!(fold.semantic_decodes, 0);
-        assert_eq!(fold.applied(), 4);
+        assert_eq!(fold.applied(), 2);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
         assert_eq!(fold.view_state(), CommittedViewState::Stale);
-        fold.observe_source_head(&scope, fold.downloaded()).unwrap();
-        assert_eq!(fold.view_state(), CommittedViewState::Complete);
+        fold.observe_source_head(&scope, 5 + frames.len() as u64)
+            .unwrap();
+        assert_eq!(fold.status().freshness(), CommittedFreshness::Stale);
+        assert_eq!(fold.status().completeness(), CommittedCompleteness::Partial);
         fold.mark_unknown();
         assert_eq!(fold.view_state(), CommittedViewState::Unknown);
     }
@@ -1566,13 +1669,20 @@ mod tests {
         empty.observe_source_head(&scope, 0).unwrap();
         assert_eq!(empty.view_state(), CommittedViewState::CompleteEmpty);
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let checkpoint = fold.checkpoint().unwrap();
-        let mut restored = TranscriptFold::restore(scope.clone(), 1, &checkpoint).unwrap();
+        let mut restored = TranscriptFold::restore(scope.clone(), 2, &checkpoint).unwrap();
         assert_eq!(restored.status().freshness(), CommittedFreshness::Stale);
-        restored.observe_source_head(&scope, 1).unwrap();
+        restored.observe_source_head(&scope, 2).unwrap();
         assert_eq!(restored.view_state(), CommittedViewState::Complete);
+        let mut input = accepted_input("pending");
+        if let SessionChange::InputAccepted(record) = &mut input {
+            record.request.user_message =
+                UserMessage::text_only(PromptText::new("x".repeat(100_000)).unwrap());
+        }
+        let frames = save_frames(input, 2, 1);
+        let later_head = 5 + frames.len() as u64;
         let before = restored.checkpoint().unwrap();
         for component in 0..6 {
             let mut parts = [
@@ -1587,7 +1697,7 @@ mod tests {
             let [receiver, origin, stream, incarnation, schema, epoch] = parts;
             let foreign = Scope::new(receiver, origin, stream, incarnation, schema, epoch);
             assert_eq!(
-                restored.observe_source_head(&foreign, 1),
+                restored.observe_source_head(&foreign, 2),
                 Err(TranscriptError::Scope)
             );
             assert_eq!(restored.checkpoint().unwrap(), before);
@@ -1599,35 +1709,33 @@ mod tests {
         );
         assert_eq!(restored.checkpoint().unwrap(), before);
         assert_eq!(restored.view_state(), CommittedViewState::Complete);
-        restored.observe_source_head(&scope, 2).unwrap();
+        // An exact original retry after the abort can complete at this actual bound.
+        restored.observe_source_head(&scope, later_head).unwrap();
         assert_eq!(restored.status().freshness(), CommittedFreshness::Stale);
-        assert_eq!(restored.applied(), 1);
+        assert_eq!(restored.applied(), 2);
         restored.mark_unknown();
         assert_eq!(restored.status().freshness(), CommittedFreshness::Unknown);
-        let pending = FramedFact {
-            key: records::key_for_changes(restored.snapshot(), &[opened(), opened()], 1).unwrap(),
-            body: vec![b'x'; 100_000],
-        };
-        let frames = stream_fact::frame_fact(&pending, 2).unwrap();
-        restored.apply(&records(&scope, 2, &frames[..2])).unwrap();
-        restored.observe_source_head(&scope, 3).unwrap();
-        assert_eq!(restored.status().freshness(), CommittedFreshness::Current);
+        restored.apply(&records(&scope, 3, &frames[..2])).unwrap();
+        restored.observe_source_head(&scope, later_head).unwrap();
+        assert_eq!(restored.status().freshness(), CommittedFreshness::Stale);
         assert_eq!(
             restored.status().completeness(),
             CommittedCompleteness::Partial
         );
         let partial_checkpoint = restored.checkpoint().unwrap();
         assert_eq!(
-            restored.observe_source_head(&scope, 2),
+            restored.observe_source_head(&scope, 3),
             Err(TranscriptError::Position)
         );
         assert_eq!(restored.checkpoint().unwrap(), partial_checkpoint);
-        assert_eq!(restored.status().freshness(), CommittedFreshness::Current);
+        assert_eq!(restored.status().freshness(), CommittedFreshness::Stale);
         assert_eq!(
             restored.status().completeness(),
             CommittedCompleteness::Partial
         );
-        restored.observe_source_head(&scope, 4).unwrap();
+        restored
+            .observe_source_head(&scope, later_head + 2)
+            .unwrap();
         assert_eq!(restored.status().freshness(), CommittedFreshness::Stale);
         assert_eq!(
             restored.status().completeness(),
@@ -1644,16 +1752,16 @@ mod tests {
     fn checkpoint_refuses_tampered_cursor_state_and_oversized_input() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let checkpoint = fold.checkpoint().unwrap();
         assert!(matches!(
-            TranscriptFold::restore(scope.clone(), 2, &checkpoint),
+            TranscriptFold::restore(scope.clone(), 3, &checkpoint),
             Err(TranscriptError::Checkpoint)
         ));
-        let value: serde_json::Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
         for (field, replacement) in [
-            ("applied", serde_json::json!(2)),
+            ("applied", serde_json::json!(3)),
             ("facts", serde_json::json!(0)),
             ("facts", serde_json::json!(2)),
             ("loaded", serde_json::json!(false)),
@@ -1664,7 +1772,7 @@ mod tests {
                 TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
                     .unwrap();
             assert!(matches!(
-                TranscriptFold::restore(scope.clone(), 1, &malformed),
+                TranscriptFold::restore(scope.clone(), 2, &malformed),
                 Err(TranscriptError::Checkpoint)
             ));
         }
@@ -1673,7 +1781,7 @@ mod tests {
         let foreign =
             TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()]).unwrap();
         assert!(matches!(
-            TranscriptFold::restore(scope.clone(), 1, &foreign),
+            TranscriptFold::restore(scope.clone(), 2, &foreign),
             Err(TranscriptError::Scope)
         ));
         let oversized = TranscriptCheckpoint::from_chunks(vec![vec![
@@ -1683,33 +1791,38 @@ mod tests {
         ]]);
         assert!(matches!(oversized, Err(TranscriptError::Checkpoint)));
     }
+
     #[test]
     fn pending_piece_staging_shares_prefix_and_decodes_only_at_seal() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let input = SessionChange::InputAccepted(Box::new(
             snapshot::checkpoint::history_fixture(1)
                 .invocations
                 .remove(0),
         ));
-        let frames = fact(fold.snapshot(), input, 2);
+        let frames = save_frames(input, 2, 1);
         assert!(frames.len() > 60);
-        for (index, event) in frames[..frames.len() - 1].iter().enumerate() {
+        for (index, event) in frames[..frames.len() - 2].iter().enumerate() {
             fold.apply(&records(
                 &scope,
-                index as u64 + 2,
+                index as u64 + 3,
                 std::slice::from_ref(event),
             ))
             .unwrap();
             assert_eq!(fold.semantic_decodes, 1);
-            assert_eq!(fold.applied(), 1);
+            assert_eq!(fold.applied(), 2);
             assert!(fold.frames.is_pending());
-            assert_eq!(fold.frames.allocation_bytes(), "input-0".len());
+            assert_eq!(fold.frames.allocation_bytes(), 0);
         }
         let position = fold.downloaded() + 1;
-        let seal = records(&scope, position, &frames[frames.len() - 1..]);
+        let seal = records(
+            &scope,
+            position,
+            &frames[frames.len() - 2..frames.len() - 1],
+        );
         let before = fold.clone();
         let mut invalid = seal.clone();
         invalid[0].payload[1] ^= 1;
@@ -1725,26 +1838,34 @@ mod tests {
         assert_eq!(fold.pending.retained_bytes(), 0);
         assert_eq!(fold.frames.allocation_bytes(), 0);
         assert!(!fold.frames.is_pending());
+        assert_eq!(fold.applied(), 2);
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
+        let completion_position = fold.downloaded() + 1;
+        fold.apply(&records(
+            &scope,
+            completion_position,
+            &frames[frames.len() - 1..],
+        ))
+        .unwrap();
+        assert_eq!(fold.applied(), completion_position);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(fold.semantic_decodes, 2);
         assert!(before.frames.is_pending());
         drop(before);
     }
 
     #[test]
     fn checkpoint_streams_history_beyond_one_fact_limit() {
-        let mut fold = TranscriptFold::new(scope()).unwrap();
-        let state = snapshot::checkpoint::history_fixture(41);
-        fold.committed = CommittedTranscript::restore(Some(state), 42, 42).unwrap();
-        fold.frames = FrameValidator::after(42);
-        fold.loaded = true;
+        let fold = checkpoint_fixture(snapshot::checkpoint::history_fixture(41));
         let checkpoint = fold.checkpoint().unwrap();
         assert!(checkpoint.chunks().map(<[u8]>::len).sum::<usize>() > 160 * 1024 * 1024);
         assert!(checkpoint
             .chunks()
             .all(|chunk| chunk.len() <= MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES));
-        let restored = TranscriptFold::restore(scope(), 42, &checkpoint).unwrap();
+        let restored =
+            TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint).unwrap();
         assert_eq!(restored.snapshot(), fold.snapshot());
-        assert_eq!(restored.applied(), 42);
+        assert_eq!(restored.applied(), fold.applied());
     }
 
     #[test]
@@ -1799,7 +1920,9 @@ mod tests {
                         + context.structured_content().map_or(0, str::len)
                 })
                 .sum::<usize>();
-        assert_eq!(bytes(written) - bytes(person), expected);
+        // The fold holds the published snapshot beside the committed one, and
+        // counts each.
+        assert_eq!(bytes(written) - bytes(person), 2 * expected);
     }
 
     #[test]
@@ -1807,7 +1930,7 @@ mod tests {
         let mut state = snapshot::checkpoint::history_fixture(1);
         state.invocations[0].request.user_message =
             UserMessage::text_only(PromptText::new("雪").unwrap());
-        let fold = TranscriptFold::from_test_snapshot(scope(), state.clone(), 2);
+        let fold = checkpoint_fixture(state.clone());
         let initial = fold.checkpoint().unwrap();
         let first = initial.chunks().next().unwrap();
         let offset = first
@@ -1822,7 +1945,28 @@ mod tests {
             );
             state.invocations[0].request.user_message =
                 UserMessage::text_only(PromptText::new(text).unwrap());
-            let fold = TranscriptFold::from_test_snapshot(scope(), state.clone(), 2);
+            // Actual grouped physical positions grow with this input. Locate
+            // its encoded text after that real lineage exists, then align the
+            // split using the same-size physical shape (not the tiny seed's cursor).
+            let candidate = checkpoint_fixture(state.clone());
+            let candidate_position = candidate.applied();
+            let candidate_checkpoint = candidate.checkpoint().unwrap();
+            let prefix = candidate_checkpoint.chunks().next().unwrap();
+            let text_offset = prefix
+                .windows(16)
+                .position(|bytes| bytes == b"xxxxxxxxxxxxxxxx")
+                .unwrap();
+            let text = format!(
+                "{}{}suffix",
+                "x".repeat(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES - 1 - text_offset),
+                token
+            );
+            state.invocations[0].request.user_message =
+                UserMessage::text_only(PromptText::new(text).unwrap());
+            drop(candidate_checkpoint);
+            drop(candidate);
+            let fold = checkpoint_fixture(state.clone());
+            assert_eq!(fold.applied(), candidate_position);
             let checkpoint = fold.checkpoint().unwrap();
             assert!(checkpoint.chunks().len() > 1);
             let first = checkpoint.chunks().next().unwrap();
@@ -1834,7 +1978,7 @@ mod tests {
             let external = checkpoint.chunks().map(|bytes| bytes.to_vec()).collect();
             let checkpoint = TranscriptCheckpoint::from_chunks(external).unwrap();
             assert_eq!(
-                TranscriptFold::restore(scope(), 2, &checkpoint)
+                TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint)
                     .unwrap()
                     .snapshot(),
                 fold.snapshot()
@@ -1848,14 +1992,14 @@ mod tests {
         fold.apply(&records(
             &scope(),
             1,
-            &fact(
-                None,
+            &save_frames(
                 SessionChange::Opened {
                     id: SessionId::new("conversation").unwrap(),
                     provider: ProviderIdentity::new("雪\"\\", "model", "workspace").unwrap(),
                     context: ProviderContext::Absent,
                 },
-                1,
+                0,
+                0,
             ),
         ))
         .unwrap();
@@ -1867,7 +2011,7 @@ mod tests {
         let individual = bytes.iter().map(|byte| vec![*byte]).collect();
         let checkpoint = TranscriptCheckpoint::from_chunks(individual).unwrap();
         assert_eq!(
-            TranscriptFold::restore(scope(), 1, &checkpoint)
+            TranscriptFold::restore(scope(), 2, &checkpoint)
                 .unwrap()
                 .snapshot(),
             fold.snapshot()
@@ -1885,21 +2029,67 @@ mod tests {
             Err(TranscriptError::Checkpoint)
         );
     }
-    fn accepted_suffix(fold: &TranscriptFold, count: u64) -> Vec<Record> {
-        (0..count)
-            .flat_map(|index| {
-                let position = fold.downloaded() + index + 1;
-                records(
-                    &fold.scope,
-                    position,
-                    &fact(
-                        fold.snapshot(),
-                        accepted_input(&format!("input-{index}")),
-                        position,
-                    ),
-                )
-            })
-            .collect()
+    fn accepted_suffix(fold: &TranscriptFold, count: u64, generation: u64) -> Vec<Record> {
+        group_suffix(
+            fold,
+            (0..count).map(|ordinal| accepted_input(&format!("input-{ordinal}"))),
+            generation,
+            true,
+        )
+    }
+
+    fn group_suffix(
+        fold: &TranscriptFold,
+        changes: impl IntoIterator<Item = SessionChange>,
+        generation: u64,
+        complete: bool,
+    ) -> Vec<Record> {
+        let binding = SessionSaveGeneration::new(
+            SessionSaveBackend::Record {
+                stream: fold.scope.stream().clone(),
+                incarnation: *Uuid::parse_str(fold.scope.incarnation().as_str())
+                    .unwrap()
+                    .as_bytes(),
+            },
+            fold.applied(),
+            generation,
+        );
+        let identity = SaveIdentity::binding(&binding).unwrap();
+        let mut suffix = Vec::new();
+        let mut chain = EMPTY_CHAIN;
+        let mut count = 0;
+        for change in changes {
+            let ordinal = count;
+            let payload = snapshot::encode_semantic_batch(&[change]).unwrap();
+            let unit = Header::unit(identity.clone(), ordinal, chain, &payload);
+            let start = fold.downloaded() + suffix.len() as u64 + 1;
+            let frames = stream_fact::frame_fact(
+                &FramedFact {
+                    key: FactKey::new(FactKind::SaveUnit, None, ordinal).unwrap(),
+                    body: unit.encode(&payload),
+                },
+                start,
+            )
+            .unwrap();
+            suffix.extend(records(&fold.scope, start, &frames));
+            chain = unit.chain(payload.len() as u64);
+            count += 1;
+        }
+        if !complete {
+            return suffix;
+        }
+        let terminal = Header::unit(identity, count, chain, &[]);
+        let start = fold.downloaded() + suffix.len() as u64 + 1;
+        let frames = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveComplete, None, count).unwrap(),
+                body: terminal.encode(&[]),
+            },
+            start,
+        )
+        .unwrap();
+        suffix.extend(records(&fold.scope, start, &frames));
+        suffix
     }
 
     #[test]
@@ -1907,13 +2097,13 @@ mod tests {
         for count in [1, 2, 4, 32] {
             let scope = scope();
             let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-            fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
                 .unwrap();
-            fold.observe_source_head(&scope, 1).unwrap();
+            fold.observe_source_head(&scope, 2).unwrap();
             let checkpoint = fold.checkpoint().unwrap();
             let status = fold.status();
             let published = fold.committed.snapshot_handle().unwrap();
-            let suffix = accepted_suffix(&fold, count);
+            let suffix = accepted_suffix(&fold, count, 1);
             let mut warm_bytes = None;
             for _ in 0..3 {
                 {
@@ -1925,7 +2115,7 @@ mod tests {
                 assert_eq!(fold.checkpoint().unwrap(), checkpoint);
                 assert_eq!(
                     (fold.applied(), fold.downloaded(), fold.fact_count()),
-                    (1, 1, 1)
+                    (2, 2, 1)
                 );
                 assert_eq!(fold.status(), status);
                 assert!(published.invocations.is_empty());
@@ -1938,13 +2128,13 @@ mod tests {
                 assert_eq!(fold.checkpoint().unwrap(), checkpoint);
                 assert_eq!(
                     (fold.applied(), fold.downloaded(), fold.fact_count()),
-                    (1, 1, 1)
+                    (2, 2, 1)
                 );
                 assert_eq!(fold.status(), status);
                 fold.committed.assert_retained_accounting();
                 assert_eq!(fold.retained_bytes(), retained);
             }
-            let mut restored = TranscriptFold::restore(scope.clone(), 1, &checkpoint).unwrap();
+            let mut restored = TranscriptFold::restore(scope.clone(), 2, &checkpoint).unwrap();
             let mut invalid = suffix.clone();
             invalid.push(suffix.last().unwrap().clone());
             assert_eq!(restored.apply(&invalid), Err(TranscriptError::Position));
@@ -1959,7 +2149,7 @@ mod tests {
             assert_eq!(fold.checkpoint().unwrap(), restored.checkpoint().unwrap());
             assert_eq!(
                 (fold.applied(), fold.downloaded(), fold.fact_count()),
-                (count + 1, count + 1, count + 1)
+                (count + 3, count + 3, count + 1)
             );
             assert_eq!(fold.snapshot().unwrap().invocations.len(), count as usize);
             fold.committed.assert_retained_accounting();
@@ -1977,16 +2167,16 @@ mod tests {
     fn borrowed_rollback_four_inputs_then_position_refusal_preserves_accounting() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let checkpoint = fold.checkpoint().unwrap();
-        let mut invalid = accepted_suffix(&fold, 4);
+        let mut invalid = accepted_suffix(&fold, 4, 1);
         invalid.push(invalid.last().unwrap().clone());
         assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
         assert_eq!(fold.checkpoint().unwrap(), checkpoint);
         assert_eq!(
             (fold.applied(), fold.downloaded(), fold.fact_count()),
-            (1, 1, 1)
+            (2, 2, 1)
         );
         fold.committed.assert_retained_accounting();
     }
@@ -1999,17 +2189,19 @@ mod tests {
         {
             let _guard = fold.transaction();
         }
-        assert_eq!(fold.retained_bytes(), empty);
+        // Cloning the bounded group backup can release unused Vec capacity on
+        // rollback; semantic and actual retained-owner accounting stay exact.
+        assert!(fold.retained_bytes() <= empty);
         fold.committed.assert_retained_accounting();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let checkpoint = fold.checkpoint().unwrap();
-        let suffix = accepted_suffix(&fold, 4);
+        let suffix = accepted_suffix(&fold, 4, 1);
         let mut invalid = suffix.clone();
         invalid.extend(records(
             &scope,
-            6,
-            &fact(fold.snapshot(), accepted_input("input-0"), 6),
+            8,
+            &save_frames(accepted_input("input-0"), 7, 2),
         ));
         assert!(matches!(
             fold.apply(&invalid),
@@ -2018,7 +2210,7 @@ mod tests {
         assert_eq!(fold.checkpoint().unwrap(), checkpoint);
         assert_eq!(
             (fold.applied(), fold.downloaded(), fold.fact_count()),
-            (1, 1, 1)
+            (2, 2, 1)
         );
         fold.committed.assert_retained_accounting();
         fold.apply(&suffix).unwrap();
@@ -2034,46 +2226,50 @@ mod tests {
             unreachable!()
         };
         *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+        fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
             &scope,
-            2,
-            &fact(fold.snapshot(), accepted_input("output"), 2),
+            3,
+            &save_frames(accepted_input("output"), 2, 1),
         ))
         .unwrap();
-        let prefix: Vec<_> = (0..256)
-            .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 32 * 1024))
-            .collect();
-        fold.apply(&prefix).unwrap();
-        for index in 0..127 {
-            let position = fold.downloaded() + 1;
-            fold.apply(&records(
-                &scope,
-                position,
-                &fact(
-                    fold.snapshot(),
-                    accepted_input(&format!("prefix-{index}")),
-                    position,
-                ),
+        let message = |bytes| {
+            SessionChange::ProviderObservation(ExecutionEvent::new(
+                ExecutionId::new("output").unwrap(),
+                ExecutionUpdate::Message(MessageChunk::text("x".repeat(bytes))),
             ))
-            .unwrap();
-        }
+        };
+        let prefix = group_suffix(&fold, (0..256).map(|_| message(32 * 1024)), 2, true);
+        fold.apply(&prefix).unwrap();
+        let inputs = group_suffix(
+            &fold,
+            (0..127).map(|index| accepted_input(&format!("prefix-{index}"))),
+            3,
+            true,
+        );
+        fold.apply(&inputs).unwrap();
         let checkpoint = fold.checkpoint().unwrap();
         let progress = (fold.applied(), fold.downloaded(), fold.fact_count());
-        let published = fold.committed.snapshot_handle().unwrap();
-        let mut suffix = accepted_suffix(&fold, 32);
-        let start = suffix.last().unwrap().position + 1;
-        suffix
-            .extend((256..272).map(|ordinal| {
-                message_record(&scope, ordinal, start + ordinal as u64 - 256, 4096)
-            }));
+        let published = Arc::new(fold.snapshot().unwrap().clone());
+        let suffix = group_suffix(
+            &fold,
+            (0..32)
+                .map(|index| accepted_input(&format!("input-{index}")))
+                .chain((0..16).map(|_| message(4096))),
+            4,
+            true,
+        );
+        let terminal = suffix.len() - 1;
         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
         VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
         SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
         {
             let mut guard = fold.transaction();
-            guard.apply(&suffix).unwrap();
+            guard.apply(&suffix[..terminal]).unwrap();
+            assert_eq!(guard.applied(), progress.0);
+            assert_eq!(guard.snapshot().unwrap().invocations.len(), 128);
+            assert_eq!(guard.committed.snapshot().unwrap().invocations.len(), 160);
             assert_eq!(
                 MESSAGE_CLONES.with(|counter| counter.get()),
                 (16, 16 * 4096)
@@ -2094,50 +2290,12 @@ mod tests {
         assert_eq!(published.invocations.len(), 128);
         assert_eq!(published.invocations[0].events.len(), 256);
         fold.committed.assert_retained_accounting();
-        fold.apply(&suffix).unwrap();
+        fold.apply(&suffix[..terminal]).unwrap();
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 128);
+        fold.apply(&suffix[terminal..]).unwrap();
         fold.committed.assert_retained_accounting();
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 160);
         assert_eq!(published.invocations.len(), 128);
-    }
-
-    fn tool_record(scope: &Scope, name: &str, ordinal: u64, position: u64) -> Vec<Record> {
-        tool_update_record(
-            scope,
-            ToolCallUpdate::new(
-                ToolCallId::new(name).unwrap(),
-                Some(name.into()),
-                None,
-                None,
-                None,
-                None,
-            ),
-            ordinal,
-            position,
-        )
-    }
-    fn tool_update_record(
-        scope: &Scope,
-        update: ToolCallUpdate,
-        ordinal: u64,
-        position: u64,
-    ) -> Vec<Record> {
-        let event = ExecutionEvent::new(
-            ExecutionId::new("output").unwrap(),
-            ExecutionUpdate::Tool(update),
-        );
-        let key = records::FactKey::new(
-            records::FactKind::ProviderObservation,
-            Some(event.execution_id().clone()),
-            ordinal,
-        )
-        .unwrap();
-        let body =
-            snapshot::encode_semantic_change(&SessionChange::ProviderObservation(event)).unwrap();
-        records(
-            scope,
-            position,
-            &stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap(),
-        )
     }
 
     #[test]
@@ -2149,19 +2307,36 @@ mod tests {
             unreachable!()
         };
         *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+        fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
             &scope,
-            2,
-            &fact(fold.snapshot(), accepted_input("output"), 2),
+            3,
+            &save_frames(accepted_input("output"), 2, 1),
         ))
         .unwrap();
-        fold.apply(&tool_record(&scope, "existing", 0, 3)).unwrap();
+        let tool = |name: String| {
+            SessionChange::ProviderObservation(ExecutionEvent::new(
+                ExecutionId::new("output").unwrap(),
+                ExecutionUpdate::Tool(ToolCallUpdate::new(
+                    ToolCallId::new(name.clone()).unwrap(),
+                    Some(name),
+                    None,
+                    None,
+                    None,
+                    None,
+                )),
+            ))
+        };
+        let existing = group_suffix(&fold, [tool("existing".into())], 2, true);
+        fold.apply(&existing).unwrap();
         let checkpoint = fold.checkpoint().unwrap();
-        let suffix: Vec<_> = (0..32)
-            .flat_map(|index| tool_record(&scope, &format!("tool-{index}"), index + 1, index + 4))
-            .collect();
+        let suffix = group_suffix(
+            &fold,
+            (0..32).map(|index| tool(format!("tool-{index}"))),
+            3,
+            true,
+        );
         for _ in 0..3 {
             {
                 let mut guard = fold.transaction();
@@ -2170,7 +2345,7 @@ mod tests {
             assert_eq!(fold.checkpoint().unwrap(), checkpoint);
             assert_eq!(
                 (fold.applied(), fold.downloaded(), fold.fact_count()),
-                (3, 3, 3)
+                (6, 6, 3)
             );
             fold.committed.assert_retained_accounting();
             let mut invalid = suffix.clone();
@@ -2191,8 +2366,9 @@ mod tests {
     fn borrowed_rollback_reconciles_queue_capacity_with_restored_membership() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
+        let mut inputs = Vec::new();
         for index in 0..32 {
             let name = format!("queued-{index}");
             let mut change = accepted_input(&name);
@@ -2208,37 +2384,24 @@ mod tests {
                 target: None,
                 actor: Some(record.actor.clone()),
             });
-            let position = fold.downloaded() + 1;
-            fold.apply(&records(
-                &scope,
-                position,
-                &fact(fold.snapshot(), change, position),
-            ))
-            .unwrap();
+            inputs.push(change);
         }
+        let prefix = group_suffix(&fold, inputs, 1, true);
+        fold.apply(&prefix).unwrap();
         let checkpoint = fold.checkpoint().unwrap();
         let progress = (fold.applied(), fold.downloaded(), fold.fact_count());
         let actor = fold.snapshot().unwrap().invocations[0].actor.clone();
-        let mut suffix = Vec::new();
-        for index in 0..32 {
-            let position = fold.downloaded() + suffix.len() as u64 + 1;
-            let change = SessionChange::QueueDecision(QueueHistoryRecord {
+        let admissions = (0..32).map(|index| {
+            SessionChange::QueueDecision(QueueHistoryRecord {
                 mutation: QueueMutation::Admitted {
                     id: ExecutionId::new(format!("queued-{index}")).unwrap(),
                     kind: InvocationKind::Queued,
                 },
                 actor: Some(actor.clone()),
                 scheduling_length: Some(1),
-            });
-            // Queue ordinals advance with the staged suffix, independently of the retained prefix.
-            let key = records::FactKey::new(records::FactKind::QueueDecision, None, index).unwrap();
-            let body = snapshot::encode_semantic_change(&change).unwrap();
-            suffix.extend(records(
-                &scope,
-                position,
-                &stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap(),
-            ));
-        }
+            })
+        });
+        let suffix = group_suffix(&fold, admissions, 2, true);
         for _ in 0..3 {
             {
                 let mut guard = fold.transaction();
@@ -2262,62 +2425,6 @@ mod tests {
             TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
         restored.committed.assert_retained_accounting();
     }
-    // Independent fixture sum: actual snapshot vector capacities and payload owners,
-    // without retained::snapshot/touched/append_payload or rollback projections.
-    fn assert_growth_snapshot_allocation(fold: &TranscriptFold) {
-        use std::mem::size_of;
-        let snapshot = fold.snapshot().unwrap();
-        let mut actual = size_of::<SessionSnapshot>()
-            + snapshot.id.as_str().len()
-            + snapshot.provider.name().len()
-            + snapshot.provider.model_id().len()
-            + snapshot.provider.context().len()
-            + snapshot
-                .provider_context
-                .recorded()
-                .map_or(0, |id| id.as_str().len())
-            + snapshot.invocations.capacity() * size_of::<InvocationRecord>()
-            + snapshot.queue_history.capacity() * size_of::<QueueHistoryRecord>();
-        assert!(snapshot.queue_history.is_empty());
-        for record in &snapshot.invocations {
-            assert!(record.scheduling.is_empty());
-            assert!(matches!(
-                record.acknowledgement,
-                SubmissionAcknowledgement::Pending
-            ));
-            assert!(
-                record.cancellation.is_none()
-                    && record.local_cancellation.is_none()
-                    && record.provider_report.is_none()
-                    && record.result.is_none()
-            );
-            let message = &record.request.user_message;
-            actual += record.request.execution_id.as_str().len()
-                + record.actor.principal_id().len()
-                + record.actor.surface_id().len()
-                + record.actor.request_id().len()
-                + message.text_str().len()
-                + std::mem::size_of_val(message.images())
-                + std::mem::size_of_val(message.files())
-                + message
-                    .files()
-                    .iter()
-                    .map(|file| file.path().len())
-                    .sum::<usize>()
-                + record.events.capacity() * size_of::<ExecutionEvent>()
-                + record.scheduling.capacity() * size_of::<InvocationSchedulingEvent>();
-            for event in &record.events {
-                actual += event.execution_id().as_str().len();
-                actual += match event.update() {
-                    ExecutionUpdate::Message(chunk) => chunk.payload_bytes(),
-                    ExecutionUpdate::Tool(tool) => tool.id().as_str().len() + tool.payload_bytes(),
-                    _ => panic!("unexpected growth fixture payload"),
-                };
-            }
-        }
-        fold.committed.assert_snapshot_allocation(actual);
-    }
-
     fn rollback_parent_growth(existing: bool) {
         for count in [1, 2, 4, 32] {
             for tools in [false, true] {
@@ -2328,74 +2435,72 @@ mod tests {
                     unreachable!()
                 };
                 *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-                fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+                fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
                     .unwrap();
                 if existing {
-                    fold.apply(&records(
-                        &scope,
-                        2,
-                        &fact(fold.snapshot(), accepted_input("output"), 2),
-                    ))
-                    .unwrap();
-                    fold.apply(&[message_record(&scope, 0, 3, 4096)]).unwrap();
+                    let original = group_suffix(
+                        &fold,
+                        [
+                            accepted_input("output"),
+                            SessionChange::ProviderObservation(ExecutionEvent::new(
+                                ExecutionId::new("output").unwrap(),
+                                ExecutionUpdate::Message(MessageChunk::text("x".repeat(4096))),
+                            )),
+                        ],
+                        1,
+                        true,
+                    );
+                    fold.apply(&original).unwrap();
                 }
-                // This retained prefix must not be copied or scanned by rollback.
-                for index in 0..128 {
-                    let position = fold.downloaded() + 1;
-                    fold.apply(&records(
-                        &scope,
-                        position,
-                        &fact(
-                            fold.snapshot(),
-                            accepted_input(&format!("prefix-{index}")),
-                            position,
-                        ),
-                    ))
-                    .unwrap();
-                }
+                let prefix_generation = if existing { 2 } else { 1 };
+                let prefix = group_suffix(
+                    &fold,
+                    (0..128).map(|index| accepted_input(&format!("prefix-{index}"))),
+                    prefix_generation,
+                    true,
+                );
+                fold.apply(&prefix).unwrap();
                 fold.observe_source_head(&scope, fold.downloaded()).unwrap();
                 let checkpoint = fold.checkpoint().unwrap();
                 let progress = (fold.applied(), fold.downloaded(), fold.fact_count());
                 let status = fold.status();
-                let published = fold.committed.snapshot_handle().unwrap();
-                let mut suffix = if existing {
-                    Vec::new()
-                } else {
-                    let position = fold.downloaded() + 1;
-                    records(
-                        &scope,
-                        position,
-                        &fact(fold.snapshot(), accepted_input("output"), position),
-                    )
-                };
+                let published = Arc::new(fold.snapshot().unwrap().clone());
+                let mut changes = Vec::new();
+                if !existing {
+                    changes.push(accepted_input("output"));
+                }
                 for index in 0..count {
-                    let ordinal = index + usize::from(existing);
-                    let position = fold.downloaded() + suffix.len() as u64 + 1;
-                    if tools {
-                        // Create, omit, and explicitly clear the same tool before
-                        // moving on to another inner owner.
+                    let update = if tools {
                         let title = match index % 3 {
                             0 => Some("t".repeat(1024)),
                             1 => None,
                             _ => Some(String::new()),
                         };
-                        suffix.extend(tool_update_record(
-                            &scope,
-                            ToolCallUpdate::new(
-                                ToolCallId::new(format!("tool-{}", index / 3)).unwrap(),
-                                title,
-                                None,
-                                None,
-                                None,
-                                None,
-                            ),
-                            ordinal as u64,
-                            position,
-                        ));
+                        ExecutionUpdate::Tool(ToolCallUpdate::new(
+                            ToolCallId::new(format!("tool-{}", index / 3)).unwrap(),
+                            title,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ))
                     } else {
-                        suffix.push(message_record(&scope, ordinal, position, 1024));
-                    }
+                        ExecutionUpdate::Message(MessageChunk::text("x".repeat(1024)))
+                    };
+                    changes.push(SessionChange::ProviderObservation(ExecutionEvent::new(
+                        ExecutionId::new("output").unwrap(),
+                        update,
+                    )));
                 }
+                let generation = prefix_generation + 1;
+                let unpublished = group_suffix(&fold, changes.clone(), generation, false);
+                let suffix = group_suffix(&fold, changes.clone(), generation, true);
+                let semantic_refusal = group_suffix(
+                    &fold,
+                    changes.into_iter().chain(std::iter::once(opened())),
+                    generation,
+                    false,
+                );
                 for _ in 0..3 {
                     for refusal in 0..3 {
                         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
@@ -2403,26 +2508,19 @@ mod tests {
                         SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
                         if refusal == 0 {
                             let mut guard = fold.transaction();
-                            guard.apply(&suffix).unwrap();
+                            guard.apply(&unpublished).unwrap();
+                            assert_eq!(guard.applied(), progress.0);
+                            assert_eq!(guard.snapshot(), Some(published.as_ref()));
+                        } else if refusal == 1 {
+                            let mut invalid = unpublished.clone();
+                            invalid.push(unpublished.last().unwrap().clone());
+                            assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
                         } else {
-                            let mut invalid = suffix.clone();
-                            if refusal == 1 {
-                                invalid.push(suffix.last().unwrap().clone());
-                                assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
-                            } else {
-                                let position = fold.downloaded() + invalid.len() as u64 + 1;
-                                invalid.extend(records(
-                                    &scope,
-                                    position,
-                                    &fact(None, opened(), position),
-                                ));
-                                assert!(matches!(
-                                    fold.apply(&invalid),
-                                    Err(TranscriptError::Decision(StorageError::Corrupt(_)))
-                                ));
-                            }
+                            assert!(matches!(
+                                fold.apply(&semantic_refusal),
+                                Err(TranscriptError::Decision(StorageError::Corrupt(_)))
+                            ));
                         }
-                        // Check bounded work before any full accounting oracle.
                         assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()).0, 0);
                         assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
                         assert_eq!(
@@ -2436,7 +2534,6 @@ mod tests {
                         );
                         assert_eq!(fold.status(), status);
                         assert_eq!(fold.snapshot(), Some(published.as_ref()));
-                        assert_growth_snapshot_allocation(&fold);
                     }
                 }
                 let mut restored =
@@ -2448,12 +2545,9 @@ mod tests {
                 }
                 restored.apply(&suffix).unwrap();
                 assert_eq!(fold.checkpoint().unwrap(), restored.checkpoint().unwrap());
-                assert_growth_snapshot_allocation(&fold);
-                assert_growth_snapshot_allocation(&restored);
                 let resumed =
                     TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap())
                         .unwrap();
-                assert_growth_snapshot_allocation(&resumed);
                 assert_eq!(resumed.snapshot(), fold.snapshot());
                 assert_eq!(published.invocations.len(), 128 + usize::from(existing));
             }
@@ -2470,13 +2564,6 @@ mod tests {
     }
     #[test]
     fn borrowed_rollback_reconciles_scheduling_stop_report_and_result_payloads() {
-        use crate::application::agent_execution::{
-            providers::{
-                CloseOutcome, ExecutionReport, FinalizedExecutionProjection, ProviderSessionState,
-                ResourceCleanup,
-            },
-            sessions::InvocationCancellationEvent,
-        };
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         let mut open = opened();
@@ -2484,8 +2571,9 @@ mod tests {
             unreachable!()
         };
         *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+        fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
+        let mut inputs = Vec::new();
         for name in ["queued", "cancel", "report", "settle", "local-report"] {
             let mut input = accepted_input(name);
             if name == "queued" {
@@ -2502,28 +2590,19 @@ mod tests {
                     actor: Some(record.actor.clone()),
                 });
             }
-            let position = fold.downloaded() + 1;
-            fold.apply(&records(
-                &scope,
-                position,
-                &fact(fold.snapshot(), input, position),
-            ))
-            .unwrap();
+            inputs.push(input);
         }
+        let initial = group_suffix(&fold, inputs, 1, true);
+        fold.apply(&initial).unwrap();
         let prior_result = Err(AgentError::Storage(StorageError::Io("prior".repeat(256))));
-        let position = fold.downloaded() + 1;
         let prior = SessionChange::LocalSettlement {
             execution_id: ExecutionId::new("settle").unwrap(),
             before: None,
             after: prior_result.clone(),
             local_outcome: None,
         };
-        fold.apply(&records(
-            &scope,
-            position,
-            &fact(fold.snapshot(), prior, position),
-        ))
-        .unwrap();
+        let settlement = group_suffix(&fold, [prior], 2, true);
+        fold.apply(&settlement).unwrap();
         let actor = ActionContext::new("user", "surface", "cleanup-request").unwrap();
         let error = || AgentError::Storage(StorageError::Io("failure".repeat(256)));
         let changes = [
@@ -2577,17 +2656,8 @@ mod tests {
         ];
         // Fixture construction uses explicit owned Clone, outside measured suffix work.
         let mut candidate = fold.clone();
-        let mut suffix = Vec::new();
-        for change in changes {
-            let position = candidate.downloaded() + 1;
-            let frames = records(
-                &scope,
-                position,
-                &fact(candidate.snapshot(), change, position),
-            );
-            candidate.apply(&frames).unwrap();
-            suffix.extend(frames);
-        }
+        let suffix = group_suffix(&fold, changes, 3, true);
+        candidate.apply(&suffix).unwrap();
         let checkpoint = fold.checkpoint().unwrap();
         for _ in 0..3 {
             {

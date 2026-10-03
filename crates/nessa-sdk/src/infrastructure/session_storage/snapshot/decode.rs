@@ -265,10 +265,6 @@ pub(crate) fn preflight_checkpoint(reader: impl Read) -> Result<(), StorageError
     preflight_shape(reader, Shape::Checkpoint)
 }
 
-pub(super) fn preflight_semantic(reader: impl Read) -> Result<(), StorageError> {
-    preflight_shape(reader, Shape::Semantic)
-}
-
 pub(super) fn preflight_semantic_batch(reader: impl Read) -> Result<(), StorageError> {
     preflight_shape(reader, Shape::SemanticBatch)
 }

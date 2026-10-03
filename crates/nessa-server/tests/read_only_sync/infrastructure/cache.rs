@@ -901,7 +901,7 @@ async fn reset_accepts_aborted_physical_progress_and_retains_historical_retry() 
         ))
         .unwrap();
     let before = store.cached_progress(&saved).unwrap().unwrap();
-    assert_eq!((before.downloaded, before.applied, before.facts), (3, 3, 0));
+    assert_eq!((before.downloaded, before.applied, before.facts), (3, 0, 0));
     drop(store);
     let mut reopened = cache(&path);
     let request = reset_request(&saved, before.generation, "reset-aborted");
@@ -962,11 +962,14 @@ async fn borrowed_fold_restores_late_sql_failure_and_quota() {
     let (scope, records) = source_records_with_history(root.path()).await;
     let path = cache_path(root.path(), "borrowed.sqlite3");
     let mut store = cache(&path);
-    // The first fact is a complete opened session; the second is a multi-piece update.
+    // The first save ends at its actual completion2; the next Unit starts at3
+    // and remains private until that outer save's final completion.
     store.apply(plan(&scope, 0, records[..3].to_vec())).unwrap();
     assert_eq!(store.transcript(&scope).unwrap().fact_count(), 1);
     assert!(store.transcript(&scope).unwrap().applied() < 3);
-    store.observe_head(&scope, 3).unwrap();
+    store
+        .observe_head(&scope, records.last().unwrap().position)
+        .unwrap();
     let before = store.cached_progress(&scope).unwrap();
     let fold = store.transcript(&scope).unwrap();
     let status = fold.status();

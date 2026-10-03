@@ -19,6 +19,7 @@
  * Every check runs on a fresh page, in each engine and layout.
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
+import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, names } from "./lib/selectors.mjs"
@@ -543,19 +544,6 @@ async function onSample(browser, { url, layout }) {
   await need(page, css.appFrameIn("inline"), "the app's card frame", 10_000)
   await settled(page)
   return opened
-}
-
-/** The app's own document in the frame drawn in `place`: the proxy's one child. */
-async function appFrame(page, place, timeout = 10_000) {
-  const until = Date.now() + timeout
-  while (Date.now() < until) {
-    const element = await page.$(css.appFrameIn(place))
-    const proxy = await element?.contentFrame()
-    const app = proxy?.childFrames()[0]
-    if (app && !app.isDetached()) return { element, proxy, app }
-    await page.waitForTimeout(100)
-  }
-  throw new CannotRun(`no app document in the ${place} frame`)
 }
 
 /** Waits until the app in `frame` says it is `state` (`data-fixture-state`), and says what it is. */

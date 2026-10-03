@@ -21,8 +21,8 @@ use crate::conversation_test_support::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::sessions::{
-    CommittedSession, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture,
+    CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
@@ -63,14 +63,19 @@ struct RefusingLease {
     inner: Box<dyn SessionStorageLease>,
 }
 impl SessionStorageLease for RefusingLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         if self.refusing.load(Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
-        self.inner.save(snapshot)
+        self.inner.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()
@@ -135,12 +140,17 @@ impl Default for Gate {
     }
 }
 impl Apps {
+    /// `tool` listed with a UI seen by whom `ui` says, or with no `_meta.ui`
+    /// when `None`.
     pub(crate) fn list(&self, tool: &str, ui: Option<UiVisibility>, hints: ToolHints) {
-        let listed = ListedTool::new(
-            McpTool::new(SERVER, tool).unwrap(),
-            ui.map(|visibility| ToolUi::new(UiResourceUri::new(URI).unwrap(), visibility)),
-        )
-        .with_hints(hints);
+        let ui = ui.map_or_else(ToolUi::default, |visibility| {
+            ToolUi::new(Some(UiResourceUri::new(URI).unwrap()), visibility)
+        });
+        self.list_declared(tool, ui, hints);
+    }
+    /// `tool` listed with `ui` as its `_meta.ui`.
+    pub(crate) fn list_declared(&self, tool: &str, ui: ToolUi, hints: ToolHints) {
+        let listed = ListedTool::new(McpTool::new(SERVER, tool).unwrap(), ui).with_hints(hints);
         self.listed.lock().unwrap().insert(tool.into(), listed);
     }
     pub(crate) fn calls(&self) -> usize {
