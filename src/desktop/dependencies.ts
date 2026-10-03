@@ -3,21 +3,22 @@
  * workspace source, the clock, ids, the page's measure of the panes' room,
  * the storage that keeps the overview's filter — and the widget plugins it
  * draws with, built once and handed to the store (`store.ts`) and the views.
- * Overrides are explicit, never a service locator — a test or a future
- * gateway adapter passes its own `workspace`.
+ * Overrides are explicit, never a service locator — a test passes its own
+ * `workspace`.
  *
- * With a gateway's `client.mcpApps`, real servers' apps are drawn: an app
- * plugin is registered for each server a conversation's view names with a UI,
- * and the source hands each view to `gatewayApps.observe` (#384,
+ * The workspace is the gateway's (`gatewaySource`) when the window is given
+ * a way to connect to one (`gateway`), and the in-memory sample otherwise —
+ * which is what the verification fixtures run on.
+ *
+ * Beside a gateway's source, where apps are drawn, real servers' apps are
+ * too: the source hands each view it reads to `gatewayApps`, which registers
+ * an app plugin for each server a view names with a UI, and their calls go on
+ * the source's own client (`client.mcpApps`, #384,
  * `widgets/app/adapters/gateway/`). The fixture app stays with the sample
  * workspace.
  *
  * ```ts
- * const dependencies = createDesktopDependencies({
- *   workspace: gatewaySource,
- *   gateway: { mcpApps: client.mcpApps },
- *   apps,
- * })
+ * const dependencies = createDesktopDependencies({ gateway: () => connect(), apps })
  * const store = makeDesktopStore(dependencies)
  * ```
  */
@@ -30,18 +31,19 @@ import {
   readPageContext,
   samplePlugin,
   type DesktopWidgetRegistry,
-  type GatewayApps,
   type NativeWidgetPlugin,
   type SandboxOrigin,
   type Timers,
   type WidgetPlugin,
 } from "./widgets"
 import {
+  gatewaySource,
   inMemorySource,
   measureWorkspace,
   rememberedFilter,
   sampleAppSession,
   sampleWidgetSession,
+  type GatewayClient,
   type WorkspaceDependencies,
   type WorkspaceSource,
 } from "./workspace"
@@ -49,17 +51,16 @@ import {
 export interface DesktopDependencies extends WorkspaceDependencies {
   /** The widget plugins, native ones registered here (ADR 326); provided to the tree by `main.tsx`. */
   readonly widgets: DesktopWidgetRegistry
-  /**
-   * Where a gateway source reports each conversation view, so the apps of
-   * its servers are registered and their calls read, and each conversation
-   * deleted; absent unless both a gateway and `apps` are given.
-   */
-  readonly gatewayApps?: GatewayApps
 }
 
 export function createDesktopDependencies(
   options: {
     workspace?: WorkspaceSource
+    /**
+     * Connects to the gateway whose conversations the window shows, and whose
+     * servers' apps it draws where `apps` are; ignored beside `workspace`.
+     */
+    gateway?: () => Promise<WindowGatewayClient>
     now?: () => number
     newId?: () => string
     measure?: WorkspaceDependencies["measure"]
@@ -73,8 +74,6 @@ export function createDesktopDependencies(
      * at all, no app plugin is registered.
      */
     apps?: AppsOptions
-    /** The gateway's MCP App calls (`client.mcpApps`): real servers' apps reach the window through them. */
-    gateway?: { readonly mcpApps: McpAppsApi }
   } = {},
 ): DesktopDependencies {
   // The real clock and timers; tests pass their own.
@@ -83,19 +82,18 @@ export function createDesktopDependencies(
     const timer = window.setTimeout(run, ms)
     return () => window.clearTimeout(timer)
   }
-  // With no source given, the window runs on the sample workspace.
-  const sample = options.workspace === undefined
-  const workspace = options.workspace ?? inMemorySource({ now, after })
+  // With no source given and no gateway, the window runs on the sample workspace.
+  const sample = options.workspace === undefined && options.gateway === undefined
   const newId = options.newId ?? (() => crypto.randomUUID())
   const { apps, gateway } = options
-  // The fixture app only beside the sample workspace, and never beside a
-  // gateway, whose servers' apps it could otherwise stand in for.
-  const widgets = widgetRegistry(
-    options.widgets,
-    sample,
-    gateway ? undefined : apps,
-    after,
-  )
+  // The fixture app only beside the sample workspace, never beside a gateway,
+  // whose servers' apps it could otherwise stand in for.
+  const widgets = widgetRegistry(options.widgets, sample, apps, after)
+  const workspace =
+    options.workspace ??
+    (gateway
+      ? gatewayWorkspace(gateway, { now, after }, widgets, apps)
+      : inMemorySource({ now, after }))
   return {
     workspace,
     now,
@@ -105,16 +103,41 @@ export function createDesktopDependencies(
     // The webview's storage, where the overview's filter is kept between launches.
     overviewFilter: options.overviewFilter ?? rememberedFilter(),
     widgets,
-    ...(gateway && apps
-      ? {
-          gatewayApps: gatewayApps({
-            registry: widgets,
-            mcpApps: gateway.mcpApps,
-            ports: appPorts(apps, after),
-          }),
-        }
-      : {}),
   }
+}
+
+/** A gateway client the window can show conversations and draw apps through. */
+type WindowGatewayClient = GatewayClient & { readonly mcpApps: McpAppsApi }
+
+/**
+ * The gateway's workspace, and — where apps are drawn — its servers' apps:
+ * told each view the source reads, their calls made on the client the source
+ * holds, so an app is asked on the same connection its conversation is read.
+ */
+function gatewayWorkspace(
+  connect: () => Promise<WindowGatewayClient>,
+  clock: { now: () => number; after: Timers["after"] },
+  registry: DesktopWidgetRegistry,
+  apps: AppsOptions | undefined,
+): WorkspaceSource {
+  if (!apps) return gatewaySource({ connect, clock })
+  const mcpApps = (): Promise<McpAppsApi> =>
+    source.connected().then((client) => client.mcpApps)
+  const source = gatewaySource({
+    connect,
+    clock,
+    apps: gatewayApps({
+      registry,
+      mcpApps: {
+        callTool: (...args) => mcpApps().then((api) => api.callTool(...args)),
+        readResource: (...args) => mcpApps().then((api) => api.readResource(...args)),
+        fetchResource: (...args) => mcpApps().then((api) => api.fetchResource(...args)),
+        releaseApp: (...args) => mcpApps().then((api) => api.releaseApp(...args)),
+      },
+      ports: appPorts(apps, clock.after),
+    }),
+  })
+  return source
 }
 
 /** Where this window draws MCP Apps, as the host decides it. */

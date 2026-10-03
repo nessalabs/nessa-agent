@@ -386,7 +386,7 @@ describe("the agents overview", () => {
     await press(card("first") as HTMLElement, "Enter", { command: true })
     expect(card("first")?.dataset.phase).toBeUndefined()
     expect(card("first")?.querySelector(".agents-request-failure")?.textContent).toBe(
-      "Nessa couldn’t reach your sessions.",
+      "Nessa couldn’t confirm this just now.",
     )
     source.refuse("approve", undefined)
     const allow = button(card("first"), "Allow")

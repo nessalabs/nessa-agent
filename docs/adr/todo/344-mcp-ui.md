@@ -257,12 +257,17 @@ app widgets alike.
   conversation as well as its execution and tool ids, and kept, at the last
   state a view reported, until the conversation is deleted — a view holds only
   its latest tools — and a forgotten conversation is not brought back by a
-  late view. The order of views is the gateway source's to keep (#248):
+  late view. The order of views is the gateway source's to keep: it tells
+  the apps each view in the order read, and a conversation the gateway says
+  was deleted (`gateway-source.test.ts`, "MCP Apps (#384)"), and its apps'
+  calls go on the client it holds (`dependencies.test.ts`):
   `app-calls.test.ts`, and
   `workspace/adapters/gateway/tool-widget.test.ts` for the widget the
   transcript draws reading the same call.
-- **Not yet in a real browser against a real gateway**: the window shows a
-  real conversation only once its gateway source (#248) lands.
+- **Not yet in a real browser against a real gateway**: the gateway source
+  (#248) is on `main`, so the window draws a real conversation's apps in a
+  browser preview opened with `?gateway`; the Chromium and WebKit run against
+  a real server is still to do.
 
 ## What each harness passes through ACP
 

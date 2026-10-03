@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Composition registers the sample widget plugin only beside the sample
  * workspace, whose session its widgets belong to, and the fixture MCP App
@@ -15,6 +16,7 @@ import {
   samplePluginId,
   WidgetRegistryError,
 } from "./widgets"
+import { fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
 import { fakeSource } from "./workspace/testing"
 
 describe("the window's widget plugins", () => {
@@ -59,71 +61,46 @@ describe("the window's widget plugins", () => {
     ).toBeUndefined()
   })
 
-  it("register a real server's app through the gateway, only given both a gateway and apps (#384)", () => {
-    const gateway = { mcpApps: {} as McpAppsApi }
+  it("register a real server's app as the gateway's source reads it, only given apps (#384)", async () => {
     const apps = { sandbox: undefined, platform: "web" } as const
-    expect(
-      createDesktopDependencies({ workspace: fakeSource(), apps }).gatewayApps,
-    ).toBeUndefined()
-    expect(
-      createDesktopDependencies({ workspace: fakeSource(), gateway }).gatewayApps,
-    ).toBeUndefined()
-    const { widgets, gatewayApps } = createDesktopDependencies({
-      workspace: fakeSource(),
-      gateway,
+    const drawn = gatewayWithApp()
+    const { workspace, widgets } = createDesktopDependencies({
+      gateway: drawn.connect,
       apps,
     })
-    gatewayApps?.observe({
-      conversationId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
-      tools: [
-        {
-          executionId: "run",
-          toolId: "call-1",
-          title: "show_chart",
-          kind: "other",
-          status: "running",
-          details: "",
-          input: "",
-          mcp: {
-            server: "mcptest",
-            tool: "show_chart",
-            resourceUri: "ui://t/chart.html",
-          },
-        },
-      ],
-    })
+    expect(widgets.plugin(appPluginId("mcptest"))).toBeUndefined()
+    await workspace.transcript(conversation)
     expect(widgets.plugin(appPluginId("mcptest"))).toMatchObject({
       kind: "app",
       server: "mcptest",
     })
+
+    // Without apps, the same view registers none.
+    const undrawn = gatewayWithApp()
+    const plain = createDesktopDependencies({ gateway: undrawn.connect })
+    await plain.workspace.transcript(conversation)
+    expect(plain.widgets.plugin(appPluginId("mcptest"))).toBeUndefined()
+
+    // Beside a named source, the gateway is not asked at all.
+    const ignored = gatewayWithApp()
+    const named = createDesktopDependencies({
+      workspace: fakeSource(),
+      gateway: ignored.connect,
+      apps,
+    })
+    await named.workspace.index()
+    expect(ignored.connects()).toBe(0)
+    expect(named.widgets.plugin(appPluginId("mcptest"))).toBeUndefined()
   })
 
-  it("give a real server's app mount ids of the protocol's form, whatever ids the workspace is given", () => {
-    const { widgets, gatewayApps } = createDesktopDependencies({
-      workspace: fakeSource(),
+  it("give a real server's app mount ids of the protocol's form, whatever ids the workspace is given", async () => {
+    const drawn = gatewayWithApp()
+    const { workspace, widgets } = createDesktopDependencies({
       newId: () => "id-1",
-      gateway: { mcpApps: {} as McpAppsApi },
+      gateway: drawn.connect,
       apps: { sandbox: undefined, platform: "web" },
     })
-    gatewayApps?.observe({
-      conversationId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
-      tools: [
-        {
-          executionId: "run",
-          toolId: "call-1",
-          title: "show_chart",
-          kind: "other",
-          status: "running",
-          details: "",
-          input: "",
-          mcp: {
-            server: "mcptest",
-            tool: "show_chart",
-            resourceUri: "ui://t/chart.html",
-          },
-        },
-      ],
-    })
+    await workspace.transcript(conversation)
     const plugin = widgets.plugin(appPluginId("mcptest"))
     expect(plugin?.kind).toBe("app")
     if (plugin?.kind !== "app") return
@@ -132,12 +109,112 @@ describe("the window's widget plugins", () => {
     )
   })
 
+  it("make a real server's app's calls on the client the source holds", async () => {
+    const drawn = gatewayWithApp()
+    const { workspace, widgets } = createDesktopDependencies({
+      gateway: drawn.connect,
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    await workspace.transcript(conversation)
+    const plugin = widgets.plugin(appPluginId("mcptest"))
+    if (plugin?.kind !== "app") throw new Error("no app plugin")
+    const app = { executionId: "run", toolId: "call-1", instanceId: "mount" }
+    await plugin.ports.server.release({ sessionId: conversation, server: "mcptest", app })
+    expect(drawn.released).toEqual([[conversation, app]])
+    // One connection: the app was asked on the client its conversation was read on.
+    expect(drawn.connects()).toBe(1)
+  })
+
   it("leave the fixture app out beside a gateway, whose servers' apps it could stand in for", () => {
-    const { widgets, gatewayApps } = createDesktopDependencies({
-      gateway: { mcpApps: {} as McpAppsApi },
+    const { widgets } = createDesktopDependencies({
+      gateway: gatewayWithApp().connect,
       apps: { sandbox: undefined, platform: "web" },
     })
     expect(widgets.plugin(appPluginId(fixtureServer))).toBeUndefined()
-    expect(gatewayApps).toBeDefined()
+  })
+})
+
+const conversation = "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d"
+
+/**
+ * A gateway holding one conversation whose view names an MCP App's call, its
+ * client's `mcpApps` recording each release.
+ */
+function gatewayWithApp() {
+  const gateway = fakeGateway()
+  gateway.views.set(
+    conversation,
+    view(conversation, {
+      tools: [
+        {
+          executionId: "run",
+          toolId: "call-1",
+          title: "show_chart",
+          kind: "other",
+          status: "running",
+          details: "",
+          input: "",
+          mcp: {
+            server: "mcptest",
+            tool: "show_chart",
+            resourceUri: "ui://t/chart.html",
+          },
+        },
+      ],
+    }),
+  )
+  const released: unknown[][] = []
+  const mcpApps = {
+    releaseApp: (...args: unknown[]) => {
+      released.push(args)
+      return Promise.resolve()
+    },
+  } as unknown as McpAppsApi
+  const { client } = gateway
+  let connects = 0
+  return {
+    released,
+    connects: () => connects,
+    connect: () => {
+      connects++
+      return Promise.resolve({
+        conversation: client.conversation,
+        get connectionState() {
+          return client.connectionState
+        },
+        onConnectionStateChange: client.onConnectionStateChange,
+        close: client.close,
+        mcpApps,
+      })
+    },
+  }
+}
+
+describe("the window's workspace", () => {
+  it("is the gateway's when composition can connect to one, which it does on first need", async () => {
+    const gateway = fakeGateway()
+    let connects = 0
+    const { workspace, widgets } = createDesktopDependencies({
+      gateway: () => {
+        connects++
+        return Promise.resolve({ ...gateway.client, mcpApps: {} as McpAppsApi })
+      },
+    })
+    // Not the sample: none of its plugins.
+    expect(widgets.natives()).toEqual([])
+    expect(connects).toBe(0)
+    await workspace.index()
+    expect(connects).toBe(1)
+    expect(gateway.count("list")).toBe(1)
+  })
+
+  it("is the source composition names, ahead of a gateway", () => {
+    const named = fakeSource()
+    expect(
+      createDesktopDependencies({
+        workspace: named,
+        gateway: () => Promise.reject(new Error("never asked")),
+      }).workspace,
+    ).toBe(named)
   })
 })

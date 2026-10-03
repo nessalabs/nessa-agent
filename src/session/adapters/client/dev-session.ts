@@ -5,6 +5,7 @@ import {
   type CredentialSource,
   type GatewayEndpointSource,
   type Stage,
+  type SurfaceKind,
 } from "@nessa/client"
 
 import { host } from "../../../host"
@@ -32,6 +33,8 @@ export type ConnectDevSessionDeps = {
   endpointSource?: GatewayEndpointSource
   stage?: Stage
   clientId?: string
+  /** Which surface this is, for the gateway's record; the panel when not said. */
+  surfaceKind?: SurfaceKind
   browserUrl?: string
   gatewayBaseUrl?: string
 }
@@ -58,7 +61,7 @@ export async function connectDevSession(
         : { endpointSource: deps.endpointSource }),
     credentialSource: deps.credentialSource,
     role: "surface",
-    surface: { kind: "panel", instance: crypto.randomUUID() },
+    surface: { kind: deps.surfaceKind ?? "panel", instance: crypto.randomUUID() },
     client: {
       id: deps.clientId ?? "nessa-panel",
       version: "0.1.0",

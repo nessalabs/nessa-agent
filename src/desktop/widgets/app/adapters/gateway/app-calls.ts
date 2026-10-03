@@ -22,11 +22,12 @@
  * A view is bounded — the gateway keeps its latest tools, and drops the oldest
  * — so a call missing from a later view has not ended: it keeps the last state
  * a view reported, and its app stays (C11, `app-calls.test.ts`). A
- * conversation's calls go only with the conversation (`forget`, which its
- * source calls — #248's to wire), so what is kept grows until then; a
- * forgotten (deleted) conversation is not brought back by a view of it
- * arriving late. The order of a conversation's views is its source's to keep
- * (#248): `ConversationView.revision` is for equality, not order.
+ * conversation's calls go only with the conversation (`forget`, which the
+ * gateway source calls when a read says it was deleted); a forgotten
+ * conversation is not brought back by a view of it arriving late. The order
+ * of a conversation's views is its source's to keep (`gateway-source.ts`
+ * tells them in the order read): `ConversationView.revision` is for
+ * equality, not order.
  */
 import type { ConversationTool, ConversationView } from "@nessa/client"
 import type { CallRead, McpAppCalls } from "../../application/ports"

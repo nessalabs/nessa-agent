@@ -3,8 +3,9 @@ use super::view::{
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
     ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationTool, ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 use super::{McpToolUis, NoMcpToolUis};
 use crate::conversation::domain::ConversationId;
@@ -16,7 +17,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
-    permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
+    permissions::{PermissionScope, ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
@@ -562,6 +563,19 @@ impl Projection {
             self.view.truncated = true;
             return;
         }
+        // An option says what it decides (`effect`), not how far it reaches. Live
+        // offers decide one request (`once_only`, and the ACP parser admits no
+        // persistent kind); a restored one that reached further would read as
+        // one that does not, so its review is not offered here.
+        if options
+            .choices()
+            .iter()
+            .any(|option| *option.decision().scope() != PermissionScope::request())
+        {
+            self.view.interaction_view_error = Some("This review offers a choice beyond this one request, which this view cannot show; this review has no actionable choices in this view.".into());
+            self.view.truncated = true;
+            return;
+        }
         if let Some(tool) = self
             .view
             .tools
@@ -587,6 +601,7 @@ impl Projection {
                 .map(|option| ConversationPermissionOption {
                     id: option.id().as_str().into(),
                     label: option.label().into(),
+                    effect: ConversationPermissionOptionEffect::from(option.decision().effect()),
                 })
                 .collect(),
         };
