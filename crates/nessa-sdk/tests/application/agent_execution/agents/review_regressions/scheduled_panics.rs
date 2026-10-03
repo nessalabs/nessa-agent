@@ -1,5 +1,8 @@
 //! Panics cannot detach provider work from scheduling ownership or retry evidence.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 
 fn panic_result(result: &Result<ExecutionOutcome, AgentError>, cleanup: &Option<AgentError>) {
     match (result, cleanup) {
@@ -280,10 +283,15 @@ impl SessionStorage for SchedulingPanicStorage {
     }
 }
 impl SessionStorageLease for SchedulingPanicLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             let target = if self.stage == InvocationStage::Cancelled {
                 "pending-one"
@@ -300,11 +308,11 @@ impl SessionStorageLease for SchedulingPanicLease {
             if panic && !self.commit_first {
                 panic!("first scheduling save panic before commit");
             }
-            self.backing.save(snapshot).await?;
+            let receipt = self.backing.save_changes(binding, snapshot, units).await?;
             if panic {
                 panic!("first scheduling save panic after commit");
             }
-            Ok(())
+            Ok(receipt)
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

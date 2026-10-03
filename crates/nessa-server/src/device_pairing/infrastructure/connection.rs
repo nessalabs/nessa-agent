@@ -100,8 +100,11 @@ impl NativeEnrollmentConnections {
         stream: TcpStream,
         entropy: R,
     ) -> Result<NativeConnectionTask, NativeConnectionError> {
-        let endpoint = WakeEndpoint::new(&stream)
-            .map_err(|error| NativeConnectionFailure::Io(error.kind()))?;
+        let endpoint = WakeEndpoint::new(
+            stream
+                .peer_addr()
+                .map_err(|error| NativeConnectionFailure::Io(error.kind()))?,
+        );
         let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())?;
         // `close` closes the semaphore under this lock, so a permit acquired here
         // is registered before any wake sweep, and a closed owner admits nothing.
@@ -217,19 +220,51 @@ impl NativeDeadline {
             .ok_or_else(|| Error::from(ErrorKind::TimedOut))
     }
 }
+/// The socket calls a `DeadlineStream` makes. `TcpStream` is the real one;
+/// tests substitute a recording double.
+pub(super) trait NativeSocket: Read + Write {
+    fn set_nonblocking(&self, nonblocking: bool) -> IoResult<()>;
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> IoResult<()>;
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> IoResult<()>;
+}
+impl NativeSocket for TcpStream {
+    fn set_nonblocking(&self, nonblocking: bool) -> IoResult<()> {
+        TcpStream::set_nonblocking(self, nonblocking)
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> IoResult<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> IoResult<()> {
+        TcpStream::set_write_timeout(self, timeout)
+    }
+}
+
 /// A native socket bounded by its phase deadline and by its owner's wake.
-/// Every OS wait is capped at `WAKE_TICK`; between waits the stream checks the
-/// wake flag and the deadline, so a woken worker's IO fails with
-/// ConnectionAborted within one tick on every OS
-/// (`native_shutdown_keeps_original_physical_capacity`).
-pub(super) struct DeadlineStream {
-    stream: TcpStream,
+///
+/// Reads cap each OS wait at `WAKE_TICK` and retry a wait that ended without
+/// data, checking the wake flag and the deadline between waits, so a worker
+/// blocked reading fails with ConnectionAborted within one tick on every OS
+/// (`native_shutdown_keeps_original_physical_capacity`). No bytes are consumed
+/// by a timed-out read, so retrying it is safe.
+///
+/// A send is never retried: after a timed-out send the transport may have
+/// taken part of the buffer (Winsock calls the connection indeterminate), so
+/// neither resending nor continuing is safe. A write checks the flag, then
+/// makes one send with the rest of the phase deadline as its timeout. If it
+/// times out, the stream fails for good with TimedOut and nothing touches the
+/// socket again (`timed_out_send_is_terminal_and_never_retried`). A worker
+/// blocked in a send is therefore not woken by the flag; it ends at its
+/// deadline.
+pub(super) struct DeadlineStream<S: NativeSocket = TcpStream> {
+    stream: S,
     deadline: Arc<NativeDeadline>,
     wake: Arc<WakeEndpoint>,
+    /// Set by a timed-out send; every later call fails with it.
+    failed: Option<ErrorKind>,
 }
-impl DeadlineStream {
+impl<S: NativeSocket> DeadlineStream<S> {
     pub(super) fn new(
-        stream: TcpStream,
+        stream: S,
         clock: Arc<dyn Clock>,
         wake: Arc<WakeEndpoint>,
     ) -> Result<(Self, Arc<NativeDeadline>), NativeConnectionError> {
@@ -248,6 +283,7 @@ impl DeadlineStream {
                 stream,
                 deadline: deadline.clone(),
                 wake,
+                failed: None,
             },
             deadline,
         ))
@@ -257,23 +293,27 @@ impl DeadlineStream {
             .set_nonblocking(false)
             .map_err(|error| NativeConnectionFailure::Io(error.kind()).into())
     }
-    /// The next OS wait: refused once woken or past the deadline, otherwise
-    /// the time left, capped at one tick.
-    fn next_wait(&self) -> IoResult<Duration> {
+    /// The time left in the phase: refused once the stream has failed, once
+    /// woken, or past the deadline.
+    fn usable_for(&self) -> IoResult<Duration> {
+        if let Some(kind) = self.failed {
+            return Err(Error::from(kind));
+        }
         if self.wake.woken() {
             return Err(Error::from(ErrorKind::ConnectionAborted));
         }
-        Ok(self.deadline.remaining()?.min(WAKE_TICK))
+        self.deadline.remaining()
     }
 }
 /// An OS wait that ended without data: WouldBlock on Unix, TimedOut on Windows.
 fn wait_elapsed(error: &Error) -> bool {
     matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
 }
-impl Read for DeadlineStream {
+impl<S: NativeSocket> Read for DeadlineStream<S> {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         loop {
-            self.stream.set_read_timeout(Some(self.next_wait()?))?;
+            let wait = self.usable_for()?.min(WAKE_TICK);
+            self.stream.set_read_timeout(Some(wait))?;
             match self.stream.read(bytes) {
                 Err(error) if wait_elapsed(&error) => continue,
                 result => return result,
@@ -281,21 +321,28 @@ impl Read for DeadlineStream {
         }
     }
 }
-impl Write for DeadlineStream {
+impl<S: NativeSocket> Write for DeadlineStream<S> {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
-        loop {
-            self.stream.set_write_timeout(Some(self.next_wait()?))?;
-            match self.stream.write(bytes) {
-                Err(error) if wait_elapsed(&error) => continue,
-                result => return result,
+        let wait = self.usable_for()?;
+        self.stream.set_write_timeout(Some(wait))?;
+        match self.stream.write(bytes) {
+            Err(error) if wait_elapsed(&error) => {
+                self.failed = Some(ErrorKind::TimedOut);
+                Err(Error::from(ErrorKind::TimedOut))
             }
+            result => result,
         }
     }
     fn flush(&mut self) -> IoResult<()> {
-        self.next_wait()?;
+        self.usable_for()?;
         self.stream.flush()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/device_pairing/infrastructure/deadline_stream.rs"]
+mod deadline_stream_tests;
+
 fn serve_exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
     handle: &Handle,

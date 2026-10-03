@@ -2,13 +2,13 @@ use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
     BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
     NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
-    ReleaseEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets,
-    UploadBody, UploadError, UploadRejection,
+    ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
+    TicketSecrets, UploadBody, UploadError, UploadRejection,
 };
 use crate::{
     attachments::domain::{
-        Attachment, Caller, Hold, MediaType, Redemption, TicketBook, TicketLifetime, TicketLimits,
-        UploadMismatch, UploadTicket,
+        Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
+        TicketLimits, UploadMismatch, UploadTicket,
     },
     conversation::domain::ConversationId,
 };
@@ -415,7 +415,7 @@ impl AttachmentService {
     }
 
     /// The work of one upload stopped without an answer. What it had already
-    /// done is still this gateway's to account for: a hold it left pending is
+    /// done is still this gateway's to account for: a pending or kept hold it left is
     /// taken back by its own claim and no other, and the ticket it used up is
     /// recorded as used without a hold, for the reason that actually applies.
     async fn unresolved(
@@ -566,6 +566,7 @@ impl AttachmentService {
                 let reverted = AttachmentAuditRecord::HoldReverted {
                     hold,
                     cause: RevertCause::RemovedBeforeUsable,
+                    was: RetiredFrom::Pending,
                 };
                 if self.audit(reverted).await == AuditDelivery::Unavailable {
                     tracing::error!("a hold removed before it was usable went unrecorded");
@@ -584,11 +585,15 @@ impl AttachmentService {
             .take_back(hold, claim, RevertCause::ConfirmationFailed)
             .await
         {
-            TakenBack::Removed => UploadError::Rejected {
+            TakenBack::Retired => UploadError::Rejected {
                 reason: UploadRejection::StorageUnavailable,
                 evidence: AuditDelivery::Recorded,
             },
-            TakenBack::RemovedUnrecorded | TakenBack::Stranded => UploadError::Rejected {
+            TakenBack::CleanupIncomplete(evidence) => UploadError::Rejected {
+                reason: UploadRejection::StorageUnavailable,
+                evidence,
+            },
+            TakenBack::RetiredUnrecorded | TakenBack::Stranded => UploadError::Rejected {
                 reason: UploadRejection::StorageUnavailable,
                 evidence: AuditDelivery::Unavailable,
             },
@@ -599,26 +604,31 @@ impl AttachmentService {
         }
     }
 
-    /// Take back this claim's pending hold and say what became of it. Each
+    /// Take back this claim's pending or kept hold and say what became of it. Each
     /// answer is a different thing to say about the hold, and none of them is
     /// evidence that some other upload's record reached the sink.
     async fn take_back(&self, hold: &Hold, claim: &HoldClaim, cause: RevertCause) -> TakenBack {
-        match self.inner.store.discard(hold, claim).await {
-            Ok(Discard::Discarded) => {
+        match self.inner.store.discard(hold, claim, cause).await {
+            Ok(outcome @ (Discard::Discarded { was } | Discard::CleanupIncomplete { was })) => {
                 // Attempted with its own bound even when the sink just failed:
                 // that failure may have been a late success.
                 let reverted = AttachmentAuditRecord::HoldReverted {
                     hold: hold.clone(),
                     cause,
+                    was,
                 };
-                if self.audit(reverted).await == AuditDelivery::Recorded {
-                    TakenBack::Removed
+                let evidence = self.audit(reverted).await;
+                if matches!(outcome, Discard::CleanupIncomplete { .. }) {
+                    tracing::error!(stored = %hold.stored().digest(), ?evidence, "hold retired but blob cleanup did not complete");
+                    TakenBack::CleanupIncomplete(evidence)
+                } else if evidence == AuditDelivery::Recorded {
+                    TakenBack::Retired
                 } else {
                     tracing::error!(
                         stored = %hold.stored().digest(),
                         "a hold was taken back without audit evidence"
                     );
-                    TakenBack::RemovedUnrecorded
+                    TakenBack::RetiredUnrecorded
                 }
             }
             // Another upload owns the hold now, or a release removed it; each
@@ -796,9 +806,12 @@ impl AttachmentService {
         let report = self
             .inner
             .store
-            .release(&request.organization_id, &request.conversation_id)
+            .release(&request.organization_id, &request.conversation_id, &release)
             .await
-            .ok();
+            .ok()
+            .filter(|report| {
+                report.agrees_with(&request.organization_id, &request.conversation_id)
+            });
         let storage_failures = report.as_ref().map_or(1, |report| report.failures);
         let mut records: Vec<_> = withdrawn
             .into_iter()
@@ -808,19 +821,25 @@ impl AttachmentService {
             })
             .collect();
         if let Some(report) = report {
-            records.extend(report.released.into_iter().map(|released| {
-                AttachmentAuditRecord::HoldReleased {
-                    hold: released.hold,
-                    was: released.was,
-                    release: release.clone(),
+            records.extend(report.retired.into_iter().map(|retired| {
+                let (hold, was, evidence) = retired.into_parts();
+                match evidence {
+                    RetirementEvidence::Release(release) => AttachmentAuditRecord::HoldReleased {
+                        hold,
+                        was: was.into(),
+                        release,
+                    },
+                    RetirementEvidence::RevertedUpload { cause, .. } => {
+                        AttachmentAuditRecord::HoldReverted { hold, was, cause }
+                    }
                 }
             }));
-            records.extend(report.removed.into_iter().map(|hold| {
-                AttachmentAuditRecord::BlobRemoved {
-                    hold,
-                    release: release.clone(),
-                }
-            }));
+            records.extend(
+                report
+                    .removed
+                    .into_iter()
+                    .map(|removed| AttachmentAuditRecord::BlobRemoved { removed }),
+            );
         }
         // One budget for the whole release: a conversation's holds are not
         // bounded, and a sink that answers slowly must not keep a close open
@@ -859,19 +878,20 @@ fn written_hold(pending: &PendingHold) -> Option<(Hold, HoldClaim)> {
     lock(pending).take()
 }
 
-/// What became of a pending hold its own upload tried to take back.
+/// What became of a pending or kept hold its own upload tried to take back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TakenBack {
-    /// Removed by this upload, and the removal is on record.
-    Removed,
-    /// Removed by this upload; the removal itself was not acknowledged.
-    RemovedUnrecorded,
+    /// Retired by this upload, with cleanup completed and evidence recorded.
+    Retired,
+    /// Retired by this upload; its audit write was not acknowledged.
+    RetiredUnrecorded,
+    /// Retirement succeeded; cleanup did not. Keep the independent audit result.
+    CleanupIncomplete(AuditDelivery),
     /// Nothing of this claim was left: another upload of the same file owns
     /// the hold now, or a release removed it. Each of those records itself,
     /// and this upload wrote nothing that is missing from the trail.
     NothingLeft,
-    /// The hold could not be removed. It stays pending, which nothing can use,
-    /// and goes when its conversation lets go of its files.
+    /// Retirement was not confirmed. No successful state or byte cleanup is inferred.
     Stranded,
 }
 

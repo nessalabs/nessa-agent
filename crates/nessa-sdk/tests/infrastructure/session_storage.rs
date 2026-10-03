@@ -1,10 +1,23 @@
 //! Public record-storage contract exercised through the SDK port.
+//! session_storage -> memory public bindings / receipts / reset
+//!                 -> record public writer / watch / physical interruption / retry
+//!                 -> record_source public publication / restored extension
+//!                 -> discovery public bounded query ordering / physical faults
+//!                 -> save_group public leases / emitted records / checkpoints
+//!                 -> fixtures public immutable data / actual emitted donor output
+
+mod discovery;
+mod fixtures;
+mod memory;
+mod record;
+mod record_source;
+mod save_group;
 
 use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,
         sessions::{
-            ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+            ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
             StorageError,
         },
     },
@@ -52,21 +65,17 @@ async fn record_storage_reopens_the_same_semantic_history() {
     assert!(storage.open_existing(id.clone()).await.unwrap().is_none());
     let lease = storage.open(id.clone()).await.unwrap();
     let (change, snapshot) = opened(&id);
-    assert_eq!(
-        lease.save(snapshot.clone()).await,
-        Err(StorageError::ChangesRequired)
-    );
     lease
         .save_changes(
-            SessionSaveGeneration::initial(),
+            lease.load().await.unwrap().binding().clone(),
             snapshot.clone(),
-            vec![change],
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
         .unwrap();
     drop(lease);
     let restored = storage.open_existing(id).await.unwrap().unwrap();
-    assert_eq!(restored.load().await.unwrap(), Some(snapshot));
+    assert_eq!(restored.load().await.unwrap().snapshot(), Some(&snapshot));
     drop(restored);
     storage.shutdown().await.unwrap();
 }
@@ -83,23 +92,26 @@ async fn record_storage_lease_excludes_second_manager_and_reset_erases_history()
     ));
     let (change, snapshot) = opened(&id);
     first
-        .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+        .save_changes(
+            first.load().await.unwrap().binding().clone(),
+            snapshot,
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
         .await
         .unwrap();
     first.erase().await.unwrap();
-    assert_eq!(first.load().await.unwrap(), None);
+    assert!(first.load().await.unwrap().snapshot().is_none());
     drop(first);
-    assert_eq!(
-        storage
-            .open_existing(id)
-            .await
-            .unwrap()
-            .unwrap()
-            .load()
-            .await
-            .unwrap(),
-        None
-    );
+    assert!(storage
+        .open_existing(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .load()
+        .await
+        .unwrap()
+        .snapshot()
+        .is_none());
 }
 
 #[tokio::test]
@@ -116,7 +128,11 @@ async fn record_source_reads_committed_frames_while_writer_lease_is_held() {
         .unwrap();
     let (change, snapshot) = opened(&id);
     lease
-        .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            snapshot,
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
         .await
         .unwrap();
     let scope = source.scope(Id::new("receiver").unwrap(), Id::new("epoch").unwrap());
@@ -137,8 +153,8 @@ async fn record_source_reads_committed_frames_while_writer_lease_is_held() {
     })
     .await
     .unwrap();
-    assert_eq!(head, 1);
-    assert_eq!(page.records.len(), 1);
+    assert_eq!(head, 2);
+    assert_eq!(page.records.len(), 2);
     assert_eq!(page.records[0].position, 1);
     assert_eq!(page.records[0].payload[0], 1);
     drop(source);
@@ -154,7 +170,11 @@ async fn sync_pass_reloads_checkpoint_after_lost_commit_reply() {
     let lease = storage.open(id.clone()).await.unwrap();
     let (change, snapshot) = opened(&id);
     lease
-        .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            snapshot,
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
         .await
         .unwrap();
     let source = storage
@@ -175,13 +195,13 @@ async fn sync_pass_reloads_checkpoint_after_lost_commit_reply() {
             Err(SyncError::Store(StoreError::Uncertain))
         );
         let mut resumed = begin_pass(&scope, &mut access, &mut source, &mut replica).unwrap();
-        assert_eq!(resumed.position(), 1);
+        assert_eq!(resumed.position(), 2);
         finish_pass(&mut resumed, limits, &mut access, &mut source, &mut replica).unwrap();
         (source, replica.records(&scope).unwrap(), access.checks)
     })
     .await
     .unwrap();
-    assert_eq!(result.1.len(), 1);
+    assert_eq!(result.1.len(), 2);
     assert_eq!(result.1[0].position, 1);
     assert_eq!(result.2, 3);
     drop(result.0);
@@ -281,7 +301,7 @@ fn separate_process_receiver_catches_write_between_head_and_recheck() {
     let mut replica = MemoryStore::new();
 
     let mut first = begin_pass(&scope, &mut access, &mut client, &mut replica).unwrap();
-    assert_eq!(first.target(), 1);
+    assert_eq!(first.target(), 2);
     server.append_context();
     replica.fail_next_apply(StoreError::Uncertain);
     assert_eq!(
@@ -289,10 +309,10 @@ fn separate_process_receiver_catches_write_between_head_and_recheck() {
         Err(SyncError::Store(StoreError::Uncertain))
     );
     let mut resumed = begin_pass(&scope, &mut access, &mut client, &mut replica).unwrap();
-    assert_eq!(resumed.position(), 1);
-    assert_eq!(resumed.target(), 2);
+    assert_eq!(resumed.position(), 2);
+    assert_eq!(resumed.target(), 4);
     finish_pass(&mut resumed, limits, &mut access, &mut client, &mut replica).unwrap();
-    assert_eq!(replica.records(&scope).unwrap().len(), 2);
+    assert_eq!(replica.records(&scope).unwrap().len(), 4);
     let first_counters = client.counters();
     assert!(first_counters.payload_bytes > 0);
     assert!(first_counters.protocol_bytes > 0);
@@ -309,7 +329,7 @@ fn separate_process_receiver_catches_write_between_head_and_recheck() {
         LoopbackClient::new(restarted.address, Id::new("read-token").unwrap()).unwrap();
     let rechecked = begin_pass(&scope, &mut access, &mut client, &mut replica).unwrap();
     assert!(rechecked.is_complete());
-    assert_eq!(replica.records(&scope).unwrap().len(), 2);
+    assert_eq!(replica.records(&scope).unwrap().len(), 4);
     let counters = client.counters();
     assert!(counters.protocol_bytes > 0);
 }
@@ -326,22 +346,20 @@ fn child_record_source_server_probe() {
     let storage = Arc::new(RecordStorage::new(root).unwrap());
     let session = SessionId::new("conversation").unwrap();
     let lease = runtime.block_on(storage.open(session.clone())).unwrap();
-    let snapshot = runtime.block_on(lease.load()).unwrap();
-    let (snapshot, next_generation) = match snapshot {
-        Some(snapshot) => (snapshot, SessionSaveGeneration::initial()),
+    let loaded = runtime.block_on(lease.load()).unwrap();
+    let (saved, binding) = loaded.into_published(&session).unwrap();
+    let (snapshot, next_generation) = match saved {
+        Some(snapshot) => (snapshot, binding),
         None => {
             let (change, snapshot) = opened(&session);
-            runtime
+            let receipt = runtime
                 .block_on(lease.save_changes(
-                    SessionSaveGeneration::initial(),
+                    binding.clone(),
                     snapshot.clone(),
-                    vec![change],
+                    vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 ))
                 .unwrap();
-            (
-                snapshot,
-                SessionSaveGeneration::initial().checked_next().unwrap(),
-            )
+            (snapshot, receipt.next_for(&binding, 1).unwrap())
         }
     };
     let source = runtime
@@ -382,7 +400,11 @@ fn child_record_source_server_probe() {
                 ..snapshot
             };
             control_handle
-                .block_on(lease.save_changes(next_generation, next, vec![change]))
+                .block_on(lease.save_changes(
+                    next_generation,
+                    next,
+                    vec![SessionSaveUnit::new(vec![change]).unwrap()],
+                ))
                 .unwrap();
             println!("NESSA_RECORD_SOURCE_APPENDED");
             std::io::stdout().flush().unwrap();

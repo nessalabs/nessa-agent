@@ -2,6 +2,9 @@
 mod control_fence;
 mod ready_stream;
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionChange, SessionSaveUnit, SessionSnapshot,
+};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 
 fn observations() -> [ExecutionUpdate; 3] {
@@ -103,8 +106,51 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
             // with their local protocol failure.
             let storage = InMemoryStorage::new();
             let lease = storage.open(saved.id.clone()).await.unwrap();
-            lease.save(saved.clone()).await.unwrap();
-            let loaded = lease.load().await.unwrap().unwrap();
+            let mut admitted = record.clone();
+            admitted.events.clear();
+            admitted.result = None;
+            admitted.local_outcome = None;
+            admitted.acknowledgement = SubmissionAcknowledgement::Pending;
+            let mut changes = vec![
+                SessionChange::Opened {
+                    id: saved.id.clone(),
+                    provider: saved.provider.clone(),
+                    context: saved.provider_context.clone(),
+                },
+                SessionChange::InputAccepted(Box::new(admitted)),
+            ];
+            if record.acknowledgement != SubmissionAcknowledgement::Pending {
+                changes.push(SessionChange::ReceiptUpdated {
+                    execution_id: record.request.execution_id.clone(),
+                    before: SubmissionAcknowledgement::Pending,
+                    after: record.acknowledgement.clone(),
+                });
+            }
+            changes.extend(
+                record
+                    .events
+                    .iter()
+                    .cloned()
+                    .map(SessionChange::ProviderObservation),
+            );
+            changes.push(SessionChange::LocalSettlement {
+                execution_id: record.request.execution_id.clone(),
+                before: None,
+                after: record.result.clone().unwrap(),
+                local_outcome: None,
+            });
+            lease
+                .save_changes(
+                    lease.load().await.unwrap().binding().clone(),
+                    saved.clone(),
+                    vec![SessionSaveUnit::new(changes).unwrap()],
+                )
+                .await
+                .unwrap();
+            let loaded = SessionSnapshot::load_saved(lease.as_ref(), &saved.id)
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(loaded.invocations[0].events, record.events);
             assert_eq!(loaded.invocations[0].result, record.result);
             assert!(loaded.invocations[0].provider_report.is_none());

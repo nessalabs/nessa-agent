@@ -193,7 +193,9 @@ automatic session storage, hooks, invocation, and UI integration.
   and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
-  `permissions` attribution and answer/cancellation evidence, and `tools` the original review input. The controller
+  `permissions` attribution and answer/cancellation evidence, and `tools` the original review input.
+  The private `caller_wake` module keeps a panic from a caller's `Waker` inside
+  the public Agent waits listed in [Caller wakers](docs/agent_execution/lifecycle.md#caller-wakers). The controller
   pairs input with accepted requests, bounds retention, and projects domain state.
   No provider JSON or process handles enter this layer. See the
   [execution guides](docs/agent_execution/README.md) for the current contracts.
@@ -213,7 +215,8 @@ automatic session storage, hooks, invocation, and UI integration.
   configuration moved up from `codex_acp/` to `acp/sessions/configuration.rs` when
   Opencode turned out to need the same two options.
 - `infrastructure/session_storage/`: in-memory test snapshots and private SQLite semantic records,
-  exclusive leases, bounded physical framing, explicit JSON evidence mapping,
+  exclusive leases, bounded physical framing, unpublished units and save completion
+  lineage in `save_group.rs`, explicit JSON evidence mapping,
   and the Tokio streaming commit clock adapter. `terminal_discovery.rs` owns the
   sixteen-entry process framing/hash cache used by `NessaRecordSource::bounded_head`
   and `bounded_page`; [`RecordReadStatus::Preparing`](../../docs/design/bounded-terminal-discovery.md)

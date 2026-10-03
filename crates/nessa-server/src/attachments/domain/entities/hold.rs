@@ -13,6 +13,22 @@ pub enum HoldState {
     Held,
 }
 
+/// The existing hold a retirement took back. [`Self`] excludes an absent
+/// predecessor for discard results, saved retirement and reversal audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetiredFrom {
+    Pending,
+    Held,
+}
+impl From<RetiredFrom> for HoldState {
+    fn from(value: RetiredFrom) -> Self {
+        match value {
+            RetiredFrom::Pending => Self::Pending,
+            RetiredFrom::Held => Self::Held,
+        }
+    }
+}
+
 /// One conversation keeping one stored file. Its identity is the organization,
 /// the conversation, and the stored file: digest and media type together. The
 /// same bytes kept as two types are two holds, so declaring a file again as
