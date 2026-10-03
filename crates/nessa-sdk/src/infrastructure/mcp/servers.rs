@@ -1,12 +1,11 @@
 use super::connection::Connection;
-use super::forwarded::ForwardedResults;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
 use super::stand_in::{self, Visibility};
 use super::{wire, McpError};
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
-use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::acp::sessions::{ForwardedResults, StandInGrant, StdioMcpServer};
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
 use std::{
@@ -126,11 +125,21 @@ impl McpOwner {
     pub fn session(&self) -> &SessionId {
         &self.session
     }
-    /// The results this grant's stand-ins forwarded to their harness, shared:
-    /// the host hands them to the binding it grants
-    /// ([`StandInGrant::with_forwarded`](crate::infrastructure::acp::sessions::StandInGrant::with_forwarded)).
+    /// The results this grant's stand-ins forwarded to their harness, shared,
+    /// for comparing: only the SDK writes and takes them.
     pub fn forwarded(&self) -> ForwardedResults {
         self.grant.forwarded.clone()
+    }
+    /// The grant a host gives the binding for this owner's open: its stand-ins'
+    /// `environment`, `held` until the grant is dropped (the host's revocation
+    /// of this owner), and this owner's forwarded results — its own, so a
+    /// grant cannot carry another owner's.
+    pub fn stand_in_grant(
+        &self,
+        environment: Vec<(String, String)>,
+        held: Box<dyn Send + Sync>,
+    ) -> StandInGrant {
+        StandInGrant::new(environment, held).with_forwarded(self.forwarded())
     }
     /// Whether `other` is this same grant.
     fn same_grant(&self, other: &Self) -> bool {

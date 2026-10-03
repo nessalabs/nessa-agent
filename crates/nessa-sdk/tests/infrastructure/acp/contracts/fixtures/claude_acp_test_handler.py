@@ -302,25 +302,16 @@ for line in sys.stdin:
             result(pending, {"stopReason": "end_turn"})
             pending = None
         elif mode == "forwarded-result":
-            # The frames Claude ACP 0.76.0 sends for an MCP call, as recorded
-            # live (#435): the result only as JSON text, in `rawOutput`, the
-            # content, and the PostToolUse frame's `toolResponse`, which has
-            # no content. `toolu_rows` has a forwarded result; `toolu_plain`
-            # has none.
-            for call in ("toolu_rows", "toolu_plain"):
-                name = "mcp__mcptest__report_rows"
-                said = '{"rows":[1,2]}'
-                meta = {"claudeCode": {"toolName": name}}
-                update({"_meta": meta, "toolCallId": call, "sessionUpdate": "tool_call",
-                        "rawInput": {}, "status": "pending", "title": name, "kind": "other",
-                        "content": []})
-                update({"_meta": meta, "toolCallId": call, "sessionUpdate": "tool_call_update",
-                        "rawInput": {}, "title": name, "kind": "other", "content": []})
-                update({"_meta": {"claudeCode": {"toolResponse": said, "toolName": name}},
-                        "toolCallId": call, "sessionUpdate": "tool_call_update"})
-                update({"_meta": meta, "toolCallId": call, "sessionUpdate": "tool_call_update",
-                        "status": "completed", "rawOutput": said,
-                        "content": [{"type": "content", "content": {"type": "text", "text": said}}]})
+            # The frames Claude ACP 0.76.0 sent for two MCP calls, replayed from
+            # the live recording (#435): `report_rows` completed, its result
+            # only as JSON text, and `always_fails`, an `isError` result,
+            # failed.
+            recording = pathlib.Path(__file__).resolve().parent.joinpath(
+                "../../../claude_acp/tools/fixtures/mcp_live_frames.json")
+            calls = json.loads(recording.read_text())["calls"]
+            for name in ("mcp__mcptest__report_rows", "mcp__mcptest__always_fails"):
+                for frame in calls[name]:
+                    update(frame)
             text("continued:" + user_text)
             result(pending, {"stopReason": "end_turn"})
             pending = None

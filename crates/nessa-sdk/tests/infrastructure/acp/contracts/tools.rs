@@ -3,10 +3,9 @@ use super::support::*;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::ToolContent;
 use crate::infrastructure::acp::sessions::{
-    StandInGrant, StandInGrants, StandInSessions, StdioMcpServer,
+    ForwardedResults, StandInGrant, StandInGrants, StandInSessions, StdioMcpServer,
 };
 use crate::infrastructure::acp::tools::wire::UNSUPPORTED_TOOL_CONTENT;
-use crate::infrastructure::mcp::ForwardedResults;
 
 #[tokio::test]
 async fn unsupported_tool_content_is_visible_and_does_not_end_the_session() {
@@ -71,12 +70,29 @@ impl StandInGrants for ForwardingGrants {
     }
 }
 
-/// #435 W1–W4: Claude's harness reports an MCP result as JSON text only. The
-/// structured result its stand-in forwarded under the call's id is appended
-/// to that call's terminal update — not to the PostToolUse frame, which has
-/// no content — and taken; a call with none forwarded keeps its text alone.
+/// The frames Claude ACP 0.76.0 sent for MCP calls, recorded live.
+const RECORDING: &str = include_str!("../../claude_acp/tools/fixtures/mcp_live_frames.json");
+
+/// #435, through the worker, on Claude's recorded frames: the structured
+/// result a stand-in forwarded under a call's id is appended to that call's
+/// completed update (W1) — not to the PostToolUse frame, which has no content
+/// (W2) — and taken; an `isError` call, reported `failed`, takes nothing (W7).
 #[tokio::test]
-async fn a_forwarded_structured_result_reaches_the_terminal_update_of_its_call() {
+async fn a_forwarded_structured_result_reaches_the_completed_update_of_its_call() {
+    let recording: serde_json::Value = serde_json::from_str(RECORDING).unwrap();
+    let last = |tool: &str| {
+        recording["calls"][tool]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone()
+    };
+    let (rows, fails) = (
+        last("mcp__mcptest__report_rows"),
+        last("mcp__mcptest__always_fails"),
+    );
+    let id = |frame: &serde_json::Value| frame["toolCallId"].as_str().unwrap().to_owned();
     let _process_slot = process_test_slot().await;
     let (_root, mut config, model) = test_acp_configuration("forwarded-result", 32);
     config.mcp_servers = vec![StdioMcpServer {
@@ -84,11 +100,11 @@ async fn a_forwarded_structured_result_reaches_the_terminal_update_of_its_call()
         command: "/bin/stand-in".into(),
         args: vec!["mcp-relay".into(), "mcptest".into()],
     }];
+    let structured = ToolContent::structured(rows["rawOutput"].as_str().unwrap()).unwrap();
+    let refusal = ToolContent::structured(r#"{"reason":"on purpose"}"#).unwrap();
     let forwarded = ForwardedResults::new();
-    forwarded.record(
-        "toolu_rows".into(),
-        ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap(),
-    );
+    forwarded.record(id(&rows), structured.clone());
+    forwarded.record(id(&fails), refusal.clone());
     config.stand_ins = StandInSessions::granted_by(Arc::new(ForwardingGrants(forwarded.clone())));
     let binding = ClaudeAcpProvider::new(
         config,
@@ -111,33 +127,30 @@ async fn a_forwarded_structured_result_reaches_the_terminal_update_of_its_call()
         }
     }
     assert_eq!(running.await.unwrap(), Ok(ExecutionOutcome::Completed));
-    let said = ToolContent::text(r#"{"rows":[1,2]}"#);
-    let of = |id: &str| -> Vec<_> {
+    let of = |frame: &serde_json::Value| -> Vec<_> {
         updates
             .iter()
-            .filter(|update| update.id().as_str() == id)
+            .filter(|update| update.id().as_str() == id(frame))
             .map(|update| update.content().clone())
             .collect()
     };
-    // Pending, update, PostToolUse (no content), terminal.
-    assert_eq!(
-        of("toolu_rows"),
-        vec![
-            Some(vec![]),
-            Some(vec![]),
-            None,
-            Some(vec![
-                said.clone(),
-                ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap()
-            ]),
-        ]
-    );
-    assert_eq!(
-        of("toolu_plain"),
-        vec![Some(vec![]), Some(vec![]), None, Some(vec![said])]
-    );
-    // Taken: nothing is left to attach twice.
-    assert_eq!(forwarded.take("toolu_rows"), None);
+    let said = |frame: &serde_json::Value| {
+        ToolContent::text(frame["content"][0]["content"]["text"].as_str().unwrap())
+    };
+    // Every update before the completed one is as the harness sent it: the
+    // PostToolUse frame among them, without content, takes nothing.
+    let rows_updates = of(&rows);
+    let (completed, before) = rows_updates.split_last().unwrap();
+    assert!(before.contains(&None));
+    assert!(before
+        .iter()
+        .flatten()
+        .all(|content| !content.contains(&structured)));
+    assert_eq!(completed, &Some(vec![said(&rows), structured]));
+    assert_eq!(of(&fails).last().unwrap(), &Some(vec![said(&fails)]));
+    // Taken once; the failed call's result is left to be dropped.
+    assert_eq!(forwarded.take(&id(&rows)), None);
+    assert_eq!(forwarded.take(&id(&fails)), Some(refusal));
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

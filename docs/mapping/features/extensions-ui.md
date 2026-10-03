@@ -57,7 +57,7 @@ Ownership and links:
   explain session ownership and the stand-in. The [tool-UI adapter](../../../crates/nessa-server/src/mcp_servers/infrastructure/tool_uis.rs)
   asks for this conversation's list, not a global guessed match.
   Claude's structured results, which its harness reports only as text, come from
-  the [results the stand-in forwarded](../../../crates/nessa-sdk/src/infrastructure/mcp/forwarded.rs)
+  the [results the stand-in forwarded](../../../crates/nessa-sdk/src/infrastructure/acp/sessions/forwarded.rs)
   ([forwarded results](../../design/mcp-connections.md#forwarded-results), #435).
 - [SDK tool UI values](../../../crates/nessa-sdk/src/domain/mcp_apps/value_objects/tool_ui.rs)
   own URI bounds, visibility, and unique matching. [SDK MCP domain tests](../../../crates/nessa-sdk/tests/domain/mcp_apps.rs)

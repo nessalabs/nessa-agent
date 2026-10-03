@@ -8,7 +8,7 @@ use crate::domain::mcp_apps::{
     ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
     UiVisibility, APP_MIME_TYPE, EXTENSION,
 };
-use crate::infrastructure::acp::fields::json_fits;
+use crate::infrastructure::json_rpc::json_fits;
 use base64::Engine;
 use serde_json::{json, Value};
 

@@ -12,8 +12,8 @@
 //! one execution worker serializes commands, observations, and review effects.
 //! Tools and permissions translate wire values; they do not own domain rules.
 //! The worker also takes, from the open's `sessions::StandInSessions`, the
-//! result an MCP stand-in forwarded (`mcp::ForwardedResults`) for a call's
-//! completed update (`tools::wire::attach_forwarded`).
+//! result an MCP stand-in forwarded for a call's completed update
+//! (`sessions::forwarded`); acp depends on no MCP module for it.
 pub(crate) mod executions;
 pub(crate) mod fields;
 pub(crate) mod permissions;

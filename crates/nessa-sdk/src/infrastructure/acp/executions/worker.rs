@@ -6,9 +6,9 @@ use super::super::{
     sessions::{
         binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
+        forwarded::attach_forwarded,
         thought_level, AcpConfig,
     },
-    tools::wire::attach_forwarded,
 };
 #[cfg(all(test, unix))]
 use super::failure::MAX_RETAINED_CATEGORY_FACTS;

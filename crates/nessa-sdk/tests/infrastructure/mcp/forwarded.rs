@@ -1,9 +1,8 @@
-//! What a grant keeps of the results its stand-ins forward: rows S1–S11 of the
-//! "Forwarded results" table in `docs/design/mcp-connections.md`, each test
-//! named after its row.
-use super::super::{
-    framing::MAX_FRAME_BYTES, ForwardedResults, McpOwner, McpSession, MAX_FORWARDED_RESULTS,
-};
+//! What a grant keeps of the results its stand-ins forward: rows S1–S8 and
+//! S11 of the "Forwarded results" table in `docs/design/mcp-connections.md`,
+//! each test named after its row. The store's own bound and replacement (S9,
+//! S10) are tested with it, in `tests/infrastructure/acp/sessions/forwarded.rs`.
+use super::super::{framing::MAX_FRAME_BYTES, McpOwner, McpSession};
 use super::fixture::{Behaviour, FixtureLauncher};
 use super::{conversation, servers, Harness};
 use crate::domain::agent_execution::tools::{ToolContent, MAX_STRUCTURED_RESULT_BYTES};
@@ -334,7 +333,7 @@ impl AsyncWrite for GatedFlush {
 async fn s6_a_call_finished_but_cancelled_before_its_answer_was_given_keeps_nothing() {
     // Its answer is in and its cancellation is read before the stand-in has
     // answered it: whichever the stand-in takes first decides, and the result
-    // is kept exactly when the harness was given it. Which comes first is the
+    // is kept exactly when the stand-in answers the call. Which comes first is the
     // stand-in's `select!`'s to pick, so each order is reached over the runs.
     let (session, owner, launcher) = granted(silent("tools/call")).await;
     let server = launcher.server(0);
@@ -452,32 +451,6 @@ async fn s8_an_answer_to_any_other_method_keeps_nothing() {
                         "result": { "structuredContent": { "rows": 1 } } }));
     assert_eq!(harness.next().await.unwrap()["id"], 1);
     assert_eq!(owner.forwarded().len(), 0);
-}
-
-#[test]
-fn s9_past_the_bound_the_oldest_result_is_dropped() {
-    let forwarded = ForwardedResults::new();
-    for call in 0..=MAX_FORWARDED_RESULTS {
-        forwarded.record(format!("toolu_{call}"), structured(&call.to_string()));
-    }
-    assert_eq!(forwarded.len(), MAX_FORWARDED_RESULTS);
-    assert_eq!(forwarded.take("toolu_0"), None);
-    assert_eq!(forwarded.take("toolu_1"), Some(structured("1")));
-    let last = format!("toolu_{MAX_FORWARDED_RESULTS}");
-    assert_eq!(
-        forwarded.take(&last),
-        Some(structured(&MAX_FORWARDED_RESULTS.to_string()))
-    );
-}
-
-#[test]
-fn s10_an_id_kept_again_holds_the_later_result_once() {
-    let forwarded = ForwardedResults::new();
-    forwarded.record("toolu_1".into(), structured("1"));
-    forwarded.record("toolu_1".into(), structured("2"));
-    assert_eq!(forwarded.len(), 1);
-    assert_eq!(forwarded.take("toolu_1"), Some(structured("2")));
-    assert_eq!(forwarded.take("toolu_1"), None);
 }
 
 #[tokio::test]

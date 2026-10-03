@@ -4,8 +4,8 @@
 //! attaches to the tool calls the harness reports.
 #![deny(missing_docs)]
 
+use super::ForwardedResults;
 use crate::domain::agent_execution::sessions::SessionId;
-use crate::infrastructure::mcp::ForwardedResults;
 use std::{fmt, sync::Arc};
 
 /// The host's side of keying MCP stand-ins by session. For each provider
@@ -21,8 +21,9 @@ pub trait StandInGrants: Send + Sync {
 }
 
 /// One open's grant: the environment its MCP server processes get, the
-/// results its stand-ins forward when the host gives them
-/// ([`Self::with_forwarded`]), and what the host revokes when the grant is
+/// results its stand-ins forward when it is an MCP owner's
+/// ([`McpOwner::stand_in_grant`](crate::infrastructure::mcp::McpOwner::stand_in_grant)),
+/// and what the host revokes when the grant is
 /// dropped — which happens on whichever task drops the provider session's
 /// last handle, so `held`'s `Drop` must not block either.
 pub struct StandInGrant {
@@ -40,12 +41,13 @@ impl StandInGrant {
             _held: held,
         }
     }
-    /// This grant, with the results its stand-ins forward to their harness
-    /// ([`McpOwner::forwarded`](crate::infrastructure::mcp::McpOwner::forwarded)
-    /// for the owner it was granted as). The binding attaches each to the
-    /// tool call the harness reports it under, on that call's completed
-    /// update. Without them, nothing is attached.
-    pub fn with_forwarded(self, forwarded: ForwardedResults) -> Self {
+    /// This grant, with the results its stand-ins forward to their harness:
+    /// those of the owner it is granted as, which only that owner gives
+    /// ([`McpOwner::stand_in_grant`](crate::infrastructure::mcp::McpOwner::stand_in_grant)).
+    /// The binding attaches each to the tool call the harness reports it
+    /// under, on that call's completed update. Without them, nothing is
+    /// attached.
+    pub(crate) fn with_forwarded(self, forwarded: ForwardedResults) -> Self {
         Self {
             forwarded: Some(forwarded),
             ..self

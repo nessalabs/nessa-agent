@@ -25,10 +25,10 @@
 //! stand-in --'  (a harness's MCP traffic, forwarded over that connection)
 //!    |
 //!    v keeps a tools/call result's structuredContent
-//! mcp::ForwardedResults <- take -- ACP worker (acp::tools::wire)
+//! acp::sessions::ForwardedResults <- take -- ACP worker
 //!
-//! acp <-> mcp: mcp reads acp's launch entries and field rules; acp's
-//! sessions carry, and its worker takes from, mcp's forwarded results.
+//! mcp -> acp, one way: mcp reads acp's launch entries, its identifier rule,
+//! and keeps forwarded results in the store acp's sessions own.
 //! ```
 //! Arrows show calls and translation, not ownership shared between layers. The
 //! vendor `sessions` modules are alternatives, not a chain: a host reaches one

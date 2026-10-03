@@ -8,7 +8,7 @@
 //! McpServers ──open(server, McpOwner)──▶ McpSession: server process ─ Connection
 //!     │                                    ├── list_tools / read_ui_resource
 //!     │                                    └── serve(harness pipes) ──▶ stand_in
-//!     │                                          └── record ──▶ ForwardedResults (the grant's)
+//!     │                                          └── record ──▶ acp::sessions::ForwardedResults (the grant's)
 //!     ├── tool_ui (an SDK session's own newest session of the server)
 //!     ├── listed_tool / call_tool / read_app_resource (an MCP App's calls, on that session)
 //!     └── revoke (a grant's sessions closed, none opened under it after)
@@ -22,9 +22,9 @@
 //! process (its process group) and its connection, closed when its harness
 //! session ends or its grant is revoked; `Connection` owns
 //! request ids, answers, cancellation and the end of a connection; `stand_in`
-//! owns what a harness sees; `forwarded` the results a grant's stand-ins
-//! forwarded, until the ACP binding takes each for the tool call it was
-//! reported under; `process` launching and stopping; `wire` the
+//! owns what a harness sees, and keeps a forwarded `tools/call` result's
+//! `structuredContent` in the grant's store for the ACP worker to attach;
+//! `process` launching and stopping; `wire` the
 //! shapes, and the domain (`domain::mcp_apps`) the values and their bounds.
 //! The states and orderings are tabled in `docs/design/mcp-connections.md`.
 //!
@@ -37,7 +37,6 @@
 
 mod connection;
 mod error;
-mod forwarded;
 mod framing;
 mod process;
 mod servers;
@@ -45,7 +44,6 @@ mod stand_in;
 mod wire;
 
 pub use error::McpError;
-pub use forwarded::{ForwardedResults, MAX_FORWARDED_RESULTS};
 pub use servers::{
     McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS,
     MAX_TOOL_PAGES, REQUEST_TIMEOUT,

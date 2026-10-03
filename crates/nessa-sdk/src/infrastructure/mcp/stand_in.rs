@@ -14,9 +14,10 @@
 //! connection ends. Its calls still waiting are dropped then, unanswered; the
 //! session closing after it ends them upstream by closing the server's stdin.
 use super::connection::{Connection, Reply};
-use super::forwarded::{self, ForwardedResults};
 use super::framing::{self, Frames, MAX_FRAME_BYTES};
 use super::{wire, McpError};
+use crate::infrastructure::acp::fields::identifier;
+use crate::infrastructure::acp::sessions::ForwardedResults;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -239,7 +240,7 @@ pub(crate) async fn serve(
                 let params = message.get("params").cloned();
                 let order = (method == "tools/list").then(|| visibility.ask());
                 let call = if method == "tools/call" {
-                    forwarded::call_id(params.as_ref())
+                    call_id(params.as_ref())
                 } else {
                     None
                 };
@@ -276,6 +277,19 @@ pub(crate) async fn serve(
 /// `key`: not when it was cancelled, or its id reused since.
 pub(super) fn answered_by(waiting: &HashMap<String, AbortHandle>, key: &str, task: Id) -> bool {
     waiting.get(key).is_some_and(|call| call.id() == task)
+}
+
+/// Where Claude's harness puts its own id for the call in a forwarded
+/// `tools/call`: the id its ACP frames give the same call (`toolCallId`).
+const CALL_ID: &str = "claudecode/toolUseId";
+
+/// The harness's id for a forwarded `tools/call`, from its `params`: one the
+/// ACP binding would accept as a tool call's id ([`identifier`]), or `None` —
+/// as for Codex and OpenCode, which name none.
+fn call_id(params: Option<&Value>) -> Option<String> {
+    identifier(params?.get("_meta")?, CALL_ID)
+        .ok()
+        .map(str::to_owned)
 }
 
 /// Keep the `structuredContent` of `answer` — the harness's answer, as it will

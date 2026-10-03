@@ -1,11 +1,11 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::{McpTool, ToolCallUpdate, ToolContent};
-use crate::infrastructure::acp::fields::{identifier, json_fits, string};
+use crate::infrastructure::acp::fields::{identifier, string};
 use crate::infrastructure::acp::tools::wire::{
     tool_call as acp_tool_call, UNSUPPORTED_TOOL_CONTENT,
 };
-use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::json_rpc::{json_fits, protocol};
 use crate::infrastructure::mcp::structured_result;
 use serde_json::{json, Value};
 use std::borrow::Cow;
