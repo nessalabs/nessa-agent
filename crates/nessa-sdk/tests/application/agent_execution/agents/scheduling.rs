@@ -428,12 +428,13 @@ async fn a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops
     ));
 }
 
-// A cancellation drains the queue before it settles each owner, so a
-// settlement cut short (a panic between the two) leaves an owner in `pending`
-// with no queue entry. Strand one by hand the same way, let the first runner
-// pass over it while it is not yet stopped, then stop the work and start a
-// runner, as a later attachment would. That runner must take the slot and
-// settle the owner, not exit because the queue is empty.
+// Explicit close stops every permit, then drains the queue before it settles
+// each owner (`close_scheduled`, `cancel_pending`). A panic that escapes that
+// settlement leaves stopped owners in `pending` with no queue entry, and a
+// later attachment starts a runner. Strand one by hand the same way. While it
+// is not yet stopped the first runner takes the slot, passes over it and
+// exits. Once it is stopped, a new runner must take the slot and settle it,
+// not exit because the queue is empty.
 #[tokio::test]
 async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
     let audit = Arc::new(PausingSettlementAudit {
@@ -458,6 +459,13 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
         .remove(&stranded_id)
         .is_some());
     drop(direct);
+    assert_eq!(
+        agent
+            .invoke(request("direct-beside-the-stranded-owner"), actor())
+            .await,
+        Err(AgentError::Busy),
+        "the released slot went to the runner the stranded owner keeps"
+    );
     tokio::time::timeout(bound, async {
         while agent.inner.scheduler.lock().await.running {
             tokio::task::yield_now().await;
