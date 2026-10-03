@@ -19,10 +19,12 @@ use crate::conversation::application::ConversationLimits;
 use crate::conversation::application::{SubmissionMode, SubmittedImage, SubmittedMessage};
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::providers::{
     ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
     ProviderSessionState,
 };
+use nessa_sdk::domain::agent_execution::executions::MessageChunk;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, MessageSender, UserMessage};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1659,6 +1661,64 @@ async fn c8d_a_context_carried_by_a_turn_the_adapter_failed_before_its_prompt_is
     settled(&fixture, "p1").await;
     // A report, and nothing from the agent: no answer, and kept.
     assert_eq!(held_count(&fixture), 1);
+}
+
+#[tokio::test]
+async fn c8c_a_context_carried_by_a_turn_the_agent_observed_with_no_result_is_let_go() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    // The agent said something, then the turn failed with no result from
+    // the provider: an observation on its record is an answer all the same.
+    *fixture.provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Message(MessageChunk::text("seen"))];
+    *fixture.provider.execution_reply.lock().unwrap() = Some(ProviderExecutionReply::Finished(
+        ExecutionReport::new(None, Some(AgentError::Closed), ProviderSessionState::Usable),
+    ));
+    *fixture
+        .provider
+        .execution_observation_failure
+        .lock()
+        .unwrap() = Some(ObservationFailure::new(
+        AgentError::Closed,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    // Hold the reply until the observation is on the agent's own record,
+    // the snapshot the settling reads: the stream and the report arrive
+    // apart (#439).
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.after_updates_gate.lock().unwrap() = Some(gate);
+    fixture.person_sends("p1", "first").await;
+    let live = fixture
+        .service
+        .resolve_unchecked(&fixture.id, &caller("read"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let observed = live
+                .agent
+                .session_manager()
+                .snapshot()
+                .await
+                .is_some_and(|snapshot| {
+                    snapshot.invocations.iter().any(|record| {
+                        record.request.execution_id.as_str() == "p1" && !record.events.is_empty()
+                    })
+                });
+            if observed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release.send(()).unwrap();
+    settled(&fixture, "p1").await;
+    assert_eq!(held_count(&fixture), 0);
 }
 
 #[tokio::test]

@@ -348,6 +348,7 @@ app's on behalf of the caller, on the app lane.
 | C8 | held | a message admitted while nothing runs or waits | carried | read under the submission lock just before the enqueue; carried with it, in the order given, naming its update |
 | C8c | carried | its receipt settles, and the agent answered for its turn (a provider result, or an observation, on its record) | none | let go of, whether the turn completed or failed |
 | C8d | carried | its receipt settles, its turn removed, or failed before its prompt reached the agent (no report, or one with no provider result) | held | kept for the next |
+| C8f | carried | its receipt settles before what the agent observed reaches its record, the turn having no provider result | held | kept for the next, though the agent saw them: a limit, in the safe direction ([#439](https://github.com/nessalabs/nessa-agent/issues/439); no test) |
 | C8e | carried | another message admitted before its turn settles | carried | that message carries none of them |
 | C8b | held | a message queued behind a turn, or steered into one | held | carries none |
 | C9 | held or carried | a message refused, before or after it carried them | held | kept |
