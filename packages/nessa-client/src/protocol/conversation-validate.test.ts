@@ -309,7 +309,7 @@ describe("conversation view agreement", () => {
             toolName: "delete_rows",
             argumentsJson: "{}",
             origin,
-            options: [{ id: "allow", label: "Allow" }],
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
           },
         ],
       })
@@ -349,6 +349,45 @@ describe("conversation view agreement", () => {
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
   })
 
+  it("reads what each permission option decides, and refuses an option that does not say", () => {
+    const withOptions = (options: unknown[]) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName: "write_file",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            options,
+          },
+        ],
+      })
+      return value
+    }
+    const read = conversationView(
+      withOptions([
+        { id: "a", label: "Allow", effect: "allow" },
+        { id: "d", label: "Deny", effect: "deny" },
+      ]),
+      "conversation",
+    )
+    expect(read.permissions[0]!.options.map((option) => option.effect)).toEqual([
+      "allow",
+      "deny",
+    ])
+    for (const option of [
+      { id: "a", label: "Allow" },
+      { id: "a", label: "Allow", effect: "always" },
+      { id: "a", label: "Allow", effect: "" },
+      { id: "a", label: "Allow", effect: true },
+    ])
+      expect(() => conversationView(withOptions([option]), "conversation")).toThrow()
+  })
+
   it("rejects unknown fields at the view and nested schema boundaries", () => {
     const mutations: Array<(value: ReturnType<typeof view>) => void> = [
       (value) => Object.assign(value, { extra: true }),
@@ -375,7 +414,7 @@ describe("conversation view agreement", () => {
           toolName: "write_file",
           argumentsJson: "{}",
           origin: { kind: "harness" },
-          options: [{ id: "allow", label: "Allow", extra: true }],
+          options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],
         },
       ],
     })

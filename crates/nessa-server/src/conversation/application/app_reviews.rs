@@ -11,7 +11,8 @@
 //! expired, or withdrawn.
 use super::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
 use super::view::{
-    ConversationPermission, ConversationPermissionOption, ConversationPermissionOrigin,
+    ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
+    ConversationPermissionOrigin,
 };
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -27,6 +28,12 @@ pub const APP_REVIEW_DEADLINE: Duration = Duration::from_secs(5 * 60);
 pub const ALLOW: &str = "allow";
 /// The option that denies it.
 pub const DENY: &str = "deny";
+/// The options an app's review offers, each with what it decides: the one
+/// table both the view (`open`) and an answer (`answer`) read.
+const OPTIONS: [(&str, &str, ConversationPermissionOptionEffect); 2] = [
+    (ALLOW, "Allow", ConversationPermissionOptionEffect::Allow),
+    (DENY, "Deny", ConversationPermissionOptionEffect::Deny),
+];
 /// The most app reviews one conversation has open at once, so that with the
 /// agent's own they stay within the 64 a view carries.
 pub const MAX_OPEN_APP_REVIEWS: usize = 16;
@@ -275,10 +282,10 @@ impl AppReviews {
         if state.pending[&key].review.execution_id != execution {
             return ReviewAnswer::Stale;
         }
-        let end = match option {
-            ALLOW => ReviewEnd::Allowed(by),
-            DENY => ReviewEnd::Denied(by),
-            _ => return ReviewAnswer::Stale,
+        let end = match OPTIONS.iter().find(|&&(id, ..)| id == option) {
+            Some((.., ConversationPermissionOptionEffect::Allow)) => ReviewEnd::Allowed(by),
+            Some((.., ConversationPermissionOptionEffect::Deny)) => ReviewEnd::Denied(by),
+            None => return ReviewAnswer::Stale,
         };
         let open = state.remove(key).expect("present");
         let _ = open.end.send(end);
@@ -389,16 +396,14 @@ fn review_of(
         title: format!("An app asks to run {tool} on {server}"),
         tool_name: tool.to_owned(),
         arguments_json: arguments_json.to_owned(),
-        options: vec![
-            ConversationPermissionOption {
-                id: ALLOW.into(),
-                label: "Allow".into(),
-            },
-            ConversationPermissionOption {
-                id: DENY.into(),
-                label: "Deny".into(),
-            },
-        ],
+        options: OPTIONS
+            .iter()
+            .map(|&(id, label, effect)| ConversationPermissionOption {
+                id: id.into(),
+                label: label.into(),
+                effect,
+            })
+            .collect(),
         origin: ConversationPermissionOrigin::App {
             server: server.to_owned(),
             tool: tool.to_owned(),
