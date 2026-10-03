@@ -17,7 +17,7 @@ use nessa_server::{
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
         wire::NativePairingStatus, NativeClientError, NativeConnectionFailure,
-        NativeEnrollmentClient, NativeEnrollmentConnections, PairingRuntimeError,
+        NativeEnrollmentClient, NativeEnrollmentConnections, NativeWakeCause, PairingRuntimeError,
         RegisteredInvitation, RegistrationError, RegistrationWorker,
     },
 };
@@ -115,10 +115,16 @@ async fn native_shutdown_keeps_original_physical_capacity() {
         NativeConnectionFailure::Capacity
     );
     drop(other);
-    tokio::time::timeout(WAIT, connections.shutdown())
+    // The eight workers are blocked reading their sockets, with 30 s left on
+    // their enrollment deadline; the wake must end them within its tick on
+    // every OS, so the drain finishes long before the deadline could.
+    tokio::time::timeout(std::time::Duration::from_secs(5), connections.shutdown())
         .await
-        .unwrap();
+        .expect("shutdown wakes blocked socket reads");
     let first = connections.wake_report().unwrap();
+    assert!(first
+        .iter()
+        .all(|entry| entry.cause() == NativeWakeCause::AdmissionRetirement));
     let mut actual: Vec<_> = first.iter().map(|entry| entry.target()).collect();
     actual.sort();
     targets.sort();

@@ -23,7 +23,7 @@ use tokio::{
     sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::JoinHandle,
 };
-use wake::{NativeWakeReport, WakeEndpoint, WakeEndpoints, NATIVE_CONNECTION_CAPACITY};
+use wake::{NativeWakeReport, WakeEndpoint, WakeEndpoints, NATIVE_CONNECTION_CAPACITY, WAKE_TICK};
 
 const TLS_DEADLINE: Duration = Duration::from_secs(10);
 const ENROLLMENT_DEADLINE: Duration = Duration::from_secs(30);
@@ -100,13 +100,9 @@ impl NativeEnrollmentConnections {
         stream: TcpStream,
         entropy: R,
     ) -> Result<NativeConnectionTask, NativeConnectionError> {
-        let endpoint = WakeEndpoint::new(
-            stream
-                .try_clone()
-                .map_err(|error| NativeConnectionFailure::Io(error.kind()))?,
-        )
-        .map_err(|error| NativeConnectionFailure::Io(error.kind()))?;
-        let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone())?;
+        let endpoint = WakeEndpoint::new(&stream)
+            .map_err(|error| NativeConnectionFailure::Io(error.kind()))?;
+        let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())?;
         // `close` closes the semaphore under this lock, so a permit acquired here
         // is registered before any wake sweep, and a closed owner admits nothing.
         let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
@@ -128,10 +124,7 @@ impl NativeEnrollmentConnections {
             let _permit = permit;
             // Locals unwind physical IO and its runtime before the original permit.
             let runtime = gateway;
-            let physical = PhysicalEndpoint(_permit.endpoint.clone());
-            let result = serve_exchange(&runtime, &handle, stream, deadline, entropy);
-            drop(physical);
-            result
+            serve_exchange(&runtime, &handle, stream, deadline, entropy)
         });
         drop(wake);
         Ok(NativeConnectionTask { worker, lease })
@@ -197,14 +190,6 @@ impl NativeConnectionCompletion {
         self.outcome
     }
 }
-struct PhysicalEndpoint(Option<Arc<WakeEndpoint>>);
-impl Drop for PhysicalEndpoint {
-    fn drop(&mut self) {
-        if let Some(endpoint) = &self.0 {
-            endpoint.physically_returned();
-        }
-    }
-}
 struct ConnectionPermit {
     endpoint: Option<Arc<WakeEndpoint>>,
     permit: Option<OwnedSemaphorePermit>,
@@ -232,14 +217,21 @@ impl NativeDeadline {
             .ok_or_else(|| Error::from(ErrorKind::TimedOut))
     }
 }
+/// A native socket bounded by its phase deadline and by its owner's wake.
+/// Every OS wait is capped at `WAKE_TICK`; between waits the stream checks the
+/// wake flag and the deadline, so a woken worker's IO fails with
+/// ConnectionAborted within one tick on every OS
+/// (`native_shutdown_keeps_original_physical_capacity`).
 pub(super) struct DeadlineStream {
     stream: TcpStream,
     deadline: Arc<NativeDeadline>,
+    wake: Arc<WakeEndpoint>,
 }
 impl DeadlineStream {
     pub(super) fn new(
         stream: TcpStream,
         clock: Arc<dyn Clock>,
+        wake: Arc<WakeEndpoint>,
     ) -> Result<(Self, Arc<NativeDeadline>), NativeConnectionError> {
         let expires_ms = clock
             .elapsed_ms()
@@ -255,6 +247,7 @@ impl DeadlineStream {
             Self {
                 stream,
                 deadline: deadline.clone(),
+                wake,
             },
             deadline,
         ))
@@ -264,23 +257,42 @@ impl DeadlineStream {
             .set_nonblocking(false)
             .map_err(|error| NativeConnectionFailure::Io(error.kind()).into())
     }
-    fn remaining(&self) -> IoResult<Duration> {
-        self.deadline.remaining()
+    /// The next OS wait: refused once woken or past the deadline, otherwise
+    /// the time left, capped at one tick.
+    fn next_wait(&self) -> IoResult<Duration> {
+        if self.wake.woken() {
+            return Err(Error::from(ErrorKind::ConnectionAborted));
+        }
+        Ok(self.deadline.remaining()?.min(WAKE_TICK))
     }
+}
+/// An OS wait that ended without data: WouldBlock on Unix, TimedOut on Windows.
+fn wait_elapsed(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
 }
 impl Read for DeadlineStream {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
-        self.stream.set_read_timeout(Some(self.remaining()?))?;
-        self.stream.read(bytes)
+        loop {
+            self.stream.set_read_timeout(Some(self.next_wait()?))?;
+            match self.stream.read(bytes) {
+                Err(error) if wait_elapsed(&error) => continue,
+                result => return result,
+            }
+        }
     }
 }
 impl Write for DeadlineStream {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
-        self.stream.set_write_timeout(Some(self.remaining()?))?;
-        self.stream.write(bytes)
+        loop {
+            self.stream.set_write_timeout(Some(self.next_wait()?))?;
+            match self.stream.write(bytes) {
+                Err(error) if wait_elapsed(&error) => continue,
+                result => return result,
+            }
+        }
     }
     fn flush(&mut self) -> IoResult<()> {
-        self.remaining()?;
+        self.next_wait()?;
         self.stream.flush()
     }
 }
@@ -376,7 +388,7 @@ fn exchange<R: RngCore + CryptoRng>(
         Ok(message) => message,
         Err(mut error) => {
             let cause = match error.failure {
-                NativeConnectionFailure::Io(ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                NativeConnectionFailure::Io(ErrorKind::TimedOut) => {
                     AttemptFailure::HandshakeDeadline
                 }
                 NativeConnectionFailure::Io(_) => AttemptFailure::ConnectionClosed,
@@ -451,12 +463,8 @@ pub(super) fn check_deadline(deadline: &NativeDeadline) -> Result<(), NativeConn
 fn read_request<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,
 ) -> Result<NativePairingRequest, NativeConnectionError> {
-    let bytes = loop {
-        match channel.receive_envelope() {
-            Err(NativeFrameError::Io(ErrorKind::WouldBlock)) => std::thread::yield_now(),
-            result => break result.map_err(frame_error)?,
-        }
-    };
+    // `DeadlineStream` retries elapsed waits itself, so every error here is final.
+    let bytes = channel.receive_envelope().map_err(frame_error)?;
     wire::decode_request(&bytes).map_err(|error| NativeConnectionFailure::Wire(error).into())
 }
 fn write_reply<S: Read + Write>(
@@ -465,12 +473,7 @@ fn write_reply<S: Read + Write>(
 ) -> Result<(), NativeConnectionError> {
     let bytes =
         bytes.map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Wire(error)))?;
-    loop {
-        match channel.send_envelope(&bytes) {
-            Err(NativeFrameError::Io(ErrorKind::WouldBlock)) => std::thread::yield_now(),
-            result => return result.map_err(frame_error),
-        }
-    }
+    channel.send_envelope(&bytes).map_err(frame_error)
 }
 fn send_status<S: Read + Write>(
     gateway: &GatewayPairing,

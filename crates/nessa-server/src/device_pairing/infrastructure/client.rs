@@ -88,8 +88,8 @@ impl NativeEnrollmentClient {
         entropy: R,
     ) -> Result<NativePairingStatus, NativeClientError> {
         let endpoint = client_endpoint(&stream)?;
-        let (stream, deadline) =
-            DeadlineStream::new(stream, self.clock.clone()).map_err(physical_error)?;
+        let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())
+            .map_err(physical_error)?;
         self.dispatch_owned(vec![endpoint], move |pending| {
             if pending
                 .load_pending()
@@ -128,10 +128,9 @@ impl NativeEnrollmentClient {
         code: ManualCode,
         entropy: R,
     ) -> Result<NativeRetryOutcome, NativeClientError> {
-        let endpoints = vec![
-            client_endpoint(&original_stream)?,
-            client_endpoint(&retry_stream)?,
-        ];
+        let original_endpoint = client_endpoint(&original_stream)?;
+        let retry_endpoint = client_endpoint(&retry_stream)?;
+        let endpoints = vec![original_endpoint.clone(), retry_endpoint.clone()];
         let clock = self.clock.clone();
         self.dispatch_owned(endpoints, move |pending| {
             let saved = pending
@@ -141,7 +140,8 @@ impl NativeEnrollmentClient {
             let (key, pin, public) = saved.into_parts();
             let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
             let (stream, deadline) =
-                DeadlineStream::new(original_stream, clock.clone()).map_err(physical_error)?;
+                DeadlineStream::new(original_stream, clock.clone(), original_endpoint)
+                    .map_err(physical_error)?;
             stream.blocking().map_err(physical_error)?;
             let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
                 .map_err(NativeClientError::Crypto)?;
@@ -156,7 +156,7 @@ impl NativeEnrollmentClient {
             drop(channel);
             // No new attempt is generated until the original terminal receipt is read.
             let (stream, deadline) =
-                DeadlineStream::new(retry_stream, clock).map_err(physical_error)?;
+                DeadlineStream::new(retry_stream, clock, retry_endpoint).map_err(physical_error)?;
             stream.blocking().map_err(physical_error)?;
             let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
                 .map_err(NativeClientError::Crypto)?;
@@ -184,8 +184,8 @@ impl NativeEnrollmentClient {
         received: Option<DisclosedConsent>,
     ) -> Result<NativePairingStatus, NativeClientError> {
         let endpoint = client_endpoint(&stream)?;
-        let (stream, deadline) =
-            DeadlineStream::new(stream, self.clock.clone()).map_err(physical_error)?;
+        let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())
+            .map_err(physical_error)?;
         self.dispatch_owned(vec![endpoint], move |pending| {
             let saved = pending
                 .load_pending()
@@ -233,10 +233,7 @@ impl NativeEnrollmentClient {
                 let _permit = permit;
                 // The real private owner drops before capacity on success and unwind.
                 let store = pending;
-                let physical = PhysicalClientEndpoints(_permit.endpoints.clone());
-                let result = work(store.as_ref());
-                drop(physical);
-                result
+                work(store.as_ref())
             });
             (worker, lease)
         };
@@ -273,20 +270,7 @@ impl NativeEnrollmentClient {
     }
 }
 fn client_endpoint(stream: &TcpStream) -> Result<Arc<WakeEndpoint>, NativeClientError> {
-    WakeEndpoint::new(
-        stream
-            .try_clone()
-            .map_err(|error| NativeClientError::Io(error.kind()))?,
-    )
-    .map_err(|error| NativeClientError::Io(error.kind()))
-}
-struct PhysicalClientEndpoints(Vec<Arc<WakeEndpoint>>);
-impl Drop for PhysicalClientEndpoints {
-    fn drop(&mut self) {
-        for endpoint in &self.0 {
-            endpoint.physically_returned();
-        }
-    }
+    WakeEndpoint::new(stream).map_err(|error| NativeClientError::Io(error.kind()))
 }
 struct ClientPermit {
     endpoints: Vec<Arc<WakeEndpoint>>,
@@ -386,22 +370,13 @@ fn send<S: Read + Write>(
     request: NativePairingRequest,
 ) -> Result<(), NativeClientError> {
     let bytes = wire::encode_request(&request).map_err(NativeClientError::Wire)?;
-    loop {
-        match channel.send_envelope(&bytes) {
-            Err(NativeFrameError::Io(ErrorKind::WouldBlock)) => std::thread::yield_now(),
-            result => return result.map_err(frame_error),
-        }
-    }
+    // `DeadlineStream` retries elapsed waits itself, so every error here is final.
+    channel.send_envelope(&bytes).map_err(frame_error)
 }
 fn receive<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,
 ) -> Result<NativePairingReply, NativeClientError> {
-    let bytes = loop {
-        match channel.receive_envelope() {
-            Err(NativeFrameError::Io(ErrorKind::WouldBlock)) => std::thread::yield_now(),
-            result => break result.map_err(frame_error)?,
-        }
-    };
+    let bytes = channel.receive_envelope().map_err(frame_error)?;
     match wire::decode_reply(&bytes).map_err(NativeClientError::Wire)? {
         NativePairingReply::Refused => Err(NativeClientError::Refused),
         reply => Ok(reply),
