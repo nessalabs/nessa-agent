@@ -200,8 +200,32 @@ function readResult(described: McpReadResourceResult, text: string): JsonObject 
   }
 }
 
-/** The app's own server, through the gateway's `client.mcpApps`. */
-export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
+/**
+ * Whether trying a release again may change the outcome: always, unless the
+ * client says the gateway refused it before applying it (`uncertain` false).
+ * A lost answer, a closed socket, a timeout or a busy gateway
+ * (`temporarily_unavailable`, which the client counts as uncertain) may all
+ * have left it untaken.
+ */
+function releaseMayLand(error: unknown): boolean {
+  return !(error instanceof NessaConversationControlError) || error.uncertain
+}
+
+/**
+ * How long to wait before each try of a release after the first. A release
+ * is idempotent, so a lost or busy answer is asked again; the last try is well
+ * inside a review's own deadline, after which the gateway withdraws it anyway.
+ */
+export const releaseRetryMs: readonly number[] = [500, 2_000, 8_000]
+
+/**
+ * The app's own server, through the gateway's `client.mcpApps`. `after` is
+ * the clock a release that did not land waits on before it is tried again.
+ */
+export function gatewayAppServer(
+  mcpApps: McpAppsApi,
+  after: (ms: number, run: () => void) => () => void,
+): McpAppServer {
   return {
     // The longest the client waits for `mcp.callTool`: a review, then the call.
     callWithin: mcpAppDeadlines.callToolMs,
@@ -267,17 +291,24 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
     },
 
     async release(address: AppAddress) {
-      try {
-        await mcpApps.releaseApp(address.sessionId, address.app)
-      } catch (error) {
-        // A conversation that is gone has no mount left to release: the
-        // expected end of one, not a fault. Anything else is for the bridge.
-        if (
-          error instanceof NessaConversationControlError &&
-          conversationGone.has(error.code)
-        )
+      for (let tried = 0; ; tried++) {
+        try {
+          await mcpApps.releaseApp(address.sessionId, address.app)
           return
-        throw error
+        } catch (error) {
+          // A conversation that is gone has no mount left to release: the
+          // expected end of one, not a fault.
+          if (
+            error instanceof NessaConversationControlError &&
+            conversationGone.has(error.code)
+          )
+            return
+          // Until the gateway has taken it, the mount's reviews stay open,
+          // so a release that may not have landed is asked again (#384).
+          const wait = releaseRetryMs[tried]
+          if (!releaseMayLand(error) || wait === undefined) throw error
+          await new Promise<void>((resolve) => after(wait, resolve))
+        }
       }
     },
   }
