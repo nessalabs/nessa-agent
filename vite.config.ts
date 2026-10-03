@@ -127,6 +127,13 @@ export default defineConfig({
       "/attachments": {
         target: gatewayTarget,
       },
+      // Where an MCP App's page is fetched with its ticket (#348). A browser
+      // preview fetches it from its own origin, so it goes through here; the
+      // packaged app fetches from the gateway directly. Without it, Vite
+      // answers with its own page and the app fails its integrity check.
+      "/mcp-resources": {
+        target: gatewayTarget,
+      },
     },
     port: 1420,
     strictPort: true,

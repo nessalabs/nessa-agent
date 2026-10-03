@@ -775,11 +775,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = if ReadRefusal::from(error) == ReadRefusal::Unverifiable {
-        RecordReadErrorCode::Unverifiable
-    } else {
-        RecordReadErrorCode::Unauthorized
-    };
+    let code = RecordReadErrorCode::from(ReadRefusal::from(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -1386,7 +1382,7 @@ mod tests {
     };
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
-        ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+        ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
     };
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
     use nessa_sdk::infrastructure::session_storage::{
@@ -1785,7 +1781,7 @@ mod tests {
         let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
         writer
             .save_changes(
-                SessionSaveGeneration::initial(),
+                writer.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
                     id: session_id.clone(),
                     provider: provider.clone(),
@@ -1793,11 +1789,12 @@ mod tests {
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                 },
-                vec![SessionChange::Opened {
+                vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),
                     provider,
                     context: ProviderContext::Absent,
-                }],
+                }])
+                .unwrap()],
             )
             .await
             .unwrap();
@@ -1862,36 +1859,51 @@ mod tests {
             panic!("record reply expected")
         };
         let head_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(head_json["payload"]["head"], "1");
+        assert_eq!(head_json["payload"]["head"], "2");
         assert_eq!(head_json["payload"]["scope"]["accessEpoch"], "epoch-3");
         drop(lease);
-        let mut page_frame = request("page", "conversation.recordsPage");
-        page_frame.params = serde_json::json!({
-            "conversationId": id.to_string(), "accessEpoch": "3",
-            "request": {
-                "scope": scope_json, "after": "0", "target": "1", "maxRecords": 16,
-                "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-                "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-            },
-        });
-        let (page_wire, lease) = dispatch_passive_read(
-            &state,
-            &session,
-            page_frame,
-            RecordReadLease::new(()),
-            Instant::now() + PASSIVE_READ_TIMEOUT,
-        )
-        .await;
-        let WireResponse::Record { text, .. } = page_wire else {
-            panic!("record reply expected")
-        };
-        let page_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(page_json["payload"]["records"][0]["position"], "1");
-        assert_eq!(
-            page_json["payload"]["request"]["scope"]["accessEpoch"],
-            "epoch-3"
-        );
-        drop(lease);
+        for target in ["1", "2"] {
+            let mut page_frame = request("page", "conversation.recordsPage");
+            page_frame.params = serde_json::json!({
+                "conversationId": id.to_string(), "accessEpoch": "3",
+                "request": {
+                    "scope": scope_json.clone(), "after": "0", "target": target, "maxRecords": 16,
+                    "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                    "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                },
+            });
+            let (page_wire, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                page_frame,
+                RecordReadLease::new(()),
+                Instant::now() + PASSIVE_READ_TIMEOUT,
+            )
+            .await;
+            if target == "1" {
+                let WireResponse::Ordinary(message) = page_wire else {
+                    panic!("intermediate Unit target must refuse")
+                };
+                let OutgoingMessage::Response(failure) = *message else {
+                    panic!("refusal expected")
+                };
+                assert_eq!(failure.error.unwrap().code, "invalid_request");
+            } else {
+                let WireResponse::Record { text, .. } = page_wire else {
+                    panic!("record reply expected")
+                };
+                let page_json: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(page_json["payload"]["records"].as_array().unwrap().len(), 2);
+                assert_eq!(page_json["payload"]["records"][0]["position"], "1");
+                assert_eq!(page_json["payload"]["records"][1]["position"], "2");
+                assert_eq!(page_json["payload"]["request"]["target"], "2");
+                assert_eq!(
+                    page_json["payload"]["request"]["scope"]["accessEpoch"],
+                    "epoch-3"
+                );
+            }
+            drop(lease);
+        }
         let mut wrong = request("wrong", "conversation.recordsHead");
         wrong.params = serde_json::json!({
             "conversationId": id.to_string(), "accessEpoch": "3",
@@ -2000,6 +2012,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn passive_socket_preserves_retryable_authority_failures() {
         for (error, expected) in [
+            (AccessError::Denied, "forbidden"),
             (AccessError::Unavailable, "unverifiable"),
             (AccessError::StaleRevision, "unverifiable"),
             (AccessError::InvalidCredential, "unauthorized"),

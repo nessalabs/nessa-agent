@@ -23,10 +23,17 @@ recording can be compared with another.
 | `rows.get` | `{"id": 1 \| 2}` → text and `structuredContent`; any other id → `isError` | a dotted tool name, which some harnesses rewrite |
 | `always_fails` | a text block with `isError: true` | a tool error result |
 | `show_chart` | text and `structuredContent`; the tool declares `_meta.ui.resourceUri` | an MCP Apps tool: `ui://nessa-test/chart.html` is served by `resources/read` as `text/html;profile=mcp-app` |
+| `review_rows` | text and `structuredContent`; declares `_meta.ui.resourceUri` `ui://nessa-test/review.html` | an MCP App that calls tools itself: shown inline, once it has its tool result it calls `app_delete_row` and both `model_only_*` tools through the host's `tools/call`, and shows each answer; a button calls `app_delete_row` again, another asks for fullscreen |
+| `app_delete_row` | `{"id": 1 \| 2}` → "Deleted row N." (it deletes nothing); any other id → `isError` | a tool only an app may call (`_meta.ui.visibility: ["app"]`), destructive (`destructiveHint: true`), so a host asks the person first |
+| `model_only_note` | a text block | a tool hidden from apps (`visibility: ["model"]`) that declares no UI: `resourceUri` is optional in `_meta.ui` |
+| `model_only_chart` | a text block | a tool hidden from apps that declares a UI (the chart's) |
+
+The review app's own calls are what the desktop's real-gateway check
+(`verification/desktop/scripts/mcp-apps-gateway.mjs`) reads in the window.
 
 Arguments outside a tool's schema return an `isError` result and are never
-echoed back. The server's tests are `server.test.mjs`, run by
-`pnpm scripts:test`.
+echoed back. The server's tests are `server.test.mjs`, and the local
+gateway's are `local-gateway.test.mjs`, both run by `pnpm scripts:test`.
 
 To use it from an agent, configure it as a stdio MCP server, for example in a
 gateway's `config.json`:
@@ -61,7 +68,7 @@ MCP_LIVE_OPENCODE=/path/to/opencode-1.18.31 \
 | `mcp.jsonl` | every MCP frame between the gateway and the test server, the harness's forwarded calls among them |
 | `view.json` | the conversation view the window reads at the end of the turn |
 | `summary.json` | the tool frames' shapes, the view's MCP tools with their `resourceUri`, every `ui://` the harness sent, the MCP calls made, the servers the harness was given (stand-ins), and the widget parts the desktop transcript makes of the view |
-| `gateway.log` | the gateway's own log |
+| `gateway.log` | the gateway's own log, read once it has stopped (or, if it failed to start, what it said then) |
 
 It uses the sign-in each agent already has on this machine — Claude's
 credential from the keychain the gateway reads, Codex's own home, OpenCode's

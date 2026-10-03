@@ -16,7 +16,7 @@ use base64::Engine;
 use nessa_local_database::rusqlite::{params, Connection};
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
-    ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+    ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
 };
 use nessa_sdk::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use nessa_sdk::infrastructure::session_storage::{
@@ -123,13 +123,14 @@ async fn gateway_child() {
         };
         writer
             .save_changes(
-                SessionSaveGeneration::initial(),
+                writer.load().await.unwrap().binding().clone(),
                 snapshot.clone(),
-                vec![SessionChange::Opened {
+                vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session.clone(),
                     provider,
                     context: ProviderContext::Absent,
-                }],
+                }])
+                .unwrap()],
             )
             .await
             .unwrap();
@@ -147,21 +148,23 @@ async fn gateway_child() {
                 after: ProviderContext::Absent,
             });
         }
-        let mut generation = SessionSaveGeneration::initial().checked_next().unwrap();
         writer
-            .save_changes(generation, snapshot.clone(), changes)
+            .save_changes(
+                writer.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(changes).unwrap()],
+            )
             .await
             .unwrap();
         for index in 0..20 {
-            generation = generation.checked_next().unwrap();
             let context = ProviderContext::Recorded(
                 ExecutionSessionId::new(format!("tail-{index}")).unwrap(),
             );
             writer
                 .save_changes(
-                    generation,
+                    writer.load().await.unwrap().binding().clone(),
                     snapshot.clone(),
-                    vec![
+                    vec![SessionSaveUnit::new(vec![
                         SessionChange::ProviderContext {
                             before: ProviderContext::Absent,
                             after: context.clone(),
@@ -170,7 +173,8 @@ async fn gateway_child() {
                             before: context,
                             after: ProviderContext::Absent,
                         },
-                    ],
+                    ])
+                    .unwrap()],
                 )
                 .await
                 .unwrap();

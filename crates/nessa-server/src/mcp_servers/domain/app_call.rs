@@ -54,8 +54,8 @@ pub fn admit_tool_call(
 ) -> Result<AppCallAdmission, AppRefusal> {
     admit_app(app, server)?;
     let tool = tool.ok_or(AppRefusal::ToolNotForApp)?;
-    // A tool with no UI declared is for both the model and an app.
-    if tool.ui().is_some_and(|ui| !ui.visibility().app()) {
+    // With a UI or without one: a tool that says nothing is for both.
+    if !tool.ui().visibility().app() {
         return Err(AppRefusal::ToolNotForApp);
     }
     if arguments_bytes > MAX_APP_ARGUMENTS_BYTES {

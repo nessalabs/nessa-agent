@@ -47,7 +47,6 @@ pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;
-mod read_workers;
 mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::NessaRecordReadSource;

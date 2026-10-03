@@ -12,8 +12,8 @@ fn tool(server: &str, name: &str) -> McpTool {
 fn uri(value: &str) -> UiResourceUri {
     UiResourceUri::new(value).unwrap()
 }
-fn ui(value: &str) -> Option<ToolUi> {
-    Some(ToolUi::new(uri(value), UiVisibility::BOTH))
+fn ui(value: &str) -> ToolUi {
+    ToolUi::new(Some(uri(value)), UiVisibility::BOTH)
 }
 
 #[test]
@@ -58,9 +58,14 @@ fn visibility_says_who_sees_the_tool() {
     assert!(!app_only.model() && app_only.app());
     let model_only = UiVisibility::new(true, false);
     assert!(model_only.model() && !model_only.app());
-    let declared = ToolUi::new(uri("ui://x/y"), app_only);
-    assert_eq!(declared.resource_uri().as_str(), "ui://x/y");
+    let declared = ToolUi::new(Some(uri("ui://x/y")), app_only);
+    assert_eq!(declared.resource_uri().unwrap().as_str(), "ui://x/y");
     assert_eq!(declared.visibility(), app_only);
+    // Visibility stands without a UI (#412); saying nothing is no UI, for both.
+    let model_only_no_ui = ToolUi::new(None, model_only);
+    assert_eq!(model_only_no_ui.resource_uri(), None);
+    assert_eq!(model_only_no_ui.visibility(), model_only);
+    assert_eq!(ToolUi::default(), ToolUi::new(None, UiVisibility::BOTH));
 }
 
 #[test]
@@ -87,16 +92,19 @@ fn a_call_names_a_listed_tool_exactly_or_in_the_harness_spelling() {
 fn the_ui_for_a_call_is_the_one_named_tools_or_none() {
     let listed = vec![
         ListedTool::new(tool("s", "show_chart"), ui("ui://s/chart.html")),
-        ListedTool::new(tool("s", "report"), None),
+        ListedTool::new(tool("s", "report"), ToolUi::default()),
         ListedTool::new(tool("s", "rows.get"), ui("ui://s/rows.html")),
         ListedTool::new(tool("s", "rows_get"), ui("ui://s/other.html")),
     ];
     assert_eq!(listed[0].tool(), &tool("s", "show_chart"));
-    assert_eq!(listed[1].ui(), None);
+    assert_eq!(listed[1].ui(), &ToolUi::default());
     let chart = ListedTool::ui_for(&listed, &tool("s", "show_chart")).unwrap();
-    assert_eq!(chart.resource_uri().as_str(), "ui://s/chart.html");
-    // Named, but declared none.
-    assert_eq!(ListedTool::ui_for(&listed, &tool("s", "report")), None);
+    assert_eq!(chart.resource_uri().unwrap().as_str(), "ui://s/chart.html");
+    // Named, but declared no UI.
+    assert_eq!(
+        ListedTool::ui_for(&listed, &tool("s", "report")),
+        Some(&ToolUi::default())
+    );
     // Named by nothing listed, or on another server.
     assert_eq!(ListedTool::ui_for(&listed, &tool("s", "missing")), None);
     assert_eq!(ListedTool::ui_for(&listed, &tool("t", "show_chart")), None);
@@ -107,6 +115,7 @@ fn the_ui_for_a_call_is_the_one_named_tools_or_none() {
         ListedTool::ui_for(&listed, &tool("s", "rows.get"))
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://s/rows.html"
     );
@@ -276,7 +285,7 @@ fn a_tool_is_destructive_unless_it_says_it_only_reads_or_destroys_nothing() {
         );
     }
     // A tool listed without hints is destructive; with them, as they say.
-    let listed = ListedTool::new(tool("s", "t"), None);
+    let listed = ListedTool::new(tool("s", "t"), ToolUi::default());
     assert!(listed.hints().destructive());
     let reads = listed.with_hints(ToolHints::new(Some(true), None));
     assert!(!reads.hints().destructive());

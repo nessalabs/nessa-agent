@@ -4,7 +4,7 @@
 use super::fixture::{Behaviour, CHART};
 use super::servers;
 use crate::domain::agent_execution::sessions::SessionId;
-use crate::domain::mcp_apps::UiResourceUri;
+use crate::domain::mcp_apps::{UiResourceUri, UiVisibility};
 use crate::infrastructure::mcp::{McpError, McpOwner};
 use serde_json::json;
 use std::time::Duration;
@@ -117,6 +117,38 @@ async fn a_listed_tool_is_found_by_its_exact_name_with_what_it_said_of_its_effec
     // Exactly as listed: no other spelling, nothing unlisted.
     assert_eq!(destructive("Reads"), None);
     assert_eq!(destructive("missing"), None);
+}
+
+#[tokio::test]
+async fn a_listed_tool_is_found_with_who_its_server_said_may_call_it() {
+    let (servers, _, _) = servers(Behaviour {
+        pages: vec![vec![
+            json!({ "name": "both" }),
+            json!({ "name": "app_only", "_meta": { "ui": { "visibility": ["app"] } } }),
+            // A `visibility` that cannot be read is no one's (#412): an app
+            // asking for it is told it is not for apps.
+            json!({ "name": "app_string", "_meta": { "ui": { "visibility": "app" } } }),
+            json!({ "name": "null", "_meta": { "ui": { "visibility": null } } }),
+        ]],
+        ..Behaviour::default()
+    });
+    let session = servers
+        .open("fixture", McpOwner::new(conversation("a")))
+        .await
+        .unwrap();
+    session.list_tools().await.unwrap();
+    let a = conversation("a");
+    let visibility = |name: &str| {
+        servers
+            .listed_tool(&a, "fixture", name)
+            .unwrap()
+            .map(|tool| tool.ui().visibility())
+    };
+    let nobody = UiVisibility::new(false, false);
+    assert_eq!(visibility("both"), Some(UiVisibility::BOTH));
+    assert_eq!(visibility("app_only"), Some(UiVisibility::new(false, true)));
+    assert_eq!(visibility("app_string"), Some(nobody));
+    assert_eq!(visibility("null"), Some(nobody));
 }
 
 #[tokio::test]
