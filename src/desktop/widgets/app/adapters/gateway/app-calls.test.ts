@@ -274,6 +274,42 @@ describe("the servers' app plugins", () => {
     expect(plugin.ports.server.callWithin).toBeGreaterThan(300_000)
   })
 
+  it("C8: a server's app waits on the host's own clock before asking a release again", async () => {
+    const registry = createWidgetRegistry<WidgetPlugin>([])
+    const waits: number[] = []
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValue({ requestId: "r", applied: true })
+    gatewayApps({
+      registry,
+      mcpApps: { ...mcpApps, releaseApp },
+      ports: {
+        ...ports,
+        timers: {
+          after: (ms, run) => {
+            waits.push(ms)
+            run()
+            return () => {}
+          },
+        },
+      },
+    }).observe({ conversationId: conversationId, tools: [tool()] })
+    const plugin = registry.plugin(appPluginId("mcptest"))
+    if (plugin?.kind !== "app") throw new Error("no app plugin")
+    await plugin.ports.server.release({
+      sessionId: conversationId,
+      server: "mcptest",
+      app: {
+        executionId: "execution-1",
+        toolId: "call-1",
+        instanceId: crypto.randomUUID(),
+      },
+    } as Parameters<typeof plugin.ports.server.release>[0])
+    expect(releaseApp).toHaveBeenCalledTimes(2)
+    expect(waits).toEqual([500])
+  })
+
   it("C2, C8: a view with no app calls registers nothing", () => {
     const registry = createWidgetRegistry<WidgetPlugin>([])
     gatewayApps({ registry, mcpApps, ports }).observe({

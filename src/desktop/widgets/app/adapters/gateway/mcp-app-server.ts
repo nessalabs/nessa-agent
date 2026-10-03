@@ -201,22 +201,25 @@ function readResult(described: McpReadResourceResult, text: string): JsonObject 
 }
 
 /**
- * Whether trying a release again may change the outcome: always, unless the
- * client says the gateway refused it before applying it (`uncertain` false).
- * A lost answer, a closed socket, a timeout or a busy gateway
- * (`temporarily_unavailable`, which the client counts as uncertain) may all
- * have left it untaken.
+ * Whether trying a release again may change the outcome. Not a release the
+ * client refused to send (`TypeError`: an address it cannot carry), and not
+ * one the gateway refused before applying it (`uncertain` false). A lost
+ * answer, a closed socket, a timeout or a busy gateway (`temporarily_unavailable`,
+ * which the client counts as uncertain) may all have left it untaken.
  */
 function releaseMayLand(error: unknown): boolean {
+  if (error instanceof TypeError) return false
   return !(error instanceof NessaConversationControlError) || error.uncertain
 }
 
 /**
- * How long to wait before each try of a release after the first. A release
- * is idempotent, so a lost or busy answer is asked again; the last try is well
- * inside a review's own deadline, after which the gateway withdraws it anyway.
+ * How long to wait before each try of a release after the first: 10.5 s of
+ * waiting in all, plus each try's own request timeout. A release is
+ * idempotent, so a lost or busy answer is asked again. A review the person
+ * has not answered expires on its own deadline whatever happens here, and the
+ * gateway withdraws a mount's reviews when its socket closes.
  */
-export const releaseRetryMs: readonly number[] = [500, 2_000, 8_000]
+export const releaseRetryMs: readonly number[] = Object.freeze([500, 2_000, 8_000])
 
 /**
  * The app's own server, through the gateway's `client.mcpApps`. `after` is
@@ -291,9 +294,11 @@ export function gatewayAppServer(
     },
 
     async release(address: AppAddress) {
+      // One teardown, one action: every try carries the same request id.
+      const requestId = crypto.randomUUID()
       for (let tried = 0; ; tried++) {
         try {
-          await mcpApps.releaseApp(address.sessionId, address.app)
+          await mcpApps.releaseApp(address.sessionId, address.app, { requestId })
           return
         } catch (error) {
           // A conversation that is gone has no mount left to release: the
