@@ -100,8 +100,9 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
             review, and the inline app stays live
 
 Each review step answers the review its own action opened, not one pending
-before it. The mount's first call is allow's: run deny or release without
-allow, and that call's review can be taken for theirs.`,
+before it: deny first denies any review of the app's still pending (the
+mount's first call, when allow did not run), and a card is answered only once
+the gateway shows its review first.`,
 }
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
@@ -326,6 +327,38 @@ const reviewGone = (stack, review, ms) =>
     ms,
   )
 
+/** Waits up to `ms` for `review` to be the conversation's first pending permission: the one the window shows. */
+const reviewShown = (stack, review, ms = 10_000) =>
+  waitFor(async () => {
+    const view = await stack.client.conversation.read(stack.conversationId)
+    const first = view.permissions[0]
+    return first !== undefined && permissionKey(first) === permissionKey(review)
+  }, ms)
+
+/**
+ * Denies, in the window, each of the app's reviews pending now, oldest first,
+ * so the window's card is free for the review a step's own action opens
+ * (deny's, release's).
+ * Returns the keys of what is still pending: the step's baseline.
+ */
+async function settleEarlier(page, stack, failures) {
+  for (const review of await appReviews(stack.client, stack.conversationId)) {
+    if (!(await reviewShown(stack, review))) {
+      failures.push("an earlier review of the app's is not the window's approval")
+      break
+    }
+    const card = await approvalNaming(page, DESTRUCTIVE)
+    if (!card) {
+      failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
+      break
+    }
+    await card.getByRole("button", { name: names.denyOnce, exact: true }).click()
+    if (!(await reviewGone(stack, review, 10_000)))
+      failures.push("an earlier review of the app's is still pending after Deny")
+  }
+  return pendingReviews(stack)
+}
+
 /**
  * Waits for the app's review of a destructive call in the gateway's view and
  * in the window, answers it in the window with `button`, and returns what was
@@ -352,6 +385,13 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
     review.origin.tool !== DESTRUCTIVE
   )
     failures.push(`the review's origin is ${JSON.stringify(review.origin)}`)
+  // The window shows only the conversation's first pending permission, so
+  // the card is this review's only once the gateway puts it first.
+  const shown = await reviewShown(stack, review)
+  if (!shown) {
+    failures.push("the window's approval is not the review the call opened")
+    return seen
+  }
   const card = await approvalNaming(page, DESTRUCTIVE)
   if (!card) {
     failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
@@ -501,7 +541,9 @@ const checks = {
   deny: async (page, stack) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
-    const baseline = await pendingReviews(stack)
+    // A review left pending (the mount's own, when allow did not run) would
+    // hold the window's card ahead of this step's.
+    const baseline = await settleEarlier(page, stack, failures)
     await app.click(css.reviewControl("delete"))
     const before = await said(app, "again")
     if (before !== "pending")
@@ -530,13 +572,15 @@ const checks = {
     )
     if (paneMode !== "fullscreen") failures.push(`the pane's app is told ${paneMode}`)
     // The pane's own mount: its tool result arrives, and it makes no calls of its own.
-    const baseline = await pendingReviews(stack)
+    const baseline = await settleEarlier(page, stack, failures)
     await pane.app.click(css.reviewControl("delete"))
     const waiting = await reviewOpened(stack, baseline)
     if (!waiting) {
       failures.push("the pane app's destructive call reached no review")
       return { seen: { paneMode }, failures }
     }
+    if (!(await reviewShown(stack, waiting)))
+      failures.push("the window's approval is not the review the pane's call opened")
     const card = await approvalNaming(page, DESTRUCTIVE)
     if (!card) failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
     const paneSaid = await said(pane.app, "again")
