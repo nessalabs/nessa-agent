@@ -41,7 +41,7 @@ export type ConversationListOptions = {
 
 /** Optional caller-managed action identity. The client generates it when omitted. */
 export type ConversationActionOptions = {
-  /** Stable action attribution. Only creation and message admission support same-ID retries; controls require a fresh read and a new deliberate action. */
+  /** Stable action attribution. Creation, message admission and the idempotent `releaseApp` control support same-ID retries; other controls require a fresh read and a new deliberate action. */
   requestId?: string
 }
 /** Optional identities for optimistic display or explicit serializable retry state. */
