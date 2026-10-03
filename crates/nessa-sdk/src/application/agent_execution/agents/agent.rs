@@ -422,7 +422,15 @@ impl Agent {
     /// `provider` supplies immutable identity and model capabilities;
     /// `session_manager` transfers its exclusive storage lease into this Agent;
     /// `audit` receives mandatory attachment and scheduling evidence. Identity and
-    /// storage failures return [`AgentInitializationError`]. Provider startup is a
+    /// storage failures return [`AgentInitializationError`].
+    ///
+    /// Opening a new conversation, or recording that a restart cleared its saved
+    /// queue, is saved before this returns. When an earlier `prepare` left that
+    /// save unfinished — its decision durable, its completion refused or never
+    /// written — this call derives the same decision from the same saved state
+    /// and completes it. Any other unfinished save returns
+    /// [`StorageError::Unresolved`](crate::application::agent_execution::sessions::StorageError::Unresolved)
+    /// with nothing written. Provider startup is a
     /// separate, explicitly authorized operation through
     /// [`Self::authorize_attachment`] and [`Self::start_attachment`].
     ///

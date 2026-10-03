@@ -270,8 +270,11 @@ impl SessionManager {
         // Initialization derives its plan only from the prior publication and
         // the provider identity, so a plan this method left unfinished — its
         // Unit durable, its completion refused or never written — is derived
-        // again here and retried exactly. Any other unfinished save does not
-        // match that plan and stays unresolved (design row O12).
+        // again here and retried exactly. The writer refuses the retry when
+        // its durable units differ from this plan, and that refusal is reported
+        // as unresolved. It cannot compare units that never became durable, so
+        // a longer plan whose durable prefix is exactly this one would be
+        // completed as this plan (design row O12).
         let unfinished = saved.state() == SessionLoadState::Unfinished;
         let (saved, mut save_generation) =
             saved.into_checked(&self.id).map_err(AgentError::Storage)?;
@@ -330,8 +333,11 @@ impl SessionManager {
             .await
             .map_err(StorageError::bounded)
             .map_err(|error| match error {
-                // The storage refuses a plan that differs from the unfinished
-                // one before appending anything; that save is someone else's.
+                // The writer refuses a plan that differs from the unfinished
+                // one before appending anything. It has no separate variant for
+                // that refusal, so every corruption refusal of this retry is
+                // reported as unresolved; a fenced writer's next load still
+                // reports the corruption.
                 StorageError::Corrupt(_) if unfinished => StorageError::Unresolved,
                 error => error,
             })
