@@ -35,17 +35,8 @@
  * (default: this checkout's `target/debug/nessa`); `MCP_LIVE_OPENCODE` — an Opencode 1.18.31
  * binary; `MCP_LIVE_PORT` (default 7431); `MCP_LIVE_POLLS` (seconds, default 300).
  */
-import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import {
-  rmSync,
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -59,10 +50,14 @@ import {
   uiMentions,
   viewTools,
 } from "./evidence.mjs"
+import {
+  SERVER,
+  agentCommand,
+  serverScript,
+  startLocalGateway,
+} from "./local-gateway.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const root = resolve(here, "../..")
-const SERVER = "mcptest"
 
 /** What the model is asked to do: call every tool once, in order. */
 export const PROMPT = [
@@ -71,57 +66,6 @@ export const PROMPT = [
   '(no arguments), rows.get with {"id": 2}, always_fails (no arguments), show_chart (no',
   "arguments). Do not use any other tool. When all five have returned, reply with DONE.",
 ].join(" ")
-
-function agentCommand(agent) {
-  const harnesses =
-    process.env.MCP_LIVE_HARNESSES ?? join(root, "crates/nessa-sdk/harnesses")
-  const entry = (name, path) => {
-    const file = join(harnesses, name, "node_modules", path)
-    if (!existsSync(file)) throw new Error(`no ${name} harness at ${file}`)
-    return file
-  }
-  switch (agent) {
-    case "claude":
-      return {
-        argv: [
-          process.execPath,
-          entry("claude-acp", "@agentclientprotocol/claude-agent-acp/dist/index.js"),
-        ],
-        model: "claude-sonnet-5",
-        path: null,
-      }
-    case "codex":
-      return {
-        argv: [
-          process.execPath,
-          entry("codex-acp", "@agentclientprotocol/codex-acp/dist/index.js"),
-        ],
-        model: "gpt-5.6-terra",
-        path: join(harnesses, "codex-acp", "node_modules", ".bin"),
-      }
-    case "opencode": {
-      const binary = process.env.MCP_LIVE_OPENCODE
-      if (!binary || !existsSync(binary))
-        throw new Error("set MCP_LIVE_OPENCODE to an Opencode 1.18.31 binary")
-      return {
-        argv: [binary, "acp"],
-        model: "opencode/nemotron-3-ultra-free",
-        path: null,
-      }
-    }
-    default:
-      throw new Error(`unknown agent ${agent}`)
-  }
-}
-
-/** Wait up to `ms` for `child` to exit; whether it did. */
-async function exited(child, ms) {
-  if (child.exitCode !== null || child.signalCode !== null) return true
-  return Promise.race([
-    new Promise((done) => child.once("exit", () => done(true))),
-    sleep(ms).then(() => false),
-  ])
-}
 
 async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))]) {
   const command = agentCommand(agent)
@@ -134,88 +78,34 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
   const mcpRecording = join(evidence, "mcp.jsonl")
   writeFileSync(mcpRecording, "")
   const step = (name, detail) => console.error(`[${agent}:${name}] ${detail}`)
-  const log = []
-  let directory = null
-  let server = null
+  let gateway = null
   let client = null
   let failed = false
   try {
-    const nessa = process.env.MCP_LIVE_NESSA ?? join(root, "target/debug/nessa")
-    if (!existsSync(nessa))
-      throw new Error(
-        "build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",
-      )
-    directory = mkdtempSync(join(tmpdir(), `nessa-mcp-live-${agent}-`))
-    const workspace = join(directory, "workspace")
-    mkdirSync(workspace)
-    const port = Number(process.env.MCP_LIVE_PORT ?? 7431)
-    const instance = `mcp-live-${agent}`
-    const env = {
-      ...process.env,
-      NESSA_STAGE: "ci",
-      NESSA_PORT: String(port),
-      NESSA_DATA_DIR: directory,
-      NESSA_INSTANCE: instance,
-      ...(command.path ? { PATH: `${command.path}:${process.env.PATH}` } : {}),
-    }
-    const token = join(directory, "owner.token")
-    const init = spawnSync(
-      nessa,
-      ["auth", "init", "--local", "--owner-token-file", token],
-      {
-        env,
-        encoding: "utf8",
+    gateway = await startLocalGateway({
+      agent,
+      port: Number(process.env.MCP_LIVE_PORT ?? 7431),
+      instance: `mcp-live-${agent}`,
+      agentArgv: [
+        process.execPath,
+        join(here, "acp-recorder.mjs"),
+        recording,
+        ...command.argv,
+      ],
+      model: command.model,
+      path: command.path,
+      mcpServer: {
+        command: process.execPath,
+        args: [
+          join(here, "acp-recorder.mjs"),
+          mcpRecording,
+          process.execPath,
+          serverScript,
+        ],
       },
-    )
-    if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
-    const configPath = join(directory, "ci", "instances", instance, "config.json")
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: {
-          catalog: join(root, "crates/nessa-sdk/data/models.json"),
-          workspace,
-          selected: agent,
-          mcpServers: [
-            {
-              name: SERVER,
-              command: process.execPath,
-              args: [
-                join(here, "acp-recorder.mjs"),
-                mcpRecording,
-                process.execPath,
-                join(here, "server.mjs"),
-              ],
-            },
-          ],
-          runtimes: {
-            [agent]: {
-              command: process.execPath,
-              args: [join(here, "acp-recorder.mjs"), recording, ...command.argv],
-              model: command.model,
-              toolsEnabled: true,
-            },
-          },
-        },
-      }),
-    )
-    chmodSync(configPath, 0o600)
-    server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
-    for (const stream of [server.stdout, server.stderr])
-      stream.on("data", (chunk) => log.push(chunk.toString()))
-    for (let i = 0; ; i += 1) {
-      // A gateway that already exited is not the one answering on the port.
-      if (server.exitCode !== null)
-        throw new Error(
-          `gateway exited (${server.exitCode}):\n${log.join("").slice(-4000)}`,
-        )
-      try {
-        if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break
-      } catch {}
-      if (i > 240)
-        throw new Error(`gateway never became healthy:\n${log.join("").slice(-4000)}`)
-      await sleep(250)
-    }
+    })
+    const token = gateway.token
+    const port = Number(new URL(gateway.url).port)
     const { NessaClient } = await import("@nessa/client")
     client = await NessaClient.connect({
       stage: "ci",
@@ -309,24 +199,17 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
   } catch (error) {
     failed = true
     console.error(`[${agent}:FAILED]`, error?.stack ?? error)
-    console.error(log.join("").slice(-6000))
+    console.error((gateway?.log() ?? error?.gatewayLog ?? "").slice(-6000))
   } finally {
     client?.close()
-    // Stop the gateway, and wait for it, before its directory is removed: it
-    // stops the agent and the MCP server it started, and its last words go in
-    // the log.
-    if (server) {
-      server.kill("SIGTERM")
-      if (!(await exited(server, 10_000))) {
-        server.kill("SIGKILL")
-        if (!(await exited(server, 5_000))) {
-          failed = true
-          console.error(`[${agent}:FAILED] the gateway (pid ${server.pid}) did not exit`)
-        }
-      }
+    const log = gateway?.log() ?? ""
+    if (gateway && !(await gateway.stop())) {
+      failed = true
+      console.error(
+        `[${agent}:FAILED] the gateway (pid ${gateway.server.pid}) did not exit`,
+      )
     }
-    writeFileSync(join(evidence, "gateway.log"), log.join(""))
-    if (directory) rmSync(directory, { recursive: true, force: true })
+    writeFileSync(join(evidence, "gateway.log"), log)
   }
   process.exit(failed ? 1 : 0)
 }
