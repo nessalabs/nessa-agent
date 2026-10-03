@@ -26,6 +26,7 @@ import type { McpAppsApi } from "@nessa/client"
 import {
   createWidgetRegistry,
   fixtureAppPlugin,
+  fixtureConversation,
   gatewayApps,
   platformFor,
   readPageContext,
@@ -39,6 +40,7 @@ import {
 import {
   gatewaySource,
   inMemorySource,
+  type InMemorySource,
   measureWorkspace,
   rememberedFilter,
   sampleAppSession,
@@ -86,14 +88,16 @@ export function createDesktopDependencies(
   const sample = options.workspace === undefined && options.gateway === undefined
   const newId = options.newId ?? (() => crypto.randomUUID())
   const { apps, gateway } = options
+  // The sample workspace, which the fixture app speaks to.
+  const samples = sample ? inMemorySource({ now, after }) : undefined
   // The fixture app only beside the sample workspace, never beside a gateway,
   // whose servers' apps it could otherwise stand in for.
-  const widgets = widgetRegistry(options.widgets, sample, apps, after)
+  const widgets = widgetRegistry(options.widgets, samples, apps, after)
   const workspace =
     options.workspace ??
     (gateway
       ? gatewayWorkspace(gateway, { now, after }, widgets, apps)
-      : inMemorySource({ now, after }))
+      : (samples ?? inMemorySource({ now, after })))
   return {
     workspace,
     now,
@@ -133,6 +137,9 @@ function gatewayWorkspace(
         readResource: (...args) => mcpApps().then((api) => api.readResource(...args)),
         fetchResource: (...args) => mcpApps().then((api) => api.fetchResource(...args)),
         releaseApp: (...args) => mcpApps().then((api) => api.releaseApp(...args)),
+        sendMessage: (...args) => mcpApps().then((api) => api.sendMessage(...args)),
+        updateModelContext: (...args) =>
+          mcpApps().then((api) => api.updateModelContext(...args)),
       },
       ports: appPorts(apps, clock.after),
     }),
@@ -163,10 +170,11 @@ function appPorts(apps: AppsOptions, after: Timers["after"]) {
 
 function widgetRegistry(
   natives: readonly NativeWidgetPlugin[] | undefined,
-  sample: boolean,
+  samples: InMemorySource | undefined,
   apps: AppsOptions | undefined,
   after: Timers["after"],
 ): DesktopWidgetRegistry {
+  const sample = samples !== undefined
   // The sample plugin only beside the sample workspace, whose session its widgets belong to.
   const registry = createWidgetRegistry<WidgetPlugin>(
     natives ?? (sample ? [samplePlugin(sampleWidgetSession)] : []),
@@ -181,6 +189,7 @@ function widgetRegistry(
         timers: { after },
         newId: () => crypto.randomUUID(),
         page: () => readPageContext(document, apps.platform),
+        conversation: fixtureConversation(samples.appMessage),
       }),
     )
   return registry

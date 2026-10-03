@@ -1,6 +1,7 @@
 import {
   bounds,
   type McpCallToolResult,
+  type McpSendMessageResult,
   type McpReadResourceResult,
   type McpRemoteErrorDetails,
   type McpUiCsp,
@@ -18,6 +19,14 @@ export const MAX_MCP_ARGUMENTS_BYTES = bounds.maxMcpArgumentsBytes
 export const MAX_MCP_RESULT_BYTES = bounds.maxMcpResultBytes
 /** `McpReadResourceResult.size` maximum: the most one app resource holds. */
 export const MAX_MCP_RESOURCE_BYTES = bounds.maxMcpResourceBytes
+/** `McpSendMessageParams.text` maximum, in UTF-8 bytes: what a sent message may take. */
+export const MAX_MCP_MESSAGE_BYTES = bounds.maxMcpMessageBytes
+/**
+ * `McpUpdateModelContextParams.text` and `.structuredContentJson` maximum,
+ * each, in UTF-8 bytes. Together, as the gateway holds them, they take no
+ * more either; that is the gateway's to judge (`mcp_request_too_large`).
+ */
+export const MAX_MCP_CONTEXT_BYTES = bounds.maxMcpContextBytes
 
 const utf8 = new TextEncoder()
 
@@ -55,7 +64,47 @@ export const mcpAppRequestProblem = {
       : !wellFormedText(argumentsJson)
         ? "Arguments must be Unicode text"
         : undefined,
+  /**
+   * A message an app sends: 1 to `MAX_MCP_MESSAGE_BYTES` UTF-8 bytes of
+   * Unicode. Whether it is blank is the gateway's to judge (`invalid_request`).
+   */
+  message: (text: string): string | undefined =>
+    !boundedName(text, MAX_MCP_MESSAGE_BYTES)
+      ? `Message must contain 1-${MAX_MCP_MESSAGE_BYTES} UTF-8 bytes`
+      : !wellFormedText(text)
+        ? "Message must be Unicode text"
+        : undefined,
+  /**
+   * The context an app gives the model: its text and its structured content,
+   * encoded, each at most `MAX_MCP_CONTEXT_BYTES` UTF-8 bytes of Unicode.
+   * Whether they fit together as the gateway holds them — the structure
+   * re-encoded — and whether the structure is one JSON object are the
+   * gateway's to judge (`mcp_request_too_large`, `invalid_request`).
+   */
+  context: (context: McpModelContext): string | undefined => {
+    const parts = [context.text, context.structuredContentJson].filter(
+      (part): part is string => part !== undefined,
+    )
+    if (parts.some((part) => typeof part !== "string")) return "Context must be text"
+    if (parts.some((part) => utf8.encode(part).byteLength > MAX_MCP_CONTEXT_BYTES))
+      return `Context parts must each contain at most ${MAX_MCP_CONTEXT_BYTES} UTF-8 bytes`
+    return parts.every(wellFormedText) ? undefined : "Context must be Unicode text"
+  },
 } as const
+
+/** What an app gives the model: either part, both, or neither, which clears it. */
+export interface McpModelContext {
+  readonly text?: string
+  /** One JSON object, encoded. */
+  readonly structuredContentJson?: string
+}
+
+/** The answer to `mcp.sendMessage`: the turn the message became. */
+export function mcpSendMessageResult(value: unknown): McpSendMessageResult {
+  const item = object(value, ["executionId"], "message result")
+  if (!boundedName(item.executionId, 256)) throw new Error("Invalid message executionId")
+  return { executionId: item.executionId }
+}
 
 const instanceIdPattern = new RegExp(bounds.mcpAppInstanceIdPattern)
 const digestPattern = new RegExp(bounds.mcpResourceDigestPattern)

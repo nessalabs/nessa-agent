@@ -90,7 +90,9 @@ export const css = {
   appNotice: ".widget-app-notice", // class: a notice above a running app
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
-  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
+  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
+  messageAuthor: ".workspace-message-author", // class: which app wrote a message of the person's (#390)
+  bubble: ".workspace-bubble", // class: a message of the person's
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -322,6 +324,9 @@ export const names = {
   appSession: "An MCP App, in its sandbox",
   /** What the fixture server refuses its hidden tool with (`fixture-plugin.ts`). */
   hiddenToolRefused: "fixture_secret is not available to apps",
+  /** The tool whose UI the fixture app is, and the message it sends (`fixture-app.ts`). */
+  fixtureTool: "show_fixture",
+  fixtureMessage: "Plot May next to April",
   /** What the fixture app says on its body (`fixture-app.ts`), by the field it says it in. */
   fixtureSays: {
     state: "data-fixture-state",

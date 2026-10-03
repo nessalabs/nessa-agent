@@ -7,6 +7,11 @@
 use super::*;
 use crate::conversation::application::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
 use nessa_auth::domain::PrincipalId;
+use nessa_sdk::domain::agent_execution::{
+    executions::ExecutionId,
+    prompts::{AppContext, McpAppSource},
+    tools::{McpTool, ToolCallId},
+};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +53,7 @@ fn open(reviews: &Arc<AppReviews>, instance: &str) -> Result<Waiting, ReviewRefu
     reviews.open(
         EPOCH,
         new_review_id(),
+        ReviewAsk::RunTool,
         &app(instance),
         "charts",
         "delete_rows",
@@ -62,6 +68,7 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
         .open(
             EPOCH,
             new_review_id(),
+            ReviewAsk::RunTool,
             &app("i1"),
             "charts",
             "delete_rows",
@@ -252,7 +259,15 @@ async fn a_conversation_ending_withdraws_every_review_as_whoever_ended_it() {
     let reviews = reviews();
     let first = open(&reviews, "i1").unwrap();
     let second = reviews
-        .open(EPOCH, new_review_id(), &app("i2"), "files", "erase", "{}")
+        .open(
+            EPOCH,
+            new_review_id(),
+            ReviewAsk::RunTool,
+            &app("i2"),
+            "files",
+            "erase",
+            "{}",
+        )
         .unwrap();
     let mut released = 0;
     reviews.end(EPOCH, &releaser(), || released += 1);
@@ -317,12 +332,20 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
     let reviews = reviews();
     // One review alone past the share is never opened.
     let large = format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_APP_REVIEW_BYTES));
-    assert!(!fits("app-x", &app("i1"), "charts", "delete_rows", &large));
+    assert!(!fits(
+        "app-x",
+        ReviewAsk::RunTool,
+        &app("i1"),
+        "charts",
+        "delete_rows",
+        &large
+    ));
     assert_eq!(
         reviews
             .open(
                 EPOCH,
                 new_review_id(),
+                ReviewAsk::RunTool,
                 &app("i1"),
                 "charts",
                 "delete_rows",
@@ -337,6 +360,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
         .open(
             EPOCH,
             new_review_id(),
+            ReviewAsk::RunTool,
             &app("i1"),
             "charts",
             "delete_rows",
@@ -348,6 +372,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
             .open(
                 EPOCH,
                 new_review_id(),
+                ReviewAsk::RunTool,
                 &app("i1"),
                 "charts",
                 "delete_rows",
@@ -362,6 +387,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
         .open(
             EPOCH,
             new_review_id(),
+            ReviewAsk::RunTool,
             &app("i1"),
             "charts",
             "delete_rows",
@@ -480,4 +506,222 @@ async fn an_opening_never_carries_another_s_reviews() {
     ));
     assert!(reviews.reviews().is_empty());
     assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
+}
+
+// --- An app in its conversation (#390): consent and contexts -------------
+
+fn context(text: &str) -> AppContext {
+    AppContext::new(
+        McpAppSource::new(
+            ExecutionId::new("e1").unwrap(),
+            ToolCallId::new("t1").unwrap(),
+            McpTool::new("charts", "show").unwrap(),
+        )
+        .unwrap(),
+        Some(text.into()),
+        None,
+    )
+    .unwrap()
+}
+
+fn held(reviews: &AppReviews) -> Vec<String> {
+    reviews
+        .held_contexts()
+        .contexts
+        .iter()
+        .map(|context| context.text().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_mount_is_allowed_to_send_messages_until_its_release_or_the_openings_end() {
+    let reviews = reviews();
+    assert_eq!(reviews.consented(EPOCH, &app("i1")), Ok(false));
+    reviews.consent(EPOCH, &app("i1")).unwrap();
+    assert_eq!(reviews.consented(EPOCH, &app("i1")), Ok(true));
+    assert_eq!(reviews.consented(EPOCH, &app("i2")), Ok(false));
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    assert_eq!(
+        reviews.consented(EPOCH, &app("i1")),
+        Err(ReviewRefusal::Released)
+    );
+    assert_eq!(
+        reviews.consent(EPOCH, &app("i1")),
+        Err(ReviewRefusal::Released)
+    );
+
+    reviews.consent(EPOCH, &app("i2")).unwrap();
+    reviews.end(EPOCH, &releaser(), || {});
+    assert_eq!(
+        reviews.consented(EPOCH, &app("i2")),
+        Err(ReviewRefusal::Ended)
+    );
+    let next = reviews.begin();
+    assert_eq!(reviews.consented(next, &app("i2")), Ok(false));
+}
+
+#[test]
+fn a_mount_allowed_longest_ago_is_forgotten_past_the_bound_and_asks_again() {
+    let reviews = reviews();
+    let mount = |n: usize| app(&format!("i{n}"));
+    for n in 0..=MAX_CONSENTED_MOUNTS {
+        reviews.consent(EPOCH, &mount(n)).unwrap();
+    }
+    assert_eq!(reviews.consented(EPOCH, &mount(0)), Ok(false));
+    assert_eq!(
+        reviews.consented(EPOCH, &mount(MAX_CONSENTED_MOUNTS)),
+        Ok(true)
+    );
+}
+
+#[test]
+fn a_context_is_given_only_once_its_update_is_on_record() {
+    let reviews = reviews();
+    let old = reviews
+        .stage_context(EPOCH, &app("i1"), context("old"))
+        .unwrap();
+    assert!(held(&reviews).is_empty());
+    reviews.recorded_context(old);
+    let new = reviews
+        .stage_context(EPOCH, &app("i1"), context("new"))
+        .unwrap();
+    // Pending: what was on record stands.
+    assert_eq!(held(&reviews), ["old"]);
+    reviews.recorded_context(new);
+    assert_eq!(held(&reviews), ["new"]);
+    // An update that could not be recorded is let go of, and replaces nothing.
+    let lost = reviews
+        .stage_context(EPOCH, &app("i1"), context("lost"))
+        .unwrap();
+    reviews.discard_context(lost);
+    reviews.recorded_context(lost);
+    assert_eq!(held(&reviews), ["new"]);
+}
+
+#[test]
+fn two_updates_of_one_mount_recorded_out_of_order_leave_the_later_given() {
+    let reviews = reviews();
+    let first = reviews
+        .stage_context(EPOCH, &app("i1"), context("first"))
+        .unwrap();
+    let second = reviews
+        .stage_context(EPOCH, &app("i1"), context("second"))
+        .unwrap();
+    reviews.recorded_context(second);
+    assert_eq!(held(&reviews), ["second"]);
+    reviews.recorded_context(first);
+    assert_eq!(held(&reviews), ["second"]);
+    // And in order, the same.
+    let third = reviews
+        .stage_context(EPOCH, &app("i1"), context("third"))
+        .unwrap();
+    let fourth = reviews
+        .stage_context(EPOCH, &app("i1"), context("fourth"))
+        .unwrap();
+    reviews.recorded_context(third);
+    reviews.recorded_context(fourth);
+    assert_eq!(held(&reviews), ["fourth"]);
+}
+
+#[test]
+fn a_pending_update_holds_its_mounts_place_and_a_clear_lets_go_of_it() {
+    let reviews = reviews();
+    for n in 0..MAX_HELD_CONTEXTS {
+        reviews
+            .stage_context(EPOCH, &app(&format!("i{n}")), context("x"))
+            .unwrap();
+    }
+    assert_eq!(
+        reviews
+            .stage_context(EPOCH, &app("other"), context("x"))
+            .map(|_| ()),
+        Err(ContextRefusal::Full)
+    );
+    // The same mount may stage another beside its own.
+    let again = reviews
+        .stage_context(EPOCH, &app("i0"), context("y"))
+        .unwrap();
+    reviews.clear_context(EPOCH, &app("i0")).unwrap();
+    reviews.recorded_context(again);
+    assert!(!held(&reviews).contains(&"y".to_owned()));
+    reviews
+        .stage_context(EPOCH, &app("other"), context("x"))
+        .unwrap();
+}
+
+#[test]
+fn a_message_takes_what_it_read_and_never_a_replacement_given_since() {
+    let reviews = reviews();
+    let one = reviews
+        .stage_context(EPOCH, &app("i1"), context("one"))
+        .unwrap();
+    reviews.recorded_context(one);
+    let two = reviews
+        .stage_context(EPOCH, &app("i2"), context("two"))
+        .unwrap();
+    reviews.recorded_context(two);
+    let read = reviews.held_contexts();
+    // Replaced after the message read it, before it was taken.
+    let newer = reviews
+        .stage_context(EPOCH, &app("i1"), context("newer"))
+        .unwrap();
+    reviews.recorded_context(newer);
+    reviews.took(&read);
+    assert_eq!(held(&reviews), ["newer"]);
+}
+
+#[test]
+fn contexts_are_let_go_of_with_their_mount_the_openings_end_and_a_delete() {
+    let reviews = reviews();
+    for mount in ["i1", "i2"] {
+        let number = reviews
+            .stage_context(EPOCH, &app(mount), context(mount))
+            .unwrap();
+        reviews.recorded_context(number);
+    }
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    assert_eq!(held(&reviews), ["i2"]);
+    assert_eq!(
+        reviews
+            .stage_context(EPOCH, &app("i1"), context("i1"))
+            .map(|_| ()),
+        Err(ContextRefusal::Gone(ReviewRefusal::Released))
+    );
+    // Pending when the opening ends: let go of, and its record comes later.
+    let pending = reviews
+        .stage_context(EPOCH, &app("i3"), context("i3"))
+        .unwrap();
+    reviews.end(EPOCH, &releaser(), || {});
+    reviews.recorded_context(pending);
+    assert!(held(&reviews).is_empty());
+    let next = reviews.begin();
+    let number = reviews
+        .stage_context(next, &app("i2"), context("again"))
+        .unwrap();
+    reviews.recorded_context(number);
+    reviews.delete(|| {});
+    assert!(held(&reviews).is_empty());
+}
+
+#[test]
+fn a_message_review_says_what_it_asks() {
+    let reviews = reviews();
+    let waiting = reviews
+        .open(
+            EPOCH,
+            new_review_id(),
+            ReviewAsk::SendMessage,
+            &app("i1"),
+            "charts",
+            "show",
+            r#"{"text":"hi"}"#,
+        )
+        .unwrap();
+    let shown = reviews.reviews();
+    assert_eq!(
+        shown[0].title,
+        "The show app on charts asks to send a message as you"
+    );
+    assert_eq!(shown[0].arguments_json, r#"{"text":"hi"}"#);
+    drop(waiting);
 }

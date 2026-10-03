@@ -109,13 +109,26 @@ export interface McpAppCalls {
 /** What a request to the conversation came to. */
 export type Delivered = "done" | "refused"
 
-/** The conversation an app's call was made in: messages and model context. */
+/**
+ * The conversation an app's call was made in: messages and model context.
+ * Whether the app may speak there — the person's consent, a turn already
+ * running, the bounds — is the gateway's to decide (#390); `refused` is its
+ * answer.
+ */
 export interface McpAppConversation {
-  /** `ui/message`: a message from the person, through the app. */
-  sendMessage(sessionId: string, content: readonly JsonObject[]): Promise<Delivered>
-  /** `ui/update-model-context`: replaces what this app last gave the model. */
+  /**
+   * `ui/message`: a message from the person, written by the app. Its blocks
+   * are what `model/messages.ts` reads: text.
+   */
+  sendMessage(address: AppAddress, content: readonly JsonObject[]): Promise<Delivered>
+  /**
+   * How long, in milliseconds, a `ui/message` may take before the bridge
+   * gives up on it: the first of a mount's waits on the person's review.
+   */
+  readonly messageWithin: number
+  /** `ui/update-model-context`: replaces what this mount last gave the model. */
   updateModelContext(
-    sessionId: string,
+    address: AppAddress,
     context: {
       readonly content?: readonly JsonObject[]
       readonly structuredContent?: JsonObject

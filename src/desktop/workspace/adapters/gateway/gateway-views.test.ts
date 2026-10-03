@@ -212,6 +212,35 @@ describe("a conversation view as a transcript", () => {
     ])
   })
 
+  it("says which app wrote a turn, waiting or not, and nothing of the person's own", () => {
+    const app = { executionId: "e0", toolId: "t0", server: "charts", tool: "show" }
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", app }),
+          turn({ executionId: "e2", userText: "mine" }),
+        ],
+        pending: [
+          {
+            executionId: "e3",
+            text: "Plot May",
+            attachments: [],
+            files: [],
+            app,
+            mode: "queued",
+          },
+        ],
+      }),
+      1,
+      at,
+    )
+    expect(transcript.messages.map((message) => [message.id, message.app])).toEqual([
+      ["e1", { server: "charts", tool: "show" }],
+      ["e2", undefined],
+      ["e3", { server: "charts", tool: "show" }],
+    ])
+  })
+
   it("says what a running turn does until its reply streams, then nothing", () => {
     const working = transcriptFrom(
       view("c", {

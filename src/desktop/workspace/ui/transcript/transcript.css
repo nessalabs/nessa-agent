@@ -168,6 +168,17 @@
   margin: 0;
 }
 
+/* Which app wrote the person's message, on their behalf: said above it. */
+.workspace-message-author {
+  max-width: min(84%, 540px);
+  margin: 0 4px 4px 0;
+  overflow: hidden;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace-message-failed {
   display: flex;
   flex-wrap: wrap;

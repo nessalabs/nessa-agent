@@ -370,4 +370,113 @@ mod mcp_app_lane {
         drop(peer.input);
         task.await.unwrap();
     }
+
+    fn app(fixture: &Fixture, instance: &str) -> serde_json::Value {
+        json!({
+            "executionId": fixture.execution_id,
+            "toolId": fixture.tool_id,
+            "instanceId": instance,
+        })
+    }
+
+    #[tokio::test]
+    async fn an_apps_messages_and_contexts_travel_on_its_lane_and_land_as_its_own() {
+        let fixture = owners_fixture().await;
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        let message = |request: &str, text: &str| {
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": request,
+                "app": app(&fixture, INSTANCE),
+                "server": SERVER,
+                "text": text,
+            })
+        };
+        let context = |request: &str| {
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": request,
+                "app": app(&fixture, INSTANCE),
+                "server": SERVER,
+                "text": "Showing April",
+                "structuredContentJson": "{\"month\":4}",
+            })
+        };
+
+        // Four first messages, each waiting on the person: the lane is full,
+        // for a context as much as a call.
+        for request in ["m1", "m2", "m3", "m4"] {
+            send_command(&peer, request, "mcp.sendMessage", message(request, "hello"));
+        }
+        until(async || fixture.app_reviews().await.len() == 4).await;
+        send_command(&peer, "ctx", "mcp.updateModelContext", context("ctx"));
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "ctx");
+        assert_eq!(refused["error"]["code"], "temporarily_unavailable");
+
+        // Allowed, one is sent, answered with the turn it became; the other
+        // three, asking for the same mount, are let go by its release.
+        let reviews = fixture.app_reviews().await;
+        send_command(
+            &peer,
+            "answer",
+            "conversation.answer",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "answer",
+                "executionId": reviews[0].execution_id,
+                "permissionId": reviews[0].permission_id,
+                "optionId": "allow",
+            }),
+        );
+        let answered = responses(&mut peer, 2).await;
+        let sent: Vec<_> = answered.keys().filter(|id| id.starts_with('m')).collect();
+        assert_eq!(sent.len(), 1, "{answered:?}");
+        let execution = answered[sent[0]]["payload"]["executionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // The context now has room, and is applied.
+        send_command(&peer, "ctx2", "mcp.updateModelContext", context("ctx2"));
+        let applied = response(&mut peer).await;
+        assert_eq!(applied["id"], "ctx2");
+        assert_eq!(applied["payload"], json!({"requestId": "ctx2", "applied": true}));
+
+        // The transcript says who wrote it, on the wire.
+        until(async || {
+            send_command(
+                &peer,
+                "read",
+                "conversation.read",
+                json!({"conversationId": fixture.id.to_string()}),
+            );
+            let view = loop {
+                let reply = response(&mut peer).await;
+                if reply["id"] == "read" {
+                    break reply;
+                }
+            };
+            view["payload"]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| {
+                    message["executionId"] == execution.as_str()
+                        && message["app"]
+                            == json!({
+                                "executionId": fixture.execution_id,
+                                "toolId": fixture.tool_id,
+                                "server": SERVER,
+                                "tool": crate::app_call_test_support::UI_TOOL,
+                            })
+                })
+        })
+        .await;
+        drop(peer.input);
+        task.await.unwrap();
+    }
 }

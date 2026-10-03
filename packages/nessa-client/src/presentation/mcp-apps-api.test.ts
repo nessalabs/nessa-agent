@@ -866,3 +866,175 @@ it("is certain nothing reached the gateway for a request too large to send", asy
   expect(error).toBeInstanceOf(NessaMcpAppError)
   expect(error).toMatchObject({ code: undefined, uncertain: false, cause })
 })
+
+describe("an app speaking in its conversation (#390)", () => {
+  it("sends a message as the app, waiting as long as a review can, and returns its turn", async () => {
+    const request = vi.fn(async () => ({ executionId: "turn-2" }))
+    expect(
+      await api(request).sendMessage(conversationId, app, "charts", "Plot May", {
+        requestId: "message",
+      }),
+    ).toEqual({ executionId: "turn-2" })
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "mcp.sendMessage",
+      { conversationId, requestId: "message", app, server: "charts", text: "Plot May" },
+      { atLeastMs: mcpAppDeadlines.sendMessageMs },
+    )
+    expect(mcpAppDeadlines.sendMessageMs).toBe(mcpAppDeadlines.callToolMs)
+  })
+
+  it("gives the model context, leaving out the part not given", async () => {
+    const request = vi.fn<Request>(async () => ({ requestId: "context", applied: true }))
+    expect(
+      await api(request).updateModelContext(
+        conversationId,
+        app,
+        "charts",
+        { structuredContentJson: '{"month":4}' },
+        { requestId: "context" },
+      ),
+    ).toEqual({ requestId: "context", applied: true })
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "mcp.updateModelContext",
+      {
+        conversationId,
+        requestId: "context",
+        app,
+        server: "charts",
+        structuredContentJson: '{"month":4}',
+      },
+      { atLeastMs: mcpAppDeadlines.updateModelContextMs },
+    )
+    // Neither part clears it: a request of the conversation and app alone.
+    await api(request).updateModelContext(
+      conversationId,
+      app,
+      "charts",
+      {},
+      {
+        requestId: "context",
+      },
+    )
+    expect(request.mock.calls[1]![1]).toEqual({
+      conversationId,
+      requestId: "context",
+      app,
+      server: "charts",
+    })
+  })
+
+  it("sends a message and a context at exactly their bounds, and nothing one byte past", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "mcp.sendMessage"
+        ? { executionId: "turn" }
+        : { requestId: "generated", applied: true },
+    )
+    const mcpApps = api(request)
+    // Counted in UTF-8 bytes, multibyte text included.
+    await mcpApps.sendMessage(conversationId, app, "charts", "é".repeat(4096))
+    await expect(
+      mcpApps.sendMessage(conversationId, app, "charts", `${"é".repeat(4096)}x`),
+    ).rejects.toBeInstanceOf(TypeError)
+    // Each part to the wire's own bound; together is the gateway's to judge,
+    // on what it holds, and is sent.
+    const structured = `{"a":"${"x".repeat(8192 - 8)}"}`
+    expect(structured).toHaveLength(8192)
+    await mcpApps.updateModelContext(conversationId, app, "charts", {
+      text: "x".repeat(8192),
+      structuredContentJson: structured,
+    })
+    await expect(
+      mcpApps.updateModelContext(conversationId, app, "charts", {
+        text: "x".repeat(8193),
+      }),
+    ).rejects.toBeInstanceOf(TypeError)
+    await expect(
+      mcpApps.updateModelContext(conversationId, app, "charts", {
+        structuredContentJson: `${structured} `,
+      }),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    [
+      "an empty message",
+      () => api(vi.fn()).sendMessage(conversationId, app, "charts", ""),
+    ],
+    [
+      "a message that is not Unicode",
+      () => api(vi.fn()).sendMessage(conversationId, app, "charts", "a\ud800"),
+    ],
+    [
+      "a message that is no string",
+      () =>
+        api(vi.fn()).sendMessage(conversationId, app, "charts", 7 as unknown as string),
+    ],
+    [
+      "a context that is not Unicode",
+      () =>
+        api(vi.fn()).updateModelContext(conversationId, app, "charts", {
+          text: "\udc00",
+        }),
+    ],
+    [
+      "a context part that is no string",
+      () =>
+        api(vi.fn()).updateModelContext(conversationId, app, "charts", {
+          structuredContentJson: 5 as unknown as string,
+        }),
+    ],
+    [
+      "a context that is no object",
+      () =>
+        api(vi.fn()).updateModelContext(
+          conversationId,
+          app,
+          "charts",
+          null as unknown as object,
+        ),
+    ],
+    [
+      "another server's name past its bound",
+      () => api(vi.fn()).sendMessage(conversationId, app, "x".repeat(129), "hi"),
+    ],
+  ])("refuses %s before asking the gateway", async (_name, send) => {
+    await expect(send()).rejects.toBeInstanceOf(TypeError)
+  })
+
+  it("is certain a message refused while a turn runs reached nobody", async () => {
+    const cause = new NessaRpcError("turn_running", "busy")
+    const error = await failure(
+      api(() => Promise.reject(cause)).sendMessage(conversationId, app, "charts", "hi"),
+    )
+    expect(error).toBeInstanceOf(NessaMcpAppError)
+    expect(error).toMatchObject({ code: "turn_running", uncertain: false, cause })
+  })
+
+  it.each([
+    ["no turn", {}],
+    ["an empty turn", { executionId: "" }],
+    ["a turn past 256 bytes", { executionId: "x".repeat(257) }],
+    ["an unknown field", { executionId: "turn", sent: true }],
+  ])("refuses a message answer with %s", async (_name, reply) => {
+    const error = await failure(
+      api(async () => reply).sendMessage(conversationId, app, "charts", "hi"),
+    )
+    expect(error).toBeInstanceOf(NessaMcpAppError)
+    expect(error).toMatchObject({ code: undefined, uncertain: true })
+  })
+
+  it("refuses a context answer that acknowledges another action", async () => {
+    const error = await failure(
+      api(async () => ({ requestId: "other", applied: true })).updateModelContext(
+        conversationId,
+        app,
+        "charts",
+        { text: "x" },
+        { requestId: "context" },
+      ),
+    )
+    expect(error).toBeInstanceOf(NessaMcpAppError)
+    expect(error).toMatchObject({ uncertain: true })
+  })
+})

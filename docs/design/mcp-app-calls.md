@@ -4,7 +4,9 @@ An MCP App ([ADR 344](../adr/todo/344-mcp-ui.md)) reaches its own server
 through the gateway: `mcp.callTool` and `mcp.readResource`, on the
 conversation's own session of that server
 ([one connection per harness session](mcp-connections.md)). Its host releases
-one mount of it with `mcp.releaseApp`. The wire contract is
+one mount of it with `mcp.releaseApp`. It speaks in its conversation with
+`mcp.sendMessage` and `mcp.updateModelContext` (#390, "An app in its
+conversation" below). The wire contract is
 [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls); this is what
 the gateway does with it (#348, part b).
 
@@ -218,6 +220,84 @@ gateway stops; nothing reports it.
 
 Anything still running after that is logged as such.
 
+## An app in its conversation (#390)
+
+An app may write the person's next message (`ui/message`) and give the model
+context (`ui/update-model-context`). Both are the app's steps, audited as the
+app's on behalf of the caller, on the app lane.
+
+**Decisions.**
+
+- **Consent: the first message per mount, per opening.** It waits on an app
+  review (`ReviewAsk::SendMessage`) in the conversation's `permissions`,
+  answered as a destructive call's is. Allowed, the mount is remembered
+  under the conversation's apps lock, and asks no more until it is released
+  or the opening ends; denied, expired or withdrawn, the next message asks
+  again. An opening remembers its 64 latest allowed mounts.
+- **Who wrote it is part of the message.** The SDK's `UserMessage` carries
+  its `MessageSender` — the person, or the app's tool call (execution and
+  tool call, server and tool) — persisted with the invocation, compared on a
+  retry, and projected as `ConversationMessage.app`.
+- **An app's message waits for nobody.** Refused `turn_running` while a turn
+  runs or input waits, checked inside the submission under the
+  conversation's submission lock.
+- **One context per mount, sent once.** Held under the apps lock, pending
+  until its update is on record (as a ticket is), taken by the next message
+  admitted into the conversation, whoever wrote it. Taken only once the agent
+  has the message: a refused message takes none. A retry carries what its
+  first attempt took and takes nothing more.
+- **How it reaches the agent.** Claude, Codex and OpenCode are all ACP
+  harnesses; each is given one leading `text` block — a fixed preamble, then
+  the contexts as one JSON array (`prompt_content.rs`). A text block is the
+  one kind every ACP agent takes, and JSON encoding means nothing an app
+  writes can end the block or pass for another app's entry.
+- **Bounds.** A message: the conversation's input bound. A context: 8 KiB of
+  text and structured JSON together (`AppContext::MAX_BYTES`); at most 4
+  mounts hold one (`UserMessage::MAX_APP_CONTEXTS`), so a turn carries at
+  most 32 KiB of app context.
+
+### A message
+
+| # | State | Event | Next | Effect, and what is recorded |
+| --- | --- | --- | --- | --- |
+| M1 | — | the app lane or the 32 slots full | — | `temporarily_unavailable`; nothing recorded |
+| M2 | — | no app of this conversation, or another server | — | `Refused(mcp_app_unknown / mcp_server_mismatch)` |
+| M3 | — | blank text | — | `Refused(invalid_request)` |
+| M4 | — | past the input bound | — | `Refused(mcp_request_too_large)` |
+| M5 | — | its mount released, or the opening ended | — | `Refused(mcp_cancelled)`, by the system |
+| M6 | — | mount not yet allowed | Waiting | `ApprovalRequested`; the review shows `{"text": …}` |
+| M7 | Waiting | the person allows | Sending | `Approved`, by that person; the mount allowed |
+| M8 | Waiting | denied, expired, or withdrawn (its request gone, a release, an end) | — | as a call's review; not allowed |
+| M9 | — | mount allowed | Sending | `Admitted` |
+| M10 | Sending | released or ended before its last check | — | `Refused(mcp_cancelled)`, by the system; not sent |
+| M11 | Sending | a turn running or input waiting | — | `Refused(turn_running)` |
+| M12 | Sending | the agent takes it | — | `MessageSent{executionId}`; answered with it |
+| M13 | Sending | the conversation refuses it | — | `MessageNotSent{executionId}`; its own code |
+| M14 | Sending | the agent took it, its admission evidence failed | — | `MessageSent`; the evidence's code |
+| M15 | any | a record cannot be written | — | `audit_unavailable`; the step not taken |
+| M16 | allowed | release, or the opening ends | — | allowing forgotten |
+
+### A context
+
+| # | State | Event | Next | Effect, and what is recorded |
+| --- | --- | --- | --- | --- |
+| C1 | — | lane or slots full | — | `temporarily_unavailable` |
+| C2 | — | no app, another server, released, ended | — | as M2, M5 |
+| C3 | — | past 8 KiB | — | `Refused(mcp_request_too_large)` |
+| C4 | — | structured content no object | — | `Refused(invalid_request)` |
+| C5 | none or held | an update, fewer than 4 other mounts holding one | pending | its place taken; then `ContextHeld{bytes}`; then held, replacing the mount's |
+| C6 | none | 4 other mounts hold one (pending ones too) | none | `Refused(temporarily_unavailable)` |
+| C7 | any | an update with neither part | none | `ContextCleared`; held and pending let go of |
+| C8 | held | a message admitted | none | carried with it, once, in the order given |
+| C9 | held | a message refused | held | kept |
+| C10 | held | a retry of a message the agent has | held | the retry carries what it first took |
+| C11 | held | its mount released | none | let go of, unsent |
+| C12 | held | the opening ends | none | all let go of, unsent |
+| C13 | pending | a message admitted | pending | not carried: what was on record is |
+| C14 | pending | `ContextHeld` cannot be written | — | let go of; `audit_unavailable`; what was held stands |
+| C15 | pending | released or ended before its record | none | its record stands; the release came after it |
+| C16 | pending ×2 | two updates of one mount recorded out of order | held | the later given stands |
+
 ## Lanes
 
 App calls have 4 slots on each socket. A destructive call holds its slot while
@@ -246,3 +326,11 @@ Each row above has a test, named after it:
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `wire_errors.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
+- An app in its conversation, each row of "A message" and "A context":
+  `crates/nessa-server/tests/conversation/app_messages.rs`, and the
+  orderings C13–C16 in `app_reviews.rs`; the ACP block in
+  `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
+  its persistence in `snapshot/semantic.rs`; the socket in
+  `an_apps_messages_and_contexts_travel_on_its_lane_and_land_as_its_own`;
+  the desktop in `app-messages.test.ts` and `mcp-apps.mjs --only
+  message`.

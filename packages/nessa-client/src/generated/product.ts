@@ -440,6 +440,8 @@ export interface ConversationMessage {
   attachments: ImageAttachment[]
   /** Files the user pointed this turn at, in attachment order. No bytes were ever carried for them. */
   files: LinkedFile[]
+  /** The app that wrote this turn on the person's behalf; absent when the person wrote it. */
+  app?: ConversationMessageApp
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -461,8 +463,21 @@ export interface ConversationPending {
   attachments: ImageAttachment[]
   /** Files the waiting input points at, in attachment order. */
   files: LinkedFile[]
+  /** The app that wrote this waiting input on the person's behalf; absent when the person wrote it. */
+  app?: ConversationMessageApp
   /** Queue or steering admission. */
   mode: ConversationPendingMode
+}
+/** The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to. */
+export interface ConversationMessageApp {
+  /** The execution the app's tool call belongs to. */
+  executionId: string
+  /** The app's tool call. */
+  toolId: string
+  /** The app's MCP server. */
+  server: string
+  /** The tool whose UI the app is. */
+  tool: string
 }
 /** An exact option offered by the provider. */
 export interface ConversationPermissionOption {
@@ -820,6 +835,39 @@ export interface McpReleaseAppParams {
   requestId: string
   /** The mount torn down. */
   app: McpAppReference
+}
+/** An MCP App sends a message into its conversation (mcp.sendMessage, MCP Apps ui/message): the person's turn, written by the app on their behalf and shown in the transcript as the app's (ConversationMessage.app). The first message from a mount in an opening of the conversation waits for the person's approval in the conversation's permissions, origin {kind: app}, answered with conversation.answer or conversation.cancel whatever the approval mode; allowed, that mount sends without asking again until it is released or the opening ends. Refused turn_running while a turn runs or input waits, so an app's message never queues behind the person's own; any other refusal of the message is its own conversation code. It travels on the app lane. */
+export interface McpSendMessageParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app sending it. */
+  app: McpAppReference
+  /** The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch. */
+  server: string
+  /** The message, as text: at most 8192 UTF-8 bytes, what conversation.send takes (mcp_request_too_large past it), and not blank (invalid_request). */
+  text: string
+}
+/** The conversation's agent took the message. */
+export interface McpSendMessageResult {
+  /** The turn the message became, as the transcript names it. */
+  executionId: string
+}
+/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; neither text nor structuredContentJson clears it. It is held for the mount until the next message admitted into the conversation, the person's or an app's, takes it: sent once, with that turn, ahead of what the message says, and never shown in the transcript. A release of the mount (mcp.releaseApp) or the end of the conversation's opening lets go of it unsent. Text and structured content together take at most 8192 UTF-8 bytes (mcp_request_too_large past it), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
+export interface McpUpdateModelContextParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app giving it. */
+  app: McpAppReference
+  /** The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch. */
+  server: string
+  /** The context as text. Empty is none. */
+  text?: string
+  /** The context's structured content: one JSON object, encoded (invalid_request if it is not one), held as parsed — re-encoded, a duplicate key's last value kept. Absent is none. */
+  structuredContentJson?: string
 }
 /** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
 export interface McpCallToolParams {
@@ -1335,7 +1383,7 @@ export const mcpAppCallTiming = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 32,
+  maxReadyMethods: 34,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1375,6 +1423,8 @@ export const bounds = {
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxMcpArgumentsBytes: 32768,
   maxMcpResultBytes: 57344,
+  maxMcpMessageBytes: 8192,
+  maxMcpContextBytes: 8192,
   maxMcpResourceUriBytes: 2048,
   mcpAppMimeType: "text/html;profile=mcp-app",
   maxMcpResourceBytes: 4194304,
@@ -1420,6 +1470,8 @@ export const ProductMethod = {
   McpCallTool: "mcp.callTool",
   McpReadResource: "mcp.readResource",
   McpReleaseApp: "mcp.releaseApp",
+  McpSendMessage: "mcp.sendMessage",
+  McpUpdateModelContext: "mcp.updateModelContext",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
@@ -1456,6 +1508,8 @@ export const productReadyMethods = [
   "mcp.callTool",
   "mcp.readResource",
   "mcp.releaseApp",
+  "mcp.sendMessage",
+  "mcp.updateModelContext",
 ] as const
 export const catalogueWireSchemas = {
   RecordScope: {

@@ -368,6 +368,14 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   filling it. _Check:_ `mcp-apps.mjs --only inline,pane,window`.
 - [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
   one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
+- [ ] **An app's message lands in its conversation, as the person's, saying
+  which app wrote it** (#390): `ui/message` is answered `{}`, the transcript
+  gains exactly one message of the person's with the app's words, labelled
+  "Sent by the show_fixture app" above its bubble, right-aligned with it
+  (within 6 px) and inside the column; another while the reply runs is
+  refused (`isError: true`) and adds nothing; `ui/update-model-context` is
+  answered `{}`. The gateway's own path is `crates/nessa-server/tests/conversation/app_messages.rs`
+  and `app-messages.test.ts`. _Check:_ `mcp-apps.mjs --only message`.
 - [ ] **A request to an origin the app did not declare is blocked by its CSP,
   and the host says so** above the app. _Check:_ `mcp-apps.mjs --only csp`.
 - [ ] **The app is on an opaque origin**: no parent or top document, no

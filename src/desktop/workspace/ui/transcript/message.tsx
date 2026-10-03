@@ -12,7 +12,7 @@ import { failureCopy } from "../failure-copy"
 
 /**
  * One message. The person's is a bubble, saying so when it has not reached
- * the agent; the agent's is prose, steps, code, lists and widgets, each a
+ * the agent, and which app wrote it when an app did; the agent's is prose, steps, code, lists and widgets, each a
  * card its plugin draws (`InlineWidget`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
@@ -35,6 +35,11 @@ export const Message = memo(function Message({
         data-new={isNew || undefined}
         data-sending={message.delivery?.state === "sending" || undefined}
       >
+        {message.app ? (
+          <p className="workspace-message-author" data-message-app={message.app.tool}>
+            Sent by the {message.app.tool} app
+          </p>
+        ) : null}
         <div className="workspace-bubble">
           {message.parts.map((part, index) =>
             part.kind === "text" ? (

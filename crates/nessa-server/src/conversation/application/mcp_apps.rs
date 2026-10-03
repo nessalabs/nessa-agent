@@ -74,8 +74,22 @@ pub trait McpApps: Send + Sync {
 /// What an app asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppAsk {
-    CallTool { server: String, tool: String },
-    ReadResource { server: String, uri: String },
+    CallTool {
+        server: String,
+        tool: String,
+    },
+    ReadResource {
+        server: String,
+        uri: String,
+    },
+    /// `ui/message`: a message in its conversation, as the person.
+    SendMessage {
+        server: String,
+    },
+    /// `ui/update-model-context`: what it gives the model now.
+    UpdateModelContext {
+        server: String,
+    },
 }
 
 /// Who a step was taken by: the app, on behalf of the person whose
@@ -126,10 +140,12 @@ pub enum McpAppCode {
     RemoteError,
     InvalidRequest,
     TemporarilyUnavailable,
+    /// A message, while a turn runs or input waits.
+    TurnRunning,
 }
 impl McpAppCode {
     /// Every code, for the tests that hold them to the protocol's.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::AppUnknown,
         Self::ServerMismatch,
         Self::ToolNotForApp,
@@ -143,6 +159,7 @@ impl McpAppCode {
         Self::RemoteError,
         Self::InvalidRequest,
         Self::TemporarilyUnavailable,
+        Self::TurnRunning,
     ];
     /// The protocol's name for it.
     pub fn as_str(self) -> &'static str {
@@ -160,6 +177,7 @@ impl McpAppCode {
             Self::RemoteError => "mcp_remote_error",
             Self::InvalidRequest => "invalid_request",
             Self::TemporarilyUnavailable => "temporarily_unavailable",
+            Self::TurnRunning => "turn_running",
         }
     }
 }
@@ -221,6 +239,17 @@ pub enum McpAppAuditPhase {
         ticket_digest: String,
         cause: TicketEnd,
     },
+    /// The agent took the app's message as the turn `execution_id`, whose
+    /// own record holds what it said.
+    MessageSent { execution_id: String },
+    /// The conversation refused the app's message: nothing reached the
+    /// agent. Its code is the answer's.
+    MessageNotSent { execution_id: String },
+    /// The mount's context, `bytes` of it, is held for the next message, in
+    /// place of what it held.
+    ContextHeld { bytes: usize },
+    /// The mount holds no context now.
+    ContextCleared,
 }
 
 /// Immutable evidence of one step: its target (the conversation, the app,

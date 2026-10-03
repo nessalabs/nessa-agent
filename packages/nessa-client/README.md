@@ -165,7 +165,7 @@ requests, and releases subscriptions. It is safe to call repeatedly.
 - `client.conversation.create({ conversationId? })` creates or reopens an agent conversation.
 - `client.conversation.send(id, text, attachments)` queues a message of text, images, or both; `steer(id, text, attachments)` uses supported steering. Pass `[]` for text alone.
 - `client.attachments.begin(id, file)` and `client.attachments.upload(ticket, file)` stage bytes so a message can refer to them by digest.
-- `client.mcpApps.callTool`, `readResource`, `fetchResource`, and `releaseApp` make an MCP App's calls to its own server, fetch its HTML, and release a mount of it.
+- `client.mcpApps.callTool`, `readResource`, `fetchResource`, and `releaseApp` make an MCP App's calls to its own server, fetch its HTML, and release a mount of it; `sendMessage` and `updateModelContext` let it speak in its conversation (`ui/message`, `ui/update-model-context`).
 - `client.conversation.read(id)` returns a bounded replacement view of live output, waiting input, tools, and permissions.
 - `client.conversation.list({ archived? })` lists the caller's conversations, closed ones included, newest first: title, last line said, when, whether it is running, and whether it is archived. Archived conversations are listed only when asked for. It opens no provider.
 - `archive(id)` and `unarchive(id)` hide and restore a conversation in that list, answering `applied: false` when it was already in that state, or — for `archive` — when the gateway has no summary for it (nothing was said in it, or its summary was never written), since such a conversation is never listed; `delete(id)` deletes it permanently — history, uploads and summary are erased, audit evidence is kept, and later commands on it by its owner reject with `conversation_deleted` — except deleting it again — while anyone else is told `conversation_not_found`. The request that decided a deletion answers `applied: true`, and so does a repeat of it (same caller, surface and `requestId`); any other later delete answers `false`. `conversation_erasure_incomplete` means it was deleted but some stored data remains, and `audit_unavailable` from `delete` means it was deleted but its record — the deletion record, or the uploads' own evidence — did not finish; any other code from `delete` means only that whether it was deleted is not known — list it, or delete again. For the first two, deleting again, and each gateway start, tries the erasure again (and may answer the same), while an agent that keeps refusing to delete its own session, or a damaged history, needs the operator.
@@ -360,7 +360,31 @@ itself. What the arguments decode to is the gateway's to judge
 `NessaRequestTooLargeError` — inside `NessaMcpAppError`, with `uncertain`
 false: the gateway would close the socket on it rather than answer.
 
-`callTool` and `readResource` fail with `NessaMcpAppError`. Its `uncertain` is
+An app speaks in its conversation through two more calls:
+
+```ts
+await client.mcpApps.updateModelContext(conversationId, app, "charts", {
+  text: "Showing April",
+  structuredContentJson: JSON.stringify({ month: 4 }),
+})
+const { executionId } = await client.mcpApps.sendMessage(
+  conversationId,
+  app,
+  "charts",
+  "Plot May next to April",
+)
+```
+
+`sendMessage` puts the text in the conversation as the person's turn, shown
+as the app's; the first from a mount waits on the person's review, so it waits
+as long as a call (`mcpAppDeadlines.sendMessageMs`), and one while a turn runs
+fails `turn_running`. `updateModelContext` holds the context until the next
+message takes it to the agent, once; neither part clears it. Their bounds are
+`MAX_MCP_MESSAGE_BYTES` and `MAX_MCP_CONTEXT_BYTES` (each part; whether they
+fit together, as held, is the gateway's to say: `mcp_request_too_large`),
+asked of `mcpAppRequestProblem.message` and `.context`.
+
+`callTool`, `readResource`, `sendMessage` and `updateModelContext` fail with `NessaMcpAppError`. Its `uncertain` is
 `false` when nothing reached the app's server — `mcp_app_unknown`,
 `mcp_server_mismatch`, `mcp_tool_not_for_app`, `mcp_request_too_large`,
 `mcp_approval_denied`, `mcp_approval_expired`, `mcp_cancelled` — and `true`

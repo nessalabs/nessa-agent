@@ -140,23 +140,23 @@ pub use record_read::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, McpAppCall, McpAppRead, McpAppResource,
-    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, MAX_APP_CALLS,
-    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    ConversationService, DeletionsLeft, McpAppCall, McpAppMessage, McpAppModelContext, McpAppRead,
+    McpAppResource, QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
+    MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,
     ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
     ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationLinkedFile, ConversationList, ConversationListEntry,
-    ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPending,
-    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationReorderOutcome,
-    ConversationStartupFailure, ConversationStartupFailureCode, ConversationTool, ConversationView,
-    ElicitationForwardingSupport, IncomingElicitationSupport, ModelSwitchReportingSupport,
-    NativeHookSuppressionSupport, PermissionDeferralSupport, PermissionDenialSupport,
-    PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport, SubmissionReceipt,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
+    ConversationPending, ConversationPendingMode, ConversationPermission,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationReorderOutcome, ConversationStartupFailure, ConversationStartupFailureCode,
+    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
+    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
+    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
+    SubmissionReceipt, MAX_STRUCTURED_CONTENT_BYTES,
 };
 
 #[cfg(test)]

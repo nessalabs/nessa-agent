@@ -156,7 +156,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 32,
+          "maxItems": 34,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -959,6 +959,10 @@
           "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files the user pointed this turn at, in attachment order. No bytes were ever carried for them."
         },
+        "app": {
+          "$ref": "#/$defs/ConversationMessageApp",
+          "description": "The app that wrote this turn on the person's behalf; absent when the person wrote it."
+        },
         "status": {
           "$ref": "#/$defs/ConversationMessageStatus",
           "description": "Current invocation state."
@@ -1024,12 +1028,52 @@
           "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files the waiting input points at, in attachment order."
         },
+        "app": {
+          "$ref": "#/$defs/ConversationMessageApp",
+          "description": "The app that wrote this waiting input on the person's behalf; absent when the person wrote it."
+        },
         "mode": {
           "$ref": "#/$defs/ConversationPendingMode",
           "description": "Queue or steering admission."
         }
       },
       "required": ["executionId", "text", "attachments", "files", "mode"]
+    },
+    "ConversationMessageApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The execution the app's tool call belongs to."
+        },
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The app's tool call."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The app's MCP server."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The tool whose UI the app is."
+        }
+      },
+      "required": ["executionId", "toolId", "server", "tool"]
     },
     "ConversationPermissionOption": {
       "type": "object",
@@ -2061,6 +2105,103 @@
         }
       },
       "required": ["conversationId", "requestId", "app"]
+    },
+    "McpSendMessageParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App sends a message into its conversation (mcp.sendMessage, MCP Apps ui/message): the person's turn, written by the app on their behalf and shown in the transcript as the app's (ConversationMessage.app). The first message from a mount in an opening of the conversation waits for the person's approval in the conversation's permissions, origin {kind: app}, answered with conversation.answer or conversation.cancel whatever the approval mode; allowed, that mount sends without asking again until it is released or the opening ends. Refused turn_running while a turn runs or input waits, so an app's message never queues behind the person's own; any other refusal of the message is its own conversation code. It travels on the app lane.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": {
+          "$ref": "#/$defs/McpAppReference",
+          "description": "The app sending it."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The message, as text: at most 8192 UTF-8 bytes, what conversation.send takes (mcp_request_too_large past it), and not blank (invalid_request)."
+        }
+      },
+      "required": ["conversationId", "requestId", "app", "server", "text"]
+    },
+    "McpSendMessageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The conversation's agent took the message.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The turn the message became, as the transcript names it."
+        }
+      },
+      "required": ["executionId"]
+    },
+    "McpUpdateModelContextParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; neither text nor structuredContentJson clears it. It is held for the mount until the next message admitted into the conversation, the person's or an app's, takes it: sent once, with that turn, ahead of what the message says, and never shown in the transcript. A release of the mount (mcp.releaseApp) or the end of the conversation's opening lets go of it unsent. Text and structured content together take at most 8192 UTF-8 bytes (mcp_request_too_large past it), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": { "$ref": "#/$defs/McpAppReference", "description": "The app giving it." },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The context as text. Empty is none."
+        },
+        "structuredContentJson": {
+          "type": "string",
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The context's structured content: one JSON object, encoded (invalid_request if it is not one), held as parsed — re-encoded, a duplicate key's last value kept. Absent is none."
+        }
+      },
+      "required": ["conversationId", "requestId", "app", "server"]
     },
     "McpCallToolParams": {
       "type": "object",
