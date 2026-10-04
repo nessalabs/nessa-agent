@@ -9,11 +9,11 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
-  approvalCardNaming,
+  approvalCardFor,
   approvalGone,
-  approvalNaming,
-  namesTool,
+  approvalShown,
   oneMount,
+  toolAtEnd,
 } from "./apps.mjs"
 import { css } from "./selectors.mjs"
 
@@ -72,40 +72,66 @@ function cardPage({ goesAfter, fails } = {}) {
   return { asked, built, page }
 }
 
-/** The one locator both waits use: visible cards naming `tool`, the first of them. */
-const namingT = [
-  ["locator", css.approvalCard, { hasText: /(?<!\w)t(?!\w)/ }],
-  ["filter", { visible: true }],
-  ["first"],
-]
+/**
+ * The one locator both waits use, as `built` recorded it: approval cards,
+ * those with head words naming `tool` and shown, the first of them. The head's
+ * `hasText` is checked by what it matches, not by how it is written.
+ */
+function assertCardFor(built, tool) {
+  assert.equal(built.length, 4, JSON.stringify(built))
+  assert.deepEqual(built[0], ["locator", css.approvalCard, undefined])
+  const [kind, selector, options] = built[1]
+  assert.deepEqual([kind, selector], ["locator", css.approvalHeadWords])
+  assert.deepEqual(Object.keys(options), ["hasText"])
+  assert.ok(options.hasText.test(`The mcptest app wants to run ${tool}`))
+  assert.ok(!options.hasText.test(`The mcptest app wants to run ${tool}s`))
+  assert.ok(!options.hasText.test(`The mcptest app wants to run ${tool.toUpperCase()}`))
+  const [filter, { has, visible, ...rest }] = built[2]
+  assert.equal(filter, "filter")
+  assert.ok(has, "the card is filtered by its head")
+  assert.equal(visible, true)
+  assert.deepEqual(rest, {})
+  assert.deepEqual(built[3], ["first"])
+}
 
-describe("namesTool", () => {
-  it("W5: names the tool as a whole name, case and all", () => {
-    const names = namesTool("app_delete_row")
+describe("toolAtEnd", () => {
+  it("W5: names the tool as the head's last whole name, case and all", () => {
+    const names = toolAtEnd("app_delete_row")
     assert.ok(names.test("The mcptest app wants to run app_delete_row"))
-    assert.ok(names.test("app_delete_row {}"))
-    for (const other of ["app_delete_rows", "APP_DELETE_ROW", "xapp_delete_row"])
+    assert.ok(names.test("app_delete_row"))
+    for (const other of [
+      "The mcptest app wants to run app_delete_rows",
+      "The mcptest app wants to run APP_DELETE_ROW",
+      "The mcptest app wants to run xapp_delete_row",
+      "The mcptest app wants to run app_delete_row now",
+    ])
       assert.ok(!names.test(other), other)
   })
+  it("W5: bounds a name by the head, whatever characters it holds", () => {
+    const head = "The mcptest app wants to run rows.delete-all"
+    assert.ok(toolAtEnd("rows.delete-all").test(head))
+    for (const part of ["rows.delete", "rows", "delete-all", "all"])
+      assert.ok(!toolAtEnd(part).test(head), part)
+  })
   it("W5: takes a tool's characters literally", () => {
-    assert.ok(namesTool("a.b(c)").test("run a.b(c) now"))
-    assert.ok(!namesTool("a.b").test("run aXb"))
+    assert.ok(toolAtEnd("a.b(c)").test("run a.b(c)"))
+    assert.ok(!toolAtEnd("a.b").test("run aXb"))
   })
 })
 
-describe("approvalCardNaming", () => {
-  it("W5: is the first visible approval card naming the tool", () => {
+describe("approvalCardFor", () => {
+  it("W5: is the first shown approval card whose head names the tool", () => {
     const { built, page } = cardPage()
-    approvalCardNaming(page, "t")
-    assert.deepEqual(built, namingT)
+    approvalCardFor(page, "app_delete_row")
+    assertCardFor(built, "app_delete_row")
   })
 })
 
-describe("approvalNaming", () => {
+describe("approvalShown", () => {
   it("W5: waits for the card by the same locator", async () => {
     const { asked, built, page } = cardPage({ goesAfter: Infinity })
-    assert.ok(await approvalNaming(page, "t", 30))
-    assert.deepEqual(built, namingT)
+    assert.ok(await approvalShown(page, "app_delete_row", 30))
+    assertCardFor(built, "app_delete_row")
     assert.deepEqual(asked, [{ state: "visible", timeout: 30 }])
   })
 })
@@ -128,9 +154,9 @@ describe("approvalGone", () => {
   it("W4: an error other than the timeout is not the card's state", async () => {
     await assert.rejects(approvalGone(cardPage({ fails: true }).page, "t", 30), /closed/)
   })
-  it("W5: waits on the same locator as approvalNaming", async () => {
+  it("W5: waits on the same locator as approvalShown", async () => {
     const { built, page } = cardPage({ goesAfter: 0 })
-    await approvalGone(page, "t", 50)
-    assert.deepEqual(built, namingT)
+    await approvalGone(page, "app_delete_row", 50)
+    assertCardFor(built, "app_delete_row")
   })
 })

@@ -36,26 +36,33 @@ export function oneMount(count) {
 }
 
 /**
- * `tool` as a whole name, case and all: `app_delete_row` is not named by
- * `app_delete_rows` or `APP_DELETE_ROW`, as a plain `hasText` would take it.
+ * The head's words when they end with `tool` as a whole name, case and all.
+ * A tool's name may hold any characters (the protocol bounds only its bytes),
+ * so the bounds are the head's: whitespace or the start before, its end after.
+ * `rows.delete` is not named by "… run rows.delete-all", nor `app_delete_row`
+ * by "… run APP_DELETE_ROW".
  */
-export const namesTool = (tool) =>
-  new RegExp(`(?<!\\w)${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\w)`)
+export const toolAtEnd = (tool) =>
+  new RegExp(`(?:^|\\s)${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
 
 /**
- * The first visible approval card that names `tool` (`namesTool`). One rule
- * for the card's appearing and its going (`approvalNaming`, `approvalGone`):
- * a hidden card that names the tool does not stand for a visible one.
+ * The locator for the first visible approval card whose head names `tool`
+ * (`toolAtEnd`). One rule for the card's appearing and its going
+ * (`approvalShown`, `approvalGone`): a hidden card that names the tool does
+ * not stand for a visible one.
  */
-export const approvalCardNaming = (page, tool) =>
+export const approvalCardFor = (page, tool) =>
   page
-    .locator(css.approvalCard, { hasText: namesTool(tool) })
-    .filter({ visible: true })
+    .locator(css.approvalCard)
+    .filter({
+      has: page.locator(css.approvalHeadWords, { hasText: toolAtEnd(tool) }),
+      visible: true,
+    })
     .first()
 
-/** The card `approvalCardNaming` matches, once it shows; `null` when none does within `ms`. */
-export async function approvalNaming(page, tool, ms = 10_000) {
-  const card = approvalCardNaming(page, tool)
+/** Waits up to `ms` for `approvalCardFor`'s card to show: the card, or `null`. */
+export async function approvalShown(page, tool, ms = 10_000) {
+  const card = approvalCardFor(page, tool)
   try {
     await card.waitFor({ state: "visible", timeout: ms })
     return card
@@ -65,14 +72,14 @@ export async function approvalNaming(page, tool, ms = 10_000) {
 }
 
 /**
- * Waits up to `ms` until `approvalCardNaming` matches no card; true when it
+ * Waits up to `ms` until `approvalCardFor` matches no card; true when it
  * matches none by then, false when it still matches one at the bound. A card
  * shown when the wait starts is waited out, not sampled. Errors other than the
  * timeout (a closed page) propagate.
  */
 export async function approvalGone(page, tool, ms) {
   try {
-    await approvalCardNaming(page, tool).waitFor({ state: "hidden", timeout: ms })
+    await approvalCardFor(page, tool).waitFor({ state: "hidden", timeout: ms })
     return true
   } catch (error) {
     if (error?.name === "TimeoutError") return false

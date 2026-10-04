@@ -38,7 +38,7 @@ import {
   serverScript,
   startLocalGateway,
 } from "../../../scripts/mcp-test-server/local-gateway.mjs"
-import { appFrame, approvalGone, approvalNaming, oneMount } from "./lib/apps.mjs"
+import { appFrame, approvalGone, approvalShown, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
@@ -336,7 +336,7 @@ async function settleEarlier(page, stack, failures) {
       failures.push("an earlier review of the app's is not the window's approval")
       break
     }
-    const card = await approvalNaming(page, DESTRUCTIVE)
+    const card = await approvalShown(page, DESTRUCTIVE)
     if (!card) {
       failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
       break
@@ -381,7 +381,7 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
     failures.push("the window's approval is not the review the call opened")
     return seen
   }
-  const card = await approvalNaming(page, DESTRUCTIVE)
+  const card = await approvalShown(page, DESTRUCTIVE)
   if (!card) {
     failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
     return seen
@@ -579,7 +579,7 @@ const checks = {
     }
     if (!(await reviewShown(stack, waiting)))
       failures.push("the window's approval is not the review the pane's call opened")
-    const card = await approvalNaming(page, DESTRUCTIVE)
+    const card = await approvalShown(page, DESTRUCTIVE)
     if (!card) failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
     const paneSaid = await said(pane.app, "again")
     if (paneSaid !== "pending")
