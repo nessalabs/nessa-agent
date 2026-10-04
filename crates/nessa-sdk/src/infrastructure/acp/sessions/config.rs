@@ -25,7 +25,7 @@ pub struct StdioMcpServer {
     pub name: String,
     /// Absolute UTF-8 executable path, launched directly without shell interpolation.
     pub command: PathBuf,
-    /// Ordered UTF-8 arguments. Never put credentials here; these enter the context fingerprint.
+    /// Ordered UTF-8 arguments. Never put credentials here: any process list shows them.
     #[serde(default)]
     pub args: Vec<String>,
 }
@@ -90,10 +90,8 @@ pub struct AcpConfig {
     pub tools_enabled: bool,
     /// Trusted MCP servers exposed by profiles that support MCP. Empty disables custom tools.
     /// Servers require tools_enabled and share the provider session lifetime.
-    /// Excluded from restoration identity: like `stand_ins`, they are attached to each provider
-    /// open rather than selecting the provider context, so adding, editing or removing an MCP
-    /// server no longer changes a session's identity
-    /// (`adding_an_mcp_server_keeps_the_identity_and_restores` and its siblings).
+    /// Not part of the restoration identity, so changing them keeps a saved session restorable;
+    /// the fingerprint's inputs are listed on `fingerprint` in `acp/sessions/identity.rs`.
     pub mcp_servers: Vec<StdioMcpServer>,
     /// Where each provider open's MCP server processes get their per-open environment, and the
     /// results its stand-ins forward are taken from: a host's grant for the SDK session being

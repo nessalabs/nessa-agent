@@ -55,8 +55,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     }
     // The same configuration is the same stand-in, run after run; another is
     // another, so the relay, which compares the digest, refuses a server
-    // changed under an open conversation with `configuration-changed`. The
-    // restoration fingerprint does not read these (ADR 344, #391).
+    // changed under an open conversation with `configuration-changed`.
     assert_eq!(stand_ins(&configured, gateway, socket).unwrap(), handed);
     let changed = vec![server("mcptest", &["/other.mjs"]), configured[1].clone()];
     assert_ne!(

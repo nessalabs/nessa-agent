@@ -174,6 +174,7 @@ async fn mcp_server_change_keeps_the_identity_and_restores(
     assert_eq!(resumed.len(), current.len());
     for (sent, server) in resumed.iter().zip(&current) {
         assert_eq!(sent["name"], server.name.as_str());
+        assert_eq!(sent["command"], serde_json::json!(server.command));
         assert_eq!(sent["args"], serde_json::json!(server.args));
     }
 }
@@ -196,6 +197,19 @@ async fn editing_an_mcp_server_keeps_the_identity_and_restores() {
         vec![nessa_server("/edited")],
     )
     .await;
+}
+
+/// Changing only a server's command keeps the identity, and the conversation
+/// resumes with the new command. A stand-in's command is the gateway's
+/// executable, so this is the gateway moving.
+#[tokio::test]
+async fn moving_an_mcp_servers_command_keeps_the_identity_and_restores() {
+    let moved = StdioMcpServer {
+        command: "/moved/nessa-mcp".into(),
+        ..nessa_server("/saved")
+    };
+    mcp_server_change_keeps_the_identity_and_restores(vec![nessa_server("/saved")], vec![moved])
+        .await;
 }
 
 /// Removing a server keeps the identity, and the conversation resumes with no

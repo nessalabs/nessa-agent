@@ -59,9 +59,6 @@ Claude's profile now accepts bounded native tool names and configured MCP server
 names, retaining original permission inputs. Web fetch, execution and thinking
 categories retain their distinct domain/storage values. Native Bash and mode
 changes remain disabled; Nessa's shell is provided through MCP. Trusted
-`AcpConfig::mcp_servers` configurations are not part of restoration identity
-(ADR 344): the server list is a per-open attachment, so adding, editing or
-removing an MCP server no longer changes a saved session's identity. A host that
-relays the servers may refuse one changed while it runs; the gateway reads its
-list once per run, and its relay's `configuration-changed` refusal guards the
-live settings that #480 introduces.
+`AcpConfig::mcp_servers` are not part of restoration identity, so changing them
+keeps a saved session restorable; the fingerprint's inputs are stated once, on
+`fingerprint` in [`acp/sessions/identity.rs`](../../src/infrastructure/acp/sessions/identity.rs).

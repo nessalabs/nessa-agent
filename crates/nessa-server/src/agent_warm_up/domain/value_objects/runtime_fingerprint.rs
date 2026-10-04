@@ -4,21 +4,23 @@ use std::fmt;
 ///
 /// Two launches share a fingerprint when they would run the same provider, the
 /// same model, and the same configuration. The configuration part is the
-/// provider's own credential-free identity — for the ACP provider that covers
-/// the executable, its arguments, the environment it is given, the workspace,
-/// whether tools are enabled, the token limits, the permission policy and the
-/// system prompt — so changing the runtime it launches changes this value.
+/// provider's own credential-free identity; for the ACP providers that is the
+/// SDK's restoration fingerprint, whose inputs are listed on `fingerprint` in
+/// the SDK's `acp/sessions/identity.rs`. This is the one statement of what a
+/// warm-up covers; the gateway's composition links here.
 ///
-/// That matters because a warm-up exists for the agent runtime's
-/// first-execution scan, which is paid per file. An install or an update stages
-/// the runtime under a new directory, and that directory is inside the
-/// provider's configuration identity; so is the bundled `nessa` server, which
-/// lives in it.
+/// A warm-up exists for the agent runtime's first-execution scan, which is
+/// paid per file. An install or an update stages the runtime under a new
+/// directory, and the agent runtime's executable and entry are launched from
+/// it, so their paths, and with them this value, change with every version.
 ///
-/// The configured MCP server list is left out of this key by choice, so that
-/// changing it does not re-warm. A user-configured server's own first launch,
-/// and any first-run scan it needs, is paid when a conversation first uses it,
-/// not by a warm-up.
+/// A warm-up opens a real session, so it may also launch the MCP servers
+/// configured at that time. The server list is not among the inputs, though,
+/// so changing it does not re-warm: a server added later pays its first
+/// launch, and any first-run scan it needs, when a conversation first uses
+/// it. The bundled `nessa` server is covered only because it sits in the same
+/// versioned directory as the agent runtime: a new version moves that
+/// runtime, and the re-warm that follows may launch the new `nessa` with it.
 ///
 /// The model is part of it too, although changing a model scans nothing: a
 /// warm-up also proves the configuration establishes a session, and that is

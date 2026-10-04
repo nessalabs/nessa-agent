@@ -90,7 +90,6 @@ impl TicketRecorder {
 /// that a namespace under a long data directory passes; in a directory of the
 /// user's own, created private and refused when it is not (`relay::bind`); and
 /// the same on every run of one namespace, so a stand-in's arguments are too.
-/// Those arguments are not part of any restoration identity (ADR 344).
 pub(super) fn relay_socket(namespace: &Path, uid: u32) -> PathBuf {
     let digest = Sha256::digest(namespace.as_os_str().as_encoded_bytes());
     let name: String = digest[..8]
