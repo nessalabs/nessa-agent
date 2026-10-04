@@ -64,7 +64,9 @@ const STOP_GRACE_MS = 2_000
  * Every stand-in started, connected or still connecting, by its process, with
  * a promise taken at spawn that it has ended: its `exit`, by which it is
  * reaped (not `close`, which a process of its own holding its pipes can put
- * off forever), or the `error` of a spawn that failed, which has no `exit`.
+ * off forever), or an `error`, which a spawn that failed emits in place of
+ * `exit` (as does a kill the system refuses, which a stand-in of our own
+ * user never meets).
  * One that has already ended has nothing left to wait for. Stopped when the
  * agent's input closes or its output fails.
  */
@@ -84,9 +86,10 @@ async function stop() {
   stopping = true
   await Promise.all(
     [...standIns].map(async ([child, ended]) => {
-      // A failed spawn has no pid until its `error`, and a kill before then
-      // would signal the agent's process group. A stop never comes first: it
-      // begins on an input or output event, later than that `error`'s tick.
+      // A failed spawn never has a pid, but until its `error` Node still holds
+      // its process handle, so a kill then would signal the agent's process
+      // group. A stop never comes first: it begins on an input or output
+      // event, later than that `error`'s tick.
       child.kill("SIGTERM")
       const timer = setTimeout(() => child.kill("SIGKILL"), STOP_GRACE_MS)
       await ended

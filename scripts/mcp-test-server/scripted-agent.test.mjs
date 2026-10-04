@@ -75,6 +75,9 @@ function start(agent, env = {}, tool = "review_rows") {
   }
 }
 
+/** The design's 2 s a stopped stand-in has before it is killed (#418; the agent's `STOP_GRACE_MS`). */
+const STOP_GRACE_MS = 2000
+
 const codexEnv = {
   CODEX_CONFIG: JSON.stringify({ model: "gpt-test" }),
   INITIAL_AGENT_MODE: "read-only",
@@ -589,9 +592,6 @@ test("an agent whose output fails stops its stand-ins and exits 0", async (t) =>
   assert.equal(agent.child.exitCode, 0)
   assert.equal(await gone(stand.pid()), true, "the stand-in outlived its agent")
 })
-
-/** The design's 2 s a stopped stand-in has before it is killed (#418; the agent's `STOP_GRACE_MS`). */
-const STOP_GRACE_MS = 2000
 
 for (const [trigger, close] of [
   ["input closes", (agent) => agent.child.stdin.end()],
