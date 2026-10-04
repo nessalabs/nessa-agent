@@ -210,6 +210,11 @@ async fn dropping_an_unconfirmed_process_retains_its_private_directory() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// Bites on macOS, where a group holding only an exited, unreaped leader
+/// refuses signals with EPERM. On Linux the same calls see the zombie as a
+/// member and deliver, so this passes there without reaching the EPERM arm.
+/// Whether cleanup in the live race reports `forced: false` follows from the
+/// `NotDelivered` asserted here; the race itself cannot be scheduled from a test.
 #[tokio::test]
 async fn signalling_an_exited_unreaped_group_is_not_a_cleanup_failure() {
     let mut scope = ProcessScope::spawn(exiting_command()).unwrap();
@@ -225,10 +230,43 @@ async fn signalling_an_exited_unreaped_group_is_not_a_cleanup_failure() {
         )
     };
     assert_eq!(waited, 0);
-    assert_eq!(signal_group(scope.group, false), Ok(()));
-    assert_eq!(signal_group(scope.group, true), Ok(()));
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            signal_group(scope.group, false),
+            Ok(SignalDelivery::NotDelivered)
+        );
+        assert_eq!(
+            signal_group(scope.group, true),
+            Ok(SignalDelivery::NotDelivered)
+        );
+    } else {
+        assert!(signal_group(scope.group, false).is_ok());
+    }
     assert_eq!(
         scope.cleanup(Duration::ZERO, Duration::from_secs(2)).await,
         Ok(CloseOutcome { forced: false })
     );
+}
+
+/// A process group outside our permission (a root daemon's) is the real
+/// refusal: the signal is not delivered and the probe never confirms it gone.
+/// Skipped when running as root or when no such group is found.
+#[test]
+fn a_group_that_refuses_signals_is_never_confirmed_gone() {
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    // Group 1 is excluded: kill(-1, _) means every process, not group 1.
+    let refused = (2..4096).find_map(|pid| {
+        let group = unsafe { libc::getpgid(pid) };
+        (group > 1
+            && unsafe { libc::kill(-group, 0) } == -1
+            && io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+        .then_some(group as u32)
+    });
+    let Some(group) = refused else {
+        return;
+    };
+    assert_eq!(signal_group(group, false), Ok(SignalDelivery::NotDelivered));
+    assert_eq!(group_exists(group), Err(AgentError::CleanupUncertain));
 }
