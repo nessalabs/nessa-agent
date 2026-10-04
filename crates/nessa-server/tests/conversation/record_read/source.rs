@@ -552,6 +552,49 @@ fn hold_first_boundary(boundaries: Arc<AtomicUsize>, reached: Arc<Notify>) -> Be
     })
 }
 
+/// How many discovery calls a cold head read of `saves` small saves takes,
+/// measured on a fresh source of its own. The SDK owns the step size; this
+/// counts the step boundaries an unbounded read crosses instead of computing
+/// them from it.
+async fn cold_head_discovery_calls(saves: usize) -> (u64, usize) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    let tail = small_saves(&root, &session, saves).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    let boundaries = Arc::new(AtomicUsize::new(0));
+    source.work_budget = Duration::from_secs(3600);
+    source.discovery_steps = usize::MAX;
+    source.between_steps = Some({
+        let boundaries = boundaries.clone();
+        Arc::new(move |_: &dyn Fn() -> bool| {
+            boundaries.fetch_add(1, Ordering::SeqCst);
+        })
+    });
+    let response = source
+        .read(
+            admitted_reader(conversation_id),
+            RecordReadOperation::Head,
+            RecordReadLease::new(()),
+        )
+        .await
+        .unwrap();
+    let RecordReadValue::Head(head) = response.value else {
+        panic!("head expected")
+    };
+    assert_eq!(head.head, tail);
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+    // Every call after the first is preceded by one boundary.
+    (tail, boundaries.load(Ordering::SeqCst) + 1)
+}
+
 /// S5: a cold read whose budget passes stops at its next step boundary,
 /// answers `source_preparing` and gives its permit back for the next read;
 /// its progress is kept.
@@ -588,9 +631,16 @@ async fn read_past_its_work_budget_answers_preparing_and_releases_its_permit() {
         1,
         "stopped after one step"
     );
-    // The waiting read gets the permit, and finds the first read's progress.
+    // The waiting read gets the permit, and finds the first read's progress:
+    // one step short of the whole history, it reaches the head only by
+    // resuming where the first read stopped. Only the step count may stop
+    // it; the real clock must not.
     let next = capacity.clone().try_acquire_owned().unwrap();
-    source.work_budget = operation::READ_WORK_BUDGET;
+    source.work_budget = Duration::from_secs(3600);
+    let (cold_tail, cold_calls) = cold_head_discovery_calls(100).await;
+    assert_eq!(cold_tail, tail, "the measured history is identical");
+    assert!(cold_calls >= 2, "the history spans more than one step");
+    source.discovery_steps = cold_calls - 1;
     source.between_steps = None;
     let response = source
         .read(
