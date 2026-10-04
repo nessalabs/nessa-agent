@@ -2,7 +2,7 @@
 //! Bounds are validated at the transport boundary; these are payload types only.
 //! Variant names are the schema's wire spellings, so a shared prefix is the wire's.
 #![allow(dead_code, clippy::enum_variant_names)]
-use crate::product_contract::generated::SessionCloseReason;
+use crate::product_contract::generated::{ChangeWatchEndReason, SessionCloseReason};
 use nessa_auth::application::dto::{
     CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, PrincipalInputDto,
 };
@@ -1396,6 +1396,54 @@ impl PairingErrorCode {
         }
     }
 }
+pub type ChangeWatchId = String;
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWatchCatalogueParams {
+    pub receiver_id: String,
+    pub access_epoch: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWatchRecordsParams {
+    pub conversation_id: String,
+    pub receiver_id: String,
+    pub access_epoch: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWatchResult {
+    pub watch_id: ChangeWatchId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUnwatchParams {
+    pub watch_id: ChangeWatchId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUnwatchResult {
+    pub watch_id: ChangeWatchId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationChanged {
+    pub watch_id: ChangeWatchId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWatchEnded {
+    pub watch_id: ChangeWatchId,
+    pub reason: ChangeWatchEndReason,
+}
+pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
+pub const CHANGE_WATCH_ID_PATTERN: &str =
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
+pub const MAX_GLOBAL_CHANGE_WATCHES: usize = 64;
+pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = 8;
+pub const MAX_CONNECTION_RECORD_WATCHES: usize = 1;
+pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = 1;
+pub const MAX_CONNECTION_CHANGE_WATCHES: usize = 2;
 /// Published bound from the product schema.
 pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
 /// Published bound from the product schema.
@@ -1460,9 +1508,14 @@ pub mod product_method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
+    pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
+    pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
+    pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
+    pub const CONVERSATION_CHANGED: &str = "conversation.changed";
+    pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
 }
 pub(crate) fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
@@ -1612,7 +1665,7 @@ pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 38
+                items.len() <= 41
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1675,6 +1728,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.approve",
     "pairing.deny",
     "pairing.cancel",
+    "conversation.watchRecords",
+    "conversation.watchCatalogue",
+    "conversation.unwatch",
 ];
 pub const PRODUCT_VERSION: u64 = 1;
 pub const PRODUCT_SESSION_PATH: &str = "/session";

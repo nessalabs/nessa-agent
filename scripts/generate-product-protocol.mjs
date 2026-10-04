@@ -186,7 +186,20 @@ const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
+  "ChangeWatchErrorCode",
+  "ChangeWatchEndReason",
 ])
+// Outcome enums referenced by typed payload fields serialize through Serde.
+// Unreferenced code vocabularies and close-policy enums also expose string codes.
+const payloadOutcomes = new Set(
+  Object.values(schema.$defs).flatMap((definition) =>
+    Object.values(definition.properties ?? {}).flatMap((field) =>
+      typeof field.$ref === "string" && field.$ref.startsWith("#/$defs/")
+        ? [field.$ref.slice("#/$defs/".length)]
+        : [],
+    ),
+  ),
+)
 let contractRs =
   "//! Pure product outcome values generated from protocol/product/v1.json. Do not edit.\nuse serde::{Deserialize, Serialize};\n"
 rs += "__SHARED_RUST_IMPORTS__"
@@ -202,14 +215,20 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
     let enumRs = ""
     enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
-    // The wire spelling, so handlers pass the typed value where a code is written.
-    enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
+    // Shared payload outcomes need no separate string-code API.
+    if (!sharedOutcomes.has(name) || !payloadOutcomes.has(name) || def["x-close-policy"])
+      enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
     if (def["x-close-policy"]) {
       ts += `export const sessionClosePolicy = ${JSON.stringify(def["x-close-policy"])} as const\n`
       enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } pub(crate) fn from_web_socket_code(code: u16) -> Option<Self> { match code {${def.enum.map((v) => `${def["x-close-policy"][v].webSocketCode} => Some(Self::${pascal(v)})`).join(",")}, _ => None } } }\n`
     }
     if (sharedOutcomes.has(name)) contractRs += enumRs
     else rs += enumRs
+    continue
+  }
+  if (def.type === "string" && !def.properties) {
+    ts += `export type ${name} = string\n`
+    rs += `pub type ${name} = String;\n`
     continue
   }
   ts += `export interface ${name} {\n`
@@ -260,6 +279,43 @@ function agreeing(name, values) {
     throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
   return first
 }
+// Watch capacity is product policy. The server reads these constants and holds
+// no limit of its own; per-connection capacity is the sum of the per-kind limits.
+const watchLimits = schema["x-changeWatchLimits"]
+const watchLimitNames = [
+  "globalOwners",
+  "principalOwners",
+  "recordTargets",
+  "catalogueTargets",
+]
+for (const name of watchLimitNames) {
+  if (
+    !watchLimits ||
+    !Object.hasOwn(watchLimits, name) ||
+    !Number.isSafeInteger(watchLimits[name]) ||
+    watchLimits[name] <= 0
+  )
+    throw new Error(`Invalid change watch limit: ${name}`)
+}
+if (Object.keys(watchLimits).length !== watchLimitNames.length)
+  throw new Error("Invalid change watch limit: unknown policy key")
+if (watchLimits.principalOwners > watchLimits.globalOwners)
+  throw new Error("Invalid change watch limit: principalOwners exceeds globalOwners")
+const connectionWatches = watchLimits.recordTargets + watchLimits.catalogueTargets
+const watchId = schema.$defs.ChangeWatchId
+if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
+  throw new Error("Invalid change watch ID publication")
+rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
+// Published so the server can test the identities it mints against the schema.
+rs += `pub const CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(watchId.pattern)};\n`
+rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
+rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
+rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
+rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
+rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
+ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
+ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
+ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties

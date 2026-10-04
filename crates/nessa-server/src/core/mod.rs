@@ -48,4 +48,5 @@ pub use error::{Dataset, DatasetRefusal, NativeFailure, RunError};
 pub use launch::Launch;
 pub use shutdown::{
     NativeShutdownFailure, PassiveReaderOutcomes, PassiveReaderShutdownFailure, ShutdownFailure,
+    WatchDrainOutcome, WatchShutdownFailure,
 };
