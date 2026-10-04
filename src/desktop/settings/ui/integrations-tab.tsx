@@ -718,7 +718,14 @@ function InspectionGroup({
       ? sentences.inspecting(inspection.name, state.limits.inspectDeadlineMs)
       : inspection.phase === "failed"
         ? inspection.text
-        : sentences.tools(inspection.result.tools.length)
+        : inspection.result.cut === "stopping"
+          ? sentences.cut.stopping
+          : sentences.tools(inspection.result.tools.length)
+  // A stopping cut is the status itself: it read no tools, so it is not a note under them.
+  const cutNote =
+    inspection.phase === "done" && inspection.result.cut !== "stopping"
+      ? inspection.result.cut
+      : undefined
   return (
     <section className="settings-group" data-mcp-inspection={inspection.phase}>
       <h2 ref={heading} tabIndex={-1}>
@@ -780,12 +787,9 @@ function InspectionGroup({
                 ))}
               </ul>
             )}
-            {inspection.result.cut ? (
-              <p
-                className="settings-inspection-note"
-                data-mcp-cut={inspection.result.cut}
-              >
-                {sentences.cut[inspection.result.cut]}
+            {cutNote ? (
+              <p className="settings-inspection-note" data-mcp-cut={cutNote}>
+                {sentences.cut[cutNote]}
               </p>
             ) : null}
           </>

@@ -592,6 +592,20 @@ describe("inspecting", () => {
     )
   })
 
+  it("U24: a stopping cut, with no tools, is a done inspection that says so", () => {
+    const state = started()
+    const stopping = { complete: false, cut: "stopping" as const, tools: [] }
+    const done = run(state, {
+      type: "inspected",
+      seq: seqOf(state),
+      outcome: ok(stopping),
+    })
+    expect(done.inspection).toEqual({ phase: "done", name: "charts", result: stopping })
+    expect(sentences.cut.stopping).toBe(
+      "The gateway began to stop, so the server was stopped before its tools were read.",
+    )
+  })
+
   it.each([
     [{ kind: "startFailed" }, "“charts” couldn't be started. Check its command."],
     [{ kind: "timedOut" }, "“charts” didn't finish within 30 seconds."],

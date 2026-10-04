@@ -301,6 +301,36 @@ describe("Integrations", () => {
     expect(status?.textContent).toBe("It offers 2 tools.")
   })
 
+  it("a cut inspection says why under its tools; a stopping one says it as the status, with no tools", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Inspect", row("charts")))
+    await answer(fake, "inspect", {
+      ok: true,
+      value: { complete: false, cut: "bytes", tools: [{ name: "show_chart" }] },
+    })
+    const status = () => host.querySelector("[data-mcp-inspection-status]")?.textContent
+    expect(status()).toBe("It offers 1 tool.")
+    expect(host.querySelector("[data-mcp-cut]")?.getAttribute("data-mcp-cut")).toBe(
+      "bytes",
+    )
+    expect(host.querySelector("[data-mcp-cut]")?.textContent).toBe(
+      "The answer was too long; tools were left off the end.",
+    )
+    await click(host.querySelector('[data-mcp-action="close"]') ?? undefined)
+    await click(button("Inspect", row("charts")))
+    await answer(fake, "inspect", {
+      ok: true,
+      value: { complete: false, cut: "stopping", tools: [] },
+    })
+    expect(status()).toBe(
+      "The gateway began to stop, so the server was stopped before its tools were read.",
+    )
+    expect(host.querySelector("[data-mcp-cut]")).toBeNull()
+    expect(host.querySelector(".settings-tools")).toBeNull()
+  })
+
   it("U21: Inspect rests while a write is in flight", async () => {
     const fake = fakeGateway()
     await mount(fake.gateway)

@@ -59,8 +59,11 @@ export interface RemoveRequest {
   readonly name: string
 }
 
-/** Which bound left an inspection incomplete. */
-export type InspectCut = "tools" | "ui" | "bytes"
+/**
+ * Which bound left an inspection incomplete. `stopping`: the gateway began to
+ * stop after the server was started, so no tools were read.
+ */
+export type InspectCut = "tools" | "ui" | "bytes" | "stopping"
 
 export interface InspectedTool {
   readonly name: string
@@ -332,6 +335,8 @@ export const sentences = {
     tools: "The server offered more tools than are read; the rest aren't listed.",
     ui: "More apps than are read; the tools after them are listed without one.",
     bytes: "The answer was too long; tools were left off the end.",
+    stopping:
+      "The gateway began to stop, so the server was stopped before its tools were read.",
   } satisfies Record<InspectCut, string>,
 } as const
 

@@ -140,6 +140,15 @@ describe("client.mcpServers answers", () => {
     expect(inspected.tools[1]).toEqual({ name: "drop", destructiveHint: true })
   })
 
+  it("reads an inspection the gateway cut because it began to stop", async () => {
+    const { api } = session(() => ({ complete: false, cut: "stopping", tools: [] }))
+    expect(await api.inspect("charts")).toEqual({
+      complete: false,
+      cut: "stopping",
+      tools: [],
+    })
+  })
+
   it.each([
     ["a list with unknown fields", "list", { revision: "r", servers: [], extra: 1 }],
     [
