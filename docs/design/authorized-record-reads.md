@@ -311,7 +311,8 @@ unit, so its outcome cannot be `Failed`). The order is fixed: watch admission
 closed, readers and the watch drain polled together under one deadline, then
 conversations, MCP stop, and the native join. `ShutdownReport::stage()` is the
 first stage in that order with an `Unknown` outcome (`Drains`, `Conversations`,
-`Servers`, `Native`, or `Complete`); the order is written nowhere else. A report
+`Servers`, `Native`, or `Complete`); it is the only place that derives the
+stage from that order. A report
 is confirmed only when every outcome is `Ok` and no deadline evidence was
 recorded. `RunError::Shutdown(None)` stays the distinct fact that the cleanup
 owner never published a report.
@@ -423,9 +424,9 @@ refusals. Amend this table before adding a newly discovered ordering.
 | R31 | Reader succeeds/fails or misses deadline, conversation cleanup succeeds/fails | Always attempt conversation cleanup after confirmed physical drain; aggregate only failures, retaining both owners and deadline plus eventual panic when present. `shutdown_owner_outcomes_preserve_each_independent_failure` and `reader_deadline_retains_completion_and_does_not_start_storage_cleanup_early` |
 | R32 | Reader completion and deadline are both ready on first poll | Polling the already-ready reader confirms its outcome without inventing a deadline failure. `ready_reader_completion_at_zero_deadline_is_not_labeled_timeout` |
 | R33 | Reader misses deadline but later drain and conversation cleanup succeed | Preserve the elapsed deadline with `completion: Ok(())`; confirmed later cleanup does not erase the earlier failure. `reader_deadline_preserves_successful_drain_and_conversation_cleanup` |
-| R34 | Whole cleanup owner cancelled before reader outcome | The report reads stage `Drains` with both reader outcomes `Unknown` and conversation cleanup not started (shutdown report row SR7); do not invent successful cleanup. `cancelled_cleanup_before_reader_outcome_does_not_invent_confirmation` |
-| R35 | Cleanup owner cancelled after a reader fault while conversation cleanup waits | Keep confirmed physical drain and typed reader failure in the report at stage `Conversations`; the process error retains it with the conversation outcome `Unknown` (row SR7). `cancelled_cleanup_after_reader_outcome_preserves_known_success_or_failure` |
-| R36 | Cleanup owner cancelled after reader success while conversation cleanup waits | Preserve known reader success without inventing conversation success or a reader fault. `cancelled_cleanup_after_reader_outcome_preserves_known_success_or_failure` |
+| R34 | Whole cleanup owner cancelled before reader outcome | The report reads stage `Drains` with both reader outcomes `Unknown` and conversation cleanup not started (shutdown report row SR7); do not invent successful cleanup. `root::cancelled_before_either_reader_outcome_retains_unknown_drain_and_deadline` |
+| R35 | Cleanup owner cancelled after a reader fault while conversation cleanup waits | Keep confirmed physical drain and typed reader failure in the report at stage `Conversations`; the process error retains it with the conversation outcome `Unknown` (row SR7). `root::cancelled_conversation_cleanup_retains_complete_reader_evidence`; `root::cancelled_conversation_after_deadline_retains_both_reader_results` |
+| R36 | Cleanup owner cancelled after reader success while conversation cleanup waits | Preserve known reader success without inventing conversation success or a reader fault (row SR7). `root::cancelled_conversation_cleanup_retains_complete_reader_evidence`; `root::cancelled_conversation_after_deadline_retains_both_reader_results` |
 | R37 | Cleanup owner cancelled after reader deadline while physical drain is pending | Preserve elapsed deadline with physical drain unreported and conversations not started; no fabricated eventual completion. `cancelled_cleanup_after_reader_deadline_retains_unknown_physical_completion` |
 | R38 | First head has no physical identity; valid authenticated selector | Return SDK-owned full scope and actual committed head; receiver stores the scope for pages. No configured product origin/schema preflight. |
 | R39 | Denied selector, missing/deleted conversation, or stale binding | Preserve admission refusal; metadata and source spy counts remain zero. |
