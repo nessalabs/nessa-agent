@@ -1,11 +1,14 @@
 //! MCP's JSON, read into the domain's values: the `initialize` answer, a
-//! `tools/list` page, and a `resources/read` of an MCP App.
+//! `tools/list` page, a `resources/read` of an MCP App, and a tool result's
+//! `structuredContent`.
 use super::McpError;
-use crate::domain::agent_execution::tools::McpTool;
+use crate::domain::agent_execution::tools::{McpTool, ToolContent, MAX_STRUCTURED_RESULT_BYTES};
+use crate::domain::agent_execution::ExecutionError;
 use crate::domain::mcp_apps::{
     ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
     UiVisibility, APP_MIME_TYPE, EXTENSION,
 };
+use crate::infrastructure::json_rpc::json_fits;
 use base64::Engine;
 use serde_json::{json, Value};
 
@@ -38,6 +41,28 @@ pub(crate) fn initialized(result: &Value) -> Result<(), McpError> {
         )));
     }
     Ok(())
+}
+
+/// The text a structured result past the domain's bound
+/// ([`MAX_STRUCTURED_RESULT_BYTES`]) is replaced by: said, not silently dropped.
+pub(crate) const STRUCTURED_RESULT_OMITTED: &str = "[structured tool result omitted: too large]";
+
+/// A tool result's `structuredContent`, as observed content: its JSON text,
+/// or [`STRUCTURED_RESULT_OMITTED`] past [`MAX_STRUCTURED_RESULT_BYTES`] in
+/// place of JSON cut short (at and past the bound:
+/// `s2_a_structured_result_past_the_bound_is_kept_as_said_never_cut`).
+/// Counted before it is written out, so a result of any size costs no more
+/// than the bound.
+///
+/// # Errors
+///
+/// What [`ToolContent::structured`] refuses. The stand-in then keeps nothing;
+/// Codex's adapter refuses the frame.
+pub(crate) fn structured_result(structured: &Value) -> Result<ToolContent, ExecutionError> {
+    if !json_fits(structured, MAX_STRUCTURED_RESULT_BYTES) {
+        return Ok(ToolContent::text(STRUCTURED_RESULT_OMITTED));
+    }
+    ToolContent::structured(structured.to_string())
 }
 
 /// One `tools/list` page from `server`.

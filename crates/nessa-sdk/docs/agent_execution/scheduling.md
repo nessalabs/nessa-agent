@@ -174,6 +174,12 @@ while its watch publication might retain a lock. Each receipt poll keeps that
 consumer registered and forwards notifications to the actual waiting task;
 awaiting the raw receipt separately would replace the registered consumer.
 
+## Receipt notification faults
+
+A receipt's waiter is caller code: its `Waker` runs on whichever task
+publishes the result. How a panic from it is contained, and its tests, are in
+[Caller wakers](lifecycle.md#caller-wakers).
+
 ## Idempotent submission retries
 
 Retry `enqueue`, `enqueue_steering`, or `steer` with the same execution ID, exact

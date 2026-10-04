@@ -287,6 +287,29 @@ test("pairing owner changes derive auth constants and published shape before dri
       publication.$defs.ManualCodeDisplay.maxLength,
       values.manualCodeBytes + 1,
     )
+    // The owner routes' schema takes the same widths, and their Rust fields
+    // name the owner's constant rather than a number.
+    const product = JSON.parse(
+      readFileSync(join(path, "protocol/product/v1.json"), "utf8"),
+    ).$defs
+    assert.equal(
+      product.PairingApproveParams.properties.invitationId.maxItems,
+      values.identityBytes,
+    )
+    assert.equal(
+      product.PairingApproveParams.properties.deviceKey.minItems,
+      values.deviceKeyBytes,
+    )
+    assert.equal(
+      product.PairingCreateResult.properties.code.maxLength,
+      values.manualCodeBytes + 1,
+    )
+    const routes = readFileSync(
+      join(path, "crates/nessa-server/src/product/generated.rs"),
+      "utf8",
+    )
+    assert.match(routes, /pub device_key: \[u8; DeviceKey::LENGTH\],/)
+    assert.match(routes, /pub invitation_id: \[u8; InvitationId::LENGTH\],/)
     assert.equal(generate(path, "generate-product-protocol", ["--check"]).status, 0)
     writeFileSync(
       join(path, "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs"),

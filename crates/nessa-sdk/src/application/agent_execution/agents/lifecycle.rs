@@ -463,7 +463,11 @@ impl SessionLifecycle {
             recorded: !matches!(start.cause, AttachmentCause::Initial),
             open_stop,
         };
-        Ok((start, AttachmentWait { result: wait }))
+        let wait = AttachmentWait {
+            generation: start.generation,
+            result: wait,
+        };
+        Ok((start, wait))
     }
     pub(super) fn abandon_attachment_authorization(
         self: &Arc<Self>,

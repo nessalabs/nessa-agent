@@ -10,7 +10,8 @@ use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
     core::{
-        Launch, PassiveReaderOutcomes, PassiveReaderShutdownFailure, RunError, ShutdownFailure,
+        Launch, NativeFailure, NativeShutdownFailure, PassiveReaderOutcomes,
+        PassiveReaderShutdownFailure, RunError, ShutdownFailure,
     },
     env::UptimeBackend,
 };
@@ -137,6 +138,7 @@ impl CompositionRoot {
             catalogue_reader,
             warm_ups,
             mcp,
+            native,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
@@ -192,6 +194,20 @@ impl CompositionRoot {
             );
             RunError::Serve(error)
         })?;
+        // After the browser bind and before anything is advertised: a native
+        // bind failure drops the browser listener unserved (design row S10).
+        let native = match native {
+            Some(prepared) => {
+                let bound =
+                    super::native_pairing::bind(prepared, dependencies.clock.clone()).await?;
+                tracing::info!(
+                    native_listen_addr = %bound.local_address(),
+                    "native pairing listening"
+                );
+                Some(bound)
+            }
+            None => None,
+        };
         let endpoint_identity = EndpointIdentity::new(
             desktop_identity
                 .as_ref()
@@ -336,50 +352,68 @@ impl CompositionRoot {
                 }
             });
         }
+        // An accept failure that ends the native listener, or its task ending
+        // any other way, stops the whole gateway through the same path as a
+        // process signal (design rows S14, S15).
+        let (native_failure, native_failed) = tokio::sync::watch::channel(None);
+        let mut native = native.map(|bound| super::native_pairing::start(bound, native_failure));
+        let native_watch = native.as_ref().map(|_| native_failed.clone());
         // Admission stops independently of physical reader drain. The process
         // joins the cleanup owner and carries its retained report into its exit.
         // A panic before publication leaves the report unconfirmed.
         let report: Arc<Mutex<ShutdownReport>> = Arc::new(Mutex::new(ShutdownReport::Unreported));
         let slot = report.clone();
-        let (served, cleanup) =
-            serve_with_cleanup(listener, router, shutdown_signal(), async move {
-                passive_cleanup(
-                    &slot,
-                    async {
-                        match record_reader {
-                            Some(reader) => reader.shutdown().await,
-                            None => Ok(()),
+        let stop = stop_signal(shutdown_signal(), native_watch);
+        let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
+            // Native peers are woken before anything else is waited on;
+            // their drain is joined last, into the same report (row S12).
+            if let Some(native) = native.as_mut() {
+                native.signal_stop();
+            }
+            passive_cleanup(
+                &slot,
+                async {
+                    match record_reader {
+                        Some(reader) => reader.shutdown().await,
+                        None => Ok(()),
+                    }
+                },
+                async {
+                    match catalogue_reader {
+                        Some(reader) => reader.shutdown().await,
+                        None => Ok(()),
+                    }
+                },
+                conversations.map(|service| async move { service.shutdown().await }),
+                async {
+                    // After agents, whose stand-ins end with their servers.
+                    #[cfg(unix)]
+                    if let Some((servers, recorder)) = mcp_servers {
+                        servers.stop().await;
+                        // Last: the conversations' ends released their
+                        // tickets, and each end is recorded before exit.
+                        if let Some(recorder) = recorder {
+                            recorder.finish().await;
                         }
-                    },
-                    async {
-                        match catalogue_reader {
-                            Some(reader) => reader.shutdown().await,
-                            None => Ok(()),
-                        }
-                    },
-                    conversations.map(|service| async move { service.shutdown().await }),
-                    async {
-                        // After agents, whose stand-ins end with their servers.
-                        #[cfg(unix)]
-                        if let Some((servers, recorder)) = mcp_servers {
-                            servers.stop().await;
-                            // Last: the conversations' ends released their
-                            // tickets, and each end is recorded before exit.
-                            if let Some(recorder) = recorder {
-                                recorder.finish().await;
-                            }
-                        }
-                    },
-                    Duration::from_secs(30),
-                )
-                .await;
-            })
+                    }
+                },
+                async {
+                    match native {
+                        Some(native) => native.join().await,
+                        None => Ok(()),
+                    }
+                },
+                Duration::from_secs(30),
+            )
             .await;
+        })
+        .await;
         let cleanup = cleanup.map_err(|error| {
             tracing::error!(%error, "gateway cleanup owner failed");
             RunError::Shutdown(None)
         });
-        serve_outcome(served, &report)?;
+        let native_failed = *native_failed.borrow();
+        serve_outcome(served, native_failed, &report)?;
         cleanup
     }
 }
@@ -405,19 +439,49 @@ async fn serve_with_cleanup(
     (served, cleanup.await)
 }
 
-/// This process's result, from serving and from what shutdown reported.
+/// This process's result, from serving, from the native listener, and from
+/// what shutdown reported.
 ///
-/// The report is read before `served` is propagated, so a serve error cannot
+/// The report is read before either failure is propagated, so neither can
 /// discard it. Axum 0.8's graceful-shutdown future always ends in `Ok(())`, so
 /// `served` is vestigial today; it is taken and propagated rather than ignored
-/// in case a later axum gives the serve loop an error path again.
+/// in case a later axum gives the serve loop an error path again. A native
+/// listener failure is what stopped the gateway (design row S14), so it is the
+/// result ahead of the report.
 fn serve_outcome(
     served: std::io::Result<()>,
+    native_failed: Option<std::io::ErrorKind>,
     report: &Mutex<ShutdownReport>,
 ) -> Result<(), RunError> {
     let unconfirmed = shutdown_result(report);
     served?;
+    if let Some(kind) = native_failed {
+        return Err(RunError::Native(NativeFailure::Listener(kind)));
+    }
     unconfirmed
+}
+
+/// Resolves on a process signal, or when the native listener's channel changes:
+/// a published failure (row S14), or its closing because the listener task
+/// ended without being asked to, as on a panic (row S15). With native pairing
+/// off there is no channel, and only the process signal stops the gateway.
+async fn stop_signal(
+    signal: impl Future<Output = ()>,
+    native: Option<tokio::sync::watch::Receiver<Option<std::io::ErrorKind>>>,
+) {
+    let native_ended = async {
+        match native {
+            // Either outcome means the listener is no longer serving.
+            Some(mut native) => {
+                let _ = native.changed().await;
+            }
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        () = signal => {}
+        () = native_ended => {}
+    }
 }
 
 /// What the joined cleanup owner has established so far.
@@ -439,6 +503,11 @@ enum ShutdownReport {
         readers: Result<(), PassiveReaderShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },
+    /// MCP stop returned; native pairing's drain has not.
+    NativePending {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+        conversations: Result<(), ConversationError>,
+    },
     /// All cleanup owners returned; at least one failed.
     Failed(ShutdownFailure),
 }
@@ -452,6 +521,7 @@ async fn passive_cleanup(
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
     conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
     servers: impl Future<Output = ()>,
+    native: impl Future<Output = Result<(), NativeShutdownFailure>>,
     deadline: Duration,
 ) {
     record_shutdown(
@@ -516,24 +586,46 @@ async fn passive_cleanup(
         };
     }
     servers.await;
+    {
+        let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let ShutdownReport::ServersPending {
+            readers,
+            conversations,
+        } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
+        else {
+            unreachable!()
+        };
+        *report = ShutdownReport::NativePending {
+            readers,
+            conversations,
+        };
+    }
+    let native = native.await;
     let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    let ShutdownReport::ServersPending {
+    let ShutdownReport::NativePending {
         readers,
         conversations,
     } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
     else {
         unreachable!()
     };
-    *report = match (readers, conversations) {
-        (Ok(()), Ok(())) => ShutdownReport::Confirmed,
-        (Err(readers), Ok(())) => ShutdownReport::Failed(ShutdownFailure::Readers(readers)),
-        (Ok(()), Err(conversations)) => {
-            ShutdownReport::Failed(ShutdownFailure::Conversations(conversations))
-        }
-        (Err(readers), Err(conversations)) => ShutdownReport::Failed(ShutdownFailure::Both {
+    *report = match (readers, conversations, native) {
+        (readers, conversations, Err(native)) => ShutdownReport::Failed(ShutdownFailure::Native {
             readers,
             conversations,
+            native,
         }),
+        (Ok(()), Ok(()), Ok(())) => ShutdownReport::Confirmed,
+        (Err(readers), Ok(()), Ok(())) => ShutdownReport::Failed(ShutdownFailure::Readers(readers)),
+        (Ok(()), Err(conversations), Ok(())) => {
+            ShutdownReport::Failed(ShutdownFailure::Conversations(conversations))
+        }
+        (Err(readers), Err(conversations), Ok(())) => {
+            ShutdownReport::Failed(ShutdownFailure::Both {
+                readers,
+                conversations,
+            })
+        }
     };
     if let ShutdownReport::Failed(error) = &*report {
         tracing::error!(%error, "gateway shutdown did not confirm all cleanup");
@@ -587,6 +679,13 @@ fn shutdown_result(report: &Mutex<ShutdownReport>) -> Result<(), RunError> {
             readers,
             conversations,
         }),
+        ShutdownReport::NativePending {
+            readers,
+            conversations,
+        } => Some(ShutdownFailure::NativeUnreported {
+            readers,
+            conversations,
+        }),
         // `Confirmed` returned above; named rather than wildcarded so a new
         // report has to say what it means instead of inheriting "said nothing".
         ShutdownReport::Unreported | ShutdownReport::Confirmed => None,
@@ -637,6 +736,7 @@ impl crate::desktop_runtime::application::BackgroundWork for StartupWarmUps {
 mod tests {
     use super::*;
     use crate::env::{MockEnv, Stage, STAGE};
+    use nessa_auth::application::pairing::PairingWorkerFault;
     use std::future::Ready;
     use std::io::Result as IoResult;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -666,6 +766,7 @@ mod tests {
                     task_entered.notify_one();
                     gate.await.unwrap();
                 },
+                std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )
             .await;
@@ -775,6 +876,7 @@ mod tests {
                             }
                         }),
                         async { panic!("MCP drain fault") },
+                        std::future::ready(Ok(())),
                         Duration::from_secs(30),
                     )
                     .await;
@@ -809,6 +911,7 @@ mod tests {
                             }
                         }),
                         std::future::pending(),
+                        std::future::ready(Ok(())),
                         Duration::from_secs(30),
                     );
                     tokio::pin!(stop);
@@ -880,6 +983,7 @@ mod tests {
                         Ok(())
                     }),
                     async {},
+                    std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 )
                 .await;
@@ -927,6 +1031,7 @@ mod tests {
                     async { Ok(()) },
                     Some(async { Ok(()) }),
                     async {},
+                    std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 )
                 .await;
@@ -970,6 +1075,7 @@ mod tests {
                             }
                         }),
                         async {},
+                        std::future::ready(Ok(())),
                         Duration::from_secs(30),
                     )
                     .await;
@@ -1021,6 +1127,7 @@ mod tests {
                     Err(ConversationError::Audit)
                 }),
                 async {},
+                std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )
             .await
@@ -1066,6 +1173,7 @@ mod tests {
                             Ok(())
                         }),
                         async {},
+                        std::future::ready(Ok(())),
                         Duration::from_secs(30),
                     );
                     tokio::pin!(stop);
@@ -1107,6 +1215,7 @@ mod tests {
                     std::future::pending(),
                     Some(std::future::ready(Ok(()))),
                     async {},
+                    std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 );
                 tokio::pin!(stop);
@@ -1144,6 +1253,7 @@ mod tests {
                     std::future::ready(Ok(())),
                     Some(std::future::pending()),
                     async {},
+                    std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 );
                 tokio::pin!(stop);
@@ -1180,6 +1290,7 @@ mod tests {
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
             async {},
+            std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
         .await;
@@ -1209,6 +1320,7 @@ mod tests {
                 },
                 Some(std::future::pending()),
                 async {},
+                std::future::ready(Ok(())),
                 Duration::from_secs(30),
             );
             tokio::pin!(stop);
@@ -1249,6 +1361,7 @@ mod tests {
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
             async {},
+            std::future::ready(Ok(())),
             Duration::ZERO,
         )
         .await;
@@ -1336,14 +1449,14 @@ mod tests {
             ConversationError::Audit,
         )));
         assert!(matches!(
-            serve_outcome(Ok(()), &unconfirmed),
+            serve_outcome(Ok(()), None, &unconfirmed),
             Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
                 ConversationError::Audit
             ))))
         ));
 
         let confirmed = Mutex::new(ShutdownReport::Confirmed);
-        assert!(serve_outcome(Ok(()), &confirmed).is_ok());
+        assert!(serve_outcome(Ok(()), None, &confirmed).is_ok());
 
         // A serve failure is the fault that stopped the process, so it wins —
         // but the report is read first, so it cannot be skipped past.
@@ -1352,7 +1465,7 @@ mod tests {
         )));
         let served = Err(std::io::Error::other("listener died"));
         assert!(matches!(
-            serve_outcome(served, &both),
+            serve_outcome(served, None, &both),
             Err(RunError::Serve(_))
         ));
         assert!(matches!(*both.lock().unwrap(), ShutdownReport::Unreported));
@@ -1367,6 +1480,7 @@ mod tests {
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
             async {},
+            std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
         .await;
@@ -1379,6 +1493,7 @@ mod tests {
             std::future::ready(Ok(())),
             Some(std::future::ready(Err(ConversationError::Audit))),
             async {},
+            std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
         .await;
@@ -1414,6 +1529,152 @@ mod tests {
                 ConversationError::Audit
             ))))
         ));
+    }
+
+    /// Row S12: native pairing's drain is joined into the same report, and its
+    /// failure is kept beside whatever the earlier stages said.
+    #[tokio::test]
+    async fn native_shutdown_failure_is_retained_beside_other_cleanup() {
+        let fault = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
+        for conversation_fails in [false, true] {
+            let report = Mutex::new(ShutdownReport::Unreported);
+            let servers_stopped = AtomicBool::new(false);
+            passive_cleanup(
+                &report,
+                std::future::ready(Ok(())),
+                std::future::ready(Ok(())),
+                Some(std::future::ready(if conversation_fails {
+                    Err(ConversationError::Audit)
+                } else {
+                    Ok(())
+                })),
+                async { servers_stopped.store(true, Ordering::SeqCst) },
+                async {
+                    // MCP stop has returned before native's join is observed.
+                    assert!(servers_stopped.load(Ordering::SeqCst));
+                    Err(fault)
+                },
+                Duration::from_secs(30),
+            )
+            .await;
+            let Err(RunError::Shutdown(Some(ShutdownFailure::Native {
+                readers: Ok(()),
+                conversations,
+                native,
+            }))) = shutdown_result(&report)
+            else {
+                panic!("a native drain failure must survive into the result");
+            };
+            assert_eq!(native, fault);
+            assert_eq!(conversations.is_err(), conversation_fails);
+        }
+        // A confirmed native join leaves an otherwise clean report confirmed.
+        let report = Mutex::new(ShutdownReport::Unreported);
+        passive_cleanup(
+            &report,
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            None::<Ready<Result<(), ConversationError>>>,
+            async {},
+            std::future::ready(Ok(())),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(shutdown_result(&report).is_ok());
+    }
+
+    /// Row S12: a report taken while native's drain is still pending says so;
+    /// it is never Confirmed.
+    #[tokio::test]
+    async fn unreported_native_drain_is_not_confirmed() {
+        let report = Mutex::new(ShutdownReport::Unreported);
+        {
+            let stop = passive_cleanup(
+                &report,
+                std::future::ready(Ok(())),
+                std::future::ready(Ok(())),
+                Some(std::future::ready(Err(ConversationError::Audit))),
+                async {},
+                std::future::pending(),
+                Duration::from_secs(30),
+            );
+            tokio::pin!(stop);
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await
+            );
+        }
+        let Err(RunError::Shutdown(Some(ShutdownFailure::NativeUnreported {
+            readers: Ok(()),
+            conversations: Err(ConversationError::Audit),
+        }))) = shutdown_result(&report)
+        else {
+            panic!("a pending native drain must not read as confirmed");
+        };
+    }
+
+    /// Row S14: a native listener failure stops the gateway like a process
+    /// signal and is the process result, read after the shutdown report.
+    #[tokio::test]
+    async fn native_listener_failure_stops_the_gateway_and_is_the_process_result() {
+        let (failure, failed) = tokio::sync::watch::channel(None);
+        let stop = tokio::spawn(stop_signal(std::future::pending(), Some(failed.clone())));
+        tokio::task::yield_now().await;
+        assert!(!stop.is_finished(), "nothing has failed yet");
+        failure.send_replace(Some(std::io::ErrorKind::InvalidInput));
+        tokio::time::timeout(Duration::from_secs(2), stop)
+            .await
+            .expect("the failure resolves the stop signal")
+            .unwrap();
+        let report = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
+            ConversationError::Audit,
+        )));
+        assert!(matches!(
+            serve_outcome(Ok(()), *failed.borrow(), &report),
+            Err(RunError::Native(NativeFailure::Listener(
+                std::io::ErrorKind::InvalidInput
+            )))
+        ));
+        assert!(
+            matches!(*report.lock().unwrap(), ShutdownReport::Unreported),
+            "the report was read before the listener failure was returned"
+        );
+        // With native pairing off there is no channel; only the process
+        // signal stops the gateway.
+        let (signal, signalled) = oneshot::channel::<()>();
+        let stop = tokio::spawn(stop_signal(
+            async {
+                let _ = signalled.await;
+            },
+            None,
+        ));
+        tokio::task::yield_now().await;
+        assert!(!stop.is_finished(), "nothing native can stop it");
+        signal.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), stop)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    /// Row S15: a native listener task that ends without publishing a failure,
+    /// as on a panic, drops its sender; that also stops the gateway.
+    #[tokio::test]
+    async fn a_vanished_native_listener_stops_the_gateway() {
+        let (failure, failed) = tokio::sync::watch::channel(None);
+        let listener = tokio::spawn(async move {
+            let _failure = failure;
+            panic!("native listener fault");
+        });
+        assert!(listener.await.unwrap_err().is_panic());
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            stop_signal(std::future::pending(), Some(failed.clone())),
+        )
+        .await
+        .expect("a vanished listener resolves the stop signal");
+        // It is no listener failure: the shutdown report carries the fault.
+        let report = Mutex::new(ShutdownReport::Confirmed);
+        assert!(serve_outcome(Ok(()), *failed.borrow(), &report).is_ok());
     }
 
     #[test]

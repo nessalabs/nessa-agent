@@ -5,7 +5,7 @@ use super::{wire, McpError};
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
-use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::acp::sessions::{ForwardedResults, StandInGrant, StdioMcpServer};
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
 use std::{
@@ -91,9 +91,19 @@ pub struct McpOwner {
 /// (set, then take) are each one step: a session either is registered
 /// before the revocation, and is taken by it, or sees it and is refused —
 /// whichever [`McpServers`] it is opened and revoked through.
-#[derive(Default)]
 struct Grant {
     state: Mutex<GrantState>,
+    /// What its sessions' stand-ins forwarded, until the binding holding the
+    /// grant takes each for the tool call it was reported under.
+    forwarded: ForwardedResults,
+}
+impl Default for Grant {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            forwarded: ForwardedResults::new(),
+        }
+    }
 }
 #[derive(Default)]
 struct GrantState {
@@ -114,6 +124,22 @@ impl McpOwner {
     /// The SDK session these sessions belong to.
     pub fn session(&self) -> &SessionId {
         &self.session
+    }
+    /// The results this grant's stand-ins forwarded to their harness, shared,
+    /// for comparing: only the SDK writes and takes them.
+    pub fn forwarded(&self) -> ForwardedResults {
+        self.grant.forwarded.clone()
+    }
+    /// The grant a host gives the binding for this owner's open: its stand-ins'
+    /// `environment`, `held` until the grant is dropped (the host's revocation
+    /// of this owner), and this owner's forwarded results — its own, so a
+    /// grant cannot carry another owner's.
+    pub fn stand_in_grant(
+        &self,
+        environment: Vec<(String, String)>,
+        held: Box<dyn Send + Sync>,
+    ) -> StandInGrant {
+        StandInGrant::new(environment, held).with_forwarded(self.forwarded())
     }
     /// Whether `other` is this same grant.
     fn same_grant(&self, other: &Self) -> bool {
@@ -607,12 +633,17 @@ impl McpSession {
     /// requests are forwarded under ids of the connection's and answered
     /// under its own; its cancellations cancel upstream; tools the model may
     /// not see are left out of its lists and refused if called; the server's
-    /// `*/list_changed` notices are passed on.
+    /// `*/list_changed` notices are passed on. A `tools/call` result's
+    /// `structuredContent` is kept in the grant's [`McpOwner::forwarded`]
+    /// under the harness's id for the call, with this server's name, before
+    /// the harness is answered.
     pub async fn serve(self, input: impl AsyncRead + Unpin, output: impl AsyncWrite + Unpin) {
         stand_in::serve(
             self.owner.0.connection.clone(),
             self.owner.0.initialized.clone(),
             self.owner.0.visibility.clone(),
+            self.owner.0.owned_by.forwarded(),
+            &self.owner.0.server,
             input,
             output,
         )
