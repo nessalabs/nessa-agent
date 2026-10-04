@@ -689,12 +689,13 @@ says why where the conversations would be.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`, `harmlessConsole`;
   kept in the JSON as `harmless`). Chromium can report the window's own
-  `GET /mcp-resources` as failed with `net::ERR_ABORTED` after a 200 and the
-  whole body, which the client reads through a bounded reader (#485): that
-  one failure is labelled harmless (`lib/browser.mjs`, `failedRequest`, rows
-  F1–F4); with no response, another status, URL or error it stays a
-  failure. `mcp-apps-gateway.mjs`'s `renders` still asserts the bytes
-  arrived. Vite's `[vite] connecting…` / HMR
+  `GET /mcp-resources`, which the client reads through a bounded reader, as
+  failed with `net::ERR_ABORTED` after a 200 (#485): that one failure, at
+  that URL exactly, is labelled harmless, "aborted after a 200; the bytes
+  are checked by renders" (`lib/browser.mjs`, `recordFailedRequest`, rows
+  F1–F5). With no response, another status, URL, query or error it stays a
+  failure. `mcp-apps-gateway.mjs`'s `renders` asserts the bytes arrived.
+  Vite's `[vite] connecting…` / HMR
   messages are logs, not errors. A reload caused by another edit landing on
   the dev server mid-run is not a finding — re-run.
 

@@ -119,12 +119,9 @@ export async function openPage(browser, o) {
       harmless.push(entry)
     else errors.push(entry)
   })
-  page.on("requestfailed", (request) => {
-    if (/favicon\.ico/.test(request.url())) return
-    const failed = failedRequest(request, page.url())
-    if (failed.harmless) harmless.push(failed.harmless)
-    else errors.push(failed.error)
-  })
+  page.on("requestfailed", (request) =>
+    recordFailedRequest(request, page.url(), { errors, harmless }),
+  )
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
     await page.waitForSelector(o.readySelector ?? css.anyReady, {
@@ -163,18 +160,19 @@ export async function openPage(browser, o) {
 }
 
 /**
- * How a request the page reports failed is read (#485, rows F1–F4; tested in
- * `browser.test.mjs`): `{ harmless }` or `{ error }`, each a line for the
- * report.
+ * Records a request the page reports failed (#485, rows F1–F5; tested in
+ * `browser.test.mjs`): a line pushed to `harmless` or to `errors`, or
+ * nothing for the fresh browser's `/favicon.ico`.
  *
  * Harmless only when Chromium reports `net::ERR_ABORTED` for the window's own
- * `GET /mcp-resources` after a 200 arrived (F1). The client reads that body
- * through a reader bounded to its size + 1 (`fetchMcpResource`), and Chromium
- * sometimes reports such a request aborted once the whole body has reached the
- * page. Whether the bytes were the right ones is not decided here:
- * `mcp-apps-gateway.mjs`'s `renders` asserts the app is live with the
+ * `GET /mcp-resources` (that URL exactly: the client sends its ticket in a
+ * header, `fetchMcpResource`) after a 200 arrived (F1). The client reads that
+ * body through a reader bounded to its size + 1, and Chromium can report such
+ * a request aborted after the whole body reached the page. This function
+ * knows only that a 200 arrived: whether the bytes were the right ones is
+ * `mcp-apps-gateway.mjs`'s `renders`, which asserts the app is live with the
  * server's document and result. With no response (F2), another status (F3),
- * or any other URL or error (F4), it is an error.
+ * another URL or error (F4), or a query or fragment (F5), it is an error.
  *
  * `existingResponse()` answers synchronously, so the line is recorded within
  * the event, before a step reads `errors`. Playwright creates a failed
@@ -184,23 +182,24 @@ export async function openPage(browser, o) {
  * @param {{ url(): string, failure(): { errorText: string } | null,
  *   existingResponse(): { status(): number } | null }} request
  * @param {string} pageUrl the page's URL when the request failed
+ * @param {{ errors: string[], harmless: string[] }} into
  */
-export function failedRequest(request, pageUrl) {
+export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
   const url = request.url()
+  if (/favicon\.ico/.test(url)) return
   const errorText = request.failure()?.errorText ?? ""
   const line = `requestfailed: ${url} ${errorText}`
-  const target = URL.canParse(url) ? new URL(url) : null
-  const harmless =
+  // The window's own resource URL; none for a page with no origin to resolve it on.
+  const resource = URL.canParse("/mcp-resources", pageUrl)
+    ? new URL("/mcp-resources", pageUrl).href
+    : null
+  if (
     errorText === "net::ERR_ABORTED" &&
-    URL.canParse(pageUrl) &&
-    target?.origin === new URL(pageUrl).origin &&
-    target.pathname === "/mcp-resources" &&
+    url === resource &&
     request.existingResponse()?.status() === 200
-  return harmless
-    ? {
-        harmless: `${line} (after a 200: Chromium reports a body read through a reader as aborted, #485)`,
-      }
-    : { error: line }
+  )
+    harmless.push(`${line} (aborted after a 200; the bytes are checked by renders, #485)`)
+  else errors.push(line)
 }
 
 /** Fails with a clear "could not run" when the page lacks what a script needs. */

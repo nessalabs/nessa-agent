@@ -334,9 +334,10 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
 
 /**
  * Signs the page's origin in with the gateway's owner token, then opens the
- * conversation. With the page, returns `reviewsBefore`: the app's reviews
- * pending before this page loaded the window, which may mount the app before
- * the conversation is clicked (#485).
+ * conversation: the window's own opening of it on load (#485, B1′), or a
+ * click when the window did not (B2′). With the page, returns
+ * `reviewsBefore`: the app's reviews pending before this page loaded the
+ * window, and `openedBy`: `"window"` or `"click"`.
  */
 async function openConversation(browser, stack, layout) {
   const opened = await openPage(browser, { url: stack.url, layout })
@@ -364,7 +365,7 @@ async function openConversation(browser, stack, layout) {
   // Taken before the navigation, not before the click: on load the window
   // opens the newest session of its first channel by itself
   // (`usecases/updates.ts`), which can be this conversation, so the app can
-  // mount, and its first call open a review, before the click (#485, B1).
+  // mount, and its first call open a review, before any click (#485).
   const reviewsBefore = await pendingReviews(stack)
   await page.goto(`${stack.url}?gateway`, { waitUntil: "domcontentloaded" })
   await need(page, css.anyReady, "the desktop window", 30_000)
@@ -378,17 +379,50 @@ async function openConversation(browser, stack, layout) {
     await opened.close()
     throw new CannotRun(`no session row "${stack.title}" in the window`)
   }
-  // Opens the conversation, which the window may have opened already.
-  await row.click()
+  // B1′: the window opened the conversation itself, and the mount's first
+  // call has opened its review. B2′: it did not, within the bound, so the
+  // check opens it. Either way `allow` answers the first review not in
+  // `reviewsBefore`: the mount's.
+  const openedBy = (await openedByWindow(page, stack, reviewsBefore)) ? "window" : "click"
+  if (openedBy === "click") await row.click()
   // The conversation's transcript, which the app's card is drawn in.
   await need(page, css.appView, "the app's view in the conversation", 30_000)
   await settled(page)
-  return { ...opened, reviewsBefore }
+  return { ...opened, reviewsBefore, openedBy }
+}
+
+/**
+ * Whether the window opened the conversation on load (#485, B1′): within
+ * `ms` its inline app is live and the app's first destructive call has
+ * opened a review not in `baseline`. Waiting for both fixes the order, so the
+ * steps after begin from the same state each run.
+ */
+async function openedByWindow(page, stack, baseline, ms = 20_000) {
+  const until = Date.now() + ms
+  const left = () => Math.max(until - Date.now(), 1)
+  const framed = await page
+    .waitForSelector(css.appFrameIn("inline"), { timeout: left(), state: "attached" })
+    .then(() => true)
+    .catch(() => false)
+  if (!framed) return false
+  const app = await appFrame(page, "inline", left()).then(
+    (frame) => frame.app,
+    () => null,
+  )
+  if (!app) return false
+  const live = await app
+    .waitForSelector(css.reviewState("live"), { timeout: left() })
+    .then(() => true)
+    .catch(() => false)
+  if (!live) return false
+  return Boolean(await reviewOpened(stack, baseline, left()))
 }
 
 const checks = {
-  renders: async (page, stack, shot) => {
+  renders: async (page, stack, shot, opened) => {
     const failures = []
+    // Which of B1′ and B2′ this page took (#485).
+    const { openedBy } = opened
     // The app's frame is drawn once its resource is read and fetched: a
     // view that never gets there has failed, and says how in its lifecycle.
     const drawn = await page
@@ -404,7 +438,7 @@ const checks = {
       failures.push(
         `the app is not drawn inline within 30 s: its view is ${view.lifecycle}, saying "${view.text}"`,
       )
-      return { seen: { view }, failures }
+      return { seen: { openedBy, view }, failures }
     }
     const { proxy, app } = await appFrame(page, "inline", 30_000)
     await app
@@ -420,7 +454,7 @@ const checks = {
     if (drawnOnce.length > 0) {
       if (shot) await page.screenshot({ path: shot })
       failures.push(...drawnOnce)
-      return { seen: { cards, frames }, failures }
+      return { seen: { openedBy, cards, frames }, failures }
     }
     const seen = await app.evaluate(() => ({
       state: document.body.getAttribute("data-review-state"),
@@ -429,6 +463,7 @@ const checks = {
       origin: self.origin,
       url: location.href,
     }))
+    seen.openedBy = openedBy
     seen.cards = cards
     seen.frames = frames
     seen.result = await output(app, "result")
