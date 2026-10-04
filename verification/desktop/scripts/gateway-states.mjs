@@ -21,7 +21,11 @@
  * the poller's rounds and a connect's retry backoff run on its timers; it
  * runs in real time until the script pauses it for the click. While it is
  * paused no timer fires, so a host ask after the click is Try Again's own
- * connect, with no timing number to say so.
+ * connect, with no timing number to say so. That rests on a premise: Try
+ * Again's connect reaches its first host ask with no page timer, as React's
+ * scheduler and IPC promises use none. If that stops holding, the paused
+ * clock holds Try Again's own connect, and a correct product fails C2; a
+ * broken one never passes.
  *
  * The poller's numbers are the gateway source's own (`defaultGatewayTiming`),
  * read in the page from the dev server's module; a production build has none
@@ -32,7 +36,7 @@
  * `gateway-window.mjs`'s, against a real one.
  */
 import { openPage, withEngines } from "./lib/browser.mjs"
-import { attempt, CannotRun, log } from "./lib/cli.mjs"
+import { attempt, CannotRun } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css, modules } from "./lib/selectors.mjs"
@@ -80,13 +84,14 @@ function positive(source, numbers) {
  *   is at most `reconnectRounds + 1` rounds after the failure (S16), and two
  *   rounds are left for the rounds' own time. It has asked exactly once by
  *   then, as the ask after it is a whole wait later still.
- * - `unaskedMs`, two rounds: how long the host goes unasked before the clock
- *   pauses (C1), so the last connect's attempts have ended. That holds
- *   while the client's largest retry backoff plus one attempt stays under
- *   two rounds (`resolveConnectRetry`'s defaults, 500 ms today); if it
- *   stops holding, the result is a spurious C2 failure, not a pass. A connect still
- *   in flight would stop on its paused backoff, and Try Again would join it
- *   (S6) and not ask: a correct product failing C2, not a broken one passing.
+ * - `unaskedMs`, two rounds, the unasked spell: how long the host goes
+ *   unasked before the clock pauses (C1), so the last connect's attempts
+ *   have ended. That holds while the client's largest retry backoff plus one
+ *   attempt stays under two rounds (`resolveConnectRetry`'s defaults, 500 ms
+ *   today); if it stops holding, the result is a spurious C2 failure, not a
+ *   pass. A connect still in flight would stop on its paused backoff, and
+ *   Try Again would join it (S6) and not ask: a correct product failing C2,
+ *   not a broken one passing.
  * - `pauseLeadMs`, a tenth of a round: `pauseAt` takes a time no earlier
  *   than the clock's own, which moves on between the script reading it and
  *   the pause. The timers due in that lead fire as the clock pauses, before
@@ -98,11 +103,11 @@ function cadenceOf({ pollMs, reconnectRounds }) {
   const quietMs = pollerWaitMs - pollMs
   const unaskedMs = 2 * pollMs
   const pauseLeadMs = pollMs / 10
-  // C5a: the quiet spell before the pause would use up the wait it is meant
-  // to land in.
+  // C5a: the unasked spell and the lead before the pause would use up the
+  // quiet the pause is meant to land in.
   if (quietMs <= unaskedMs + pauseLeadMs)
     throw new CannotRun(
-      `the poller's quiet spell of ${quietMs}ms is not over the ${unaskedMs}ms unasked plus the ${pauseLeadMs}ms lead before the pause: the pause could not land while the poller still waits`,
+      `the poller's quiet of ${quietMs}ms, a round short of its wait, is not over the ${unaskedMs}ms unasked spell plus the ${pauseLeadMs}ms lead before the pause: the pause could not land while the poller still waits`,
     )
   return {
     pollMs,
@@ -337,9 +342,9 @@ It reads the poller's wait from the gateway source in the page, so it needs
             // C1: once the host has gone unasked for `unaskedMs`, the clock
             // pauses, and no timer fires until it resumes. One evaluate waits
             // for that and answers with the page's time, so only its answer
-            // comes between the quiet spell and `pauseAt`. It polls on the
+            // comes between the unasked spell and `pauseAt`. It polls on the
             // page's timers, the clock's, still running in real time.
-            const quietAt = await page.evaluate(
+            const unaskedAt = await page.evaluate(
               ([unasked, timeout]) =>
                 new Promise((resolve) => {
                   const started = performance.now()
@@ -354,13 +359,13 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 }),
               [unaskedMs, recoveredMs],
             )
-            if (quietAt === null) {
+            if (unaskedAt === null) {
               failures.push(
                 `the host was never unasked for ${unaskedMs}ms within ${recoveredMs}ms, so the clock was not paused for Try Again`,
               )
               return { failures, measured: { timing, first, quiet, recovered } }
             }
-            await context.clock.pauseAt(quietAt + pauseLeadMs)
+            await context.clock.pauseAt(unaskedAt + pauseLeadMs)
             const atPause = await page.evaluate(() => {
               const times = window.__fakeHostAskTimes
               return {
@@ -396,7 +401,8 @@ It reads the poller's wait from the gateway source in the page, so it needs
             }
             const clickedAt = Date.now()
             // C1 and C2: the clock still paused, an ask after the click is Try
-            // Again's own connect; with none, it did not connect.
+            // Again's own connect. With none, it did not connect, or its
+            // connect was held, on a connect in flight or a page timer.
             const asked = await page
               .waitForFunction(
                 (count) => window.__fakeHostAskTimes.length > count,
@@ -413,7 +419,7 @@ It reads the poller's wait from the gateway source in the page, so it needs
             }
             if (!asked)
               failures.push(
-                `Try Again did not connect: no host ask within ${pausedAskWaitMs}ms of the click with the clock paused. Either Try Again does not connect, or it joined a connect still in flight (S6)`,
+                `Try Again did not connect: no host ask within ${pausedAskWaitMs}ms of the click with the clock paused. Either Try Again does not connect, or it joined a connect still in flight (S6), or its connect waits on a page timer, which the paused clock holds`,
               )
             const read = await page
               .waitForFunction(() => window.__statusLeft, null, { timeout: 5_000 })
@@ -446,13 +452,10 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 tryAgain,
               },
             }
-          } catch (error) {
-            // The result keeps only the first line: a throw that is not
-            // "could not run" is a fault, and its stack goes to stderr.
-            if (!(error instanceof CannotRun)) log(error?.stack ?? String(error))
-            throw error
           } finally {
-            await opened?.close()
+            // The body's result or error is the one reported: a close that
+            // fails is swallowed, so it cannot take its place.
+            await opened?.close().catch(() => {})
           }
         })
     })

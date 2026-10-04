@@ -592,19 +592,26 @@ says why where the conversations would be.
   and connects at once though the poller waits, and says the same while
   nothing changed. Try Again is told from the poller by a clock the script
   holds, not by timing: Playwright's clock runs the page's timers, in real time
-  until the host has gone unasked for two poll rounds, when it pauses. With no
-  timer firing, a host ask after the click can only be Try Again's own
-  connect; with none, Try Again did not connect, or joined a connect still in
-  flight. The pause must also come while the poller still waits: under a round
-  short of its wait after the last ask, at least one refused round is still
-  owed. Given that check, a broken Try Again fails, and a connect still in
-  flight can only make a correct one fail, never a broken one pass. It fails when the host is never unasked for two rounds
+  until the host has gone unasked for two poll rounds (the unasked spell), when
+  it pauses. With no timer firing, a host ask after the click can only be Try
+  Again's own connect; with none, Try Again did not connect, or joined a
+  connect still in flight, or its connect waits on a page timer, which the
+  paused clock holds. That rests on a premise: Try Again's connect reaches its
+  first host ask with no page timer, as React's scheduler and IPC promises use
+  none. If that stops holding, a correct product fails, never a broken one
+  passes. The pause must also come while the poller still waits: under a round
+  short of its wait after the last ask (the quiet), at least one refused round
+  is still owed. Given that check, a broken Try Again fails, and a connect
+  still in flight or a held timer can only make a correct one fail, never a
+  broken one pass. It fails when the host is never unasked for two rounds
   within the poller's wait and three rounds more, when the host was asked
   within two rounds of the pause, when the pause came after the poller's wait
-  could have ended, when no failed connect came before the click, or when no
-  ask follows the click. Timing numbers that are missing or not positive could
-  not run, and so could a wait too short for the quiet spell and the pause to
-  fit under it (C0–C4, #419 comment 5977020094; C5, #419 comment 5978179804).
+  could have ended, when no failed connect came before the click, when Try
+  Again could not be clicked, when no ask follows the click, or when Try Again
+  did not read the index again. Timing numbers that are missing or not
+  positive could not run, and so could a quiet too short for the unasked spell
+  and the lead before the pause to fit under it (C0–C4, #419 comment
+  5977020094; C5, #419 comment 5978179804).
   While signed out, and while the gateway is not ready, the window does not
   ask the host at all for a round short of the poller's wait after its last
   ask, then asks exactly once by three rounds after it: after a failed connect
