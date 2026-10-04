@@ -796,10 +796,17 @@ await main(
             (each) => each.conversationId === conversationId,
           )?.title
           if (!title) throw new CannotRun("the conversation has no title to find it by")
+          // Reloaded to show the new conversation. What the reload's own
+          // load reports before the window is ready is set aside, as
+          // `signedIn` sets aside its load's (Chromium reports each
+          // `/browser/check` the load sends as aborted); everything before
+          // the reload, and after the window is ready, is kept.
+          const beforeReload = opened.errors.splice(0)
           await opened.page.goto(`${stack.url}?gateway`, {
             waitUntil: "domcontentloaded",
           })
           await need(opened.page, css.anyReady, "the desktop window", 30_000)
+          opened.errors.splice(0, Infinity, ...beforeReload)
         }
         if (!title) throw new CannotRun("not run: the conversation was not made")
         const drawn = await chartDrawn(opened.page, title)
