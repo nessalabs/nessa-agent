@@ -1642,7 +1642,8 @@ holds:
   progress across `WouldBlock`.
 
 It ends at **Approved**. It stages no receiver, issues no credential and
-reaches no Active state. It is **not mounted** in the default gateway.
+reaches no Active state. B1 alone does not mount it; slice 2a mounts it when
+configured ([owner routes and mounting](#owner-routes-and-mounting-slice-2a)).
 
 ### Why it lands unmounted
 
@@ -1711,7 +1712,7 @@ slice.
 | P31 | Status request from another device key | Auth refuses (WrongActor) before disclosure; `Refused`; the original key reads its status. | `native_status_refuses_another_device_and_accepts_original` |
 | P32 | Frame prefix announces 4097 bytes; exactly 4096 | Refused before the body is read or allocated; 4096 accepted. Encoding refuses 4097. | `native_framing_refuses_oversize_before_body_and_accepts_exact` |
 | P32 | Partial prefix, body or output, interrupted by `WouldBlock` | The channel keeps its offsets and resumes; a different envelope cannot replace pending output. | `native_framing_retains_partial_io_and_output` |
-| P52, P66 | Eight connections held, a ninth arrives, waiters dropped, shutdown | The limit is per `NativeEnrollmentConnections`; composition must build one per gateway, which is not enforced by construction. Ninth refused for capacity; dropped waiters leave permits with workers; shutdown wakes each socket once and waits; later admission refused. The wake is a per-socket stop flag, not a socket call from another thread: Windows does not let `shutdown` from another thread interrupt a blocking receive, so no OS relies on it. Every native socket read caps its OS timeout at 100 ms and checks the flag between waits, so a worker blocked reading fails with ConnectionAborted within one tick on every OS; the phase deadline is still checked on each wait. A send is different: after a timed-out send the transport may have taken part of the buffer (Winsock documents the connection as indeterminate), so a send is never retried. A write checks the flag, then gets the rest of the phase deadline as its one send timeout; if that send times out, the stream fails for good (TimedOut, the deadline cause) and every later read, write or flush fails without touching the socket. So a worker blocked in a send (a peer that stops reading with the socket buffer full, unlikely with frames of at most 4 KiB) is not woken by the flag; shutdown waits for it, bounded by its phase deadline. No portable way to interrupt a blocked send without the same indeterminate state was found. Test: `timed_out_send_is_terminal_and_never_retried`. The report lists exactly the connections whose permit was still held at the sweep, with their cause. A worker blocked in non-socket work (the store, the KSF) is not interrupted; shutdown waits for it. A connection takes its permit under the lock `close` takes; this ordering is structural, and no public seam can pause between the two to test it. | `native_shutdown_keeps_original_physical_capacity` |
+| P52, P66 | Eight connections held, a ninth arrives, waiters dropped, shutdown | The limit is per `NativeEnrollmentConnections`; composition builds exactly one per gateway (row S13 below). Ninth refused for capacity; dropped waiters leave permits with workers; shutdown wakes each socket once and waits; later admission refused. The wake is a per-socket stop flag, not a socket call from another thread: Windows does not let `shutdown` from another thread interrupt a blocking receive, so no OS relies on it. Every native socket read caps its OS timeout at 100 ms and checks the flag between waits, so a worker blocked reading fails with ConnectionAborted within one tick on every OS; the phase deadline is still checked on each wait. A send is different: after a timed-out send the transport may have taken part of the buffer (Winsock documents the connection as indeterminate), so a send is never retried. A write checks the flag, then gets the rest of the phase deadline as its one send timeout; if that send times out, the stream fails for good (TimedOut, the deadline cause) and every later read, write or flush fails without touching the socket. So a worker blocked in a send (a peer that stops reading with the socket buffer full, unlikely with frames of at most 4 KiB) is not woken by the flag; shutdown waits for it, bounded by its phase deadline. No portable way to interrupt a blocked send without the same indeterminate state was found. Test: `timed_out_send_is_terminal_and_never_retried`. The report lists exactly the connections whose permit was still held at the sweep, with their cause. A worker blocked in non-socket work (the store, the KSF) is not interrupted; shutdown waits for it. A connection takes its permit under the lock `close` takes; this ordering is structural, and no public seam can pause between the two to test it. | `native_shutdown_keeps_original_physical_capacity` |
 | P53 | Begin without Hello; Begin naming another attempt; refusals | Refused as Phase before any attempt is charged. A gateway decision on a readable channel is answered with the redacted `Refused` reply; physical failures are not. | `native_out_of_order_requests_are_refused_before_an_attempt_is_charged`; `native_expired_and_used_codes_are_refused_without_a_claim` |
 | P54, P59 | KE3 arrives at the enrollment deadline; one millisecond earlier | At: refused, attempt settled HandshakeDeadline, no claim. Earlier: claims. Both on the injected clock. | `native_late_confirmation_is_settled_as_deadline_without_claim` |
 | P55 | Entropy panics inside create, registration or client work | Typed `WorkerFault(Panic)`; capacity released; nothing published; the next operation succeeds. | `native_worker_faults_preserve_type_and_allow_new_work` |
@@ -1730,6 +1731,8 @@ Not implemented here, by row: P03 identical-retry receipt through the native
 client, P07, P11, P14, P18–P27, P29, P30, P63, P65 (Auth's TLS budget, not this
 slice), M1–M2 periodic expiry (expiry is settled when a path reads the record,
 not by a timer), O1/O4–O9 as product routes, and S1–S5, S7, S8, S10, S12.
+The owner routes and startup composition rows are implemented by
+[owner routes and mounting](#owner-routes-and-mounting-slice-2a).
 
 ### Open design items for mounting
 
@@ -1747,6 +1750,129 @@ not by a timer), O1/O4–O9 as product routes, and S1–S5, S7, S8, S10, S12.
   enforces it for another caller. Owner commands are not affected: their store
   work runs in the owner worker
   (`native_owner_store_work_runs_off_the_async_thread`).
-- **One connection owner per gateway.** The eight-connection limit belongs to a
-  `NativeEnrollmentConnections`; nothing stops composition building two for one
-  `GatewayPairing`. Mounting composition must build exactly one.
+- **One connection owner per gateway.** Decided at mounting: composition
+  builds exactly one; see row S13 in
+  [owner routes and mounting](#owner-routes-and-mounting-slice-2a).
+
+## Owner routes and mounting (slice 2a)
+
+### What this slice is
+
+The owner product methods on the authenticated `/session` socket, and the
+startup composition that mounts the B1 native listener when it is configured.
+Enrollment still ends at **Approved**: approval records consent and nothing
+else. Receiver staging, Active and credential publication (P19–P25, O5, O6) are
+the next slice, so `pairing.approve` in this slice is
+`OwnerDecision::Approve` alone, and no record can reach Staging, Active or a
+cleanup-pending Terminal yet.
+
+```text
+product socket --(credential.manage, Cedar)--> product/pairing.rs
+product/pairing.rs --> PairingOwnerCommands --> GatewayPairing owner commands --> Auth
+composition/native_pairing.rs --> FilePairingState + restore_gateway_identity
+                              --> GatewayPairing::open --> bind (TcpEnrollmentAccept) --> NativeEnrollmentListener
+root shutdown --> stop native first --> ... --> join native drain into the report
+```
+
+Arrows are calls or construction. Auth still owns every enrollment decision;
+the route parses, asks, and maps the record it gets back.
+
+### Owner wire
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `pairing.create` | `{}` | `PairingCreateResult {code, status}`; `code` is the grouped display form, shown once |
+| `pairing.pending` | `{}` | `PairingPendingResult {items: PairingOwnerStatus[]}` |
+| `pairing.status` | `PairingInvitationParams {invitationId}` | `PairingOwnerStatus` |
+| `pairing.approve` | `PairingApproveParams {invitationId, deviceKey}` | `PairingOwnerStatus` |
+| `pairing.deny` | `PairingInvitationParams` | `PairingOwnerStatus` |
+| `pairing.cancel` | `PairingInvitationParams` | `PairingOwnerStatus` |
+
+`PairingOwnerStatus` is the record's projection: `invitationId`, `consentId`,
+`generation`, `class`, `grant` (the consent's action and resource),
+`createdAtMs`, `expiresAtMs`, `phase`, optional `claimedDeviceKey`, optional
+`credentialId`, optional `receiver {receiverId, accessEpoch}`, optional
+`terminal {cause, initiator}`, and `cleanupPending`, read from
+`PairingRecord::cleanup_pending`, never stored separately. It is historical
+enrollment, not read authority.
+
+Identity and key arrays are authored in `v1.json` as
+`x-pairing-byte-array` nodes and the code as an `x-pairing-manual-code`
+node. The product generator fills their bounds from Auth's
+`wire-values.json` (the same derivation that writes
+`pairing-values.generated.json`) and writes the Rust field as
+`[u8; InvitationId::LENGTH]` or `[u8; DeviceKey::LENGTH]`, so serde refuses a
+wrong length and the width has one owner. `pairing.pending` carries no
+`maxItems`: the list includes cleanup-pending Terminal records, which
+`MAX_LIVE_PAIRINGS` does not bound; the registry's configured receipt and byte
+limits bound it, and the response is still subject to the ordinary response
+ceiling.
+
+Refusals use the session's existing codes (`unauthorized`, `forbidden`,
+`invalid_request`, `temporarily_unavailable`) and the generated
+`PairingErrorCode`: `pairing_not_configured`, `pairing_not_found`,
+`pairing_slot_occupied`, `pairing_capacity`, `pairing_conflict`,
+`pairing_ineligible`, `pairing_busy`, `pairing_unavailable`. One total `match`
+in `product/pairing.rs` maps every `PairingRuntimeError`.
+
+The code is copied into the response JSON the same way `credential.issue`
+copies a secret. This slice does not add the erasing response wrapper proposed
+under [owner code response ownership](#owner-code-response-ownership); the
+code never reaches a log or audit record (the route formats no
+`ManualCode`, and `ManualCode`'s `Debug` is redacted).
+
+### Configuration
+
+`config.json` gains an optional `native` section:
+`{"native": {"listenAddress": "127.0.0.1:47650"}}`. `listenAddress` is a
+numeric `SocketAddr` parsed by serde's standard parser: no hostname lookup.
+Absent or `null` means native pairing is off, and that is the default. A
+nonloopback address is accepted, as the design above approves for the fixed
+TLS 1.3 raw-public-key profile.
+
+### Ordering table
+
+| Row | Event or ordering | Result | Test |
+| --- | --- | --- | --- |
+| S1 | `native` absent or `null` | No private-state directory, no key, no socket. Owner methods answer `pairing_not_configured`; every other method is unchanged. | `native_disabled_has_no_native_effect`; `owner_route_without_native_pairing_is_not_configured` |
+| S2 | `native` malformed: unknown field, hostname, address without port | `RuntimeConfig` refuses before any private-state or socket effect. The refusal is `RunError::RuntimeConfig`, reported as the `configuration` reason and `Restart::Pointless`: re-reading an unchanged `config.json` cannot succeed, so a managed gateway records the startup-failure file and exits 0 instead of relaunching forever. This holds for every refusal `RuntimeConfig::parse` makes (serde shape, registry and session limits), on every startup path including first-start provisioning; checks made later outside that parser (for example the `agents` section's selected agent and paths) keep their own classification. | `native_config_refuses_before_effect`; `invalid_runtime_configuration_stops_the_service_and_says_why`; `refused_runtime_configuration_survives_provisioning` |
+| S3 | First start with native configured | Composition creates `native-pairing/` beneath the namespace, opens `FilePairingState`, and `restore_gateway_identity` publishes the first key through Auth's guarded `publish_first_gateway_key` (key, then audit). Only then `GatewayPairing::open`, then the browser bind, then the native bind. | `mounted_gateway_enrolls_a_device_to_approved`; `native_restart_ends_available_and_keeps_the_key` |
+| S4 | Key file absent, enrollment history present | Startup fails with `RunError::Native` before either socket is bound; nothing is regenerated or erased. Which typed cause depends on what else is missing: the key file alone gone while its publication audit remains is `Identity(PrivateState(Corrupt))` (the private state contradicts itself); the whole `native-pairing/` directory gone is `Identity(Registry(GatewayKeyHistoryExists))` (the registry's history refuses a first publication). Both are permanent (row S16). | `native_startup_history_without_key_refuses_before_bind` (both cases) |
+| S5 | Key present, its audit outcome unfinished | Auth's `restore_gateway_key` reconciles it; composition only propagates a failure as `RunError::Native`. | Auth's own restore tests; composition adds no rule here |
+| S6 | Restart with an Available invitation | `GatewayPairing::open` (B1) ends it Restarted by System before serving; the key file is byte-identical. | `native_restart_ends_available_and_keeps_the_key`; B1 `native_restart_ends_available_setup_and_preserves_key` |
+| S7, S8 | Terminal cleanup-pending at startup | Not reachable: no record reaches Staging in this slice. Slice 2b. | — |
+| S9 | Claimed or Approved retained across restart | B1: preserved, never auto-approved or activated. | B1 `native_restart_expires_due_claimed_enrollments` |
+| S10 | Preparation succeeds, native bind fails | Typed `RunError::Native(Bind)`; the browser listener is dropped unserved; key and history are untouched. | `native_bind_failure_preserves_key_and_history` |
+| S11 | Expiry or owner decision while serving | B1 and Auth decide; the route maps the record. | B1 rows P06, S11 |
+| S12 | Stop while peers, registration, a create, or any owner command is in flight | The cleanup owner signals the native listener to stop before it waits on anything else. The listener closes admission, wakes and collects its peers and drains its connection owner; then `GatewayPairing::shutdown` closes owner-command admission (`OwnerAdmission`), closes and drains registration (so an admitted create that has not registered yet publishes nothing, B1 P77), and waits for every admitted owner command (create, pending, status, approve, deny, cancel) to end. Each command holds an `OwnerLease` from admission until its blocking job ends, so a dropped caller does not release it. That join is the last stage of the combined shutdown report: its failure is retained beside reader and conversation outcomes (`ShutdownFailure::Native`), and a report taken before it finishes says so (`NativeUnreported`), never Confirmed. | `native_shutdown_joins_a_held_peer`; `native_shutdown_failure_is_retained_beside_other_cleanup`; `unreported_native_drain_is_not_confirmed`; `native_shutdown_waits_for_an_admitted_owner_command` |
+| S19 | An owner command arrives after shutdown closed owner admission, or while every owner lease is held | After close: refused `PairingRuntimeError::ShuttingDown` before any store call. With every lease held (callers that left while their store work still runs): refused `PairingRuntimeError::Busy`, answered `pairing_busy`. After close the route answers `pairing_unavailable`. Nothing is done either way. | `native_shutdown_waits_for_an_admitted_owner_command` |
+| S13 | One gateway, its connection owner | `native_pairing::bind` consumes the one `PreparedNative` that `prepare` returned and is the only production construction of `NativeEnrollmentConnections`; `PreparedNative` is not `Clone`, and the product state receives `PairingOwnerCommands`, which exposes no `GatewayPairing`. So one opened gateway has exactly one connection owner. This is structural: no test can build a second one through composition. | structural (types and the single call site) |
+| S14 | The listening socket itself fails (the P67 row for EBADF, EINVAL, ENOTSOCK, EFAULT) | The `failed` callback publishes the `ErrorKind`; the root's stop signal resolves on it as on a process signal, so the whole gateway stops through the ordinary shutdown path, and the process result is `RunError::Native(Listener(kind))`, taken after the shutdown report has been read so it cannot hide it. | `native_listener_failure_stops_the_gateway_and_is_the_process_result` |
+| S15 | The listener task ends while the gateway is serving without a stop having been asked for: an accept failure (S14) or a panic | The failure publisher lives inside the listener task, so a panic drops it. The root's stop signal resolves on any change of that channel, including its closing, so a vanished listener stops the whole gateway like a failed one; the shutdown report then carries `ShutdownFailure::Native(ListenerFault(Panic))`. With native off there is no channel, and only a process signal stops the gateway. Superseded: the first 2a cut treated a closed channel as "no listener", so a panicked listener left the gateway serving codes nobody could claim. | `native_listener_failure_stops_the_gateway_and_is_the_process_result`; `a_vanished_native_listener_stops_the_gateway` |
+| S16 | Restart policy of a native startup failure | Permanent, so `Restart::Pointless` (a managed gateway records `logs/gateway-startup-failure.json` and exits 0 rather than relaunching forever): `GatewayKeyHistoryExists`, and private state `Corrupt` or `Conflict` wherever it is met: opening the private state, restoring the key, or the first key publication (`Registry(PrivateState(..))` from `publish_first_gateway_key`). Everything else can clear and stays `Worthwhile`: a held private-state lock, a taken port, a failed listener, unavailable or uncertain storage, a worker fault. | `a_registry_this_build_cannot_read_is_not_worth_starting_for_again`; `a_failure_that_can_clear_on_its_own_is_still_retried` (native cases in both) |
+| S17 | Default local owner provisioning | `nessa auth init --local` issues the owner credential, and the default `nessa-panel` surface (at init, or `provision-surface --surface-id nessa-panel` without `--grants`), with one composition-owned set: `server.read`, `conversation.read`, `conversation.write`, `credential.manage`. Cedar already permits an active admin to read conversations; the credential grant was what refused it, because `AuthorizePairing` requires the consent's own grant (`conversation.read`). | `mounted_gateway_enrolls_a_device_to_approved` (the default owner credential creates and approves); `default_panel_surface_carries_the_owner_grants` |
+| S18 | An owner credential issued before S17 (without `conversation.read`) | `nessa auth recover-owner --local` re-issues the owner credential with the current owner set for the same principal, membership and organization, and revokes the earlier owner credentials in the same commit with their revocation history kept, as recovery always has. Recovery no longer copies the old credential's grants forward: the owner set has one owner, composition. A set without `credential.manage` is refused as `Conflict` before any change, because it would revoke every manager and issue a replacement that a later recovery could not select. The panel surface is re-provisioned with `provision-surface --surface-id nessa-panel`. | `recovery_issues_the_given_owner_grants_and_revokes_the_old_owner`, `recovery_refuses_an_owner_set_that_cannot_manage_credentials` (Auth); `recovered_old_owner_can_pair_devices` (composed process) |
+| O1 | Current owner creates into an empty slot | Socket admission asks Cedar for `credential.manage`; `GatewayPairing::create` registers, commits, then returns the code. The response is built from the committed record. | `owner_route_create_orders_code_after_commit`; `mounted_gateway_enrolls_a_device_to_approved` |
+| O2 | Create answer lost; owner creates again | The second create is refused `pairing_slot_occupied`; `pairing.pending` lists the Available record without its code; `pairing.cancel` ends it Cancelled by the owner; a new create succeeds. | `owner_route_lost_create_answer_keeps_slot` |
+| O3 | A member session (not admin) asks any pairing method; an admin whose credential does not allow the consent's grant creates; another admin of the same organization names an invitation it does not own | Member: Cedar refuses `credential.manage` at socket admission, `forbidden`, before any registry read; no record is created. Admin without the grant: Auth's `AuthorizePairing` refuses (`Denied`), mapped to `forbidden`; nothing is created. Another owner's invitation: `AuthorizePairing` refuses it as `IdentityMismatch`, which the route answers `pairing_not_found`, the same as an unknown id, so its existence is not disclosed; the record is unchanged. | `owner_route_refuses_a_member_before_disclosure`; `owner_route_without_the_consent_grant_is_forbidden`; `owner_route_hides_another_owners_invitation` |
+| O4 | Approve names another valid key, then the claimed key; deny | Another key: `pairing_conflict`, record unchanged. Claimed key: phase `approved`, no credential. Deny on a claimed record: Terminal, cause `denied`, initiator the owner principal. | `owner_route_approve_exact_claim_before_effect` |
+| O7 | Deny or cancel arrives with other owner work in flight | Classified as socket controls (`ResponseClass::Control`, `controls` capacity), so ordinary requests cannot crowd them out; the decision itself is Auth's, which keeps the first terminal cause. | `pairing_deny_and_cancel_are_controls`; Auth's terminal-cause tests |
+| O8 | The socket goes after admission | The route runs on the socket's detached request task (existing behaviour), and `GatewayPairing` keeps its own create worker through commit (B1 P77). | B1 `native_create_observer_loss_keeps_original_owner_until_drain` |
+| W1 | Malformed params: unknown field, wrong array length, non-empty params for create or pending | `invalid_request` from the generated DTO (`deny_unknown_fields`, fixed arrays) before `GatewayPairing` is asked. | `owner_route_refuses_malformed_params_before_the_store` |
+| O5, O6, O9 | Activation, receiver admission, revocation of an Active key | Slice 2b. `credential.revoke` is unchanged. | — |
+
+### Open items found while mounting
+
+- **Accept failures (P67)** are B1's: composition injects
+  `TcpEnrollmentAccept`, and only the failure that ends the listener reaches
+  row S14.
+
+### What slice 2b needs from this one
+
+- `pairing.approve` must go on to `stage_pairing`, receiver dispatch, and
+  `publish_pairing` with the original stage capability, returning the
+  intermediate phase on a physical failure (O5, O6, P19–P25).
+- Startup must run S7/S8 terminal cleanup lookup before the native bind, and
+  shutdown D5 reconciliation after the native and product drains.
+- The native client needs the issued credential delivered on its pinned status
+  (B1 ends at Approved).

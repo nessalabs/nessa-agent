@@ -35,6 +35,12 @@
     "mcp.callTool": "McpCallToolParams",
     "mcp.readResource": "McpReadResourceParams",
     "mcp.releaseApp": "McpReleaseAppParams",
+    "pairing.create": null,
+    "pairing.pending": null,
+    "pairing.status": "PairingInvitationParams",
+    "pairing.approve": "PairingApproveParams",
+    "pairing.deny": "PairingInvitationParams",
+    "pairing.cancel": "PairingInvitationParams",
     "conversation.watchRecords": "ConversationWatchRecordsParams",
     "conversation.watchCatalogue": "ConversationWatchCatalogueParams",
     "conversation.unwatch": "ConversationUnwatchParams"

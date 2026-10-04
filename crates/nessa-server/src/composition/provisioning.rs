@@ -103,7 +103,10 @@ fn provision_with(auth_command: &dyn AuthCommand, config: &Environment) -> Resul
 /// already and saying it twice reads like two different failures.
 fn context(step: &str, error: RunError) -> RunError {
     match error {
+        // Both are permanent and already name their file; rewrapping them as an
+        // authentication failure would make a managed gateway relaunch forever.
         registry @ RunError::Registry(_) => registry,
+        config @ RunError::RuntimeConfig(_) => config,
         RunError::Authentication(message) => failure(format!("{step}: {message}")),
         other => failure(format!("{step}: {other}")),
     }
@@ -226,6 +229,9 @@ mod minting_tests {
                 Err(RunError::Authentication(message)) => {
                     Err(RunError::Authentication(message.clone()))
                 }
+                Err(RunError::RuntimeConfig(message)) => {
+                    Err(RunError::RuntimeConfig(message.clone()))
+                }
                 Err(other) => Err(failure(other.to_string())),
             }
         }
@@ -239,6 +245,19 @@ mod minting_tests {
         assert_eq!(config.stage, Stage::Ci);
         config.auth_directory = Some(auth);
         (temporary, config)
+    }
+
+    /// A refused `config.json` met while minting stays a configuration
+    /// failure, so the managed service stops instead of relaunching (S2).
+    #[test]
+    fn refused_runtime_configuration_survives_provisioning() {
+        let (_temporary, config) = namespace();
+        let auth = FakeAuth::refusing(RunError::RuntimeConfig("unknown field `tls`".into()));
+
+        let error = provision_with(&auth, &config).unwrap_err();
+
+        // core::restart classifies RuntimeConfig as Pointless (its own tests).
+        assert!(matches!(error, RunError::RuntimeConfig(_)), "{error}");
     }
 
     /// The startup path of a fresh machine: both credentials are minted, in

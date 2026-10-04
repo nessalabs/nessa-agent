@@ -6,6 +6,11 @@ const owners = {
   DeviceKey: "deviceKeyBytes",
 }
 
+/** The grouped display form of a code: its symbols and one separator. */
+function manualCodeDisplayLength(values) {
+  return values.manualCodeBytes + 1
+}
+
 export function derivePairingValues(schema, values) {
   for (const name of ["identityBytes", "deviceKeyBytes", "manualCodeBytes"]) {
     if (!Number.isSafeInteger(values[name]) || values[name] <= 0)
@@ -21,6 +26,12 @@ export function derivePairingValues(schema, values) {
       node.type = "array"
       node.items = { type: "integer", minimum: 0, maximum: 255 }
       node.minItems = node.maxItems = values[owners[name]]
+    }
+    if (Object.hasOwn(node, "x-pairing-manual-code")) {
+      if (node["x-pairing-manual-code"] !== "display")
+        throw new Error(`Unknown manual code form: ${node["x-pairing-manual-code"]}`)
+      node.type = "string"
+      node.minLength = node.maxLength = manualCodeDisplayLength(values)
     }
     for (const value of Object.values(node)) visit(value)
   }
@@ -49,10 +60,11 @@ export function pairingValueSchema(values) {
     },
     values,
   )
+  const display = manualCodeDisplayLength(values)
   derived.schema.$defs.ManualCodeDisplay = {
     type: "string",
-    minLength: values.manualCodeBytes + 1,
-    maxLength: values.manualCodeBytes + 1,
+    minLength: display,
+    maxLength: display,
   }
   return derived
 }

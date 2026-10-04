@@ -162,7 +162,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 35,
+          "maxItems": 41,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -3326,6 +3326,257 @@
         "server_busy"
       ],
       "description": "Typed catalogue admission, source, capacity, and transport refusals."
+    },
+    "PairingInvitationParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "invitationId": {
+          "x-pairing-byte-array": "InvitationId",
+          "description": "Random identity of the invitation, as its bytes.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 16,
+          "minItems": 16
+        }
+      },
+      "required": ["invitationId"],
+      "description": "Wire input for pairing.status, pairing.deny and pairing.cancel: the invitation the owner names. The owner, organization and gateway come from the session, never from the request."
+    },
+    "PairingApproveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "invitationId": {
+          "x-pairing-byte-array": "InvitationId",
+          "description": "Random identity of the invitation, as its bytes.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 16,
+          "minItems": 16
+        },
+        "deviceKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The exact device key the owner was shown as claimed, as its bytes. Any other key is refused.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        }
+      },
+      "required": ["invitationId", "deviceKey"],
+      "description": "Wire input for pairing.approve. Approval records consent to this exact key; it issues no credential."
+    },
+    "PairingOwnerPhase": {
+      "type": "string",
+      "enum": ["available", "claimed", "approved", "staging", "active", "terminal"],
+      "description": "Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging and active follow approval once credential publication is built. terminal: ended; see terminal."
+    },
+    "PairingTerminalCause": {
+      "type": "string",
+      "enum": ["credential_revoked", "denied", "cancelled", "expired", "restarted"],
+      "description": "The first cause that ended the enrollment, kept across later cleanup."
+    },
+    "PairingInitiatorKind": {
+      "type": "string",
+      "enum": ["local_operator", "principal", "device", "system"],
+      "description": "Who ended the enrollment: the local operator, an authenticated principal, the enrolling device, or the gateway itself (expiry, restart)."
+    },
+    "PairingInitiator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PairingInitiatorKind",
+          "description": "Which kind of actor."
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The principal, when kind is principal."
+        },
+        "deviceKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The device key, when kind is device.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        }
+      },
+      "required": ["kind"],
+      "description": "The actor that ended an enrollment. Exactly the field its kind names is present."
+    },
+    "PairingTerminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/PairingTerminalCause",
+          "description": "First cause that ended the enrollment."
+        },
+        "initiator": {
+          "$ref": "#/$defs/PairingInitiator",
+          "description": "Who caused it."
+        }
+      },
+      "required": ["cause", "initiator"],
+      "description": "How an enrollment ended."
+    },
+    "PairingReceiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receiverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Receiver the device's reads are admitted through."
+        },
+        "accessEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Receiver access epoch recorded with the enrollment."
+        }
+      },
+      "required": ["receiverId", "accessEpoch"],
+      "description": "Receiver recorded for an enrollment once credential publication is built; absent before."
+    },
+    "PairingOwnerStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "invitationId": {
+          "x-pairing-byte-array": "InvitationId",
+          "description": "Random identity of the invitation, as its bytes.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 16,
+          "minItems": 16
+        },
+        "consentId": {
+          "x-pairing-byte-array": "ConsentIntentId",
+          "description": "Identity of the immutable consent the invitation carries.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 16,
+          "minItems": 16
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Consent generation the device enrolls under."
+        },
+        "class": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Fixed class of access the consent is for."
+        },
+        "grant": {
+          "$ref": "#/$defs/ProductGrant",
+          "description": "The exact action and resource the consent covers."
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "When the invitation was created, Unix milliseconds."
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exclusive deadline for presenting the code, Unix milliseconds."
+        },
+        "phase": {
+          "$ref": "#/$defs/PairingOwnerPhase",
+          "description": "Where the enrollment stands."
+        },
+        "claimedDeviceKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The device key that claimed the invitation, once one has. Approval must name exactly this key.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Credential reserved for the device, once staging has begun."
+        },
+        "receiver": {
+          "$ref": "#/$defs/PairingReceiver",
+          "description": "Receiver recorded for the enrollment, once known."
+        },
+        "terminal": {
+          "$ref": "#/$defs/PairingTerminal",
+          "description": "How the enrollment ended, when phase is terminal."
+        },
+        "cleanupPending": {
+          "type": "boolean",
+          "description": "Whether physical cleanup of a staged receiver is still owed. Read from the record, never stored separately."
+        }
+      },
+      "required": [
+        "invitationId",
+        "consentId",
+        "generation",
+        "class",
+        "grant",
+        "createdAtMs",
+        "expiresAtMs",
+        "phase",
+        "cleanupPending"
+      ],
+      "description": "An owner's view of one enrollment. This is historical enrollment, not read authority: every later read is authorized again."
+    },
+    "PairingCreateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "x-pairing-manual-code": "display",
+          "description": "The one-time code in its grouped display form, two groups joined by a hyphen. Shown once: it is not stored and cannot be read again. A lost code means cancelling the invitation and creating another.",
+          "type": "string",
+          "maxLength": 9,
+          "minLength": 9
+        },
+        "status": {
+          "$ref": "#/$defs/PairingOwnerStatus",
+          "description": "The invitation as committed."
+        }
+      },
+      "required": ["code", "status"],
+      "description": "Result of pairing.create: a code for one device, valid until status.expiresAtMs."
+    },
+    "PairingPendingResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PairingOwnerStatus" },
+          "description": "The caller's unfinished enrollments, including ended ones still owed cleanup. Bounded by the registry's configured capacity rather than a wire constant."
+        }
+      },
+      "required": ["items"],
+      "description": "Result of pairing.pending: the enrollments an owner can still act on, without any code."
+    },
+    "PairingErrorCode": {
+      "type": "string",
+      "enum": [
+        "pairing_not_configured",
+        "pairing_not_found",
+        "pairing_slot_occupied",
+        "pairing_capacity",
+        "pairing_conflict",
+        "pairing_ineligible",
+        "pairing_busy",
+        "pairing_unavailable"
+      ],
+      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later."
     },
     "ChangeWatchId": {
       "type": "string",

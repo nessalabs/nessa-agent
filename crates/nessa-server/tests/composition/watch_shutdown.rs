@@ -82,6 +82,7 @@ async fn ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_r
                 async {
                     stopped.store(true, Ordering::SeqCst);
                 },
+                std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )
             .await;
@@ -175,6 +176,7 @@ async fn ordinary_host_retains_watch_and_reader_faults_after_loss_of_both_observ
                     entered_mcp.notify_one();
                     mcp.await.unwrap();
                 },
+                std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )
             .await;
@@ -255,6 +257,7 @@ async fn completed_reader_drain_is_not_relabelled_as_timeout_while_original_watc
         async { Ok(()) },
         Some(async { storage.shutdown().await.map_err(ConversationError::Storage) }),
         async {},
+        std::future::ready(Ok(())),
         Duration::ZERO,
     );
     tokio::pin!(cleanup);
@@ -317,6 +320,7 @@ async fn ended_mcp_cleanup_preserves_returned_original_watch_fault_and_reader_ou
             async { Ok(()) },
             Some(async { storage.shutdown().await.map_err(ConversationError::Storage) }),
             std::future::pending(),
+            std::future::ready(Ok(())),
             Duration::from_secs(30),
         );
         tokio::pin!(cleanup);
@@ -377,6 +381,7 @@ async fn ended_original_cleanup_retains_returned_watch_fault_at_each_earlier_sta
                     storage.shutdown().await.map_err(ConversationError::Storage)
                 }),
                 async { servers_started.store(true, Ordering::SeqCst) },
+                std::future::ready(Ok(())),
                 Duration::from_secs(30),
             );
             tokio::pin!(cleanup);

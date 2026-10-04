@@ -89,6 +89,8 @@ pub struct Fixture {
     pub directory: TempDir,
     pub registry: Arc<LocalCredentialStore>,
     pub session: AuthenticatedSession,
+    /// The owner's bearer credential, for authenticating a product socket.
+    pub owner_token: String,
     pub gateway: Arc<GatewayPairing>,
     pub time: Arc<GatewayTime>,
 }
@@ -161,6 +163,7 @@ impl Fixture {
         .execute(&issued.evidence, &AudienceId::new("gateway").unwrap())
         .await
         .unwrap();
+        let owner_token = String::from_utf8(issued.evidence.expose_bytes().to_vec()).unwrap();
         let (_, keys) = pending(directory.path(), "gateway-private");
         let identity =
             restore_gateway_identity(registry.clone(), keys.clone(), Arc::new(Time), OsEntropy)
@@ -187,6 +190,7 @@ impl Fixture {
             directory,
             registry,
             session,
+            owner_token,
             gateway,
             time,
         }
@@ -198,6 +202,7 @@ impl Fixture {
             directory,
             registry,
             session,
+            owner_token,
             gateway,
             time,
         } = self;
@@ -238,6 +243,7 @@ impl Fixture {
             directory,
             registry,
             session,
+            owner_token,
             gateway,
             time,
         }
