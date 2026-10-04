@@ -34,7 +34,13 @@
     "conversation.catalogueResolve": "ConversationCatalogueResolveParams",
     "mcp.callTool": "McpCallToolParams",
     "mcp.readResource": "McpReadResourceParams",
-    "mcp.releaseApp": "McpReleaseAppParams"
+    "mcp.releaseApp": "McpReleaseAppParams",
+    "pairing.create": null,
+    "pairing.pending": null,
+    "pairing.status": "PairingInvitationParams",
+    "pairing.approve": "PairingApproveParams",
+    "pairing.deny": "PairingInvitationParams",
+    "pairing.cancel": "PairingInvitationParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

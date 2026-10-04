@@ -632,7 +632,12 @@ fn owner_recovery_preserves_read_only_key_binding() {
     publish(&fixture);
     let outcome = fixture
         .store
-        .recover_owner("recovered-owner".into(), 111, None)
+        .recover_owner(
+            "recovered-owner".into(),
+            &["credential.manage", "conversation.read"],
+            111,
+            None,
+        )
         .unwrap();
     let active = fixture.store.read_pairing(fixture.record.id()).unwrap();
     assert_eq!(active.phase(), PairingPhase::Active);
@@ -1086,9 +1091,12 @@ fn staged_identity_refuses_all_unrelated_issuance_and_exact_pairing_completes() 
         Err(LocalStoreError::Conflict)
     ));
     assert!(matches!(
-        fixture
-            .store
-            .recover_owner("native-device".into(), 110, None),
+        fixture.store.recover_owner(
+            "native-device".into(),
+            &["credential.manage", "conversation.read"],
+            110,
+            None,
+        ),
         Err(LocalStoreError::Conflict)
     ));
     assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -1353,7 +1361,12 @@ fn expired_stages_keep_reserved_identity_and_published_activation_is_not_expired
             Err(LocalStoreError::Conflict)
         ));
         assert!(matches!(
-            reopened.recover_owner("native-device".into(), 110, None),
+            reopened.recover_owner(
+                "native-device".into(),
+                &["credential.manage", "conversation.read"],
+                110,
+                None,
+            ),
             Err(LocalStoreError::Conflict)
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);

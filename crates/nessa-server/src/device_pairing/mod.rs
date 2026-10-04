@@ -1,8 +1,10 @@
 //! Native device enrollment: an owner creates a one-time code, a device claims
 //! it over TLS with a PAKE, and the owner approves the exact device key.
 //!
-//! This slice ends at Approved. It is not mounted in the default gateway, and
-//! it stages no receiver and issues no credential; see the
+//! Enrollment ends at Approved: nothing here stages a receiver or issues a
+//! credential. Composition mounts the listener only when `config.json` names a
+//! native listen address, and the product socket reaches the owner side through
+//! `infrastructure::PairingOwnerCommands`; see the
 //! [device pairing design](../../../../docs/design/auth/device-pairing.md).
 //!
 //! ```text

@@ -13,6 +13,8 @@
 //!                                   -> attachments (one store, shared)
 //!                                   -> fixed AgentWarmUp + current OpenCode lane
 //!                                                      -> readiness port
+//!                                   -> native pairing (only when configured):
+//!                                      private key -> GatewayPairing -> listener
 //! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
 //! Arrows show construction and injection. Conversations share the service across
@@ -35,6 +37,7 @@ mod installed_launch;
 mod local_auth;
 #[cfg(unix)]
 mod managed_adapter;
+mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
 

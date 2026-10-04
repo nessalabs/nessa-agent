@@ -8,15 +8,20 @@ import {
   coreWireContract,
   applyCoreWireBounds,
 } from "./product-protocol/core-contract.mjs"
-import { pairingValueSchema } from "./product-protocol/pairing-values.mjs"
+import {
+  derivePairingValues,
+  pairingArrayOwner,
+  pairingValueSchema,
+} from "./product-protocol/pairing-values.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
-const pairing = pairingValueSchema(
-  JSON.parse(readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8")),
+const pairingValues = JSON.parse(
+  readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8"),
 )
+const pairing = pairingValueSchema(pairingValues)
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
@@ -31,6 +36,8 @@ const readyMethods = Object.keys(manifest.methods).filter(
 )
 const ownedSchema = JSON.stringify(schema)
 applyCoreWireBounds(schema, coreWireContract(root))
+// Pairing identity, key and code widths have one owner: Auth's wire-values.json.
+schema.$defs = derivePairingValues(schema, pairingValues).schema.$defs
 schema.$defs.ProductSessionReady.properties.methods.maxItems = readyMethods.length
 let schemaOutput
 if (JSON.stringify(schema) !== ownedSchema) {
@@ -136,6 +143,13 @@ const externalRustTypes = new Set()
 const sharedRustReferences = new Set()
 const rustTypeName = (value) => value.split("::").at(-1)
 function type(node, rust) {
+  // A pairing byte array is the owner's fixed width, so serde refuses any other length.
+  const pairingOwner = pairingArrayOwner(node)
+  if (pairingOwner) {
+    if (!rust) return "number[]"
+    externalRustTypes.add(pairingOwner)
+    return `[u8; ${rustTypeName(pairingOwner)}::LENGTH]`
+  }
   if (node.$ref) {
     const name = node.$ref.split("/").at(-1)
     const externalType = schema.$defs[name]["x-rust-type"]
@@ -167,7 +181,7 @@ function doc(description) {
 let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
-  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n#![allow(dead_code)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
 const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",

@@ -864,9 +864,11 @@ and injected session authentication contracts. Embedded Cedar evaluates product 
 The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. The server `device_pairing` consumer implements native enrollment on top of it: the
 JSON codec and framing, the gateway runtime and listener, and the device client —
 owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
-It ends at Approved and is not mounted in the default gateway; owner product
-methods, startup composition, receiver staging and Active publication are later
-slices. See [device pairing](design/auth/device-pairing.md).
+It ends at Approved. When `config.json` names `native.listenAddress`, composition
+restores the gateway key before any bind, mounts the listener and joins its drain
+into the shutdown report, and the owner `pairing.*` product methods drive it;
+otherwise nothing native is opened. Receiver staging and Active publication are
+later slices. See [device pairing](design/auth/device-pairing.md).
 
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
