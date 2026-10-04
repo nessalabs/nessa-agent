@@ -1,7 +1,9 @@
 //! Normal host consumes the original watch and tracked SDK read owners.
+use super::tests::failure;
 use super::*;
 use crate::conversation::application::{RecordReadLease, RecordReadOperation, RecordReadSource};
 use crate::conversation::infrastructure::{NessaRecordReadSource, TestReadGate};
+use crate::core::{Outcome, ShutdownStage};
 use crate::product::HostWatchFixture;
 use futures_util::poll;
 use nessa_sdk::application::agent_execution::sessions::SessionStorage;
@@ -17,10 +19,10 @@ impl Drop for ReleaseRead {
         self.0.release();
     }
 }
-async fn observed(report: &Mutex<ShutdownReport>, ready: impl Fn(&ShutdownReport) -> bool) {
+async fn observed(report: &ReportSlot, ready: impl Fn(&ShutdownReport) -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if ready(&report.lock().unwrap()) {
+            if report.lock().unwrap().as_ref().is_some_and(&ready) {
                 break;
             }
             tokio::task::yield_now().await;
@@ -54,7 +56,7 @@ async fn ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_r
         tokio::time::timeout(Duration::from_secs(5), read_work.entered())
             .await
             .unwrap();
-        let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let report = Arc::new(Mutex::new(None));
         let output = report.clone();
         let closed_before_read = Arc::new(AtomicBool::new(false));
         let checked = closed_before_read.clone();
@@ -87,7 +89,12 @@ async fn ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_r
             )
             .await;
         });
-        observed(&report, |r| matches!(r, ShutdownReport::DrainsPending {readers, watches} if watches.result().is_none() && readers.catalogue() == Some(&Ok(())))).await;
+        observed(&report, |r| {
+            r.stage() == ShutdownStage::Drains
+                && !r.watches().outcome().is_known()
+                && r.readers().catalogue().is_ok()
+        })
+        .await;
         assert!(closed_before_read.load(Ordering::SeqCst));
         assert!(HostWatchFixture::admission_closed(&fixture.state()));
         fixture.connection_stopped().await; // Peer is still retained; host close caused this exit.
@@ -97,13 +104,23 @@ async fn ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_r
         assert!(!servers.load(Ordering::SeqCst));
         if watch_first {
             fixture.release();
-            observed(&report, |r| matches!(r, ShutdownReport::DrainsPending {readers, watches} if watches.result() == Some(&Ok(())) && readers.record().is_none())).await;
+            observed(&report, |r| {
+                r.stage() == ShutdownStage::Drains
+                    && r.watches().outcome().is_ok()
+                    && !r.readers().record().is_known()
+            })
+            .await;
             assert!(!conversations.load(Ordering::SeqCst));
             assert!(!servers.load(Ordering::SeqCst));
             read_work.release();
         } else {
             read_work.release();
-            observed(&report, |r| matches!(r, ShutdownReport::DrainsPending {readers, watches} if watches.result().is_none() && readers.record() == Some(&Ok(())))).await;
+            observed(&report, |r| {
+                r.stage() == ShutdownStage::Drains
+                    && !r.watches().outcome().is_known()
+                    && r.readers().record().is_ok()
+            })
+            .await;
             assert!(!conversations.load(Ordering::SeqCst));
             assert!(!servers.load(Ordering::SeqCst));
             assert!(fixture.resource_held());
@@ -153,7 +170,7 @@ async fn ordinary_host_retains_watch_and_reader_faults_after_loss_of_both_observ
         tokio::time::timeout(Duration::from_secs(5), read_work.entered())
             .await
             .unwrap();
-        let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let report = Arc::new(Mutex::new(None));
         let output = report.clone();
         let conversations = Arc::new(AtomicBool::new(false));
         let cleaned = conversations.clone();
@@ -182,11 +199,21 @@ async fn ordinary_host_retains_watch_and_reader_faults_after_loss_of_both_observ
             .await;
             let _ = returned.send(());
         });
-        observed(&report, |r| matches!(r, ShutdownReport::DrainsPending {readers, watches} if watches.result().is_none() && readers.catalogue() == Some(&Ok(())))).await;
+        observed(&report, |r| {
+            r.stage() == ShutdownStage::Drains
+                && !r.watches().outcome().is_known()
+                && r.readers().catalogue().is_ok()
+        })
+        .await;
         assert!(fixture.resource_held());
         drop(cleanup); // Lost host observer detaches, preserving the original cleanup task.
         fixture.release();
-        observed(&report, |r| matches!(r, ShutdownReport::DrainsPending {readers, watches} if watches.result() == Some(&Err(fault)) && readers.record().is_none())).await;
+        observed(&report, |r| {
+            r.stage() == ShutdownStage::Drains
+                && r.watches().fault() == Some(fault)
+                && !r.readers().record().is_known()
+        })
+        .await;
         assert!(!conversations.load(Ordering::SeqCst));
         read_work.release();
         assert!(matches!(
@@ -196,29 +223,34 @@ async fn ordinary_host_retains_watch_and_reader_faults_after_loss_of_both_observ
         tokio::time::timeout(Duration::from_secs(5), servers.notified())
             .await
             .unwrap();
-        assert!(
-            matches!(&*report.lock().unwrap(), ShutdownReport::ServersPending {readers: Err(readers), watches: Err(actual), conversations: Err(ConversationError::Audit)} if actual.fault() == Some(fault) && readers.outcomes().record() == Some(&Err(RecordReadError::WorkerPanicked)))
-        );
+        assert!(report.lock().unwrap().as_ref().is_some_and(|r| {
+            r.stage() == ShutdownStage::Servers
+                && matches!(r.conversations(), Outcome::Failed(ConversationError::Audit))
+                && r.watches().fault() == Some(fault)
+                && r.readers().record() == &Outcome::Failed(RecordReadError::WorkerPanicked)
+                && r.readers().catalogue().is_ok()
+        }));
         release_mcp.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(5), terminal)
             .await
             .unwrap()
             .unwrap();
-        let Err(RunError::Shutdown(Some(ShutdownFailure::Watches {
-            watches,
-            readers: Err(readers),
-            conversations: Err(ConversationError::Audit),
-        }))) = shutdown_result(&report)
-        else {
-            panic!("retain all original independent causes");
-        };
-        assert_eq!(watches.fault(), Some(fault));
-        assert!(!watches.outcome().deadline_exceeded());
+        let failure = failure(shutdown_result(&report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Complete);
+        assert_eq!(report.watches().fault(), Some(fault));
+        assert!(!report.watches().deadline_exceeded());
         assert_eq!(
-            readers.outcomes().record(),
-            Some(&Err(RecordReadError::WorkerPanicked))
+            report.readers().record(),
+            &Outcome::Failed(RecordReadError::WorkerPanicked)
         );
-        assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
+        assert_eq!(report.readers().catalogue(), &Outcome::Ok);
+        assert!(!report.readers().deadline_exceeded());
+        assert!(matches!(
+            report.conversations(),
+            Outcome::Failed(ConversationError::Audit)
+        ));
+        assert!(report.servers().is_ok() && report.native().is_ok());
         assert_eq!(fixture.state().drain_watches().await, Err(fault));
     }
 }
@@ -249,7 +281,7 @@ async fn completed_reader_drain_is_not_relabelled_as_timeout_while_original_watc
     );
     let actual_reader_outcome = source.shutdown().await;
     let state = fixture.state();
-    let report = Mutex::new(ShutdownReport::Unreported);
+    let report = Mutex::new(None);
     let cleanup = cleanup_product(
         &report,
         &state,
@@ -268,24 +300,26 @@ async fn completed_reader_drain_is_not_relabelled_as_timeout_while_original_watc
     // Row H5: the deadline stays armed for the held watch drain after both
     // readers finished. It is recorded against the watch only; cleanup still
     // waits for the original watch task.
-    assert!(
-        matches!(&*report.lock().unwrap(), ShutdownReport::DrainsPending {readers, watches} if readers.complete() && !readers.deadline_exceeded() && watches.result().is_none() && watches.deadline_exceeded())
-    );
+    assert!(report.lock().unwrap().as_ref().is_some_and(|r| {
+        r.stage() == ShutdownStage::Drains
+            && r.readers().complete()
+            && !r.readers().deadline_exceeded()
+            && !r.watches().outcome().is_known()
+            && r.watches().deadline_exceeded()
+    }));
     tokio::time::resume();
     fixture.release();
     tokio::time::timeout(Duration::from_secs(5), cleanup)
         .await
         .unwrap();
-    let Err(RunError::Shutdown(Some(ShutdownFailure::Watches {
-        watches,
-        readers: Ok(()),
-        conversations: Ok(()),
-    }))) = shutdown_result(&report)
-    else {
-        panic!("a watch drain held past the deadline is not a confirmed shutdown");
-    };
-    assert!(watches.outcome().deadline_exceeded());
-    assert_eq!(watches.fault(), None);
+    let failure = failure(shutdown_result(&report));
+    let report = failure.report();
+    assert_eq!(report.stage(), ShutdownStage::Complete);
+    assert!(report.watches().deadline_exceeded());
+    assert!(report.watches().outcome().is_ok());
+    assert!(report.readers().confirmed());
+    assert!(report.conversations().is_ok());
+    assert!(report.servers().is_ok() && report.native().is_ok());
 }
 
 #[tokio::test]
@@ -311,7 +345,7 @@ async fn ended_mcp_cleanup_preserves_returned_original_watch_fault_and_reader_ou
         state.drain_watches().await,
         Err(WatchTaskFault::UnexpectedCancellation)
     );
-    let report = Mutex::new(ShutdownReport::Unreported);
+    let report = Mutex::new(None);
     {
         let cleanup = cleanup_product(
             &report,
@@ -327,19 +361,19 @@ async fn ended_mcp_cleanup_preserves_returned_original_watch_fault_and_reader_ou
         // Poll actual cleanup while waiting for its same retained MCP phase.
         tokio::select! {
             () = &mut cleanup => panic!("MCP remains unreported"),
-            () = observed(&report, |r| matches!(r, ShutdownReport::ServersPending {..})) => {},
+            () = observed(&report, |r| r.stage() == ShutdownStage::Servers) => {},
         }
     }
-    assert!(matches!(
-        shutdown_result(&report),
-        Err(RunError::Shutdown(Some(
-            ShutdownFailure::ServersUnreported {
-                watches: Err(watches),
-                readers: Ok(()),
-                conversations: Ok(())
-            }
-        ))) if watches.fault() == Some(WatchTaskFault::UnexpectedCancellation)
-    ));
+    let failure = failure(shutdown_result(&report));
+    let report = failure.report();
+    assert_eq!(report.stage(), ShutdownStage::Servers);
+    assert_eq!(
+        report.watches().fault(),
+        Some(WatchTaskFault::UnexpectedCancellation)
+    );
+    assert!(report.readers().confirmed());
+    assert!(report.conversations().is_ok());
+    assert!(!report.servers().is_known() && !report.native().is_known());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -365,7 +399,7 @@ async fn ended_original_cleanup_retains_returned_watch_fault_at_each_earlier_sta
         tokio::time::timeout(Duration::from_secs(5), read_work.entered())
             .await
             .unwrap();
-        let report = Mutex::new(ShutdownReport::Unreported);
+        let report = Mutex::new(None);
         let conversations_started = AtomicBool::new(false);
         let servers_started = AtomicBool::new(false);
         let (_release_conversations, held_conversations) = oneshot::channel::<()>();
@@ -391,9 +425,10 @@ async fn ended_original_cleanup_retains_returned_watch_fault_at_each_earlier_sta
             fixture.release();
             tokio::select! {
                 () = &mut cleanup => panic!("original reader work remains held"),
-                () = observed(&report, |r| matches!(r, ShutdownReport::DrainsPending {
-                    readers, watches
-                } if watches.result() == Some(&Err(WatchTaskFault::Panic)) && readers.record().is_none() && readers.catalogue() == Some(&Ok(())))) => {},
+                () = observed(&report, |r| r.stage() == ShutdownStage::Drains
+                    && r.watches().fault() == Some(WatchTaskFault::Panic)
+                    && !r.readers().record().is_known()
+                    && r.readers().catalogue().is_ok()) => {},
             }
             assert_eq!(fixture.completed_authority(), 1);
             assert!(!conversations_started.load(Ordering::SeqCst));
@@ -402,9 +437,9 @@ async fn ended_original_cleanup_retains_returned_watch_fault_at_each_earlier_sta
                 read_work.release();
                 tokio::select! {
                     () = &mut cleanup => panic!("original conversation cleanup remains unknown"),
-                    () = observed(&report, |r| matches!(r, ShutdownReport::ConversationsPending {
-                        readers: Ok(()), watches: Err(watches)
-                    } if watches.fault() == Some(WatchTaskFault::Panic))) => {},
+                    () = observed(&report, |r| r.stage() == ShutdownStage::Conversations
+                        && r.readers().confirmed()
+                        && r.watches().fault() == Some(WatchTaskFault::Panic)) => {},
                 }
                 drop(read.take().unwrap().await.unwrap().unwrap());
                 assert!(conversations_started.load(Ordering::SeqCst));
@@ -414,27 +449,21 @@ async fn ended_original_cleanup_retains_returned_watch_fault_at_each_earlier_sta
         }
         assert!(!servers_started.load(Ordering::SeqCst));
         if during_conversations {
-            assert!(matches!(
-                shutdown_result(&report),
-                Err(RunError::Shutdown(Some(
-                    ShutdownFailure::ConversationsUnreported {
-                        readers: Ok(()),
-                        watches: Err(watches),
-                    }
-                ))) if watches.fault() == Some(WatchTaskFault::Panic)
-            ));
+            let failure = failure(shutdown_result(&report));
+            let report = failure.report();
+            assert_eq!(report.stage(), ShutdownStage::Conversations);
+            assert!(report.readers().confirmed());
+            assert_eq!(report.watches().fault(), Some(WatchTaskFault::Panic));
+            assert!(!report.conversations().is_known());
         } else {
-            let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
-                outcomes,
-                watches,
-            }))) = shutdown_result(&report)
-            else {
-                panic!("retain returned watch fault with original unknown reader outcome");
-            };
-            assert_eq!(watches.result(), Some(&Err(WatchTaskFault::Panic)));
-            assert_eq!(outcomes.record(), None);
-            assert_eq!(outcomes.catalogue(), Some(&Ok(())));
-            assert!(!outcomes.deadline_exceeded());
+            let failure = failure(shutdown_result(&report));
+            let report = failure.report();
+            assert_eq!(report.stage(), ShutdownStage::Drains);
+            assert_eq!(report.watches().fault(), Some(WatchTaskFault::Panic));
+            assert_eq!(report.readers().record(), &Outcome::Unknown);
+            assert_eq!(report.readers().catalogue(), &Outcome::Ok);
+            assert!(!report.readers().deadline_exceeded());
+            assert!(!report.conversations().is_known());
             assert!(!conversations_started.load(Ordering::SeqCst));
             assert!(!read.as_ref().unwrap().is_finished());
             assert_eq!(state.record_reads.available_permits(), 3);
