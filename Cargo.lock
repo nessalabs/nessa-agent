@@ -3156,11 +3156,14 @@ dependencies = [
  "base64 0.22.1",
  "nessa-auth",
  "nessa-local-storage",
+ "nessa-sdk",
  "nessa-sync",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

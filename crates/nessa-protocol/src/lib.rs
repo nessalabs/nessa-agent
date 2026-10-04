@@ -13,12 +13,15 @@
 //! - `product_contract`: the product contract's pure outcome values.
 //! - `product`: the generated product DTOs, the handshake rules, and the read codecs.
 //! - `pairing`: native pairing framing, envelope codec, enrollment channel and socket.
+//! - `conversation`: the conversation read model, and `agents`, the agent names it uses.
 //! - `clock`: the monotonic clock port the pairing socket's deadlines read.
 //!
 //! Admission rule: no process state and no runtime of its own. `pairing::socket`
 //! is the one deliberate exception, blocking std socket mechanics both ends
 //! need; `tokio` is taken with `rt` only, for the one shared worker-fault mapping.
+pub mod agents;
 pub mod clock;
+pub mod conversation;
 pub mod pairing;
 pub mod product;
 pub mod product_contract;

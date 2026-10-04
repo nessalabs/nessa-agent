@@ -1,5 +1,4 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
-use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     AttachmentRelease, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
     ConversationAgents, ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -11,10 +10,10 @@ use crate::conversation::application::{
     ConversationService, ConversationSummaries, ListedConversation, ListedConversations,
     ProviderSessionEraser, ProviderSessionErasers, UnfinishedDeletions,
 };
-use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
-};
+use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
@@ -782,12 +781,18 @@ impl ConversationAgentSource for ModeAgentSource {
         &'a self,
         agent: AgentId,
         model: &'a str,
-        mode: crate::conversation::domain::ConversationApprovalMode,
+        mode: nessa_protocol::conversation::domain::ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a> {
         let mode = match mode {
-            crate::conversation::domain::ConversationApprovalMode::Ask => ApprovalMode::Ask,
-            crate::conversation::domain::ConversationApprovalMode::Auto => ApprovalMode::Auto,
-            crate::conversation::domain::ConversationApprovalMode::Full => ApprovalMode::Full,
+            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask => {
+                ApprovalMode::Ask
+            }
+            nessa_protocol::conversation::domain::ConversationApprovalMode::Auto => {
+                ApprovalMode::Auto
+            }
+            nessa_protocol::conversation::domain::ConversationApprovalMode::Full => {
+                ApprovalMode::Full
+            }
         };
         let found = (agent == AgentId::Claude && model == "test").then(|| {
             let mode = if self.provider.force_ask_mode.load(Ordering::SeqCst) {

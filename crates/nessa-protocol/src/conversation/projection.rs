@@ -1,3 +1,6 @@
+use super::domain::ConversationId;
+use super::session_key::conversation_session;
+use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
@@ -7,8 +10,6 @@ use super::view::{
     ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
     MAX_STRUCTURED_CONTENT_BYTES,
 };
-use super::{McpToolUis, NoMcpToolUis};
-use crate::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
@@ -29,11 +30,11 @@ use std::{
 use uuid::Uuid;
 
 const MAX_MESSAGES: usize = 24;
-pub(super) const MAX_TEXT: usize = 8192;
+pub const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 // Application transcript body; product catalog enrichment is serialized afterward.
-pub(super) const MAX_VIEW_BYTES: usize = 60_000;
+pub const MAX_VIEW_BYTES: usize = 60_000;
 /// The largest single review the view offers, encoded. One review may not take
 /// most of the view's budget from everything else.
 const MAX_REVIEW_BYTES: usize = 16_000;
@@ -61,7 +62,7 @@ fn record_status(record: &InvocationRecord, restoring: bool) -> ConversationMess
     }
 }
 
-pub(super) struct Projection {
+pub struct Projection {
     pub view: ConversationView,
     epoch: Uuid,
     revision: u64,
@@ -82,7 +83,7 @@ pub(super) struct Projection {
     /// Where an MCP call's UI is looked up when the view is read.
     tool_uis: Arc<dyn McpToolUis>,
 }
-pub(super) fn clipped(value: &str, bytes: usize) -> String {
+pub fn clipped(value: &str, bytes: usize) -> String {
     let mut end = value.len().min(bytes);
     while !value.is_char_boundary(end) {
         end -= 1;
@@ -156,7 +157,7 @@ fn failure_notice(record: &InvocationRecord) -> Option<String> {
 /// This mapping performs no semantic validation, source contact or dispatch.
 /// The injected revision identity is transient presentation evidence; all action
 /// capabilities are disabled. Display truncation does not change SDK completeness.
-pub(crate) fn retained_view(
+pub fn retained_view(
     id: &ConversationId,
     snapshot: Option<&SessionSnapshot>,
     status: CommittedStatus,
@@ -972,7 +973,7 @@ impl Projection {
         // The conversation's own SDK session (`conversation_session`).
         let session = ConversationId::new(&view.conversation_id)
             .ok()
-            .map(|id| super::conversation_session(&id));
+            .map(|id| conversation_session(&id));
         for tool in &mut view.tools {
             let Some(mcp) = &mut tool.mcp else { continue };
             mcp.resource_uri = McpTool::new(mcp.server.as_str(), mcp.tool.as_str())
@@ -1022,7 +1023,7 @@ const UNSHOWN_INTERACTIONS: &str =
     "Some pending interactions exceed this display limit. Use Stop to cancel them.";
 
 /// Bound the complete service result after its metadata and authority additions.
-pub(super) fn bound_view(view: ConversationView) -> ConversationView {
+pub fn bound_view(view: ConversationView) -> ConversationView {
     bound_view_within(view, MAX_VIEW_BYTES, true)
 }
 
@@ -1030,7 +1031,7 @@ pub(super) fn bound_view(view: ConversationView) -> ConversationView {
 /// what is added beside it after. Its interactions — the agent's reviews
 /// and questions — are given up for that room only when `interactions`
 /// says so; otherwise it stops short of them, over `limit` if need be.
-pub(super) fn bound_view_within(
+pub fn bound_view_within(
     mut view: ConversationView,
     limit: usize,
     interactions: bool,

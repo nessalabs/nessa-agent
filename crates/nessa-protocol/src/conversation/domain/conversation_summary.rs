@@ -412,3 +412,7 @@ fn closing_delimiter(chars: &[char], open: usize, run: usize) -> Option<usize> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/summary.rs"]
+mod tests;

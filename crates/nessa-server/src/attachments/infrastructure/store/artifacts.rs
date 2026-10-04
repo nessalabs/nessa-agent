@@ -1,9 +1,10 @@
 //! Exact registration lookup, retained tombstone movement and local manifest reads.
 use super::super::hold_record::{HoldRecord, RecordState};
 use super::{archive_path, corrupt, hold_directory, path_of, Files};
-use crate::{attachments::domain::ArtifactId, conversation::domain::ConversationId};
+use crate::attachments::domain::ArtifactId;
 use nessa_auth::domain::OrganizationId;
 use nessa_local_storage::{replace_beneath, sync_directory_beneath};
+use nessa_protocol::conversation::domain::ConversationId;
 use std::io;
 
 impl Files {

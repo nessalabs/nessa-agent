@@ -1,11 +1,12 @@
 use super::*;
 use crate::conversation::application::{
-    CatalogueHead, CataloguePage, CatalogueReadError, CatalogueReadOperation, CatalogueReadScope,
-    CatalogueReadSource, ConversationFuture, RecordReadLease,
+    CatalogueHead, CataloguePage, CatalogueReadError, CatalogueReadOperation, CatalogueReadSource,
+    ConversationFuture, RecordReadLease,
 };
 use crate::conversation::infrastructure::NessaCatalogueReadSource;
 use mpsc::{Receiver, RecvError, Sender, TryRecvError};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;

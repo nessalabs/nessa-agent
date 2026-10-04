@@ -1,7 +1,6 @@
 //! The adapters other contexts reach attachments through, each against the
 //! port it implements.
 use super::*;
-use crate::agents::domain::AgentId;
 use crate::{
     attachments::application::{
         AttachmentLimits, AttachmentStore, ConversationOwnership, Ownership,
@@ -19,6 +18,7 @@ use crate::{
     },
     conversation_test_support::MemoryRepository,
 };
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::{
     application::agent_execution::providers::{UserImageError, UserImageSource},
     domain::{agent_execution::prompts::ImageReference, common::value_objects::ImageMediaType},
@@ -145,8 +145,9 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
                 "create".into(),
                 1,
                 AgentId::Claude,
-                crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-                crate::conversation::domain::ConversationApprovalMode::Ask,
+                nessa_protocol::conversation::domain::ConversationModelId::new("test-model")
+                    .unwrap(),
+                nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )

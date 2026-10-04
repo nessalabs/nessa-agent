@@ -1,22 +1,32 @@
 //! Projections are bounded display state, not permission or scheduling authority.
-use super::projection::{bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES};
-use super::view::{ConversationPermissionOptionEffect, ConversationTranscriptState};
 use super::{
-    retained_view, ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
-    ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
-    ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationLimits, ConversationMessageStatus, ConversationModeRequest,
-    ConversationModeRequestState, ConversationRepository, ConversationService, ConversationView,
-    McpToolUis, PermissionDenialSupport, ProviderSessionErasers, RequestedConversation,
-    SubmissionMode, SubmittedMessage, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationCaller, ConversationDependencies, ConversationLimits, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationService,
+    ProviderSessionErasers, RequestedConversation, SubmissionMode, SubmittedMessage,
 };
-use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
 use crate::conversation_test_support::{
     fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
     RecordingModeAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
+use nessa_protocol::conversation::projection::{
+    bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
+};
+use nessa_protocol::conversation::tool_uis::McpToolUis;
+use nessa_protocol::conversation::view::{
+    ConversationPermissionOptionEffect, ConversationTranscriptState,
+};
+use nessa_protocol::conversation::{
+    projection::retained_view,
+    view::{
+        ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
+        ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationLifecycle,
+        ConversationLifecyclePhase, ConversationMessageStatus, ConversationView,
+        PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
+    },
+};
 use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
@@ -1808,7 +1818,7 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
     let audit = Arc::new(RecordingModeAudit::default());
     let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     let listed = Arc::new(ListedUis::of(
-        crate::conversation::application::conversation_session(&id).as_str(),
+        nessa_protocol::conversation::session_key::conversation_session(&id).as_str(),
         Some("ui://charts/show.html".into()),
     ));
     let service = service_with_cached_tool_uis(

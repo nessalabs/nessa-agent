@@ -19,14 +19,16 @@ use super::super::mcp_apps::{
     McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
     TicketRefusal,
 };
-use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
-use super::super::session_key::conversation_session;
-use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
-use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
+};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
+use nessa_protocol::conversation::session_key::conversation_session;
+use nessa_protocol::conversation::view::{
+    ConversationPermission, ConversationTranscriptState, ConversationView,
 };
 use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;

@@ -2,14 +2,16 @@
 //! the device key presented, `openProduct`, then product frames.
 use super::super::session::{DeviceEvidence, LocalConnector, RpcKind, Session};
 use super::super::sources::GatewayConnection;
-use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
-use crate::conversation::infrastructure::{conversation_catalogue_schema, NessaCatalogueSource};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::clock::Clock;
+use nessa_protocol::conversation::domain::{
+    check_catalogue_scope_identity, conversation_catalogue_schema, conversation_catalogue_stream,
+    ConversationId,
+};
 use nessa_protocol::pairing::{
     encode_frame,
     wire::{decode_request, encode_refused, NativePairingRequest},
@@ -603,19 +605,14 @@ fn catalogue_identity_owner_rejects_other_organization_principal_and_schema() {
         conversation_catalogue_schema(),
         Id::new("epoch-3").unwrap(),
     );
-    assert!(NessaCatalogueSource::check_scope_identity(&org, &owner, &scope).is_ok());
-    assert!(NessaCatalogueSource::check_scope_identity(
-        &OrganizationId::new("other").unwrap(),
-        &owner,
-        &scope
-    )
-    .is_err());
-    assert!(NessaCatalogueSource::check_scope_identity(
-        &org,
-        &PrincipalId::new("other").unwrap(),
-        &scope
-    )
-    .is_err());
+    assert!(check_catalogue_scope_identity(&org, &owner, &scope).is_ok());
+    assert!(
+        check_catalogue_scope_identity(&OrganizationId::new("other").unwrap(), &owner, &scope)
+            .is_err()
+    );
+    assert!(
+        check_catalogue_scope_identity(&org, &PrincipalId::new("other").unwrap(), &scope).is_err()
+    );
     let wrong = Scope::new(
         scope.receiver().clone(),
         scope.origin().clone(),
@@ -624,7 +621,7 @@ fn catalogue_identity_owner_rejects_other_organization_principal_and_schema() {
         Id::new("other").unwrap(),
         scope.access_epoch().clone(),
     );
-    assert!(NessaCatalogueSource::check_scope_identity(&org, &owner, &wrong).is_err());
+    assert!(check_catalogue_scope_identity(&org, &owner, &wrong).is_err());
 }
 
 /// A gateway presenting any key but the pinned one is refused by TLS before

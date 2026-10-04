@@ -1,7 +1,7 @@
 //! Attachment rules with no store, clock, socket, or runtime anywhere near them.
 use super::*;
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::{
     agent_execution::prompts::ImageReference,
     common::value_objects::{ImageMediaType, Sha256Digest},

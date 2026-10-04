@@ -6,9 +6,10 @@
 use super::super::state::ProductRouteState;
 use crate::conversation::application::{
     AdmitPassiveRead, CatalogueReadError, CatalogueReadOperation, CatalogueReadValue,
-    ReadCatalogue, ReadRefusal, RecordReadLease,
+    ReadCatalogue, RecordReadLease,
 };
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::catalogue_read;
 use nessa_protocol::product::generated::{
     ConversationCatalogueHeadParams, ConversationCatalogueManifestParams,

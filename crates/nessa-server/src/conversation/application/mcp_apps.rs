@@ -3,8 +3,8 @@
 //! every step. The rules are `mcp_servers::domain`'s; the flow is the
 //! conversation service's.
 use super::ConversationFuture;
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product_contract::generated::MCP_RESOURCE_TICKET_MS;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};

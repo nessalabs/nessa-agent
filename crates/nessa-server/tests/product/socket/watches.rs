@@ -1,8 +1,6 @@
 use super::*;
-use crate::conversation::application::{
-    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, ReceiverReadScope,
-    WatchCatalogue, WatchRecords,
-};
+use crate::conversation::application::{CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue, WatchRecords};
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::{change_watch::{watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector}, WatchTaskFault};
 use nessa_protocol::product::generated::{MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES};

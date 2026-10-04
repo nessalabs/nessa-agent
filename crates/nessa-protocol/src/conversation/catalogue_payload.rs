@@ -2,21 +2,18 @@
 //! Decode bounds raw input before parsing and asks product field owners. Core
 //! descriptor/revision/page checks and cache atomicity remain with their owners.
 
-use crate::{
-    agents::domain::AgentId,
-    conversation::{
-        application::{CatalogueMetadata, CatalogueValue},
-        domain::{
-            ConversationApprovalMode, ConversationId, ConversationModelId, ConversationPreview,
-            ConversationSummary, ConversationTitle,
-        },
-    },
+use super::catalogue_metadata::CatalogueMetadata;
+use super::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationPreview,
+    ConversationSummary, ConversationTitle,
 };
+use crate::agents::AgentId;
 use nessa_sync::replication::catalogue::MAX_CATALOGUE_PAYLOAD_BYTES;
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CataloguePayloadError {
+/// Why a catalogue payload could not be written or read.
+pub enum CataloguePayloadError {
     Oversized,
     Malformed,
     Metadata,
@@ -60,25 +57,26 @@ fn correlate_entry(metadata: &str, expected: &str) -> Result<(), CataloguePayloa
     Ok(())
 }
 
-pub(crate) fn encode(value: &CatalogueValue) -> Result<Vec<u8>, CataloguePayloadError> {
-    let conversation = &value.conversation;
-    let metadata = RawMetadata {
-        id: conversation.id().to_string(),
-        created_at_ms: conversation.creation_requested_at_ms(),
-        agent: conversation.agent().map(|agent| agent.name().to_owned()),
-        model: conversation.model().as_str().to_owned(),
-        approval_mode: conversation.approval_mode().as_str().to_owned(),
-        summary: value.summary.as_ref().map(|summary| RawSummary {
+/// Write `metadata` as the catalogue entry `entry`'s payload. The entry and
+/// the metadata must name the same conversation.
+pub fn encode(entry: &str, metadata: &CatalogueMetadata) -> Result<Vec<u8>, CataloguePayloadError> {
+    let raw = RawMetadata {
+        id: metadata.id().to_string(),
+        created_at_ms: metadata.created_at_ms(),
+        agent: metadata.agent().map(|agent| agent.name().to_owned()),
+        model: metadata.model().as_str().to_owned(),
+        approval_mode: metadata.approval_mode().as_str().to_owned(),
+        summary: metadata.summary().map(|summary| RawSummary {
             title: summary.title().map(|title| title.as_str().to_owned()),
             preview: summary.preview().map(|preview| preview.as_str().to_owned()),
             updated_at_ms: summary.updated_at_ms(),
             archived: summary.archived(),
         }),
     };
-    correlate_entry(&metadata.id, &value.descriptor.key.id.to_string())?;
+    correlate_entry(&raw.id, entry)?;
     // Value uses the same map ordering as the former JSON-object writer,
     // including a workspace that enables serde_json's preserve_order feature.
-    let value = serde_json::to_value(metadata).map_err(|_| CataloguePayloadError::Malformed)?;
+    let value = serde_json::to_value(raw).map_err(|_| CataloguePayloadError::Malformed)?;
     let payload = serde_json::to_vec(&value).map_err(|_| CataloguePayloadError::Malformed)?;
     if payload.len() > MAX_CATALOGUE_PAYLOAD_BYTES {
         return Err(CataloguePayloadError::Oversized);
@@ -86,10 +84,8 @@ pub(crate) fn encode(value: &CatalogueValue) -> Result<Vec<u8>, CataloguePayload
     Ok(payload)
 }
 
-pub(crate) fn decode(
-    expected: &str,
-    payload: &[u8],
-) -> Result<CatalogueMetadata, CataloguePayloadError> {
+/// Read the catalogue entry `expected`'s payload back into its metadata.
+pub fn decode(expected: &str, payload: &[u8]) -> Result<CatalogueMetadata, CataloguePayloadError> {
     if payload.len() > MAX_CATALOGUE_PAYLOAD_BYTES {
         return Err(CataloguePayloadError::Oversized);
     }
@@ -129,5 +125,5 @@ pub(crate) fn decode(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/conversation/catalogue_payload.rs"]
+#[path = "../../tests/conversation/catalogue_payload.rs"]
 mod tests;

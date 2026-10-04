@@ -8,7 +8,7 @@ use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
-use crate::conversation::application::{ReadRefusal, RecordReadLease};
+use crate::conversation::application::RecordReadLease;
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
 use axum::extract::ws::{CloseFrame, Message};
@@ -31,6 +31,7 @@ use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
 use nessa_auth::domain::{Action, AudienceId, CredentialId};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
 #[cfg(test)]
 use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
@@ -1577,20 +1578,16 @@ pub(crate) use tests::watches::HostWatchFixture;
 mod tests {
     use super::super::state::SessionSettings;
     use super::*;
-    use crate::agents::domain::AgentId;
     use crate::agents_test_support::StubAgentProbe;
     use crate::browser_session::application::SessionStore;
     use crate::browser_session::domain::value_objects::{
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope,
-        RecordReadError, RecordReadFuture, RecordReadOperation, RecordReadResponse,
-        RecordReadSource,
+        ConversationRepository, ReceiverAuthority, ReceiverBinding, RecordReadError,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
     };
-    use crate::conversation::domain::{
-        Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-    };
+    use crate::conversation::domain::Conversation;
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -1607,7 +1604,12 @@ mod tests {
         AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
         MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
     };
+    use nessa_protocol::agents::AgentId;
     use nessa_protocol::clock::Clock as UptimeClock;
+    use nessa_protocol::conversation::domain::{
+        ConversationApprovalMode, ConversationId, ConversationModelId,
+    };
+    use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
     use nessa_protocol::product::generated::{
         ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,

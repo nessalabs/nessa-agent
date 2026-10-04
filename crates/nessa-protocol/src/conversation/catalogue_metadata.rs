@@ -2,13 +2,11 @@
 //! Product value constructors own field validity; this read model grants no
 //! permission and contains neither live controls nor transcript state.
 
-use crate::{
-    agents::domain::AgentId,
-    conversation::domain::{
-        ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
-        LATEST_TIME_MS,
-    },
+use super::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+    LATEST_TIME_MS,
 };
+use crate::agents::AgentId;
 
 /// A current catalogue entry's validated product metadata, separate from its
 /// core revision/deletion descriptor. Saving both remains the cache's job.

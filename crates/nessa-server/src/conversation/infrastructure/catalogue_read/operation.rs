@@ -1,14 +1,17 @@
 //! Physical catalogue reads after trusted owner admission.
 
-#[cfg(test)]
-use crate::conversation::infrastructure::conversation_catalogue_schema;
 use crate::conversation::{
     application::{
-        passive_read_selector, validate_catalogue_selector, CatalogueReadError,
-        CatalogueReadOperation, CatalogueReadScope, CatalogueReadValue, ConversationCaller,
+        CatalogueReadError, CatalogueReadOperation, CatalogueReadValue, ConversationCaller,
         ConversationCatalogue,
     },
     infrastructure::{CatalogueWorkerError, NessaCatalogueSource},
+};
+use nessa_protocol::conversation::domain::check_catalogue_scope_identity;
+#[cfg(test)]
+use nessa_protocol::conversation::domain::conversation_catalogue_schema;
+use nessa_protocol::conversation::read_scope::{
+    passive_read_selector, validate_catalogue_selector, CatalogueReadScope,
 };
 use nessa_sync::replication::{
     catalogue::{CatalogueSource, CatalogueSourceError},
@@ -37,12 +40,8 @@ pub(super) fn trusted_scope(
         if scope.origin() != origin {
             return Err(CatalogueReadError::IdentityChanged);
         }
-        NessaCatalogueSource::check_scope_identity(
-            &admitted.organization_id,
-            &admitted.owner_id,
-            scope,
-        )
-        .map_err(source_error)?;
+        check_catalogue_scope_identity(&admitted.organization_id, &admitted.owner_id, scope)
+            .map_err(source_error)?;
     }
     Ok(())
 }
@@ -124,10 +123,11 @@ mod tests {
     use super::*;
     use crate::conversation::application::{
         CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue, ConversationError,
-        ConversationFuture, ReadRefusal,
+        ConversationFuture,
     };
-    use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
     use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use nessa_protocol::conversation::domain::{conversation_catalogue_stream, ConversationId};
+    use nessa_protocol::conversation::read_scope::ReadRefusal;
     use nessa_sync::replication::{
         catalogue::{CataloguePass, ManifestRequest},
         domain::Scope,

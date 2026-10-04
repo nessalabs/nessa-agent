@@ -1,17 +1,12 @@
 // Real product sockets connect a gateway process to separately owned receiver
 // processes. Receivers receive only port, credential, and their cache path.
 use super::*;
-use crate::agents::domain::AgentId;
+use nessa_protocol::agents::AgentId;
 use crate::catalogue_receiver_store::SqliteReceiver;
-use crate::conversation::application::{
-    CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue,
-    ConversationDependencies, ConversationFuture, ConversationLimits, ConversationRepository,
-    ConversationService, ConversationSummaries, ReadRefusal, ReceiverAuthority, ReceiverBinding,
-};
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-    ConversationModelId, ConversationSummary,
-};
+use crate::conversation::application::{CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue, ConversationDependencies, ConversationFuture, ConversationLimits, ConversationRepository, ConversationService, ConversationSummaries, ReceiverAuthority, ReceiverBinding};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
+use crate::conversation::domain::{Conversation, ConversationDeletion};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary};
 use crate::conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource};
 use nessa_protocol::product::catalogue_read as catalogue_wire;
 use nessa_protocol::product::generated::{

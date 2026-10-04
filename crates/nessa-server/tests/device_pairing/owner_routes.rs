@@ -21,12 +21,10 @@ use nessa_auth::{
         AudienceId, OrganizationId, ResourceId,
     },
 };
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_server::{
-    agents::{
-        application::{AgentProbe, AgentProbeEvidence},
-        domain::AgentId,
-    },
+    agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
         InvitationEntropy, NativeEnrollmentClient, PairingOwnerCommands,

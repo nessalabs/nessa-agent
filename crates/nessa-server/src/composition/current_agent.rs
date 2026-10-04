@@ -62,7 +62,6 @@ use crate::{
             AgentCredentialKind, AgentCredentialSource, AgentProbe, AgentProbeEvidence,
             ProbeFailure,
         },
-        domain::AgentId,
         infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     },
     conversation::{
@@ -70,10 +69,11 @@ use crate::{
             ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationError,
             ConversationFuture, ProviderSessionEraser,
         },
-        domain::{ConversationApprovalMode, ProviderSessionErasure},
+        domain::ProviderSessionErasure,
     },
     core::RunError,
 };
+use nessa_protocol::{agents::AgentId, conversation::domain::ConversationApprovalMode};
 
 const RESOLUTION_DEADLINE: Duration = Duration::from_secs(5);
 

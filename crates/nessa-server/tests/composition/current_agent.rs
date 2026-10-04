@@ -40,7 +40,6 @@ use crate::{
         ConversationLimits, ConversationService, ProviderSessionErasers, SubmissionMode,
         SubmittedMessage,
     },
-    conversation::domain::ConversationId,
     conversation_test_support::{
         AcceptingAudit, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository,
         MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted,
@@ -48,6 +47,7 @@ use crate::{
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::providers::{
         ExecutableUseError, ExecutableUseSnapshot, UserImageFuture, UserImageSource,

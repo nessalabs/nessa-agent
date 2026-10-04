@@ -1,5 +1,5 @@
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::ConversationApprovalMode;
+use super::domain::ConversationApprovalMode;
+use crate::agents::AgentId;
 use nessa_sdk::{
     application::agent_execution::{
         providers::{
@@ -334,7 +334,7 @@ pub struct ConversationCapabilities {
 }
 
 impl ConversationCapabilities {
-    pub(crate) fn read_only() -> Self {
+    pub fn read_only() -> Self {
         Self {
             queue: false,
             steer: false,

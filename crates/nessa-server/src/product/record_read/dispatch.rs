@@ -5,14 +5,12 @@
 //! It carries no credential, ownership, or stream-incarnation decision.
 
 use super::super::state::ProductRouteState;
-use crate::conversation::{
-    application::{
-        AdmitPassiveRead, ReadRecords, ReadRefusal, RecordReadError, RecordReadLease,
-        RecordReadOperation, RecordReadValue,
-    },
-    domain::ConversationId,
+use crate::conversation::application::{
+    AdmitPassiveRead, ReadRecords, RecordReadError, RecordReadLease, RecordReadOperation,
+    RecordReadValue,
 };
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::passive_read::{decode_epoch, ReadEncodeError, ReadWireError};
 use nessa_protocol::product::record_read;
 
@@ -128,20 +126,6 @@ fn error_code(error: RecordReadError) -> RecordReadErrorCode {
         }
         RecordReadError::SourcePreparing => RecordReadErrorCode::SourcePreparing,
         RecordReadError::ReadTimeout => RecordReadErrorCode::ReadTimeout,
-    }
-}
-
-impl From<ReadRefusal> for RecordReadErrorCode {
-    fn from(refusal: ReadRefusal) -> Self {
-        match refusal {
-            ReadRefusal::InvalidRequest => Self::InvalidRequest,
-            ReadRefusal::Unauthorized => Self::Unauthorized,
-            ReadRefusal::Forbidden => Self::Forbidden,
-            ReadRefusal::WrongOwner => Self::WrongOwner,
-            ReadRefusal::WrongReceiver => Self::WrongReceiver,
-            ReadRefusal::StaleEpoch => Self::StaleEpoch,
-            ReadRefusal::Unverifiable => Self::Unverifiable,
-        }
     }
 }
 

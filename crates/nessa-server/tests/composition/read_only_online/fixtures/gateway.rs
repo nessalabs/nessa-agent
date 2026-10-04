@@ -1,18 +1,15 @@
 //! Independent client/gateway processes use canonical credential, receiver and cache owners.
 use super::{private_write, uuid, Setup};
 use crate::agents::application::{AgentProbe, AgentProbeEvidence};
-use crate::agents::domain::AgentId;
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs};
 use crate::composition::runtime_config::NativeConfig;
 use crate::conversation::application::{
-    ConversationRepository, ReceiverReadScope, RecordReadError, RecordReadFuture, RecordReadLease,
+    ConversationRepository, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-};
+use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, NessaRecordWatches,
@@ -30,6 +27,11 @@ use nessa_auth::application::dto::{
 use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{

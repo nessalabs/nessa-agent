@@ -10,21 +10,22 @@ use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 use crate::conversation::infrastructure::NessaRecordWatches;
 #[cfg(unix)]
 use crate::{
-    agent_warm_up::application::{AgentWarmUp, WarmUpSessionPorts},
     agent_warm_up::{
+        application::{AgentWarmUp, WarmUpSessionPorts},
         domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
-    agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
+    agents::infrastructure::AgentLaunchFiles,
     attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{
-        ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts, McpToolUis,
-        NoMcpToolUis,
-    },
-    conversation::infrastructure::{
-        DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
-        LocalConversationStore,
+    conversation::{
+        application::{
+            ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts,
+        },
+        infrastructure::{
+            DurableConversationCreationAudit, DurableConversationDeletionAudit,
+            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+            LocalConversationStore,
+        },
     },
 };
 use crate::{
@@ -65,6 +66,10 @@ use nessa_protocol::product::generated::AgentsListResult;
 use nessa_protocol::product::generated::{
     AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
     ApprovalModeChoice as WireApprovalModeChoice,
+};
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};

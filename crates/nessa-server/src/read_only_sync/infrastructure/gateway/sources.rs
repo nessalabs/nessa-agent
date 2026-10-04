@@ -1,20 +1,17 @@
 //! Private core facades share the admitted session and retain one typed outcome.
 use super::session::{RpcKind, Session};
-use crate::{
-    conversation::{
-        application::{
-            validate_catalogue_selector, validate_record_selector, CatalogueReadScope,
-            ReceiverReadScope,
-        },
-        domain::ConversationId,
-        infrastructure::NessaCatalogueSource,
-    },
-    read_only_sync::application::{
-        watch::{Registered, Wait},
-        GatewayAttempt, GatewayError, GatewayOutcome,
-    },
+use crate::read_only_sync::application::{
+    watch::{Registered, Wait},
+    GatewayAttempt, GatewayError, GatewayOutcome,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::{
+    domain::{check_catalogue_scope_identity, ConversationId},
+    read_scope::{
+        validate_catalogue_selector, validate_record_selector, CatalogueReadScope,
+        ReceiverReadScope,
+    },
+};
 use nessa_protocol::product::generated::{
     product_method, CatalogueManifestRequest, ConversationCatalogueHeadParams,
     ConversationCatalogueHeadResult, ConversationCatalogueManifestParams,
@@ -250,7 +247,7 @@ impl GatewaySource {
                 };
                 validate_catalogue_selector(&admitted, scope)
                     .map_err(|_| GatewayError::Correlation)?;
-                NessaCatalogueSource::check_scope_identity(&organization_id, &owner_id, scope)
+                check_catalogue_scope_identity(&organization_id, &owner_id, scope)
                     .map_err(|_| GatewayError::Correlation)?;
             }
         }

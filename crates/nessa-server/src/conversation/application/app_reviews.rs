@@ -10,7 +10,7 @@
 //! `conversation.cancel`, and each ended exactly once — allowed, denied,
 //! expired, or withdrawn.
 use super::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
-use super::view::{
+use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
 };

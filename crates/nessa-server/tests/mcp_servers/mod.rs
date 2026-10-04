@@ -18,7 +18,7 @@ use super::infrastructure::{
     read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, OsTokens,
     Refusal, Relay, RelayFailure, TokenSource, HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
-use crate::conversation::application::McpToolUis;
+use nessa_protocol::conversation::tool_uis::McpToolUis;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::infrastructure::{

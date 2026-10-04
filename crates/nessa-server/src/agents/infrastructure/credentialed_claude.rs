@@ -30,11 +30,11 @@ use nessa_sdk::{
     infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
 };
 
-use crate::agents::{
-    application::{AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource},
-    domain::AgentId,
+use crate::agents::application::{
+    AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
 };
 use crate::conversation::infrastructure::LaunchedDeletions;
+use nessa_protocol::agents::AgentId;
 
 const CREDENTIAL_READ_DEADLINE: Duration = Duration::from_secs(3);
 

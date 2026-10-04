@@ -1,5 +1,5 @@
-use crate::agents::domain::AgentId;
 pub use nessa_agent_credentials::{AgentCredential, AgentCredentialKind};
+use nessa_protocol::agents::AgentId;
 
 /// Why a configured credential could not be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

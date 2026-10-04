@@ -2,19 +2,16 @@
 //! nothing; sending and completing a turn keep the summary current.
 use super::{
     ConversationCaller, ConversationDependencies, ConversationError, ConversationLimits,
-    ConversationListEntry, ConversationService, ProviderSessionErasers, SubmissionMode,
-    SubmittedFile, SubmittedMessage, MAX_LISTED_CONVERSATIONS,
+    ConversationService, ProviderSessionErasers, SubmissionMode, SubmittedFile, SubmittedMessage,
+    MAX_LISTED_CONVERSATIONS,
 };
 use crate::{
-    agents::domain::AgentId,
-    conversation::domain::{
-        Conversation, ConversationDeletion, ConversationId, ConversationSummary,
-    },
     conversation::{
         application::{
             ConversationFuture, ConversationListing, ConversationRepository, ConversationSummaries,
             ListedConversation, ListedConversations,
         },
+        domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
     },
     conversation_test_support::{
@@ -25,6 +22,11 @@ use crate::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
+use nessa_protocol::conversation::view::ConversationListEntry;
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::domain::{ConversationId, ConversationSummary},
+};
 use nessa_sdk::{
     application::agent_execution::sessions::{
         CommittedSession, SessionStorage, SessionStorageLease, StorageFuture,
@@ -220,8 +222,8 @@ async fn stored_put(
         "create".into(),
         at,
         AgentId::Claude,
-        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        crate::conversation::domain::ConversationApprovalMode::Ask,
+        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     ConversationRepository::create(stored.store.as_ref(), record)
@@ -267,8 +269,8 @@ fn put(listing: &Listing, id: &ConversationId, organization: &str, principal: &s
         "create".into(),
         at,
         AgentId::Claude,
-        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        crate::conversation::domain::ConversationApprovalMode::Ask,
+        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     listing
@@ -1272,8 +1274,8 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
             "create".into(),
             1,
             AgentId::Claude,
-            crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-            crate::conversation::domain::ConversationApprovalMode::Ask,
+            nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap()
     };

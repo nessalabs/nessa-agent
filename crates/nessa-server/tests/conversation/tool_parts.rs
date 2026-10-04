@@ -9,9 +9,9 @@
 //! update is the SDK's (its wire tests show every frame of one call keeps that
 //! call's id); what reaches the projection from a frame, and all this tests
 //! needs, is that id and the status the frame states.
-use super::projection::{bound_view, Projection};
 use super::projection_tests::{committed_tool_view, completed_snapshot, event, projection};
-use super::ConversationView;
+use nessa_protocol::conversation::projection::{bound_view, Projection};
+use nessa_protocol::conversation::view::ConversationView;
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use nessa_sdk::application::agent_execution::sessions::SessionSnapshot;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageChunk};

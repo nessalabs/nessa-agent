@@ -49,5 +49,5 @@ impl AgentId {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/agents/agent_id.rs"]
+#[path = "../../tests/agents/agent_id.rs"]
 mod tests;

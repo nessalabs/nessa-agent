@@ -1,14 +1,14 @@
-use crate::conversation::{
-    application::{
-        AdmitPassiveRead, CatalogueChangeWatch, CatalogueReadScope, CatalogueWatchError,
-        CatalogueWatchState, ReadRefusal,
-    },
-    domain::ConversationId,
+use crate::conversation::application::{
+    AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState,
 };
 use crate::product::socket::close_reason;
 use crate::product::state::ProductRouteState;
 use nessa_auth::application::ports::AccessError;
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
+use nessa_protocol::conversation::{
+    domain::ConversationId,
+    read_scope::{CatalogueReadScope, ReadRefusal},
+};
 use nessa_protocol::product::generated::{
     product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
     MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,

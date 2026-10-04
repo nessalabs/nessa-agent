@@ -1,16 +1,15 @@
 //! Admission for bounded passive reads, before a record or catalogue source is touched.
 
 use super::ConversationRepository;
-use crate::conversation::domain::{ConversationId, ReceiverBinding};
+use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::{
-    application::{
-        authorization::AuthorizeAction,
-        ports::{AccessError, Decision},
-        session::AuthenticatedSession,
-    },
-    domain::{Action, CredentialId, OrganizationId, PrincipalId, Resource},
+    application::{authorization::AuthorizeAction, ports::Decision, session::AuthenticatedSession},
+    domain::{Action, CredentialId, Resource},
 };
-use nessa_sync::replication::domain::{Id, Scope};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::read_scope::{
+    CatalogueReadScope, ReadRefusal, ReceiverReadScope,
+};
 use std::{future::Future, pin::Pin};
 
 /// A binding authority reads committed state. A missing or unavailable binding
@@ -20,53 +19,6 @@ pub trait ReceiverAuthority: Send + Sync {
         &'a self,
         credential_id: &'a CredentialId,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadRefusal {
-    InvalidRequest,
-    Unauthorized,
-    Forbidden,
-    WrongOwner,
-    WrongReceiver,
-    StaleEpoch,
-    Unverifiable,
-}
-
-impl From<AccessError> for ReadRefusal {
-    fn from(error: AccessError) -> Self {
-        match error {
-            AccessError::Denied => Self::Forbidden,
-            AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
-                Self::Unverifiable
-            }
-            AccessError::InvalidCredential
-            | AccessError::CredentialRevoked
-            | AccessError::CredentialExpired
-            | AccessError::InactiveMembership
-            | AccessError::IdentityMismatch => Self::Unauthorized,
-        }
-    }
-}
-
-/// Exact receiver and ownership portion of a source scope. The physical source
-/// contributes its own origin, stream, incarnation and schema after admission.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReceiverReadScope {
-    pub receiver_id: String,
-    pub organization_id: OrganizationId,
-    pub owner_id: PrincipalId,
-    pub conversation_id: ConversationId,
-    pub access_epoch: u64,
-}
-
-/// Owner-scoped catalogue selector, independent of any conversation ID.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CatalogueReadScope {
-    pub receiver_id: String,
-    pub organization_id: OrganizationId,
-    pub owner_id: PrincipalId,
-    pub access_epoch: u64,
 }
 
 /// Admission orders fresh authentication, binding and ownership before source I/O.
@@ -200,26 +152,4 @@ impl AdmitPassiveRead<'_> {
         }
         Ok(binding)
     }
-}
-
-/// Encode the trusted passive receiver and numeric epoch into opaque sync IDs.
-pub(crate) fn passive_read_selector(receiver: &str, epoch: u64) -> Result<(Id, Id), ReadRefusal> {
-    let receiver = Id::new(receiver).map_err(|_| ReadRefusal::Unverifiable)?;
-    let epoch = Id::new(format!("epoch-{epoch}")).map_err(|_| ReadRefusal::Unverifiable)?;
-    Ok((receiver, epoch))
-}
-
-pub(crate) fn validate_passive_read_selector(
-    receiver: &str,
-    epoch: u64,
-    scope: &Scope,
-) -> Result<(), ReadRefusal> {
-    let (receiver, epoch) = passive_read_selector(receiver, epoch)?;
-    if scope.receiver() != &receiver {
-        return Err(ReadRefusal::WrongReceiver);
-    }
-    if scope.access_epoch() != &epoch {
-        return Err(ReadRefusal::StaleEpoch);
-    }
-    Ok(())
 }

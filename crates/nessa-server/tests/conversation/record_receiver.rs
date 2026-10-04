@@ -1,13 +1,11 @@
 // Separate gateway and receiver processes exercise the authenticated product
 // route. Receiver files are test data, never a second gateway journal.
 use super::*;
-use crate::agents::domain::AgentId;
-use crate::conversation::application::{
-    ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding,
-};
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-};
+use nessa_protocol::agents::AgentId;
+use crate::conversation::application::{ConversationRepository, ReceiverAuthority, ReceiverBinding};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
+use crate::conversation::domain::Conversation;
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId};
 use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
 use nessa_protocol::product::generated::{ConversationRecordsHeadResult, ConversationRecordsPageResult};
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;

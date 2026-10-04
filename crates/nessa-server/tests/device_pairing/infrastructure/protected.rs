@@ -20,6 +20,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::{
     encode_frame,
     wire::{
@@ -28,10 +29,7 @@ use nessa_protocol::pairing::{
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
 use nessa_server::{
-    agents::{
-        application::{AgentProbe, AgentProbeEvidence},
-        domain::AgentId,
-    },
+    agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
     device_pairing::infrastructure::{NativeEnrollmentClient, ProtectedSessions},

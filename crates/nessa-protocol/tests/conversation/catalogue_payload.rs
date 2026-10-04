@@ -1,36 +1,18 @@
 use super::*;
-use crate::conversation::{
-    application::{CatalogueDescriptor, CatalogueKey},
-    domain::{Conversation, LATEST_TIME_MS},
-};
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use crate::conversation::domain::LATEST_TIME_MS;
 use serde_json::{json, Value};
 
 const ENTRY: &str = "00000000-0000-0000-0000-000000000001";
 const OTHER: &str = "00000000-0000-0000-0000-000000000002";
 
-fn value() -> CatalogueValue {
-    let id = ConversationId::new(ENTRY).unwrap();
-    let conversation = Conversation::restore(
-        id.clone(),
-        OrganizationId::new("org").unwrap(),
-        PrincipalId::new("owner").unwrap(),
-        "panel".into(),
-        "create".into(),
+fn metadata() -> CatalogueMetadata {
+    CatalogueMetadata::new(
+        ConversationId::new(ENTRY).unwrap(),
         20,
         Some(AgentId::Codex),
         ConversationModelId::new("model").unwrap(),
         ConversationApprovalMode::Ask,
-    )
-    .unwrap();
-    CatalogueValue {
-        descriptor: CatalogueDescriptor {
-            key: CatalogueKey { creation: 1, id },
-            revision: 2,
-            deleted: false,
-        },
-        conversation,
-        summary: Some(
+        Some(
             ConversationSummary::new(
                 Some(ConversationTitle::new("A \"quote\" \\ path").unwrap()),
                 Some(ConversationPreview::new("snow 雪 and \"quote\"").unwrap()),
@@ -39,11 +21,12 @@ fn value() -> CatalogueValue {
             )
             .unwrap(),
         ),
-    }
+    )
+    .unwrap()
 }
 
 fn raw() -> Value {
-    serde_json::from_slice(&encode(&value()).unwrap()).unwrap()
+    serde_json::from_slice(&encode(ENTRY, &metadata()).unwrap()).unwrap()
 }
 fn decoded(raw: &Value) -> Result<CatalogueMetadata, CataloguePayloadError> {
     decode(ENTRY, &serde_json::to_vec(raw).unwrap())
@@ -51,36 +34,27 @@ fn decoded(raw: &Value) -> Result<CatalogueMetadata, CataloguePayloadError> {
 
 #[test]
 fn catalogue_metadata_codec_preserves_current_field_representation() {
-    let value = value();
-    let conversation = &value.conversation;
-    let summary = value.summary.as_ref().unwrap();
+    let value = metadata();
+    let summary = value.summary().unwrap();
     let expected = json!({
         "id": ENTRY, "createdAtMs": 20, "agent": "codex", "model": "model", "approvalMode": "ask",
         "summary": { "title": summary.title().unwrap().as_str(), "preview": summary.preview().unwrap().as_str(), "updatedAtMs": 10, "archived": true }
     });
-    let bytes = encode(&value).unwrap();
+    let bytes = encode(ENTRY, &value).unwrap();
     assert_eq!(bytes, serde_json::to_vec(&expected).unwrap());
-    let metadata = decode(ENTRY, &bytes).unwrap();
-    assert_eq!(metadata.id(), conversation.id());
-    assert_eq!(
-        metadata.created_at_ms(),
-        conversation.creation_requested_at_ms()
-    );
-    assert_eq!(metadata.agent(), conversation.agent());
-    assert_eq!(metadata.model(), conversation.model());
-    assert_eq!(metadata.approval_mode(), conversation.approval_mode());
-    assert_eq!(metadata.summary(), value.summary.as_ref());
+    assert_eq!(decode(ENTRY, &bytes).unwrap(), value);
 }
 
 #[test]
 fn catalogue_metadata_codec_correlates_identity_and_uses_product_owners() {
     assert_eq!(
-        decode(OTHER, &encode(&value()).unwrap()),
+        decode(OTHER, &encode(ENTRY, &metadata()).unwrap()),
         Err(CataloguePayloadError::WrongEntry)
     );
-    let mut value = value();
-    value.descriptor.key.id = ConversationId::new(OTHER).unwrap();
-    assert_eq!(encode(&value), Err(CataloguePayloadError::WrongEntry));
+    assert_eq!(
+        encode(OTHER, &metadata()),
+        Err(CataloguePayloadError::WrongEntry)
+    );
     let mut cases = Vec::new();
     for (field, invalid) in [
         ("id", json!("not-a-conversation")),
@@ -146,7 +120,7 @@ fn catalogue_metadata_codec_requires_one_complete_current_shape() {
     let mut extra = raw();
     extra["summary"]["unrecognized"] = json!(true);
     assert_eq!(decoded(&extra), Err(CataloguePayloadError::Malformed));
-    let bytes = encode(&value()).unwrap();
+    let bytes = encode(ENTRY, &metadata()).unwrap();
     let duplicate = format!(
         "{{\"id\":\"{ENTRY}\",{}",
         std::str::from_utf8(&bytes).unwrap().trim_start_matches('{')
@@ -165,7 +139,7 @@ fn catalogue_metadata_codec_requires_one_complete_current_shape() {
 
 #[test]
 fn catalogue_metadata_codec_bounds_input_before_parser() {
-    let bytes = encode(&value()).unwrap();
+    let bytes = encode(ENTRY, &metadata()).unwrap();
     let mut boundary = bytes;
     boundary.resize(MAX_CATALOGUE_PAYLOAD_BYTES, b' ');
     assert!(decode(ENTRY, &boundary).is_ok());
