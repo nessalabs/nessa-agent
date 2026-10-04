@@ -81,7 +81,8 @@ export type McpServersApi = {
    * allowance for stopping the server and answering.
    * @throws {@link NessaMcpServersError}: one of the `mcp_server_` codes for a
    * server that failed, `mcp_servers_busy` when inspections are running
-   * already, `mcp_servers_not_found`, `mcp_servers_reserved_name`.
+   * already, `mcp_servers_stopping` when the gateway is stopping,
+   * `mcp_servers_not_found`, `mcp_servers_reserved_name`.
    */
   inspect(name: string): Promise<McpServersInspectResult>
 }

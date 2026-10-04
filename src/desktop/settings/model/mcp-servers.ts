@@ -106,6 +106,7 @@ export type RefusalCode =
   | "notFound"
   | "revisionConflict"
   | "busy"
+  | "stopping"
   | "configInvalid"
   | "configTooLarge"
   | "storageUnavailable"
@@ -124,7 +125,14 @@ export type RefusalCode =
 export type Failure =
   | { readonly kind: "forbidden" }
   | { readonly kind: "unanswered" }
-  | { readonly kind: "invalid"; readonly problem?: Problem; readonly name?: string }
+  | {
+      readonly kind: "invalid"
+      readonly problem?: Problem
+      /** The stored or saved server the problem is about. */
+      readonly server?: string
+      /** The variable the problem is about. Never a value. */
+      readonly name?: string
+    }
   | {
       readonly kind: "auditUnavailable"
       readonly applied?: boolean
@@ -135,6 +143,8 @@ export type Failure =
   | {
       readonly kind: Exclude<RefusalCode, "invalid" | "auditUnavailable" | "remoteError">
     }
+
+type Invalid = Extract<Failure, { readonly kind: "invalid" }>
 
 export type Outcome<T> =
   | { readonly ok: true; readonly value: T }
@@ -284,6 +294,7 @@ export const sentences = {
   conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
   notFound: "That server is no longer stored. The list was reloaded.",
   busy: "Another change is in progress. Try again in a moment.",
+  stopping: "The gateway is stopping, so nothing was changed.",
   reservedName: "“nessa” is Nessa's own server and can't be changed here.",
   configInvalid: "The configuration file can't be read as it is, so nothing was changed.",
   configTooLarge: "The configuration would be too large, so nothing was changed.",
@@ -322,7 +333,8 @@ function auditSentence(
 }
 
 /** What a problem says, at the field it is about. Never the rule's pattern: what is wrong. */
-function problemAt(problem: Problem | undefined, name: string | undefined): FormProblem {
+function problemAt(failure: Invalid): FormProblem {
+  const { problem, server, name } = failure
   const it = name === undefined ? "A variable" : quoted(name)
   switch (problem) {
     case "tooMany":
@@ -330,7 +342,7 @@ function problemAt(problem: Problem | undefined, name: string | undefined): Form
     case "duplicateName":
       return {
         field: "name",
-        text: `Another server is named ${quoted(name ?? "that")}.`,
+        text: `Another server is named ${quoted(server ?? "that")}.`,
       }
     case "name":
       return { field: "name", text: "This name can't be used for a server." }
@@ -370,6 +382,8 @@ function inspectSentence(name: string, failure: Failure, limits: McpServersLimit
         : `${quoted(name)} answered with an error: ${failure.message}${failure.code === undefined ? "" : ` (${failure.code})`}`
     case "busy":
       return "Other servers are being inspected. Try again in a moment."
+    case "stopping":
+      return `The gateway is stopping, so ${quoted(name)} wasn't started.`
     case "auditUnavailable":
       return auditSentence(failure, "inspection")
     default:
@@ -390,6 +404,8 @@ function writeSentence(failure: Failure): string {
       return sentences.conflict
     case "busy":
       return sentences.busy
+    case "stopping":
+      return sentences.stopping
     case "configInvalid":
       return sentences.configInvalid
     case "configTooLarge":
@@ -400,8 +416,11 @@ function writeSentence(failure: Failure): string {
       return auditSentence(failure, "change")
     case "forbidden":
       return sentences.forbidden
-    case "invalid":
-      return problemAt(failure.problem, failure.name).text
+    case "invalid": {
+      // Away from the form, the server is named: it may be one stored by hand.
+      const { text } = problemAt(failure)
+      return failure.server === undefined ? text : `${quoted(failure.server)}: ${text}`
+    }
     case "startFailed":
     case "timedOut":
     case "gone":
@@ -586,15 +605,20 @@ function answeredWrite(
     case "notConfigured":
       return { ...done, list: { phase: "notConfigured" }, form: null, notice: null }
     case "invalid":
-      // At its field, the form kept, nothing listed again: nothing changed.
-      return fromForm && state.form
+      // At its field, the form kept, nothing listed again: nothing changed. A
+      // problem with another stored server (one edited in by hand) is not the
+      // form's: it is said, naming that server, and the form is kept.
+      return fromForm &&
+        state.form &&
+        (failure.server === undefined || failure.server === pending.request.server.name)
         ? {
             ...done,
             notice: null,
-            form: { ...state.form, problem: problemAt(failure.problem, failure.name) },
+            form: { ...state.form, problem: problemAt(failure) },
           }
         : { ...done, notice: writeSentence(failure) }
     case "busy":
+    case "stopping":
     case "reservedName":
       // Nothing was written; the controls come back as they were.
       return { ...done, notice: writeSentence(failure) }

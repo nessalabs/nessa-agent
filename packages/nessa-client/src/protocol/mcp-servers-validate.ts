@@ -136,11 +136,19 @@ export function mcpServersInvalidDetails(
   details: unknown,
 ): McpServersInvalidDetails | undefined {
   try {
-    const item = object(details, ["problem", "name"], "invalid details")
+    const item = object(details, ["problem", "server", "name"], "invalid details")
     const problem = member(McpServerProblemCode, item.problem)
-    if (!problem || (item.name !== undefined && typeof item.name !== "string"))
+    if (
+      !problem ||
+      (item.server !== undefined && typeof item.server !== "string") ||
+      (item.name !== undefined && typeof item.name !== "string")
+    )
       return undefined
-    return { problem, ...(item.name === undefined ? {} : { name: item.name as string }) }
+    return {
+      problem,
+      ...(item.server === undefined ? {} : { server: item.server as string }),
+      ...(item.name === undefined ? {} : { name: item.name as string }),
+    }
   } catch {
     return undefined
   }

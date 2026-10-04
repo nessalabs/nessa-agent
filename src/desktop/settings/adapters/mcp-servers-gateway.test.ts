@@ -38,6 +38,7 @@ describe("failureOf", () => {
       "configTooLarge",
       "storageUnavailable",
       "auditUnavailable",
+      "stopping",
       "startFailed",
       "timedOut",
       "gone",
@@ -46,9 +47,9 @@ describe("failureOf", () => {
     ])
   })
 
-  it("reads every problem, with its name", () => {
+  it("reads every problem, with its server and variable", () => {
     const problems = Object.values(McpServerProblemCode).map((problem) =>
-      failureOf(refusal("mcp_servers_invalid", { problem, name: "N" })),
+      failureOf(refusal("mcp_servers_invalid", { problem, server: "S", name: "N" })),
     )
     expect(problems.map((each) => each.kind === "invalid" && each.problem)).toEqual([
       "tooMany",
@@ -62,7 +63,12 @@ describe("failureOf", () => {
       "environmentValueMissing",
       "environmentNameRepeated",
     ])
-    expect(problems[0]).toEqual({ kind: "invalid", problem: "tooMany", name: "N" })
+    expect(problems[0]).toEqual({
+      kind: "invalid",
+      problem: "tooMany",
+      server: "S",
+      name: "N",
+    })
   })
 
   it("keeps an audit refusal's applied and code, and a remote error's message", () => {

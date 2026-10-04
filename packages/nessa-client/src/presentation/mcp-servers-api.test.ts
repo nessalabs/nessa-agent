@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { NessaMcpServersError } from "../application/mcp-servers-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import type { RequestDeadline } from "../application/session-port.js"
-import { mcpServerInspect } from "../generated/product.js"
+import { McpServersErrorCode, mcpServerInspect } from "../generated/product.js"
 import { createMcpServersApi, mayManageMcpServers } from "./mcp-servers-api.js"
 
 const entry = {
@@ -159,6 +159,25 @@ describe("NessaMcpServersError narrows the refusal", () => {
       details: { problem: "command" },
     })
     expect(error.code).toBe("mcp_servers_invalid")
+  })
+
+  it("types the invalid details' server and variable", async () => {
+    const { api } = refusing("mcp_servers_invalid", {
+      problem: "environment_value",
+      server: "charts",
+      name: "TOKEN",
+    })
+    expect((await failure(api.list())).refusal).toEqual({
+      code: "mcp_servers_invalid",
+      details: { problem: "environment_value", server: "charts", name: "TOKEN" },
+    })
+  })
+
+  it("narrows mcp_servers_stopping, which carries no details", async () => {
+    const { api } = refusing("mcp_servers_stopping")
+    const error = await failure(api.inspect("n"))
+    expect(error.refusal).toEqual({ code: "mcp_servers_stopping" })
+    expect(error.code).toBe(McpServersErrorCode.McpServersStopping)
   })
 
   it("keeps the refusal and drops details that are not its code's shape", async () => {

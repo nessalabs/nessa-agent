@@ -70,6 +70,7 @@ const refusalCodes: Record<
   mcp_servers_not_found: "notFound",
   mcp_servers_revision_conflict: "revisionConflict",
   mcp_servers_busy: "busy",
+  mcp_servers_stopping: "stopping",
   mcp_servers_config_invalid: "configInvalid",
   mcp_servers_config_too_large: "configTooLarge",
   mcp_servers_storage_unavailable: "storageUnavailable",
@@ -100,6 +101,9 @@ function refused(refusal: McpServersRefusal): Failure {
         ...(refusal.details
           ? {
               problem: problems[refusal.details.problem],
+              ...(refusal.details.server === undefined
+                ? {}
+                : { server: refusal.details.server }),
               ...(refusal.details.name === undefined
                 ? {}
                 : { name: refusal.details.name }),

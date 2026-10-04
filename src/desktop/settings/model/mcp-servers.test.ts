@@ -237,6 +237,31 @@ describe("the form", () => {
     expect(run(variable, { type: "save" }).form?.problem).toBeUndefined()
   })
 
+  it("U9: a problem with another stored server names it and keeps the form clear of it", () => {
+    const state = run(
+      listed(),
+      { type: "add" },
+      { type: "change", patch: { name: "maps", command: "/bin/maps" } },
+      { type: "save" },
+    )
+    const own = answer(
+      state,
+      no({ kind: "invalid", problem: "duplicateName", server: "maps" }),
+    )
+    expect(own.form?.problem).toEqual({
+      field: "name",
+      text: "Another server is named “maps”.",
+    })
+    const other = answer(
+      state,
+      no({ kind: "invalid", problem: "command", server: "hand" }),
+    )
+    expect(other.form?.problem).toBeUndefined()
+    expect(other.form?.name).toBe("maps")
+    expect(other.notice).toBe("“hand”: This isn't an absolute path to a program.")
+    expect(other.pending).toBeNull()
+  })
+
   it("U10: Edit fills the form, every stored value kept unless typed", () => {
     let state = run(listed(), { type: "edit", name: "charts" })
     expect(state.form).toMatchObject({
@@ -392,6 +417,19 @@ describe("refusals", () => {
     expect(state.form?.command).toBe("/bin/new")
   })
 
+  it("the gateway stopping says nothing changed and gives the controls back, listing nothing", () => {
+    const state = answer(saving(), no({ kind: "stopping" }))
+    expect(state.notice).toBe("The gateway is stopping, so nothing was changed.")
+    expect(state.pending).toBeNull()
+    expect(state.form?.command).toBe("/bin/new")
+    const removing = answer(
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      no({ kind: "stopping" }),
+    )
+    expect(removing.notice).toBe(sentences.stopping)
+    expect(removing.pending).toBeNull()
+  })
+
   it.each([
     ["configInvalid", sentences.configInvalid],
     ["configTooLarge", sentences.configTooLarge],
@@ -519,6 +557,7 @@ describe("inspecting", () => {
     ],
     [{ kind: "remoteError" }, "“charts” answered with an error."],
     [{ kind: "busy" }, "Other servers are being inspected. Try again in a moment."],
+    [{ kind: "stopping" }, "The gateway is stopping, so “charts” wasn't started."],
     [
       { kind: "auditUnavailable", applied: true },
       "The server was started, but it couldn't be recorded. The list was reloaded.",
