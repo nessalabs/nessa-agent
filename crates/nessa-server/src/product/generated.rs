@@ -961,6 +961,8 @@ impl McpServerProblemCode {
 pub struct McpServersInvalidDetails {
     pub problem: McpServerProblemCode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
@@ -1035,6 +1037,7 @@ pub enum McpServersErrorCode {
     McpServersConfigTooLarge,
     McpServersStorageUnavailable,
     AuditUnavailable,
+    McpServersStopping,
     McpServerStartFailed,
     McpServerTimedOut,
     McpServerGone,
@@ -1054,6 +1057,7 @@ impl McpServersErrorCode {
             Self::McpServersConfigTooLarge => "mcp_servers_config_too_large",
             Self::McpServersStorageUnavailable => "mcp_servers_storage_unavailable",
             Self::AuditUnavailable => "audit_unavailable",
+            Self::McpServersStopping => "mcp_servers_stopping",
             Self::McpServerStartFailed => "mcp_server_start_failed",
             Self::McpServerTimedOut => "mcp_server_timed_out",
             Self::McpServerGone => "mcp_server_gone",

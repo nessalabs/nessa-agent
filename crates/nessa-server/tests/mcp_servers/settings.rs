@@ -120,7 +120,10 @@ async fn a_save_is_published_then_replaces_the_live_set_and_is_audited_both_side
     assert_eq!(records[0].request.action, McpServerAction::Save);
     assert_eq!(records[0].request.target, "b");
     assert_eq!(records[0].request.revision, before.revision);
-    assert_eq!(records[0].request.env_names, ["API_TOKEN"]);
+    assert_eq!(
+        records[0].request.server,
+        Some(audited("b", true, &["API_TOKEN"]))
+    );
     assert_eq!(
         outcome(&audit),
         McpServerOutcome::Applied {
@@ -193,26 +196,71 @@ async fn s2_a_stale_revision_is_refused_with_the_current_one_and_nothing_is_writ
 }
 
 /// S3: two saves at one revision at once are serialised by the lock; the
-/// first wins and the second is refused with the first's revision.
+/// first wins and the second is refused with the first's revision. Writer A
+/// is held inside the window between its re-read and its publish: B, waiting
+/// on the lock, reads nothing until A has published — without the lock, B
+/// would read the old revision there, and both would publish.
 #[tokio::test]
 async fn s3_two_saves_at_one_revision_are_serialised_and_the_second_conflicts() {
     let files = MemoryFiles::holding(config(vec![]));
     let audit = Arc::new(RecordingAudit::default());
-    let (settings, _) = settings_over(files.clone(), audit, Arc::new(RuntimeClock::new()));
+    let (settings, servers) = settings_over(files.clone(), audit, Arc::new(RuntimeClock::new()));
+    let settings = Arc::new(settings);
     let revision = settings.list().await.unwrap().revision;
-    let (first, second) = tokio::join!(
-        settings.edit(initiator(), revision.clone(), save("a")),
-        settings.edit(initiator(), revision.clone(), save("b")),
+    let (release, gate) = std::sync::mpsc::channel();
+    *files.publish_gate.lock().unwrap() = Some(gate);
+    let first = tokio::spawn({
+        let settings = settings.clone();
+        let revision = revision.clone();
+        async move { settings.edit(initiator(), revision, save("a")).await }
+    });
+    within("A reaches its publish", || {
+        files.publishing.load(Ordering::SeqCst)
+    })
+    .await;
+    let reads = files.reads.load(Ordering::SeqCst);
+    let second = tokio::spawn({
+        let settings = settings.clone();
+        let revision = revision.clone();
+        async move { settings.edit(initiator(), revision, save("b")).await }
+    });
+    // Real time, well inside the lock's two-second wait, for a B that does
+    // not wait to show that it read.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        files.reads.load(Ordering::SeqCst),
+        reads,
+        "B read while A held the lock between its re-read and its publish"
     );
-    let (won, lost) = match (first, second) {
-        (Ok(won), Err(lost)) | (Err(lost), Ok(won)) => (won, lost),
-        other => panic!("one save wins: {other:?}"),
-    };
+    release.send(()).unwrap();
+    let won = bounded(first).await.unwrap();
+    let lost = bounded(second).await.unwrap_err();
     assert_eq!(
         lost,
-        McpServerSettingsError::RevisionConflict { revision: won }
+        McpServerSettingsError::RevisionConflict {
+            revision: won.clone()
+        }
     );
     assert_eq!(files.publishes.load(Ordering::SeqCst), 1);
+    assert_eq!(stored(&files), ["a"]);
+    assert_eq!(live(&servers), ["a", "nessa"]);
+}
+
+/// Wait, five real seconds at most, until `done`.
+async fn within(what: &str, done: impl Fn() -> bool) {
+    let started = std::time::Instant::now();
+    while !done() {
+        assert!(started.elapsed() < Duration::from_secs(5), "never: {what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// `task`'s answer, within ten real seconds: a test fails rather than hangs.
+async fn bounded<T>(task: tokio::task::JoinHandle<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("answered in time")
+        .unwrap()
 }
 
 /// S4: a lock held past its bound is `busy`, and nothing is written.
@@ -475,13 +523,15 @@ async fn s10_an_invalid_or_reserved_server_is_refused_with_its_problem() {
         (
             vec![],
             save("bad name"),
-            McpServerSettingsError::Invalid(EditProblem::Server(ServerProblem::Name)),
+            McpServerSettingsError::Invalid(EditProblem::Server(ServerProblem::Name {
+                server: "bad name".into(),
+            })),
         ),
         (
             vec![entry("a"), entry("b")],
             save_with("b", Some("a"), vec![]),
             McpServerSettingsError::Invalid(EditProblem::Server(ServerProblem::DuplicateName {
-                name: "b".into(),
+                server: "b".into(),
             })),
         ),
         (vec![], save("nessa"), McpServerSettingsError::ReservedName),
@@ -498,13 +548,16 @@ async fn s10_an_invalid_or_reserved_server_is_refused_with_its_problem() {
         (
             vec![],
             save_with("a", None, vec![("1BAD", Some("v"))]),
-            McpServerSettingsError::Invalid(EditProblem::Server(ServerProblem::EnvironmentName)),
+            McpServerSettingsError::Invalid(EditProblem::Server(ServerProblem::EnvironmentName {
+                server: "a".into(),
+            })),
         ),
         (
             vec![],
             save_with("a", None, vec![(MCP_SESSION_VARIABLE, Some("token"))]),
             McpServerSettingsError::Invalid(EditProblem::Server(
                 ServerProblem::ReservedEnvironmentName {
+                    server: "a".into(),
                     name: MCP_SESSION_VARIABLE.into(),
                 },
             )),
@@ -513,6 +566,7 @@ async fn s10_an_invalid_or_reserved_server_is_refused_with_its_problem() {
             vec![],
             save_with("a", None, vec![("KEY", Some("a\0b"))]),
             McpServerSettingsError::Invalid(EditProblem::Server(ServerProblem::EnvironmentValue {
+                server: "a".into(),
                 name: "KEY".into(),
             })),
         ),
@@ -520,6 +574,7 @@ async fn s10_an_invalid_or_reserved_server_is_refused_with_its_problem() {
             vec![],
             save_with("a", None, vec![("KEY", Some("1")), ("KEY", Some("2"))]),
             McpServerSettingsError::Invalid(EditProblem::EnvironmentNameRepeated {
+                server: "a".into(),
                 name: "KEY".into(),
             }),
         ),
@@ -631,6 +686,7 @@ async fn s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep() {
             .await,
         Err(McpServerSettingsError::Invalid(
             EditProblem::EnvironmentValueMissing {
+                server: "a".into(),
                 name: "NEVER".into()
             }
         ))
@@ -772,7 +828,10 @@ async fn the_audit_records_the_targets_before_and_after_on_save_rename_disable_a
     );
     // The request names the variables sorted by name, as they are stored,
     // whatever order they were given in.
-    assert_eq!(audit.records()[0].request.env_names, ["NEW", "TOKEN"]);
+    assert_eq!(
+        audit.records()[0].request.server,
+        Some(audited("b", true, &["NEW", "TOKEN"]))
+    );
     let off = ServerEdit::Save(ServerSave {
         previous_name: None,
         server: server("b"),
@@ -833,26 +892,29 @@ async fn a_change_made_outside_the_lock_after_the_read_is_a_conflict() {
     ));
 }
 
-/// A change whose caller goes away while its write is under way keeps the
-/// lock until that write has finished: the lock goes into the blocking write
-/// and comes back out of it, so nothing is ever written outside it.
+/// A change whose caller goes away while its write is under way is not
+/// abandoned: it is owned by its own task, which keeps the lock until the
+/// write has finished, then replaces the live set and records its outcome —
+/// so the file and the live set agree, and the record does not depend on the
+/// caller.
 #[tokio::test]
-async fn a_caller_gone_mid_write_leaves_the_lock_held_until_the_write_ends() {
+async fn a_caller_gone_mid_write_still_replaces_the_live_set_and_records_the_outcome() {
     let files = MemoryFiles::holding(config(vec![]));
-    let (settings, _) = settings_for(files.clone(), Arc::new(RecordingAudit::default()));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, servers) = settings_for(files.clone(), audit.clone());
     let settings = Arc::new(settings);
     let revision = settings.list().await.unwrap().revision;
     let (release, gate) = std::sync::mpsc::channel();
     *files.publish_gate.lock().unwrap() = Some(gate);
     let editing = tokio::spawn({
         let settings = settings.clone();
+        let revision = revision.clone();
         async move { settings.edit(initiator(), revision, save("a")).await }
     });
-    let started = std::time::Instant::now();
-    while !files.publishing.load(Ordering::SeqCst) {
-        assert!(started.elapsed() < Duration::from_secs(5), "never wrote");
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    within("the write starts", || {
+        files.publishing.load(Ordering::SeqCst)
+    })
+    .await;
     editing.abort();
     assert!(editing.await.unwrap_err().is_cancelled());
     assert!(
@@ -860,12 +922,183 @@ async fn a_caller_gone_mid_write_leaves_the_lock_held_until_the_write_ends() {
         "the lock was let go while the write was under way"
     );
     release.send(()).unwrap();
-    let started = std::time::Instant::now();
-    while files.held.load(Ordering::SeqCst) {
-        assert!(started.elapsed() < Duration::from_secs(5), "never let go");
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    within("the outcome is recorded", || audit.records().len() == 2).await;
+    assert!(!files.held.load(Ordering::SeqCst), "never let go");
     assert_eq!(stored(&files), ["a"]);
+    assert_eq!(live(&servers), ["a", "nessa"]);
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Applied {
+            live_set_replaced: true,
+            ..
+        }
+    ));
+}
+
+/// Shutdown during a save: it admits no more, and returns only once the
+/// save under way has published, replaced the live set and recorded its
+/// outcome.
+#[tokio::test]
+async fn shutdown_during_a_save_returns_after_its_outcome_is_recorded() {
+    let files = MemoryFiles::holding(config(vec![]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, servers) = settings_for(files.clone(), audit.clone());
+    let settings = Arc::new(settings);
+    let revision = settings.list().await.unwrap().revision;
+    let (release, gate) = std::sync::mpsc::channel();
+    *files.publish_gate.lock().unwrap() = Some(gate);
+    let editing = tokio::spawn({
+        let settings = settings.clone();
+        let revision = revision.clone();
+        async move { settings.edit(initiator(), revision, save("a")).await }
+    });
+    within("the write starts", || {
+        files.publishing.load(Ordering::SeqCst)
+    })
+    .await;
+    let stopping = tokio::spawn({
+        let settings = settings.clone();
+        async move { settings.shutdown().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !stopping.is_finished(),
+        "shutdown did not wait for the save"
+    );
+    assert_eq!(
+        settings.edit(initiator(), revision, save("b")).await,
+        Err(McpServerSettingsError::Stopping)
+    );
+    release.send(()).unwrap();
+    assert_eq!(bounded(stopping).await, Ok(()));
+    // Recorded before shutdown returned.
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Applied {
+            live_set_replaced: true,
+            ..
+        }
+    ));
+    assert_eq!(live(&servers), ["a", "nessa"]);
+    assert!(bounded(editing).await.is_ok());
+}
+
+/// Shutdown during an inspection: it returns only once the inspection has
+/// ended and its outcome is recorded.
+#[tokio::test]
+async fn shutdown_during_an_inspection_returns_after_its_outcome_is_recorded() {
+    let files = MemoryFiles::holding(config(vec![entry("a")]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, inspector) = inspecting(files, audit.clone());
+    let settings = Arc::new(settings);
+    let held = inspector.gate.available_permits();
+    inspector.gate.forget_permits(held);
+    let inspecting = tokio::spawn({
+        let settings = settings.clone();
+        async move { settings.inspect(initiator(), "a").await }
+    });
+    within("the server is started", || {
+        !inspector.asked.lock().unwrap().is_empty()
+    })
+    .await;
+    let stopping = tokio::spawn({
+        let settings = settings.clone();
+        async move { settings.shutdown().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !stopping.is_finished(),
+        "shutdown did not wait for the inspection"
+    );
+    inspector.gate.add_permits(1);
+    assert_eq!(bounded(stopping).await, Ok(()));
+    assert_eq!(
+        outcome(&audit),
+        McpServerOutcome::Inspected {
+            tools: 0,
+            cut: None
+        }
+    );
+    assert!(bounded(inspecting).await.is_ok());
+}
+
+/// Once shutdown has begun, a save, a remove or an inspection is not
+/// admitted: `stopping`, with nothing locked, read, started or recorded.
+#[tokio::test]
+async fn a_request_after_shutdown_began_is_stopping_and_starts_nothing() {
+    let files = MemoryFiles::holding(config(vec![entry("a")]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, inspector) = inspecting(files.clone(), audit.clone());
+    let revision = settings.list().await.unwrap().revision;
+    let reads = files.reads.load(Ordering::SeqCst);
+    assert_eq!(settings.shutdown().await, Ok(()));
+    assert_eq!(
+        settings
+            .edit(initiator(), revision.clone(), save("b"))
+            .await,
+        Err(McpServerSettingsError::Stopping)
+    );
+    assert_eq!(
+        settings.edit(initiator(), revision, remove("a")).await,
+        Err(McpServerSettingsError::Stopping)
+    );
+    assert_eq!(
+        settings.inspect(initiator(), "a").await,
+        Err(McpServerSettingsError::Stopping)
+    );
+    assert_eq!(files.locks.load(Ordering::SeqCst), 0);
+    assert_eq!(files.reads.load(Ordering::SeqCst), reads);
+    assert!(inspector.asked.lock().unwrap().is_empty());
+    assert!(audit.records().is_empty());
+    // The list reads the file still.
+    assert!(settings.list().await.is_ok());
+}
+
+/// Round 2, item 2: the requested record names the server asked for —
+/// its executable and arguments among it — so a save refused before
+/// anything is written still says what was asked to run.
+#[tokio::test]
+async fn a_refused_save_still_records_the_executable_it_asked_for() {
+    let files = MemoryFiles::holding(config(vec![]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, _) = settings_for(files, audit.clone());
+    let asked = ServerEdit::Save(ServerSave {
+        previous_name: None,
+        server: StdioServer {
+            name: "a".into(),
+            command: "/opt/tools/server".into(),
+            args: vec!["--serve".into(), "/data".into()],
+        },
+        env: vec![("TOKEN".into(), Some("secret-value".into()))],
+        enabled: false,
+    });
+    assert!(matches!(
+        settings.edit(initiator(), "stale".into(), asked).await,
+        Err(McpServerSettingsError::RevisionConflict { .. })
+    ));
+    let records = audit.records();
+    assert_eq!(
+        records[0].request.server,
+        Some(Box::new(AuditedServer {
+            name: "a".into(),
+            command: "/opt/tools/server".into(),
+            args: vec!["--serve".into(), "/data".into()],
+            enabled: false,
+            env_names: vec!["TOKEN".into()],
+        }))
+    );
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Refused {
+            reason: "revision_conflict",
+            ..
+        }
+    ));
+    assert!(!format!("{records:?}").contains("secret-value"));
+    // A remove names no server it asks for.
+    let revision = settings.list().await.unwrap().revision;
+    let _ = settings.edit(initiator(), revision, remove("a")).await;
+    assert_eq!(audit.records()[2].request.server, None);
 }
 
 /// On a gateway without the desktop, a `nessa` stored at startup is the
@@ -1007,8 +1240,10 @@ async fn an_inspection_starts_a_stored_server_on_or_off_and_is_audited_both_side
     assert_eq!(records[0].request.action, McpServerAction::Inspect);
     assert_eq!(records[0].request.target, "off");
     assert_eq!(records[0].request.revision, revision);
-    assert_eq!(records[0].request.env_names, ["API_TOKEN"]);
-    assert_eq!(records[0].request.enabled, Some(false));
+    assert_eq!(
+        records[0].request.server,
+        Some(audited("off", false, &["API_TOKEN"]))
+    );
     assert_eq!(
         outcome(&audit),
         McpServerOutcome::Inspected {
@@ -1111,6 +1346,7 @@ async fn an_inspection_is_not_started_unaudited_and_keeps_both_causes() {
     for (failure, started) in [
         (InspectFailure::TimedOut, true),
         (InspectFailure::StartFailed, false),
+        (InspectFailure::Stopping, false),
     ] {
         *inspector.answer.lock().unwrap() = Err(failure.clone());
         assert_eq!(

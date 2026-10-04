@@ -25,9 +25,10 @@ use crate::mcp_servers::{
     application::McpServerSettings,
     domain::{relay_arguments, ConfigurationKey},
     infrastructure::{
-        bind, launch_digest, BoundRelay, ConfigCheck, ConfigJsonStore, ConversationGrants,
-        DurableMcpServerAudit, LaunchSettings, LiveMcpServers, McpServerInspector, OsConfigFiles,
-        OsTokens, Relay, ResourceTicketStore, TicketEvent, TokenSource,
+        bind, launch_digest, BoundRelay, ConfigCheck, ConfigFiles, ConfigJsonStore,
+        ConversationGrants, DurableMcpServerAudit, LaunchSettings, LiveMcpServers,
+        McpServerInspector, OsConfigFiles, OsTokens, Relay, ResourceTicketStore, TicketEvent,
+        TokenSource,
     },
 };
 use nessa_sdk::infrastructure::{
@@ -270,7 +271,9 @@ pub(super) async fn compose(
 /// and its lock, checked by the runtime configuration's own parse and bound;
 /// the audit in `audit` (`<namespace>/conversations/audit/mcp-servers`);
 /// `mcp`'s live set, replaced after each publish; and an inspector on the
-/// same SDK client, so a gateway stopping ends an inspection under way. A
+/// same SDK client — the server lifecycle drains admitted inspections before
+/// it stops that client ([`McpServerSettings::shutdown`]), and a stop past
+/// the drain's bound still ends one under way. A
 /// file with no `agents` block gains one from `agents`' catalog and
 /// workspace on its first write. Every write re-serialises the whole file
 /// (`ConfigJsonStore`).
@@ -284,6 +287,17 @@ pub(super) fn settings(
     config: PathBuf,
     audit: PathBuf,
 ) -> Result<McpServerSettings, RunError> {
+    settings_over(mcp, agents, Arc::new(OsConfigFiles::new(config)), audit)
+}
+
+/// [`settings`] over `files`: the real file and its lock, or — in a test —
+/// something wrapped around them.
+pub(super) fn settings_over(
+    mcp: &McpComposition,
+    agents: &AgentsConfig,
+    files: Arc<dyn ConfigFiles>,
+    audit: PathBuf,
+) -> Result<McpServerSettings, RunError> {
     let mut block = serde_json::Map::new();
     block.insert(
         "catalog".into(),
@@ -294,7 +308,7 @@ pub(super) fn settings(
         serde_json::Value::String(agents.workspace.to_string_lossy().into_owned()),
     );
     let store = ConfigJsonStore::new(
-        Arc::new(OsConfigFiles::new(config)),
+        files,
         ConfigCheck {
             limit: MAX_CONFIG_BYTES,
             parses: Box::new(|bytes| RuntimeConfig::parse(bytes).is_ok()),

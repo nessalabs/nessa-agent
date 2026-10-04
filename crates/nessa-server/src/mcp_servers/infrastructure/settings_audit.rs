@@ -6,8 +6,8 @@
 //! variable's value
 //! (`composed_settings_publish_privately_under_the_lock_and_audit_without_values`).
 use crate::mcp_servers::application::{
-    AuditUnavailable, InspectCut, McpServerAction, McpServerAudit, McpServerAuditPhase,
-    McpServerAuditRecord, McpServerOutcome, ServerNames,
+    AuditUnavailable, AuditedServer, InspectCut, McpServerAction, McpServerAudit,
+    McpServerAuditPhase, McpServerAuditRecord, McpServerOutcome, ServerNames,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
@@ -33,19 +33,24 @@ impl DurableMcpServerAudit {
     }
 }
 
-/// A revision, its names, and the change's target there: what it is
-/// started with and its variables' names, never their values.
+/// A server as a record names it: what it is started with and its
+/// variables' names, never their values.
+fn server(server: &AuditedServer) -> Value {
+    json!({
+        "name": server.name,
+        "command": server.command.to_string_lossy(),
+        "args": server.args,
+        "enabled": server.enabled,
+        "envNames": server.env_names,
+    })
+}
+
+/// A revision, its names, and the change's target there.
 fn names(names: &ServerNames) -> Value {
     json!({
         "revision": names.revision,
         "names": names.names,
-        "target": names.target.as_ref().map(|target| json!({
-            "name": target.name,
-            "command": target.command.to_string_lossy(),
-            "args": target.args,
-            "enabled": target.enabled,
-            "envNames": target.env_names,
-        })),
+        "target": names.target.as_deref().map(server),
     })
 }
 
@@ -59,16 +64,16 @@ fn stored(record: &McpServerAuditRecord) -> Value {
             "requested",
             json!({
                 "revision": request.revision,
-                "envNames": request.env_names,
-                "enabled": request.enabled,
+                "server": request.server.as_deref().map(server),
             }),
         ),
+        // The server asked for, with its executable and arguments, so a
+        // refused save still names them.
         McpServerAuditPhase::Requested => (
             "requested",
             json!({
                 "requestedRevision": request.revision,
-                "envNames": request.env_names,
-                "enabled": request.enabled,
+                "server": request.server.as_deref().map(server),
             }),
         ),
         McpServerAuditPhase::Outcome(McpServerOutcome::Applied {

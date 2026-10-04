@@ -909,7 +909,7 @@ export interface McpRemoteErrorDetails {
 /** How a configured MCP server is reached. stdio: the gateway starts it as a local process and speaks MCP over its standard input and output. */
 export const McpServerKind = { Stdio: "stdio" } as const
 export type McpServerKind = (typeof McpServerKind)[keyof typeof McpServerKind]
-/** One configured MCP server as mcpServers.list reports it. Variable values never leave the gateway; only their names are listed. */
+/** One server as config.json stores it now, which mcpServers.list reads: the stored file, not the live set. A hand edit to the file is listed at once and reaches the live set, and new conversations, at the next save or remove or the next start. Variable values never leave the gateway; only their names are listed. */
 export interface McpServerListEntry {
   /** How the server is reached. */
   kind: McpServerKind
@@ -921,14 +921,14 @@ export interface McpServerListEntry {
   args: string[]
   /** The names of the variables it is given over the gateway's own, sorted by name. Never their values. */
   envNames: string[]
-  /** Whether new conversations are given it. A server turned off stays configured. */
+  /** Whether it is stored turned on. A server saved on is given to new conversations from that save; one turned on by hand in the file, from the next save or remove or the next start. A server turned off stays stored, and can be inspected. */
   enabled: boolean
   /** Nessa's own server: listed, never saved or removed through these methods. */
   managed: boolean
 }
-/** Result of mcpServers.list: the configured servers and the revision a save or remove must name. */
+/** Result of mcpServers.list: the stored servers and the revision a save or remove must name. */
 export interface McpServersListResult {
-  /** A digest of the stored server list. A save or remove naming any other revision is refused mcp_servers_revision_conflict. */
+  /** A digest of the stored server list, keyed with a secret this gateway process mints at start: compare for equality only, and list again after a restart, since the same list has another revision then. A save or remove naming any other revision is refused mcp_servers_revision_conflict. */
   revision: string
   /** The stored servers in stored order, then the managed one. */
   servers: McpServerListEntry[]
@@ -944,7 +944,7 @@ export interface McpServerEnvEntry {
 export interface McpServerInput {
   /** How the server is reached. */
   kind: McpServerKind
-  /** Its name: ASCII letters, digits, - and _, 1-64 bytes, without __. nessa is reserved. */
+  /** Its name: ASCII letters, digits, - and _, 1-64 bytes, without __ and not starting or ending with _. nessa is reserved. */
   name: string
   /** The absolute path of its executable. */
   command: string
@@ -973,10 +973,10 @@ export interface McpServersRemoveParams {
 }
 /** Result of mcpServers.save and mcpServers.remove: the published configuration's revision. New conversations get the new server set; running ones keep theirs. */
 export interface McpServersWriteResult {
-  /** The stored server list's revision now. */
+  /** The stored server list's revision now, for this gateway process. */
   revision: string
 }
-/** Why a saved server is invalid. too_many: more than 16 servers, the managed one included. duplicate_name: another server has the name. name: not 1-64 bytes of ASCII letters, digits, - and _, or holds __. command: not an absolute UTF-8 path. arguments: more than 64, or one over 8192 bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1-256 bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value. environment_name_repeated: a variable given twice. */
+/** Why a saved server is invalid. too_many: more than 16 servers, the managed one included. duplicate_name: another server has the name. name: not 1-64 bytes of ASCII letters, digits, - and _, holds __, or starts or ends with _. command: not an absolute UTF-8 path. arguments: more than 64, or one over 8192 bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1-256 bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value. environment_name_repeated: a variable given twice. */
 export const McpServerProblemCode = {
   TooMany: "too_many",
   DuplicateName: "duplicate_name",
@@ -995,7 +995,9 @@ export type McpServerProblemCode =
 export interface McpServersInvalidDetails {
   /** What is wrong. */
   problem: McpServerProblemCode
-  /** The server or variable name the problem is about, when it is about one. Never a value. */
+  /** The server the problem is about, as it is stored or was asked to be saved: present for every problem but too_many, so an entry added to config.json by hand is named. */
+  server?: string
+  /** The variable the problem is about, for reserved_environment_name, environment_value, environment_value_missing and environment_name_repeated. Never a value. */
   name?: string
 }
 /** Attached to a refusal coded mcp_servers_revision_conflict. */
@@ -1048,7 +1050,7 @@ export interface McpServersInspectResult {
   /** The tools, in the server's order. */
   tools: McpInspectedTool[]
 }
-/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change or inspection could not be made durable (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails). */
+/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound, a path was not UTF-8, or no key for its configuration digests could be drawn). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB as written, which is pretty-printed or, when only that fits, compact. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. mcp_servers_stopping: the gateway is stopping, and nothing was started or written: the request came after shutdown began, and nothing was recorded; or, for mcpServers.inspect, the MCP client refused to start the server, as the inspection's outcome record says (stopping, not started). Changes and inspections admitted before shutdown finish, and are recorded, before the gateway stops its MCP servers. audit_unavailable: a record of the change or inspection could not be made durable (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails). */
 export const McpServersErrorCode = {
   McpServersNotConfigured: "mcp_servers_not_configured",
   McpServersInvalid: "mcp_servers_invalid",
@@ -1060,6 +1062,7 @@ export const McpServersErrorCode = {
   McpServersConfigTooLarge: "mcp_servers_config_too_large",
   McpServersStorageUnavailable: "mcp_servers_storage_unavailable",
   AuditUnavailable: "audit_unavailable",
+  McpServersStopping: "mcp_servers_stopping",
   McpServerStartFailed: "mcp_server_start_failed",
   McpServerTimedOut: "mcp_server_timed_out",
   McpServerGone: "mcp_server_gone",

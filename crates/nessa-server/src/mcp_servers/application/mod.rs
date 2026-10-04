@@ -21,8 +21,8 @@ pub use ports::{
     ServerProblem, StoreError, StoreFuture, StoreLock, StoredServers,
 };
 pub use settings::{
-    EditProblem, ListedServer, McpServerSettings, McpServerSettingsError, ServerList,
-    INSPECT_BOUNDS,
+    EditProblem, ListedServer, McpServerSettings, McpServerSettingsError, ServerList, Unfinished,
+    DRAIN_GRACE, INSPECT_BOUNDS,
 };
 
 #[cfg(all(test, unix))]

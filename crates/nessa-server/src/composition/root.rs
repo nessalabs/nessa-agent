@@ -395,6 +395,18 @@ impl CompositionRoot {
                     // After agents, whose stand-ins end with their servers.
                     #[cfg(unix)]
                     if let Some((servers, recorder)) = mcp_servers {
+                        // Before the servers stop: every admitted change and
+                        // inspection reaches its outcome record, and an
+                        // inspection under way keeps the client it runs on.
+                        // Bounded, so a hung write cannot hold the exit.
+                        if let Some(settings) = &shutdown_product.mcp_server_settings {
+                            if let Err(unfinished) = settings.shutdown().await {
+                                tracing::error!(
+                                    running = unfinished.running,
+                                    "MCP server changes or inspections were still running when the gateway stopped its MCP servers; their outcomes may be unrecorded"
+                                );
+                            }
+                        }
                         servers.stop().await;
                         // Last: the conversations' ends released their
                         // tickets, and each end is recorded before exit.
@@ -511,6 +523,9 @@ async fn cleanup_product(
     deadline: Duration,
 ) {
     product.close_watch_admission();
+    // A stored MCP server change or inspection admitted from here on would
+    // outlive the drain before the servers stop.
+    product.close_mcp_server_admission();
     passive_cleanup(
         slot,
         product.drain_watches(),

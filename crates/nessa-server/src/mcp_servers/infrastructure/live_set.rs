@@ -160,14 +160,16 @@ impl LiveServerSet for LiveMcpServers {
 fn problem(problem: McpServerProblem) -> ServerProblem {
     match problem {
         McpServerProblem::TooMany => ServerProblem::TooMany,
-        McpServerProblem::DuplicateName { name } => ServerProblem::DuplicateName { name },
-        McpServerProblem::Name => ServerProblem::Name,
-        McpServerProblem::Command => ServerProblem::Command,
-        McpServerProblem::Arguments => ServerProblem::Arguments,
-        McpServerProblem::EnvironmentName => ServerProblem::EnvironmentName,
-        McpServerProblem::ReservedEnvironmentName { name } => {
-            ServerProblem::ReservedEnvironmentName { name }
+        McpServerProblem::DuplicateName { server } => ServerProblem::DuplicateName { server },
+        McpServerProblem::Name { server } => ServerProblem::Name { server },
+        McpServerProblem::Command { server } => ServerProblem::Command { server },
+        McpServerProblem::Arguments { server } => ServerProblem::Arguments { server },
+        McpServerProblem::EnvironmentName { server } => ServerProblem::EnvironmentName { server },
+        McpServerProblem::ReservedEnvironmentName { server, name } => {
+            ServerProblem::ReservedEnvironmentName { server, name }
         }
-        McpServerProblem::EnvironmentValue { name } => ServerProblem::EnvironmentValue { name },
+        McpServerProblem::EnvironmentValue { server, name } => {
+            ServerProblem::EnvironmentValue { server, name }
+        }
     }
 }

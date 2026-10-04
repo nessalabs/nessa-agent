@@ -34,8 +34,8 @@ use tokio::sync::{watch, Semaphore};
 pub(crate) const UNPARSEABLE: &str = "refused-by-the-runtime-configuration";
 
 /// `config.json` in memory, with its lock, publishing that can be made to
-/// fail, and an edit made outside the lock once the next read has been
-/// answered.
+/// fail or held, reads counted, and an edit made outside the lock once the
+/// next read has been answered.
 #[derive(Default)]
 pub(crate) struct MemoryFiles {
     pub(crate) bytes: Mutex<Option<Vec<u8>>>,
@@ -43,6 +43,8 @@ pub(crate) struct MemoryFiles {
     pub(crate) fail_publish: AtomicBool,
     pub(crate) publishes: AtomicUsize,
     pub(crate) locks: AtomicUsize,
+    /// How many reads have been made.
+    pub(crate) reads: AtomicUsize,
     /// The file another writer, ignoring the lock, leaves just after the
     /// next read: taken by that read.
     pub(crate) after_next_read: Mutex<Option<Vec<u8>>>,
@@ -79,6 +81,7 @@ impl Drop for Held {
 
 impl ConfigFiles for MemoryFiles {
     fn read(&self, limit: usize) -> io::Result<Option<Vec<u8>>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         let mut bytes = self.bytes.lock().unwrap();
         let read = bytes
             .as_ref()
