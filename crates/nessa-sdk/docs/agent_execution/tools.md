@@ -60,5 +60,5 @@ names, retaining original permission inputs. Web fetch, execution and thinking
 categories retain their distinct domain/storage values. Native Bash and mode
 changes remain disabled; Nessa's shell is provided through MCP. Trusted
 `AcpConfig::mcp_servers` are not part of restoration identity, so changing them
-keeps a saved session restorable; the fingerprint's inputs are stated once, on
+keeps a saved session restorable; the fingerprint's inputs are listed, completely, on
 `fingerprint` in [`acp/sessions/identity.rs`](../../src/infrastructure/acp/sessions/identity.rs).

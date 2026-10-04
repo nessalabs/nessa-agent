@@ -745,8 +745,9 @@ before messages could point at files does not reopen. See
 [ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md) for why a migration
 script was written for exactly this and then deleted.
 
-An app update still strands saved conversations, and so, once, does the release
-that takes the MCP servers out of the fingerprint; see
+An update that changes the staged runtime tree, which in practice is every
+release, still strands saved conversations, and so, once, does the release that
+takes the MCP servers out of the fingerprint; see
 [MCP servers and the restoration identity](../design/mcp-connections.md#mcp-servers-and-the-restoration-identity).
 
 ### Conversation activity surfaces

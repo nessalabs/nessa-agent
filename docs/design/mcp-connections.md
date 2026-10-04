@@ -415,12 +415,17 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   them changes every saved identity, so the release that ships this answers
   `conversation_configuration_changed` for conversations saved before it.
   Nothing moves them, and no reader of the earlier fingerprint is kept (one
-  current contract).
+  current contract). The same release re-runs the agent warm-up once, since
+  the configuration part of the warm-up's key is this fingerprint
+  ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
+  that costs one background launch and is harmless.
 - **What still strands a saved conversation.** A change to any hashed input,
-  and that includes every app update. The desktop stages each version's
-  runtime under a new directory and launches the agent runtime's executable
-  and entry from it (`configure` in
-  [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
-  so the executable path and the first argument move with every version.
+  and that includes every update that changes the staged runtime tree, which
+  in practice is every release. The desktop stages the runtime under a
+  directory named by the prepared tree's content fingerprint
+  ([`pruning.rs`](../../src-tauri/src/gateway/infrastructure/macos/pruning.rs))
+  and launches the agent runtime's executable and entry from it (`configure`
+  in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
+  so the executable path and the first argument move with every such update.
   What stops stranding a conversation after this release is only a change to
   the MCP servers, and with it the gateway's own path.
