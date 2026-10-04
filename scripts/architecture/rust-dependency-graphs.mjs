@@ -106,7 +106,9 @@ export function rustDependencyGraphViolations(
     }
 
     const root = roots[0]
-    const denied = new Set(Object.hasOwn(denylists, selectedName) ? denylists[selectedName] : [])
+    const denied = new Set(
+      Object.hasOwn(denylists, selectedName) ? denylists[selectedName] : [],
+    )
     const parents = new Map([[root.id, undefined]])
     const queue = [root.id]
     for (let index = 0; index < queue.length; index += 1) {

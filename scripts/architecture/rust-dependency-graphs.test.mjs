@@ -82,5 +82,8 @@ test("a package on the selected crate's denylist is rejected, transitively", () 
     rustDependencyGraphViolations(graph, ["portable"], { portable: ["host"] })[0],
     /"portable" reaches denied package "host" through portable@0\.1\.0 --bridge--> bridge@0\.1\.0 --host--> host@0\.1\.0/,
   )
-  assert.deepEqual(rustDependencyGraphViolations(graph, ["bridge"], { portable: ["host"] }), [])
+  assert.deepEqual(
+    rustDependencyGraphViolations(graph, ["bridge"], { portable: ["host"] }),
+    [],
+  )
 })

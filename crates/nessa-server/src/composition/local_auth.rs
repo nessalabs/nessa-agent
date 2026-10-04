@@ -67,6 +67,7 @@ use nessa_protocol::product::generated::{
     AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
     ApprovalModeChoice as WireApprovalModeChoice,
 };
+#[cfg(unix)]
 use nessa_protocol::{
     agents::AgentId,
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},

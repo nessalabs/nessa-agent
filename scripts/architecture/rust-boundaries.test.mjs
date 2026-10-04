@@ -24,7 +24,10 @@ test("domain rejects outward imports, grouped effects and runtime dependencies",
 
 test("domain may use the sync engine's domain values and nothing else of it", () => {
   assert.deepEqual(
-    rustBoundaryViolations("src/domain/value.rs", "use nessa_sync::replication::domain::{Id, Scope};"),
+    rustBoundaryViolations(
+      "src/domain/value.rs",
+      "use nessa_sync::replication::domain::{Id, Scope};",
+    ),
     [],
   )
   for (const source of [
