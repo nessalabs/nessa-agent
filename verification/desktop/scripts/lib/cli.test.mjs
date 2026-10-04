@@ -120,11 +120,13 @@ describe("attempt", () => {
   it("turns a timeout waiting on the product into a failure, not could-not-run", async () => {
     const rep = collect()
     // Its stack goes to stderr (`resultOfThrown`); kept out of the test's output.
-    await stderrOf(() =>
+    const written = await stderrOf(() =>
       attempt(rep, { name: "step" }, async () => {
         throw new Error("Timeout 3000ms exceeded.\nwaiting for locator('.x')")
       }),
     )
+    // Once, by `resultOfThrown` alone.
+    assert.equal(written.split("Error: Timeout 3000ms exceeded.").length - 1, 1)
     assert.equal(rep.results[0].cannotRun, false)
     assert.equal(rep.results[0].error, "Timeout 3000ms exceeded.")
     assert.equal(statusOf(rep.results), 1)
@@ -168,6 +170,13 @@ describe("resultOfThrown", () => {
       resultOfThrown({ name: "s" }, new CannotRun("no server")),
     )
     assert.equal(written, "")
+  })
+
+  it("writes the message of a thrown object that has no stack", async () => {
+    const written = await stderrOf(() =>
+      resultOfThrown({ name: "s" }, { message: "obj" }),
+    )
+    assert.equal(written, "obj\n")
   })
 })
 

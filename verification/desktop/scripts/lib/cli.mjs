@@ -252,7 +252,7 @@ export async function attempt(rep, base, body) {
  */
 export function resultOfThrown(base, error) {
   const cannotRun = error instanceof CannotRun
-  if (!cannotRun) log(error?.stack ?? String(error))
+  if (!cannotRun) log(error?.stack ?? String(error?.message ?? error))
   const message = String(error?.message ?? error).split("\n")[0]
   return { ...base, cannotRun, error: `${cannotRun ? "could not run: " : ""}${message}` }
 }

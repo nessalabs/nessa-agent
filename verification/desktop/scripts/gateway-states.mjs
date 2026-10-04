@@ -307,27 +307,27 @@ It reads the poller's wait from the gateway source in the page, so it needs
             // the last ask — a round short of the poller's wait — nothing asks
             // the host. The page's `performance.now()` is the clock's, which
             // runs in real time until the pause below.
-            let quiet
-            let recovered
+            let asksInQuiet
+            let asksByRecovered
             if (scenario.cadence) {
               const { count, since } = await page.evaluate(() => ({
                 count: window.__fakeHostAsked.load_gateway_endpoint,
                 since: performance.now() - window.__fakeHostAskTimes.at(-1),
               }))
               await page.waitForTimeout(Math.max(0, quietMs - since))
-              quiet = (await measure(page)).asked.load_gateway_endpoint - count
+              asksInQuiet = (await measure(page)).asked.load_gateway_endpoint - count
               // Not `> 0`: a count that is missing fails too.
-              if (quiet !== 0)
+              if (asksInQuiet !== 0)
                 failures.push(
-                  `the window asked the host ${quiet} times within ${quietMs}ms of its last ask, unprompted`,
+                  `the window asked the host ${asksInQuiet} times within ${quietMs}ms of its last ask, unprompted`,
                 )
               // And then it does connect again, unprompted, exactly once (S16).
               await page.waitForTimeout(recoveredMs - quietMs)
-              recovered =
-                (await measure(page)).asked.load_gateway_endpoint - count - quiet
-              if (recovered !== 1)
+              asksByRecovered =
+                (await measure(page)).asked.load_gateway_endpoint - count - asksInQuiet
+              if (asksByRecovered !== 1)
                 failures.push(
-                  `the window asked the host ${recovered} times between ${quietMs}ms and ${recoveredMs}ms after its last ask, not once`,
+                  `the window asked the host ${asksByRecovered} times between ${quietMs}ms and ${recoveredMs}ms after its last ask, not once`,
                 )
             }
             // Try Again reads the index again — the status goes while it reads,
@@ -363,7 +363,10 @@ It reads the poller's wait from the gateway source in the page, so it needs
               failures.push(
                 `the host was never unasked for ${unaskedMs}ms within ${recoveredMs}ms, so the clock was not paused for Try Again`,
               )
-              return { failures, measured: { timing, first, quiet, recovered } }
+              return {
+                failures,
+                measured: { timing, first, asksInQuiet, asksByRecovered },
+              }
             }
             await context.clock.pauseAt(unaskedAt + pauseLeadMs)
             const atPause = await page.evaluate(() => {
@@ -397,7 +400,10 @@ It reads the poller's wait from the gateway source in the page, so it needs
               )
             if (clicked !== null) {
               failures.push(`Try Again could not be clicked: ${clicked}`)
-              return { failures, measured: { timing, first, quiet, recovered, atPause } }
+              return {
+                failures,
+                measured: { timing, first, asksInQuiet, asksByRecovered, atPause },
+              }
             }
             const clickedAt = Date.now()
             // C1 and C2: the clock still paused, an ask after the click is Try
@@ -447,8 +453,8 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 timing,
                 first,
                 again,
-                quiet,
-                recovered,
+                asksInQuiet,
+                asksByRecovered,
                 tryAgain,
               },
             }
