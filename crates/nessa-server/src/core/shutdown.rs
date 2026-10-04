@@ -128,19 +128,20 @@ pub enum NativeShutdownFailure {
     Cleanup(PairingRuntimeError),
 }
 
-/// Where cleanup stood when the report was read: the first stage, in cleanup
-/// order, with an unknown outcome.
+/// The first owner, in cleanup order, whose outcome is still unknown when the
+/// report is read. It does not say whether that owner has not started, is
+/// still pending, or ended without reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownStage {
-    /// A reader or the watch drain has not returned.
+    /// A reader's or the watch drain's outcome is still unknown.
     Drains,
-    /// Every drain returned; conversation cleanup has not.
+    /// Every drain outcome is known; conversation cleanup's is still unknown.
     Conversations,
-    /// Conversation cleanup returned; MCP stop has not.
+    /// Conversation cleanup's outcome is known; MCP stop's is still unknown.
     Servers,
-    /// MCP stop returned; native pairing's drain has not.
+    /// MCP stop's outcome is known; native pairing's drain's is still unknown.
     Native,
-    /// Every cleanup owner returned.
+    /// Every cleanup owner's outcome is known.
     Complete,
 }
 impl Display for ShutdownStage {
@@ -186,7 +187,7 @@ impl ShutdownReport {
     pub fn native(&self) -> &Outcome<NativeShutdownFailure> {
         &self.native
     }
-    /// The first stage, in cleanup order, with an unknown outcome.
+    /// The first owner, in cleanup order, whose outcome is still unknown.
     pub fn stage(&self) -> ShutdownStage {
         if !self.readers.complete() || !self.watches.outcome.is_known() {
             ShutdownStage::Drains
@@ -251,8 +252,9 @@ impl ShutdownReport {
 }
 
 /// One line naming every cleanup owner in cleanup order. An unknown outcome
-/// reads `pending` at the stage reached and `not started` after it; deadline
-/// evidence appears only where it was recorded.
+/// reads `pending` at the stage and `not started` after it; the labels follow
+/// position in that order only. Deadline evidence appears only where it was
+/// recorded.
 impl Display for ShutdownReport {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let stage = self.stage();

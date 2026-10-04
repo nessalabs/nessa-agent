@@ -60,7 +60,7 @@ pub enum RunError {
     Serve(io::Error),
     /// Composed owners did not confirm cleanup on the way down. `Some` is the
     /// shutdown report that did not confirm: every owner's typed outcome, and
-    /// the stage reached when a cleanup owner ended before returning.
+    /// the first owner, in cleanup order, whose outcome is still unknown.
     /// The HTTP server itself finished; this is what shutdown could not prove.
     /// `None` means shutdown never reported at all — unknown, which is its own
     /// fact and not the same as a reported failure.
