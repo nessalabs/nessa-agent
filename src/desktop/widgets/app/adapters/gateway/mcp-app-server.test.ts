@@ -1,17 +1,7 @@
 /**
- * `McpAppServer` over a fake `client.mcpApps`: what the adapter answers for
- * each thing the client resolves or throws on a call, a read, a redemption
- * and a release, and — in the last group — what an app is told through the
- * real bridge over this adapter.
- *
- * The rule for every test here: its name starts with the row(s) it holds, of
- * the state table on #384 or #349's, and where its input is one the real
- * client or gateway cannot produce, its own name says so. Nothing else in
- * this file lists rows or cases.
- *
- * The size and SHA-256 check is the client's own (`packages/nessa-client`,
- * `mcp-apps-api.test.ts`); here a mismatch is what the client throws for it,
- * `integrity`.
+ * `McpAppServer` over a fake `client.mcpApps`, and, in the last group, the
+ * real bridge over it. A test's name begins with its rows (#384's or #349's
+ * state table) and marks an input the real client or gateway does not produce.
  */
 import {
   ConversationErrorCode,
@@ -314,20 +304,22 @@ describe("tools/call", () => {
     },
   )
 
-  it("A11: every other answer is a failure, server-gone and refused kept apart from it (the stray non-error value is one the real client cannot throw)", async () => {
+  it("A11: every other answer is a failure, server-gone and refused kept apart from it (inputs the real client or gateway does not produce included: a fractional remote code, a prototype-key code, a stray string)", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const thrown: unknown[] = [
       // mcp_remote_error without details: an answer that was no MCP answer.
       refusal(ConversationErrorCode.McpRemoteError),
+      // Unreachable: the gateway's remote code is a range-checked integer.
       refusal(ConversationErrorCode.McpRemoteError, { code: 1.5, message: "x" }),
       refusal(ConversationErrorCode.McpTimedOut),
       refusal(ConversationErrorCode.McpResultTooLarge),
       refusal(ConversationErrorCode.AuditUnavailable),
-      // A code this build does not know, and one that names a prototype's key.
+      // A code this build does not know, and one that names a prototype's
+      // key (unreachable: no ConversationErrorCode).
       refusal("mcp_something_new"),
       refusal("constructor"),
-      // No answer at all, and something that is no error of the client's
-      // (unreachable: the client only throws its own errors and TypeError).
+      // No answer at all, and a robustness input outside what the client's
+      // `call()` (`mcp-apps-api.ts`) is written to throw.
       new NessaMcpAppError(conversationId, "r", app, new Error("socket closed")),
       "a string",
     ]
@@ -346,7 +338,7 @@ describe("tools/call", () => {
   // checks that totality over every code. Many are codes the gateway never
   // sends to a given method; for those, the input is unreachable.
   it.each(["callTool", "readResource"] as const)(
-    "A3–A11, R5b: outcomes is total over every ConversationErrorCode on %s, the same for both methods, including codes the gateway never sends to it (gate 11)",
+    "A3–A9, A11, R5b: outcomes is total over every ConversationErrorCode on %s, the same for both methods, including codes the gateway never sends to it (gate 11)",
     async (method) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {})
       const kinds = new Map<string, ServerAnswer["kind"]>()
@@ -508,9 +500,8 @@ describe("resources/read and the ticket", () => {
     }
   })
 
-  // The codes a read can be refused with that R5 and A8 do not already read
-  // (#384's amendment, R5b-1 to R5b-7). Each answers a read as it answers a
-  // call — one `answerFor` — and these codes' words are the same for both.
+  // R5b-2, -3, -5, -6 and -7: each answers a read as it answers a call (one
+  // `answerFor`), and these codes' words are the same for both.
   const remote = { code: -32002, message: "Resource not found" }
   it.each<[string, string, unknown, ServerAnswer]>([
     [
@@ -663,7 +654,7 @@ describe("a read whose mount is released (R6)", () => {
 })
 
 describe("whatever the client throws", () => {
-  it("A11, R4: callTool and readResource never reject, whatever is thrown — values the real client cannot throw (undefined, null, 0, a string, a plain object, a plain Error, a symbol) included", async () => {
+  it("A11, R4: callTool and readResource never reject, whatever is thrown (robustness inputs outside what the client's call() is written to throw)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
     for (const thrown of [undefined, null, 0, "x", {}, new Error("x"), Symbol("x")]) {
       const reject = () => Promise.reject(thrown)
@@ -868,6 +859,7 @@ describe("the release", () => {
 
   it("M5d: a remount while the old mount's release is retried leaves the new mount alone", async () => {
     const remounted = { ...app, instanceId: crypto.randomUUID() }
+    const newMount: AppAddress = { ...address, app: remounted }
     const lost = new NessaConversationControlError(
       conversationId,
       "r",
@@ -879,11 +871,52 @@ describe("the release", () => {
       .mockRejectedValueOnce(lost)
       .mockRejectedValueOnce(lost)
       .mockResolvedValue({ requestId: "r", applied: true })
-    await gatewayAppServer(fakeApps({ releaseApp })).release(address)
+    const apps = fakeApps({ releaseApp })
+    // A clock whose waits run only when the test says, so the new mount
+    // calls and reads while the old mount's release is between tries.
+    const waits: (() => void)[] = []
+    const server = serverOver(
+      apps,
+      (_ms, run) => {
+        waits.push(run)
+        return () => {}
+      },
+      () => "release-1",
+    )
+    const released = server.release(address)
+    for (const tried of [1, 2]) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(waits).toHaveLength(tried)
+      expect(await server.callTool(newMount, "get_weather", {})).toEqual({
+        kind: "ok",
+        result: { content: [{ type: "text", text: "72" }] },
+      })
+      expect((await server.readResource(newMount, uri, live())).kind).toBe("ok")
+      waits[tried - 1]!()
+    }
+    await expect(released).resolves.toBeUndefined()
     expect(releaseApp.mock.calls.map((call) => call[1])).toEqual([app, app, app])
-    expect(
-      releaseApp.mock.calls.some((call) => call[1].instanceId === remounted.instanceId),
-    ).toBe(false)
+    expect(apps.callTool.mock.calls.map((call) => call[1])).toEqual([
+      remounted,
+      remounted,
+    ])
+    expect(apps.readResource.mock.calls.map((call) => call[1])).toEqual([
+      remounted,
+      remounted,
+    ])
+  })
+
+  it("release, applied false: a release the gateway acknowledges as already applied is done, not asked again", async () => {
+    waited = []
+    const releaseApp = vi.fn<McpAppsApi["releaseApp"]>(async () => ({
+      requestId: "release-1",
+      applied: false,
+    }))
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).resolves.toBeUndefined()
+    expect(releaseApp).toHaveBeenCalledTimes(1)
+    expect(waited).toEqual([])
   })
 
   it("M5a: a release the gateway refused outright is not asked again", async () => {

@@ -25,7 +25,8 @@
  *
  * `callTool` and `readResource` settle with an outcome whatever the client
  * throws, so the bridge never mistakes one for a fault of this adapter
- * (`mcp-app-server.test.ts`, "never rejects"). Only `release` rejects, when
+ * (`mcp-app-server.test.ts`, "A11, R4: callTool and readResource never
+ * reject, whatever is thrown"). Only `release` rejects, when
  * the gateway did not take it.
  */
 import {
