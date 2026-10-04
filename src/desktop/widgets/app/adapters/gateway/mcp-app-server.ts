@@ -285,12 +285,14 @@ export function gatewayAppServer(
         // Used, expired, released, not the bytes described, or unreachable:
         // the app is not loaded (R4). The error never holds the ticket.
         // `aborted` is not logged: the client answers it only for the signal
-        // it was given, the mount's, so it is the mount's own end; its own
-        // deadline is `timeout` (`mcp-apps-api.test.ts`, "reports the
-        // caller's own abort as aborted…" and "gives up on a fetch that never
-        // answers…"). The code is
-        // taken as the client gives it, not checked against the signal: an
-        // `aborted` while the mount is live is a failure, unlogged (R8).
+        // it was given, the mount's, so it is the mount's own end. Its own
+        // deadline is `timeout`, and a transport's own AbortError is
+        // `unreachable` (`mcp-apps-api.test.ts`: "reports the caller's own
+        // abort as aborted…", "gives up on a fetch that never answers…" and
+        // "reports a transport's own AbortError, the caller's signal still
+        // live, as unreachable…"). The code is taken as the client gives it,
+        // not checked against the signal: an `aborted` while the mount is
+        // live — which that client cannot answer — is a failure, unlogged (R8).
         if (!(error instanceof NessaMcpResourceError && error.code === "aborted"))
           console.error("An MCP App's resource was not fetched", error)
         return failed
