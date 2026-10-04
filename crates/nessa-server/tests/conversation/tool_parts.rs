@@ -13,6 +13,7 @@ use super::projection::{bound_view, Projection};
 use super::projection_tests::{committed_tool_view, completed_snapshot, event, projection};
 use super::ConversationView;
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
+use nessa_sdk::application::agent_execution::sessions::SessionSnapshot;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageChunk};
 use nessa_sdk::domain::agent_execution::tools::{
     ToolCallId, ToolCallUpdate, ToolContent, ToolStatus,
@@ -261,4 +262,73 @@ fn a_call_past_the_turns_part_bound_gets_no_part() {
         .iter()
         .any(|tool| tool.tool_id == "late" && tool.status == "completed"));
     assert!(shown.truncated);
+}
+
+/// A turn's calls in `execution`, each a running update then a completion.
+fn calls_in(execution: &str, calls: &[&str]) -> Vec<ExecutionEvent> {
+    let execution = ExecutionId::new(execution).unwrap();
+    calls
+        .iter()
+        .flat_map(|call| {
+            [Some(ToolStatus::Running), Some(ToolStatus::Completed)].map(|s| (call, s))
+        })
+        .map(|(call, status)| {
+            ExecutionEvent::new(
+                execution.clone(),
+                ExecutionUpdate::Tool(ToolCallUpdate::new(
+                    ToolCallId::new(*call).unwrap(),
+                    None,
+                    None,
+                    status,
+                    None,
+                    None,
+                )),
+            )
+        })
+        .collect()
+}
+
+fn restored(snapshot: &SessionSnapshot) -> ConversationView {
+    let capabilities = projection().read().capabilities;
+    bound_view(Projection::new("conversation".into(), capabilities, Some(snapshot)).read())
+}
+
+/// Row: a record replayed onto its turn starts the turn's parts again, so
+/// its calls are first seen again and each gets its part back. The other
+/// way: replayed once more, still one part per call.
+#[test]
+fn a_replayed_record_gives_its_calls_their_parts_again() {
+    let mut snapshot = completed_snapshot("execution", calls_in("execution", &["call"]));
+    let replay = snapshot.invocations[0].clone();
+    snapshot.invocations.push(replay.clone());
+    snapshot.invocations.push(replay);
+    let shown = restored(&snapshot);
+    assert_eq!(shown.messages.len(), 1);
+    assert_eq!(tool_parts(&shown, 0), vec![("call".into(), 0)]);
+}
+
+/// Row: a turn whose message is let go takes its calls with it, so a later
+/// update in that execution starts a new message where the call is first
+/// seen and gets its part. Reached here by events naming another execution
+/// than their record's, the one way a message is let go while events for it
+/// can still follow.
+#[test]
+fn a_call_in_a_turn_let_go_gets_a_part_in_its_new_message() {
+    let mut snapshot = completed_snapshot("turn-0", calls_in("turn-0", &["call"]));
+    for turn in 1..24 {
+        let mut record = snapshot.invocations[0].clone();
+        record.request.execution_id = ExecutionId::new(format!("turn-{turn}")).unwrap();
+        record.events = Vec::new();
+        snapshot.invocations.push(record);
+    }
+    let last = snapshot.invocations.last_mut().unwrap();
+    last.events = calls_in("extra", &["other"]);
+    last.events.extend(calls_in("turn-0", &["call"]));
+    let shown = restored(&snapshot);
+    let turn = shown
+        .messages
+        .iter()
+        .position(|message| message.execution_id == "turn-0")
+        .unwrap();
+    assert_eq!(tool_parts(&shown, turn), vec![("call".into(), 0)]);
 }

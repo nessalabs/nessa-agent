@@ -292,8 +292,9 @@ test("an agent not named, or with no tool to call, exits 2 saying how to run it"
 /**
  * A stand-in that answers every request with `{}`, keeps running after its
  * input closes (as `server.mjs` does not), and writes its pid: what is
- * stopped is then the agent's doing. Returns its `session/new` entry and
- * `pid()`; it is killed after the test whatever happened.
+ * stopped is then the agent's doing. Returns its `session/new` entry,
+ * `pid()`, and `termed()` (whether it was sent SIGTERM, with `ignoresTerm`);
+ * it is killed after the test whatever happened.
  */
 function lingering(
   t,
@@ -303,6 +304,7 @@ function lingering(
     exits = () => false,
     delayMs = 0,
     deafAfterInitialize = false,
+    ignoresTerm = false,
     name = "lingering",
   } = {},
 ) {
@@ -310,8 +312,11 @@ function lingering(
   // `answers(method)`: whether it answers; `refuses(method)`: with an error;
   // `exits(method)`: by exiting instead; `delayMs`: after how long;
   // `deafAfterInitialize`: it stops reading its input once it has answered
-  // initialize, but keeps running.
-  const script = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+  // initialize, but keeps running; `ignoresTerm`: SIGTERM does not stop it,
+  // and writes `termed` beside the pid file.
+  const termedFile = join(dirname(pidFile), "termed")
+  const script = `if (${ignoresTerm}) process.on("SIGTERM", () => require("node:fs").writeFileSync(${JSON.stringify(termedFile)}, ""))
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line)
   if (m.id === undefined || !(${answers.toString()})(m.method)) return
@@ -327,10 +332,11 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 })
 setInterval(() => {}, 1000)`
   const pid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null)
+  const termed = () => existsSync(termedFile)
   t.after(() => {
     if (pid() !== null && alive(pid())) process.kill(pid(), "SIGKILL")
   })
-  return { server: { ...mcptest, name, args: ["-e", script] }, pid }
+  return { server: { ...mcptest, name, args: ["-e", script] }, pid, termed }
 }
 
 /** Waits up to 5 s for process `pid` to have gone; whether it has. */
@@ -570,6 +576,62 @@ test("an agent whose output fails stops its stand-ins and exits 0", async (t) =>
   assert.equal(await exited(agent.child, 5000), true)
   assert.equal(agent.child.exitCode, 0)
   assert.equal(await gone(stand.pid()), true, "the stand-in outlived its agent")
+})
+
+/** The design's 2 s a stopped stand-in has before it is killed (#418; the agent's `STOP_GRACE_MS`). */
+const STOP_GRACE_MS = 2000
+
+for (const [trigger, close] of [
+  ["input closes", (agent) => agent.child.stdin.end()],
+  [
+    "output fails",
+    (agent) => {
+      agent.child.stdout.destroy()
+      agent.request("initialize", { protocolVersion: 1 }).catch(() => {})
+    },
+  ],
+])
+  test(`an agent whose ${trigger} kills a stand-in that ignores SIGTERM, and exits 0 once it is gone`, async (t) => {
+    const stubborn = lingering(t, { ignoresTerm: true })
+    const agent = start("codex", codexEnv)
+    const opened = await agent.request("session/new", {
+      cwd: here,
+      mcpServers: [stubborn.server],
+    })
+    assert.ok(opened.result.sessionId)
+    const stopped = Date.now()
+    close(agent)
+    assert.equal(await exited(agent.child, STOP_GRACE_MS + 3000), true)
+    // At once, not polled: the agent waited for the stand-in before exiting.
+    assert.equal(alive(stubborn.pid()), false, "the stand-in outlived its agent")
+    assert.equal(agent.child.exitCode, 0)
+    // Asked first: the SIGKILL came only after a SIGTERM and its grace.
+    assert.equal(stubborn.termed(), true, "killed without a SIGTERM")
+    assert.ok(Date.now() - stopped >= STOP_GRACE_MS - 100, "killed before its grace")
+  })
+
+test("a session/new during the stop's grace starts no stand-in", async (t) => {
+  const stubborn = lingering(t, { ignoresTerm: true })
+  const late = lingering(t, { name: "late" })
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [stubborn.server],
+  })
+  assert.ok(opened.result.sessionId)
+  // The output fails and the input stays open: the stop holds its grace for
+  // the stand-in that ignores SIGTERM, and the gateway can still ask.
+  agent.child.stdout.destroy()
+  agent.request("initialize", { protocolVersion: 1 }).catch(() => {})
+  // Its SIGTERM is the stop's outward sign: only then is the late one asked for.
+  const end = Date.now() + 5000
+  while (!stubborn.termed() && Date.now() < end) await sleep(50)
+  assert.equal(stubborn.termed(), true, "the stop never began")
+  agent.request("session/new", { cwd: here, mcpServers: [late.server] }).catch(() => {})
+  assert.equal(await exited(agent.child, STOP_GRACE_MS + 3000), true)
+  assert.equal(agent.child.exitCode, 0)
+  assert.equal(alive(stubborn.pid()), false, "the stand-in outlived its agent")
+  assert.equal(late.pid(), null, "a stand-in started after the stop began")
 })
 
 test("a second prompt while one is in flight is refused", async (t) => {

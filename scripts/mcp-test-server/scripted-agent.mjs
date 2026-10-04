@@ -17,7 +17,9 @@
  * It keeps every stand-in it started for the session: the gateway's own
  * connection to the server, which the view's `resourceUri` and the app's
  * calls use, lives as long as the stand-in does. A stand-in that does not
- * answer within `MCP_DEADLINE_MS` fails what was waiting on it. Its design
+ * answer within `MCP_DEADLINE_MS` fails what was waiting on it. When its input
+ * closes or its output fails, it stops every stand-in and waits for each to
+ * close (`stop`) before it exits. Its design
  * table is on #418. It reads no credential; the check starts the gateway
  * signed out (`startLocalGateway`'s `signedOut`).
  *
@@ -55,20 +57,50 @@ const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
 const failure = (id, code, message) => send({ id, error: { code, message } })
 
-/** Every stand-in started, connected or still connecting: stopped when the agent's input closes. */
-const standIns = new Set()
+/** How long a stopped stand-in has to close before it is killed. */
+const STOP_GRACE_MS = 2_000
 
-/** Stops every stand-in, and the agent. */
-function stop() {
-  for (const child of standIns) child.kill("SIGTERM")
+/**
+ * Every stand-in started, connected or still connecting, by its process, with
+ * a promise of its `close` taken at spawn (so one that has already closed has
+ * nothing left to wait for): stopped when the agent's input closes or its
+ * output fails.
+ */
+const standIns = new Map()
+
+/** Set once a stop begins: the agent stops once, and starts no stand-in after. */
+let stopping = false
+/**
+ * Stops every stand-in and waits for each to close, killing one still open
+ * after `STOP_GRACE_MS`; then exits 0, its stand-ins reaped (the tests of
+ * a stand-in that ignores SIGTERM). A second stop while one is in progress
+ * does nothing more, and a stand-in asked for meanwhile is not started
+ * (`mcpClient`; the test of a session/new during the grace).
+ */
+async function stop() {
+  if (stopping) return
+  stopping = true
+  await Promise.all(
+    [...standIns].map(async ([child, closed]) => {
+      child.kill("SIGTERM")
+      const timer = setTimeout(() => child.kill("SIGKILL"), STOP_GRACE_MS)
+      await closed
+      clearTimeout(timer)
+    }),
+  )
   process.exit(0)
 }
 
 // A gateway that stops reading the agent leaves it nothing to do.
 process.stdout.on("error", stop)
 
-/** One MCP server over a stand-in's stdio: `request(method, params)` resolves with its result. */
+/**
+ * One MCP server over a stand-in's stdio: `request(method, params)` resolves
+ * with its result. Throws, starting nothing, once a stop has begun: the stop
+ * has already chosen the stand-ins it waits for.
+ */
 function mcpClient({ command, args, env }) {
+  if (stopping) throw new Error("the agent is stopping")
   const child = spawn(command, args, {
     env: {
       ...process.env,
@@ -76,7 +108,7 @@ function mcpClient({ command, args, env }) {
     },
     stdio: ["pipe", "pipe", "inherit"],
   })
-  standIns.add(child)
+  standIns.set(child, new Promise((closed) => child.once("close", closed)))
   const waiting = new Map()
   let next = 1
   let ended = null
