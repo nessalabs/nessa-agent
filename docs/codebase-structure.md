@@ -1465,6 +1465,14 @@ remains their owner. Generated product DTOs, the product socket and read-only
 sync application ports consume this publication; it contains no routing, IO or
 runtime state. Generic frame protocol types remain under `protocol/`.
 
+### Record read benchmark
+
+`crates/nessa-server/examples/record_read_bench.rs` times SDK saves and cold
+and warm reads through `NessaRecordReadSource` after a storage restart, printing
+one JSON report. It is a measurement tool, not run in CI; the
+[steps per admitted read](design/bounded-terminal-discovery.md#steps-per-admitted-read)
+cite its numbers.
+
 ### Retained read-only example
 
 `crates/nessa-server/examples/read_only_sync.rs` starts the standalone example

@@ -63,6 +63,43 @@ discovery, not their sum. A ready `bounded_page` call decodes at most four runti
 record caps of accounted bytes (two discovery and two page).
 Stream replacement and pruning remain typed refusals from the event runtime.
 
+## Steps per admitted read
+
+Discovery advances only when someone calls. Each SDK call is one bounded step,
+so a host that answers `source_preparing` after a single call makes its client
+pay one full round trip per sixteen frames. Measured before this change (Apple
+M5, release, `crates/nessa-server/examples/record_read_bench.rs`): a restarted
+2,000-message history of 1,042 records took 66 reads through the gateway's
+record read adapter but only 29 ms of gateway work in total, about 0.44 ms per
+read; the real-binary harness spent ~12.8 s on the same 66 reads because each
+one was a client round trip and retry interval.
+
+The gateway's record read adapter therefore makes up to
+`DISCOVERY_STEPS_PER_READ` (128) SDK calls on the one source it opened for an
+admitted read, and answers `source_preparing` only when the last of them is
+still `Preparing`. The SDK step, its bounds and its single validation owner do
+not change: every call checks out the shared cache owner, reads current
+physical bounds, validates at most one step and returns progress. The adapter
+owns only how many steps one admitted read may spend. One read therefore
+validates at most 128 x 16 = 2,048 returned frames and at most 128 MiB of
+returned accounted bytes (256 MiB decoded, counting each step's lookahead),
+with no more than one step's records held at a time. Wall time is not bounded,
+as for a single step. A 200-message history with 200 kB answers (702 frames,
+about 20 MB on disk) validated in 84-215 ms on the same machine at load
+averages 5-6, roughly 100-250 MB/s, so a read that spends all 128 steps on
+full frames is of the order of 0.5-1.3 s against the ten-second product read
+deadline.
+A history of realistic two-kilobyte messages fits about 2,000 messages in one
+read.
+
+| Row | State and ordering | Required result and regression boundary |
+| --- | --- | --- |
+| S1 | Cold (restarted or evicted) stream whose captured tail needs at most 128 steps; one admitted head read | The read answers the validated committed head with no `source_preparing`. `cold_history_within_read_steps_answers_on_the_first_read` writes 101 real saves (13 steps), restarts storage and reads once; `authenticated_product_processes_resume_download_after_lost_page_and_both_restarts` discovers its cold multi-frame history on the first product request in real processes, after the first gateway start and after a restart. |
+| S2 | Cold stream needing more steps than one read may spend; the client retries | The read makes exactly its step count of SDK calls and answers `source_preparing` with no head. The next read resumes the SDK's retained offset; the number of `source_preparing` answers is the step count needed divided by the steps per read, so no read replays earlier validation. `history_beyond_read_steps_prepares_then_resumes_without_replay` lowers the adapter's step count to two. |
+| S3 | A call refuses partway through the steps: a non-completion page target, sticky corruption, reset or pruning | The first refusal ends the read with its existing typed mapping, and the SDK's sticky failure (D5) answers the next read. `cold_page_of_a_non_completion_target_refuses_in_one_read` asks a cold page for a save unit's offset and gets `invalid_request` in that one read, where it previously answered `source_preparing` first. |
+| S4 | Another source holds the stream's cache owner, or all sixteen cache entries are occupied | Each SDK call returns `Preparing` without validation work; the read spends at most its step count and answers `source_preparing`. The count is the loop's only exit besides Ready or a refusal, which S2 observes; a deterministic competing-owner probe through the adapter is unverified, the SDK side is `occupied_stream_and_full_active_cache_refuse_without_replacement_work`. |
+| S5 | The product deadline passes or the caller disconnects mid-read; shutdown starts | The tracked worker keeps its permit through its remaining calls and source join, as R17/R19 require; shutdown waits for at most one read's steps per worker. Existing worker-ownership tests cover the join; the longer bounded work inside it adds no new owner. |
+
 ## Shared discovery correction orderings
 
 PR401's correction has three root-verified original-production failures; the

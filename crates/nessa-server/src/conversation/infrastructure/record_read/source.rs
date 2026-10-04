@@ -24,6 +24,7 @@ pub struct NessaRecordReadSource {
     origin: Id,
     runtime: Handle,
     workers: Arc<ReadWorkers>,
+    discovery_steps: usize,
     #[cfg(test)]
     before_identity: Option<Arc<TestReadGate>>,
 }
@@ -60,6 +61,7 @@ impl NessaRecordReadSource {
             origin,
             runtime,
             workers: ReadWorkers::new(),
+            discovery_steps: operation::DISCOVERY_STEPS_PER_READ,
             #[cfg(test)]
             before_identity: None,
         }
@@ -85,6 +87,7 @@ impl RecordReadSource for NessaRecordReadSource {
             let storage = self.storage.clone();
             let runtime = self.runtime.clone();
             let origin = self.origin.clone();
+            let steps = self.discovery_steps;
             #[cfg(test)]
             let before_identity = self.before_identity.clone();
             self.workers
@@ -106,7 +109,7 @@ impl RecordReadSource for NessaRecordReadSource {
                         }
                     }
                     let result = operation::execute(
-                        storage, runtime, session, identity, admitted, observed, operation,
+                        storage, runtime, session, identity, admitted, observed, operation, steps,
                     );
                     result.map(|value| RecordReadResponse { value, lease })
                 })
