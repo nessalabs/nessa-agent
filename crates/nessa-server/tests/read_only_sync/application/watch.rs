@@ -429,3 +429,43 @@ fn preparing_beyond_the_attempt_bound_ends_unavailable() {
     );
     assert!(!script.calls.contains(&Call::Wait));
 }
+
+/// Discovery attempts answering these failures in order, and the attempts
+/// `discover` made before it returned the one it reports.
+fn discovery(answers: &[Option<GatewayError>]) -> (Option<GatewayError>, u64) {
+    let mut answers = answers.iter().copied();
+    let mut made = 0_u64;
+    let reported = discover(|| {
+        made += 1;
+        Ok::<_, ()>(GatewayAttempt {
+            result: Some(()),
+            outcome: super::super::GatewayOutcome {
+                operation: made,
+                failure: answers.next().unwrap(),
+            },
+        })
+    })
+    .unwrap();
+    assert_eq!(reported.outcome.operation, made);
+    (reported.outcome.failure, made)
+}
+
+/// Row W17 before registration: a discovery answered `source_preparing` is
+/// asked again at once, and the attempt that succeeds is the one reported, so
+/// the watch goes on to register instead of refusing.
+#[test]
+fn preparing_discovery_is_retried_until_it_succeeds() {
+    let preparing = Some(GatewayError::Record(RecordReadErrorCode::SourcePreparing));
+    assert_eq!(discovery(&[preparing, preparing, None]), (None, 3));
+}
+
+/// A discovery still preparing after `PREPARING_ATTEMPTS` attempts is reported
+/// with that cause (row W16's refusal); any other failure is reported at once.
+#[test]
+fn discovery_retries_only_preparing_and_only_up_to_the_bound() {
+    let preparing = Some(GatewayError::Record(RecordReadErrorCode::SourcePreparing));
+    let answers = vec![preparing; PREPARING_ATTEMPTS + 1];
+    assert_eq!(discovery(&answers), (preparing, PREPARING_ATTEMPTS as u64));
+    let refused = Some(GatewayError::TimedOut);
+    assert_eq!(discovery(&[refused, None]), (refused, 1));
+}
