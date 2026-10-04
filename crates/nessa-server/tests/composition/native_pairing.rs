@@ -2,10 +2,7 @@
 //! and private state (design rows S4, S10, S12 in
 //! `docs/design/auth/device-pairing.md`, "Owner routes and mounting").
 use super::*;
-use crate::agents::{
-    application::{AgentProbe, AgentProbeEvidence},
-    domain::AgentId,
-};
+use crate::agents::application::{AgentProbe, AgentProbeEvidence};
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
@@ -25,6 +22,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
+use nessa_protocol::agents::AgentId;
 use std::{io::Read, time::Duration};
 use tempfile::TempDir;
 

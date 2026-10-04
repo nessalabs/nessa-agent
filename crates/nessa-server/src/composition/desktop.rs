@@ -7,7 +7,8 @@ use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
-use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
+use crate::{core::RunError, desktop_runtime::domain::RunningRuntime};
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

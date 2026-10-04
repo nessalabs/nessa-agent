@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::agents::application::{
     AgentCredentialSource, AgentProbe, AgentProbeEvidence, ProbeFailure,
 };
-use crate::agents::domain::AgentId;
 use crate::agents::infrastructure::{claude, codex, credentials};
+use nessa_protocol::agents::AgentId;
 
 /// What this server would have to find on this machine to run an agent.
 ///

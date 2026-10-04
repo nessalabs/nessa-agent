@@ -1,10 +1,10 @@
 //! Bounded SQLite text selection before UTF-8 conversion and owned acquisition.
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationModelId, ConversationPreview,
-    ConversationTitle,
-};
+use crate::conversation::domain::Conversation;
 use nessa_auth::domain::MAX_IDENTIFIER_BYTES;
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationModelId, ConversationPreview, ConversationTitle,
+};
 use nessa_sync::replication::domain::MAX_ID_BYTES;
 
 /// SQL names are fixed by this adapter, never supplied by a caller.

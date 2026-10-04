@@ -5,7 +5,8 @@
 //! Arrows mean construction. The native snapshot keeps its original identity;
 //! Node's authority admits use of that dependency before spawning the adapter.
 use super::agent::AgentRuntime;
-use crate::{agents::domain::AgentId, core::RunError};
+use crate::core::RunError;
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::{
     ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseGuard, ExecutableUseSnapshot,
 };

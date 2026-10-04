@@ -1,13 +1,11 @@
 //! Stable target selection reads actual retained scopes in one SQLite snapshot.
 use super::{catalogue_rows, rows, ReadOnlyCache};
-use crate::{
-    conversation::domain::ConversationId,
-    read_only_sync::application::{
-        offline::{SavedReads, SavedTranscript},
-        CacheError, CachedCatalogueEntry, CachedCataloguePage, CachedProgress,
-    },
+use crate::read_only_sync::application::{
+    offline::{SavedReads, SavedTranscript},
+    CacheError, CachedCatalogueEntry, CachedCataloguePage, CachedProgress,
 };
 use nessa_local_database::rusqlite::{params, TransactionBehavior};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::{
     catalogue::{CatalogueProgress, EntryKey, MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES},
     domain::Id,

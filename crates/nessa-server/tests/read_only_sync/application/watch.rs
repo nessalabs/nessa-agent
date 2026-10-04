@@ -1,6 +1,6 @@
 //! The watch loop against scripted substitutes, one test per row W3–W14 and W17.
 use super::*;
-use crate::product_contract::generated::{ChangeWatchErrorCode, RecordReadErrorCode};
+use nessa_protocol::product_contract::generated::{ChangeWatchErrorCode, RecordReadErrorCode};
 use std::collections::VecDeque;
 
 #[derive(Debug, PartialEq, Eq)]

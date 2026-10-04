@@ -19,14 +19,16 @@ use super::super::mcp_apps::{
     McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
     TicketRefusal,
 };
-use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
 use super::super::session_key::conversation_session;
-use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
-use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
+};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
+use nessa_protocol::conversation::view::{
+    ConversationPermission, ConversationTranscriptState, ConversationView,
 };
 use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
@@ -589,7 +591,7 @@ impl ConversationService {
             .mcp_apps
             .clone()
             .ok_or(ConversationError::McpApp(McpAppError::AppUnknown))?;
-        let facts = self.app_facts(&live, app, &conversation_session(id)).await;
+        let facts = self.app_facts(&live, app, id).await;
         let opening = Opening {
             apps: live.app_reviews.clone(),
             epoch: live.app_epoch,
@@ -603,7 +605,7 @@ impl ConversationService {
         &self,
         live: &LiveConversation,
         app: &McpAppRef,
-        session: &SessionId,
+        conversation: &ConversationId,
     ) -> Option<AppFacts> {
         let projection = live.projection.lock().await;
         let tool =
@@ -614,7 +616,11 @@ impl ConversationService {
         let call = McpTool::new(mcp.server.as_str(), mcp.tool.as_str()).ok()?;
         Some(AppFacts {
             server: mcp.server.clone(),
-            has_ui: self.inner.tool_uis.resource_uri(session, &call).is_some(),
+            has_ui: self
+                .inner
+                .tool_uis
+                .resource_uri(conversation, &call)
+                .is_some(),
         })
     }
 }

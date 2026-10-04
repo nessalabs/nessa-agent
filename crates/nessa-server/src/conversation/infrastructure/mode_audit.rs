@@ -148,8 +148,8 @@ fn agrees(destination: &Path, expected: &Value) -> Result<bool, ConversationErro
 mod tests {
     use super::*;
     use crate::conversation::application::ConversationModeRequestState;
-    use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
     use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     struct TestClock(AtomicU64);

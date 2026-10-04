@@ -4,11 +4,11 @@ use super::{
     output::{catalogue_progress, record_progress},
     CommandError,
 };
-use crate::conversation::application::ConversationTranscriptState;
 use crate::read_only_sync::application::{
     driver::{CatalogueRun, RecordDriverCause, RecordDriverError, RecordRun},
     CacheError, CachedProgress, GatewayAttempt,
 };
+use nessa_protocol::conversation::view::ConversationTranscriptState;
 use nessa_sdk::application::agent_execution::sessions::CommittedStatus;
 use nessa_sync::replication::catalogue::{CatalogueError, CatalogueProgress};
 use serde_json::{json, Value};

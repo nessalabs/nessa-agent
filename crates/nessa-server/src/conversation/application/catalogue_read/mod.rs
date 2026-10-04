@@ -11,5 +11,3 @@ pub use read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
-
-pub(crate) use read::validate_catalogue_selector;

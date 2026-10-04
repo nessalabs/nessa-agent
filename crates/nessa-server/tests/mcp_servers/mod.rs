@@ -18,7 +18,7 @@ use super::infrastructure::{
     read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, OsTokens,
     Refusal, Relay, RelayFailure, TokenSource, HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
-use crate::conversation::application::McpToolUis;
+use nessa_protocol::conversation::{domain::ConversationId, tool_uis::McpToolUis};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::infrastructure::{
@@ -601,8 +601,9 @@ fn an_opens_grant_holds_what_the_stand_ins_under_its_token_forward() {
 async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     let server = fixture();
     let (relay_side, mcp, grants) = relay_for(vec![server.clone()]);
-    let (_grant, token) = granted(&grants, "conversation");
-    let conversation = SessionId::new("conversation").unwrap();
+    const CONVERSATION: &str = "00000000-0000-4000-8000-0000000000aa";
+    let (_grant, token) = granted(&grants, CONVERSATION);
+    let conversation = ConversationId::new(CONVERSATION).unwrap();
     let (stand_in, gateway) = tokio::io::duplex(1024 * 1024);
     tokio::spawn(async move { relay_side.serve(gateway).await });
     let (mut harness_in, input) = tokio::io::duplex(64 * 1024);
@@ -660,7 +661,10 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
         "ui://fixture/chart.html"
     );
     assert_eq!(
-        uis.resource_uri(&SessionId::new("another").unwrap(), &chart),
+        uis.resource_uri(
+            &ConversationId::new("00000000-0000-4000-8000-0000000000bb").unwrap(),
+            &chart
+        ),
         None
     );
     assert_eq!(

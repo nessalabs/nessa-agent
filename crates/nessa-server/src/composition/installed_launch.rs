@@ -22,7 +22,7 @@ use crate::agent_install::application::{
 };
 use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform};
 use crate::agent_install::infrastructure::{releases_for, PinFileError};
-use crate::agents::domain::AgentId;
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::{
     ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
     ExecutableUseSnapshot,

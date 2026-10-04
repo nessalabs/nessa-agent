@@ -12,15 +12,20 @@
 //! response never counts them as unexpected events (committed change watches,
 //! rows W6, W10, W15).
 use super::deadline_stream::{io_cause, DeadlineStream};
-use crate::app::ports::Clock;
-use crate::device_pairing::infrastructure::{
+use crate::read_only_sync::application::{
+    watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
+    GatewayStream,
+};
+use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
+use nessa_protocol::clock::Clock;
+use nessa_protocol::pairing::{
     encode_frame,
     wire::{
         decode_reply, encode_request as encode_envelope, NativePairingReply, NativePairingRequest,
     },
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
-use crate::product::generated::{
+use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
     wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
     ConversationChanged, ConversationWatchEnded, ConversationWatchRecordsParams,
@@ -29,17 +34,12 @@ use crate::product::generated::{
     MAX_CHANGE_WATCH_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD,
     PRODUCT_VERSION,
 };
-use crate::product::passive_read::wire::{encode_request, ReadEncodeError};
-use crate::product::wire::{authentication_close_reason, supports_product_version};
-use crate::product_contract::generated::{
+use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
+use nessa_protocol::product::passive_read::{encode_request, ReadEncodeError};
+use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, RecordReadErrorCode,
 };
-use crate::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
-use crate::read_only_sync::application::{
-    watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
-    GatewayStream,
-};
-use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
+use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;

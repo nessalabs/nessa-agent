@@ -2,12 +2,12 @@
 //! socket wakeup. A socket keeps one waker per direction; here a small duplex
 //! pipe, which behaves the same way, stands in for the socket, with a relay to
 //! the real TLS peer whose forwarding toward the peer is held by a gate.
-use super::super::connection::{wake::WakeEndpoint, DeadlineStream};
-use super::super::frames::{encode_frame, FrameReader};
 use super::*;
 use crate::app::dependencies::RuntimeDependencies;
 use futures_util::{SinkExt, StreamExt};
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, OsEntropy};
+use nessa_protocol::pairing::socket::{DeadlineStream, WakeEndpoint};
+use nessa_protocol::pairing::{encode_frame, FrameReader};
 use std::task::{Context, Poll};
 use std::{
     io::{Read, Write},

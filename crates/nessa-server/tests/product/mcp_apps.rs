@@ -1,6 +1,7 @@
 //! What an MCP App's wire commands take from the caller, and what a server's
 //! error becomes on the wire (#348).
 use super::{app, remote_message, McpAppReference};
+use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 
 fn reference(execution: &str, tool: &str, instance: &str) -> McpAppReference {
     McpAppReference {
@@ -89,7 +90,7 @@ fn the_largest_resource_the_gateway_reads_is_answered_within_one_message() {
     // Its URI, CSP and domain at the bound the conversation service holds
     // them to, every other field at its largest: one socket message.
     use crate::conversation::application::MAX_RESOURCE_META_BYTES;
-    use crate::product::generated::{McpReadResourceResult, McpUiCsp, McpUiPermissions};
+    use nessa_protocol::product::generated::{McpReadResourceResult, McpUiCsp, McpUiPermissions};
     let uri = format!("ui://{}", "u".repeat(2000));
     let domain = "d".repeat(512);
     let fixed = serde_json::to_vec(&serde_json::json!({
@@ -133,9 +134,5 @@ fn the_largest_resource_the_gateway_reads_is_answered_within_one_message() {
     let request_id = "\u{1}".repeat(256);
     let message = super::super::socket::success(&request_id, &result);
     let text = message.to_wire_text().unwrap();
-    assert!(
-        text.len() <= crate::protocol::MAX_PAYLOAD_BYTES as usize,
-        "{}",
-        text.len()
-    );
+    assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{}", text.len());
 }

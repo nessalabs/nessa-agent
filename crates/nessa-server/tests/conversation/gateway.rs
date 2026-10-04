@@ -3,8 +3,8 @@ mod gateway {
     use super::super::conversation_support;
     use super::*;
     use crate::conversation::application::ConversationLimits;
-    use crate::conversation::domain::ConversationId;
-    use crate::protocol::ResponseFrame;
+    use nessa_protocol::conversation::domain::ConversationId;
+    use nessa_protocol::protocol::ResponseFrame;
     use std::collections::HashMap;
     use tokio::sync::oneshot;
 

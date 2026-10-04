@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! infrastructure (listener, connection, client) --> application --> Auth owners
-//! infrastructure::enrollment_channel           --> wire + Auth TLS transport
+//! infrastructure (connection, client) --> nessa_protocol::pairing (channel, wire, socket)
 //! infrastructure::receivers --> conversation receiver authority
 //! ```
 //! Arrows are compile-time dependencies. Auth is the only enrollment authority;

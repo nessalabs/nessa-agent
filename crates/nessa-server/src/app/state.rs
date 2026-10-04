@@ -1,6 +1,6 @@
 use crate::app::dependencies::RuntimeDependencies;
-use crate::app::ports::Clock;
 use crate::env::{Environment, Stage};
+use nessa_protocol::clock::Clock;
 use std::sync::Arc;
 
 /// Shared runtime state wired once at composition root and passed to entrypoints.

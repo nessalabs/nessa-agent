@@ -4,12 +4,15 @@ use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport, OsEntropy},
     domain::pairing::AttemptId,
 };
+use nessa_protocol::pairing::{
+    wire::{decode_reply, encode_request, NativePairingReply, NativePairingRequest},
+    EnrollmentChannel,
+};
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
-        wire::{decode_reply, encode_request, NativePairingReply, NativePairingRequest},
-        Accepted, EnrollmentAccept, EnrollmentChannel, NativeConnectionFailure,
-        NativeEnrollmentConnections, NativeEnrollmentListener,
+        Accepted, EnrollmentAccept, NativeConnectionFailure, NativeEnrollmentConnections,
+        NativeEnrollmentListener,
     },
 };
 use std::{

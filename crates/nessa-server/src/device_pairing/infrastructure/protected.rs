@@ -11,14 +11,14 @@
 //! polled here, and TLS reads and writes in-memory ciphertext. This type owns
 //! framing at the published directional bounds; it grants nothing. Who the peer is, and what it may read, is decided by the
 //! product session's authentication and admission (design rows PR1, PR3).
-use super::connection::DeadlineStream;
-use super::frames::{encode_frame, FrameReader};
-use crate::product::generated::MAX_RECORD_RESPONSE_BYTES;
-use crate::protocol::MAX_PAYLOAD_BYTES;
 use futures_util::{task::noop_waker_ref, Sink, Stream};
 use nessa_auth::{
     adapters::pairing::NativeTransport,
     application::{pairing::DeviceConnectionProof, ports::AccessError},
+};
+use nessa_protocol::pairing::socket::DeadlineStream;
+use nessa_protocol::pairing::{
+    encode_frame, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
 use std::{
     future::Future,
@@ -31,10 +31,6 @@ use tokio::{
     net::TcpStream,
 };
 
-/// Largest product frame the gateway reads: the protocol's request bound.
-pub const MAX_PROTECTED_REQUEST_BYTES: usize = MAX_PAYLOAD_BYTES as usize;
-/// Largest product frame the gateway writes: the generated response bound.
-pub const MAX_PROTECTED_RESPONSE_BYTES: usize = MAX_RECORD_RESPONSE_BYTES;
 /// Socket reads one poll performs before yielding, so a peer that keeps the
 /// socket readable cannot hold the task.
 const READS_PER_POLL: usize = 8;

@@ -1,8 +1,8 @@
 //! Actual SDK physical reads, worker ownership and shutdown.
 use super::*;
 use crate::conversation::application::RecordReadValue;
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,

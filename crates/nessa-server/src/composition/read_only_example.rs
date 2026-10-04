@@ -8,12 +8,12 @@ mod device;
 mod online;
 mod profile;
 use crate::composition::local_auth::SystemClock;
-use crate::product::generated::{
-    MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
-};
 use crate::read_only_sync::application::CachePolicy;
 use crate::read_only_sync::entrypoint::{parse, run_local, Command, CommandError};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
+use nessa_protocol::product::generated::{
+    MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
+};
 use nessa_sync::replication::domain::Limits;
 use std::io::{Read, Write};
 use std::process::ExitCode;

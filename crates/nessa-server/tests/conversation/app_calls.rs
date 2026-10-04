@@ -10,13 +10,13 @@ use crate::conversation::application::app_reviews::{
     ALLOW, DENY, MAX_APP_REVIEW_BYTES, MAX_OPEN_APP_REVIEWS,
 };
 use crate::conversation::application::mcp_apps::TicketEnd;
-use crate::conversation::application::projection::MAX_VIEW_BYTES;
-use crate::conversation::application::view::{
-    ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
-};
 use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
+use nessa_protocol::conversation::projection::MAX_VIEW_BYTES;
+use nessa_protocol::conversation::view::{
+    ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
+};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;

@@ -5,7 +5,8 @@ use tokio::sync::watch;
 
 use crate::agents::application::ports::AgentProbe;
 use crate::agents::application::readiness::ReadAgentReadiness;
-use crate::agents::domain::{AgentId, Readiness};
+use crate::agents::domain::Readiness;
+use nessa_protocol::agents::AgentId;
 
 /// How long a caller waits for the machine's answer before giving up on it.
 ///
