@@ -26,6 +26,7 @@ import {
 } from "../generated/product.js"
 import { imageAttachments, linkedFiles } from "./attachment-validate.js"
 import { approvalModeChoices } from "./agents-validate.js"
+import { boundedName } from "./mcp-app-validate.js"
 
 const utf8 = new TextEncoder()
 
@@ -77,6 +78,26 @@ function identity(item: Record<string, unknown>, key: string) {
 function imagesKey(images: readonly ImageAttachment[]) {
   return JSON.stringify(images.map((image) => [image.digest, image.mimeType, image.size]))
 }
+/**
+ * The app that wrote a turn (`ConversationMessageApp`), checked against the
+ * schema, as a key: absent is the person's own.
+ */
+function messageAppKey(value: unknown, what: string): string {
+  if (value === undefined) return ""
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error(`Invalid ${what}`)
+  const app = value as Record<string, unknown>
+  exact(app, ["executionId", "toolId", "server", "tool"])
+  identity(app, "executionId")
+  identity(app, "toolId")
+  if (
+    !boundedName(app.server, bounds.maxMcpNameBytes) ||
+    !boundedName(app.tool, bounds.maxMcpNameBytes)
+  )
+    throw new Error(`Invalid ${what} name`)
+  return JSON.stringify([app.executionId, app.toolId, app.server, app.tool])
+}
+
 /** The same, for the paths a turn points at: the paths, in order. */
 function filesKey(files: readonly LinkedFile[]) {
   return JSON.stringify(files.map((file) => file.path))
@@ -186,6 +207,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageTexts = new Map<string, string>()
   const messageImages = new Map<string, string>()
   const messageFiles = new Map<string, string>()
+  const messageApps = new Map<string, string>()
   const toolPartIds = new Set<string>()
   const noticePartIds = new Set<string>()
   for (const message of messages) {
@@ -194,6 +216,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "userText",
       "attachments",
       "files",
+      "app",
       "status",
       "error",
       "steeringTarget",
@@ -281,10 +304,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       imagesKey(imageAttachments(message.attachments, "message attachments")),
     )
     messageFiles.set(executionId, filesKey(linkedFiles(message.files, "message files")))
+    messageApps.set(executionId, messageAppKey(message.app, "message app"))
   }
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
-    exact(pending, ["executionId", "text", "attachments", "files", "mode"])
+    exact(pending, ["executionId", "text", "attachments", "files", "app", "mode"])
     const executionId = identity(pending, "executionId")
     if (pendingIds.has(executionId))
       throw new Error("Conversation response repeats a pending execution")
@@ -299,6 +323,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       imageAttachments(pending.attachments, "pending attachments"),
     )
     const pendingFiles = filesKey(linkedFiles(pending.files, "pending files"))
+    const pendingApp = messageAppKey(pending.app, "pending app")
     oneOf(text(pending, "mode"), ["queued", "steering"])
     // The waiting input and its queued message are one submission seen twice;
     // the same text over different images is as contradictory as different text.
@@ -307,7 +332,8 @@ export function conversationView(value: unknown, expected: string): Conversation
       item.queueComplete &&
       (messageTexts.get(executionId) !== pendingText ||
         messageImages.get(executionId) !== pendingImages ||
-        messageFiles.get(executionId) !== pendingFiles)
+        messageFiles.get(executionId) !== pendingFiles ||
+        messageApps.get(executionId) !== pendingApp)
     )
       throw new Error("Pending execution contradicts its queued message")
   }

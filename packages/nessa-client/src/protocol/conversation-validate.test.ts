@@ -287,6 +287,51 @@ describe("conversation view agreement", () => {
     expect(() => conversationView(value, "conversation")).not.toThrow()
   })
 
+  it("K10: reads who wrote a turn, and holds the waiting input to the same author", () => {
+    const written = {
+      executionId: "running",
+      toolId: "tool",
+      server: "charts",
+      tool: "show",
+    }
+    const value = view() as ReturnType<typeof view> & {
+      messages: Record<string, unknown>[]
+      pending: Record<string, unknown>[]
+    }
+    value.messages[0]!.app = written
+    value.pending[0]!.app = written
+    expect(conversationView(value, "conversation").messages[0]!.app).toEqual(written)
+
+    // One submission seen twice: an app's turn waiting as the person's is
+    // as contradictory as different text.
+    const person = structuredClone(value)
+    delete person.pending[0]!.app
+    expect(() => conversationView(person, "conversation")).toThrow(
+      "Pending execution contradicts",
+    )
+    const other = structuredClone(value)
+    other.pending[0]!.app = { ...written, toolId: "other" }
+    expect(() => conversationView(other, "conversation")).toThrow(
+      "Pending execution contradicts",
+    )
+    for (const app of [
+      { ...written, extra: 1 },
+      { ...written, executionId: "" },
+      { ...written, toolId: "x".repeat(257) },
+      { ...written, server: "x".repeat(bounds.maxMcpNameBytes + 1) },
+      { ...written, tool: "" },
+      "charts",
+      null,
+    ]) {
+      const invalid = structuredClone(value)
+      invalid.messages[0]!.app = app
+      expect(
+        () => conversationView(invalid, "conversation"),
+        JSON.stringify(app),
+      ).toThrow()
+    }
+  })
+
   it("allows pending text mismatch when bounded evidence is truncated", () => {
     const value = view()
     value.truncated = true
