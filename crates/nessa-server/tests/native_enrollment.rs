@@ -16,5 +16,7 @@ mod mounted;
 mod owner_routes;
 #[path = "device_pairing/product_client.rs"]
 mod product_client;
+#[path = "device_pairing/infrastructure/protected.rs"]
+mod protected;
 #[path = "device_pairing/infrastructure/support.rs"]
 mod support;

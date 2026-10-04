@@ -63,22 +63,6 @@ impl SessionCloseReason {
             Self::TransportInterrupted => true,
         }
     }
-    pub(crate) fn from_web_socket_code(code: u16) -> Option<Self> {
-        match code {
-            4001 => Some(Self::AuthenticationFailed),
-            4002 => Some(Self::CredentialRevoked),
-            4003 => Some(Self::CredentialExpired),
-            4004 => Some(Self::AuthorizationLost),
-            4005 => Some(Self::ProtocolIncompatible),
-            4006 => Some(Self::HandshakeTimeout),
-            4010 => Some(Self::TemporaryUnavailable),
-            1012 => Some(Self::GatewayRestarting),
-            1013 => Some(Self::GatewayOverloaded),
-            1000 => Some(Self::ServerShutdown),
-            1006 => Some(Self::TransportInterrupted),
-            _ => None,
-        }
-    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

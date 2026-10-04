@@ -1,32 +1,39 @@
-//! One socket and one attempt outcome. Facades never own their own connection.
+//! One protected native connection and one attempt outcome. Facades never own
+//! their own connection.
+//!
+//! The device dials the gateway's native address, proves its key over TLS with
+//! the gateway key strictly pinned, selects the product session with a first
+//! `openProduct` envelope, and authenticates with its issued credential id.
+//! Product messages then travel one per length-prefixed frame (design
+//! "Protected reads over the native channel", rows PR1, PR3, PR9).
 use super::deadline_stream::{io_cause, DeadlineStream};
 use crate::app::ports::Clock;
+use crate::device_pairing::infrastructure::{
+    encode_frame,
+    wire::{encode_request as encode_envelope, NativePairingRequest},
+    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
+};
 use crate::product::generated::{
     product_event, wire_shape_product_session_ready, wire_shape_session_authenticate_params,
     wire_shape_session_challenge, ProductClientMetadata, ProductSessionReady,
     SessionAuthenticateParams, SessionChallenge, MAX_AUTH_CREDENTIAL_CHARACTERS,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD,
-    PRODUCT_SESSION_PATH, PRODUCT_VERSION,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use crate::product::passive_read::wire::{encode_request, ReadEncodeError};
 use crate::product::wire::{authentication_close_reason, supports_product_version};
-use crate::product_contract::generated::{
-    CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
-};
+use crate::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
 use crate::protocol::{OutgoingMessage, ResponseFrame};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy, GatewayStream,
 };
-use nessa_gateway_endpoint::domain::GatewayEndpoint;
+use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
-use std::io::{Read, Result as IoResult, Write};
+use std::io::{ErrorKind, Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
-use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{client, Error, Message, WebSocket};
 
 pub(crate) struct LocalConnector;
 impl GatewayConnector for LocalConnector {
@@ -61,6 +68,67 @@ impl GatewayStream for Socket {
     }
 }
 
+/// What a paired device presents on one protected connection: its key, the
+/// gateway key it pinned at enrollment, and its issued credential id. The id
+/// is evidence only together with the key; it is not a bearer secret.
+pub(crate) struct DeviceEvidence<'a> {
+    pub(crate) identity: &'a NativeIdentity,
+    pub(crate) pin: [u8; 44],
+    pub(crate) credential: &'a str,
+}
+
+/// Product frames over the pinned TLS connection.
+struct Channel {
+    transport: NativeTransport<DeadlineStream>,
+    frames: FrameReader,
+}
+impl Channel {
+    fn send(&mut self, text: &str) -> Result<(), GatewayError> {
+        let frame = encode_frame(MAX_PROTECTED_REQUEST_BYTES, text.as_bytes())
+            .map_err(|_| GatewayError::RequestTooLarge)?;
+        let result = self
+            .transport
+            .write_all(&frame)
+            .and_then(|()| self.transport.flush());
+        result.map_err(|error| self.io_failure(&error))
+    }
+    fn receive(&mut self) -> Result<String, GatewayError> {
+        loop {
+            let buffer = self
+                .frames
+                .unfilled()
+                .map_err(|_| GatewayError::ResponseTooLarge)?;
+            let count = match self.transport.read(buffer) {
+                Ok(0) => return Err(GatewayError::Closed(None)),
+                Ok(count) => count,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) => return Err(self.io_failure(&error)),
+            };
+            if let Some(body) = self
+                .frames
+                .filled(count)
+                .map_err(|_| GatewayError::ResponseTooLarge)?
+            {
+                return String::from_utf8(body).map_err(|_| GatewayError::Protocol);
+            }
+        }
+    }
+    /// A deadline or cancellation the stream refused with comes first; a
+    /// connection that ended without TLS close is an untyped close.
+    fn io_failure(&mut self, error: &std::io::Error) -> GatewayError {
+        self.transport
+            .stream_mut()
+            .take_failure()
+            .unwrap_or_else(|| match error.kind() {
+                ErrorKind::UnexpectedEof
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::BrokenPipe => GatewayError::Closed(None),
+                _ => io_cause(error),
+            })
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum RpcKind {
     Authentication,
@@ -69,7 +137,7 @@ pub(super) enum RpcKind {
 }
 
 pub(crate) struct Session {
-    socket: Option<WebSocket<DeadlineStream>>,
+    socket: Option<Channel>,
     clock: Arc<dyn Clock>,
     policy: GatewayPolicy,
     next_request: u64,
@@ -77,12 +145,14 @@ pub(crate) struct Session {
     active: Option<GatewayOutcome>,
     ready: ProductSessionReady,
     events: usize,
-    controls: usize,
 }
 impl Session {
+    /// Open one protected product session at the gateway's native `address`.
+    /// Every step, from the TCP connect to ready, shares one absolute
+    /// handshake deadline.
     pub(crate) fn connect(
-        endpoint: &GatewayEndpoint,
-        credential: &str,
+        address: SocketAddr,
+        device: DeviceEvidence<'_>,
         client_id: &str,
         connector: &dyn GatewayConnector,
         clock: Arc<dyn Clock>,
@@ -91,7 +161,7 @@ impl Session {
     ) -> Result<Self, GatewayError> {
         // Refuse oversized borrowed fields before allocating their owned DTO copies.
         for (value, ceiling) in [
-            (credential, MAX_AUTH_CREDENTIAL_CHARACTERS),
+            (device.credential, MAX_AUTH_CREDENTIAL_CHARACTERS),
             (client_id, MAX_PRODUCT_CLIENT_ID_CHARACTERS),
         ] {
             if value.chars().take(ceiling + 1).count() > ceiling {
@@ -110,30 +180,27 @@ impl Session {
             .filter(|ms| *ms > 0)
             .ok_or(GatewayError::TimedOut)?;
         let stream = connector
-            .connect(endpoint.socket_address(), Duration::from_millis(remaining))
+            .connect(address, Duration::from_millis(remaining))
             .map_err(|error| io_cause(&error))?;
-        let stream = DeadlineStream::new(
-            stream,
-            clock.clone(),
-            cancellation,
-            deadline,
-            policy.upgrade_bytes(),
-        );
+        let stream = DeadlineStream::new(stream, clock.clone(), cancellation, deadline);
         stream.remaining()?;
         let failure = stream.failure_owner();
-        let config = WebSocketConfig::default()
-            .max_message_size(Some(MAX_RECORD_RESPONSE_BYTES))
-            .max_frame_size(Some(MAX_RECORD_RESPONSE_BYTES))
-            .write_buffer_size(0)
-            .max_write_buffer_size(MAX_RECORD_RESPONSE_BYTES);
-        let url = format!("{}{}", endpoint.web_socket_url(), PRODUCT_SESSION_PATH);
-        let (mut socket, _) = client::client_with_config(url, stream, Some(config))
+        let transport =
+            NativeTransport::connect(stream, device.identity, GatewayTrust::Pinned(device.pin))
+                .map_err(|_| failure.take().unwrap_or(GatewayError::NativeHandshake))?;
+        let mut selector = EnrollmentChannel::new(transport);
+        let envelope = encode_envelope(&NativePairingRequest::OpenProduct)
+            .map_err(|_| GatewayError::Protocol)?;
+        selector
+            .send_envelope(&envelope)
             .map_err(|_| failure.take().unwrap_or(GatewayError::Transport))?;
-        socket.get_mut().finish_upgrade();
+        let mut socket = Channel {
+            transport: selector.into_transport(),
+            frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
+        };
         let mut events = 0;
-        let mut controls = 0;
         let challenge = loop {
-            match read_frame(&mut socket, policy, &mut events, &mut controls)? {
+            match read_frame(&mut socket)? {
                 OutgoingMessage::Event(event)
                     if event.event == product_event::SESSION_CHALLENGE =>
                 {
@@ -153,7 +220,7 @@ impl Session {
             min_version: PRODUCT_VERSION,
             max_version: PRODUCT_VERSION,
             nonce: challenge.nonce,
-            credential: credential.to_owned(),
+            credential: device.credential.to_owned(),
             client: ProductClientMetadata {
                 id: client_id.to_owned(),
             },
@@ -165,7 +232,7 @@ impl Session {
         }
         let request_id = "0";
         send_request(&mut socket, request_id, PRODUCT_HANDSHAKE_METHOD, &params)?;
-        let response = read_response(&mut socket, request_id, policy, &mut events, &mut controls)?;
+        let response = read_response(&mut socket, request_id, policy, &mut events)?;
         let ready = shape_decode::<ProductSessionReady>(
             response_payload(response, RpcKind::Authentication)?,
             wire_shape_product_session_ready,
@@ -179,7 +246,6 @@ impl Session {
             active: None,
             ready,
             events: 0,
-            controls: 0,
         })
     }
     pub(crate) fn ready(&self) -> &ProductSessionReady {
@@ -197,8 +263,8 @@ impl Session {
             .checked_add(self.policy.operation_ms())
             .ok_or_else(|| self.fail(GatewayError::TimedOut))?;
         let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
-        socket.get_mut().begin_operation(deadline);
-        if let Err(error) = socket.get_ref().remaining() {
+        socket.transport.stream_mut().begin_operation(deadline);
+        if let Err(error) = socket.transport.stream_mut().remaining() {
             return Err(self.fail(error));
         }
         self.active = Some(GatewayOutcome {
@@ -206,7 +272,6 @@ impl Session {
             failure: None,
         });
         self.events = 0;
-        self.controls = 0;
         Ok(operation)
     }
     pub(crate) fn finish(&mut self) -> Result<GatewayOutcome, GatewayError> {
@@ -244,13 +309,7 @@ impl Session {
         self.next_request = self.next_request.checked_add(1).ok_or(GatewayError::Busy)?;
         let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
         send_request(socket, &id, method, params)?;
-        let response = read_response(
-            socket,
-            &id,
-            self.policy,
-            &mut self.events,
-            &mut self.controls,
-        )?;
+        let response = read_response(socket, &id, self.policy, &mut self.events)?;
         response_payload(response, kind)
     }
 }
@@ -264,7 +323,7 @@ fn shape_decode<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|_| GatewayError::Protocol)
 }
 fn send_request<T: Serialize>(
-    socket: &mut WebSocket<DeadlineStream>,
+    socket: &mut Channel,
     id: &str,
     method: &str,
     params: &T,
@@ -273,9 +332,7 @@ fn send_request<T: Serialize>(
         ReadEncodeError::ResponseTooLarge => GatewayError::RequestTooLarge,
         ReadEncodeError::InvalidPayload => GatewayError::Protocol,
     })?;
-    socket
-        .send(Message::Text(text.into()))
-        .map_err(|error| socket_error(socket, error))
+    socket.send(&text)
 }
 fn count_event(policy: GatewayPolicy, events: &mut usize) -> Result<(), GatewayError> {
     if *events >= policy.unexpected_events() {
@@ -285,60 +342,25 @@ fn count_event(policy: GatewayPolicy, events: &mut usize) -> Result<(), GatewayE
     Ok(())
 }
 fn read_response(
-    socket: &mut WebSocket<DeadlineStream>,
+    socket: &mut Channel,
     id: &str,
     policy: GatewayPolicy,
     events: &mut usize,
-    controls: &mut usize,
 ) -> Result<ResponseFrame, GatewayError> {
     loop {
-        match read_frame(socket, policy, events, controls)? {
+        match read_frame(socket)? {
             OutgoingMessage::Response(response) if response.id == id => return Ok(response),
             OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
             OutgoingMessage::Event(_) => count_event(policy, events)?,
         }
     }
 }
-fn read_frame(
-    socket: &mut WebSocket<DeadlineStream>,
-    policy: GatewayPolicy,
-    _events: &mut usize,
-    controls: &mut usize,
-) -> Result<OutgoingMessage, GatewayError> {
-    loop {
-        // Buffered frames still consume this same absolute operation deadline.
-        socket.get_ref().remaining()?;
-        let message = socket.read().map_err(|error| socket_error(socket, error))?;
-        socket.get_ref().remaining()?;
-        match message {
-            Message::Text(text) => {
-                return OutgoingMessage::decode(&text).map_err(|_| GatewayError::Protocol)
-            }
-            Message::Ping(_) | Message::Pong(_) => {
-                if *controls >= policy.control_frames() {
-                    return Err(GatewayError::ControlCapacity);
-                }
-                *controls += 1;
-            }
-            Message::Close(frame) => {
-                return Err(GatewayError::Closed(frame.and_then(|frame| {
-                    SessionCloseReason::from_web_socket_code(u16::from(frame.code))
-                })))
-            }
-            _ => return Err(GatewayError::Protocol),
-        }
-    }
-}
-fn socket_error(socket: &mut WebSocket<DeadlineStream>, error: Error) -> GatewayError {
-    socket
-        .get_mut()
-        .take_failure()
-        .unwrap_or_else(|| match error {
-            Error::Io(error) => io_cause(&error),
-            Error::Capacity(_) => GatewayError::ResponseTooLarge,
-            Error::ConnectionClosed | Error::AlreadyClosed => GatewayError::Closed(None),
-            _ => GatewayError::Protocol,
-        })
+fn read_frame(socket: &mut Channel) -> Result<OutgoingMessage, GatewayError> {
+    // Buffered plaintext still consumes this same absolute operation deadline.
+    socket.transport.stream_mut().remaining()?;
+    let text = socket.receive()?;
+    socket.transport.stream_mut().remaining()?;
+    OutgoingMessage::decode(&text).map_err(|_| GatewayError::Protocol)
 }
 fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, GatewayError> {
     if response.ok {

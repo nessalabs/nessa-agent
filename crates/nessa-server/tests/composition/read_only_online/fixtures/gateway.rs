@@ -4,6 +4,8 @@ use crate::agents::application::{AgentProbe, AgentProbeEvidence};
 use crate::agents::domain::AgentId;
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
+use crate::composition::native_pairing::{bind, prepare, start, NativeInputs};
+use crate::composition::runtime_config::NativeConfig;
 use crate::conversation::application::{
     ConversationRepository, ReceiverReadScope, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
@@ -14,23 +16,19 @@ use crate::conversation::domain::{
 use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
 };
+use crate::device_pairing::infrastructure::{wire::NativePairingStatus, NativeEnrollmentClient};
 use crate::product::{ProductDependencies, ProductRouteState};
-use axum::Extension;
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
-use nessa_auth::application::credential_admin::{IssueCredentialOutcome, IssueCredentialRequest};
+use nessa_auth::adapters::pairing::{FilePairingState, ManualCode, OsEntropy};
+use nessa_auth::application::credential_admin::RevokeCredentialRequest;
 use nessa_auth::application::dto::{
     CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
     OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
 };
-use nessa_auth::application::ports::{AccessReader, Clock, CredentialVerifier};
-use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, ResourceId};
-use nessa_gateway_endpoint::application::PublishGatewayEndpoint;
-use nessa_gateway_endpoint::domain::{
-    EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement,
-};
-use nessa_gateway_endpoint::infrastructure::FileEndpointPublication;
-use nessa_local_storage::OpenMode;
+use nessa_auth::application::ports::Clock;
+use nessa_auth::application::session::AuthenticateSession;
+use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
     SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -42,11 +40,11 @@ use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use nessa_sync::replication::domain::Id;
 use serde_json::json;
 use std::io::{self, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 
 struct NoAgents;
@@ -59,9 +57,10 @@ impl AgentProbe for NoAgents {
 struct GatedRead {
     source: Arc<NessaRecordReadSource>,
     storage: Arc<RecordStorage>,
-    conversation: SessionId,
+    /// The paired receiver and the seeded conversation, known once the first
+    /// start has paired the device.
+    target: Arc<OnceLock<(String, SessionId)>>,
     authority: Arc<LocalReceiverAuthority>,
-    receiver: String,
     initiator: PrincipalId,
     mode: String,
     pages: AtomicUsize,
@@ -92,7 +91,7 @@ impl RecordReadSource for GatedRead {
             if !page && self.mode == "before-page" && head == Some(3) {
                 self.authority
                     .change(
-                        self.receiver.clone(),
+                        self.target.get().unwrap().0.clone(),
                         None,
                         false,
                         self.initiator.clone(),
@@ -106,7 +105,7 @@ impl RecordReadSource for GatedRead {
                 if self.mode == "epoch" && count == 1 {
                     self.authority
                         .change(
-                            self.receiver.clone(),
+                            self.target.get().unwrap().0.clone(),
                             None,
                             false,
                             self.initiator.clone(),
@@ -116,12 +115,13 @@ impl RecordReadSource for GatedRead {
                         .unwrap();
                 }
                 if self.mode == "append" && count == 1 {
-                    let lease = self.storage.open(self.conversation.clone()).await.unwrap();
+                    let conversation = self.target.get().unwrap().1.clone();
+                    let lease = self.storage.open(conversation.clone()).await.unwrap();
                     let mut snapshot = lease
                         .load()
                         .await
                         .unwrap()
-                        .into_published(&self.conversation)
+                        .into_published(&conversation)
                         .unwrap()
                         .0
                         .unwrap();
@@ -160,24 +160,27 @@ async fn gateway_child() {
     let root = Path::new(&root);
     nessa_local_storage::create_directory(root).unwrap();
     let auth = Arc::new(LocalCredentialStore::open(root, "credentials.json").unwrap());
+    // "regrant": the receiver policy revision changes, which moves every
+    // active receiver to a new access epoch; the device's next status reports
+    // it, and the saved cache scope no longer matches.
+    let policy = match std::env::var("NESSA_ONLINE_GATE").as_deref() {
+        Ok("regrant") => "regrant-policy".to_owned(),
+        _ => CedarPolicyEvaluator::profile_digest(),
+    };
     let receivers = Arc::new(
         LocalReceiverAuthority::open(
             &root.join("receivers.sqlite3"),
-            &CedarPolicyEvaluator::profile_digest(),
+            &policy,
             Arc::new(SystemClock),
         )
         .unwrap(),
     );
     let setup_path = root.join("setup.json");
-    let setup = if setup_path.exists() {
-        serde_json::from_slice::<Setup>(&std::fs::read(&setup_path).unwrap()).unwrap()
-    } else {
+    let first_start = !setup_path.exists();
+    let (gateway, organization, owner, owner_evidence) = if first_start {
         let gateway = uuid();
         let organization = uuid();
         let owner = uuid();
-        let reader = uuid();
-        let credential = uuid();
-        let membership = uuid();
         let grant = |action: &str| CredentialGrantDto {
             action: action.into(),
             resource: ResourceDto {
@@ -213,142 +216,157 @@ async fn gateway_child() {
                 ],
             })
             .unwrap();
-        auth.verify(&boot.evidence, &AudienceId::new(gateway.clone()).unwrap())
-            .await
-            .unwrap();
-        let issued = auth
-            .issue_sync(IssueCredentialRequest {
-                request_id: uuid(),
-                issuer_principal_id: owner.clone(),
-                credential_id: credential.clone(),
-                principal: PrincipalInputDto {
-                    id: reader.clone(),
-                    kind: PrincipalKindDto::Integration,
-                },
-                membership: MembershipInputDto {
-                    id: membership.clone(),
-                    principal_id: reader.clone(),
-                    organization_id: organization.clone(),
-                    role: MembershipRoleDto::Member,
-                    state: MembershipStateDto::Active,
-                },
-                audience_id: gateway.clone(),
-                issued_at: SystemClock.unix_seconds(),
-                expires_at: None,
-                grants: vec![grant("conversation.read")],
-            })
-            .unwrap();
-        let IssueCredentialOutcome::Issued {
-            metadata, evidence, ..
-        } = issued
-        else {
-            panic!("fresh credential")
-        };
-        let verified = auth
-            .verify(&evidence, &AudienceId::new(gateway.clone()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(verified.credential_id.as_str(), metadata.id);
-        let access = auth.read(&verified.credential_id).await.unwrap();
-        assert_eq!(access.credential.principal_id().as_str(), reader);
-        let paired = receivers
-            .pair(
-                verified.credential_id,
-                OrganizationId::new(organization.clone()).unwrap(),
-                PrincipalId::new(reader.clone()).unwrap(),
-                PrincipalId::new(owner.clone()).unwrap(),
-                uuid(),
-            )
-            .await
-            .unwrap();
-        private_write(&root.join("reader.token"), evidence.expose_bytes());
-        let setup = Setup {
-            gateway,
-            organization,
-            owner,
-            reader,
-            credential,
-            membership,
-            receiver: paired.receiver_id.clone(),
-            epoch: paired.access_epoch,
-            conversation: uuid(),
-            empty: uuid(),
-        };
-        private_write(&setup_path, &serde_json::to_vec(&setup).unwrap());
-        private_write(&root.join("profile.json"),&serde_json::to_vec(&json!({"receiver":setup.receiver,"accessEpoch":setup.epoch,"credentialFile":root.join("reader.token"),"endpointRoot":root,"endpointDirectory":"endpoint"})).unwrap());
-        setup
+        (gateway, organization, owner, Some(boot.evidence))
+    } else {
+        let setup = serde_json::from_slice::<Setup>(&std::fs::read(&setup_path).unwrap()).unwrap();
+        (setup.gateway, setup.organization, setup.owner, None)
     };
-    if std::env::var("NESSA_ONLINE_GATE").as_deref() == Ok("regrant") {
-        receivers
-            .change(
-                setup.receiver.clone(),
-                None,
-                false,
-                PrincipalId::new(setup.owner.clone()).unwrap(),
-                uuid(),
-            )
-            .await
-            .unwrap();
-        let issued = auth
-            .issue_sync(IssueCredentialRequest {
-                request_id: uuid(),
-                issuer_principal_id: setup.owner.clone(),
-                credential_id: uuid(),
-                principal: PrincipalInputDto {
-                    id: setup.reader.clone(),
-                    kind: PrincipalKindDto::Integration,
-                },
-                membership: MembershipInputDto {
-                    id: setup.membership.clone(),
-                    principal_id: setup.reader.clone(),
-                    organization_id: setup.organization.clone(),
-                    role: MembershipRoleDto::Member,
-                    state: MembershipStateDto::Active,
-                },
-                audience_id: setup.gateway.clone(),
-                issued_at: SystemClock.unix_seconds(),
-                expires_at: None,
-                grants: vec![CredentialGrantDto {
-                    action: "conversation.read".into(),
-                    resource: ResourceDto {
-                        organization_id: setup.organization.clone(),
-                        id: setup.gateway.clone(),
-                    },
-                }],
-            })
-            .unwrap();
-        let IssueCredentialOutcome::Issued { evidence, .. } = issued else {
-            panic!("explicit fresh regrant credential")
-        };
-        let verified = auth
-            .verify(&evidence, &AudienceId::new(setup.gateway.clone()).unwrap())
-            .await
-            .unwrap();
-        let mut token =
-            nessa_local_storage::open(&root.join("reader.token"), OpenMode::ReadWrite).unwrap();
-        token.set_len(0).unwrap();
-        token.write_all(evidence.expose_bytes()).unwrap();
-        token.sync_all().unwrap();
-        let binding = receivers
-            .change(
-                setup.receiver.clone(),
-                Some(verified.credential_id),
-                true,
-                PrincipalId::new(setup.owner.clone()).unwrap(),
-                uuid(),
-            )
-            .await
-            .unwrap();
-        let bytes = serde_json::to_vec(&json!({"receiver":setup.receiver,"accessEpoch":binding.access_epoch,"credentialFile":root.join("reader.token"),"endpointRoot":root,"endpointDirectory":"endpoint"})).unwrap();
-        let mut file =
-            nessa_local_storage::open(&root.join("profile.json"), OpenMode::ReadWrite).unwrap();
-        file.set_len(0).unwrap();
-        file.write_all(&bytes).unwrap();
-        file.sync_all().unwrap();
-    }
+    // The real native composition: key restored or first published, then the
+    // listener, on the address the first start chose and every restart keeps.
+    let address: SocketAddr = match std::fs::read_to_string(root.join("native-address")) {
+        Ok(address) => address.parse().unwrap(),
+        Err(_) => "127.0.0.1:0".parse().unwrap(),
+    };
+    let (prepared, commands) = prepare(
+        &NativeConfig {
+            listen_address: address,
+        },
+        NativeInputs {
+            namespace: root.to_path_buf(),
+            registry: auth.clone(),
+            policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+            receivers: receivers.clone(),
+            clock: Arc::new(SystemClock),
+            gateway: Resource::new(
+                OrganizationId::new(organization.clone()).unwrap(),
+                ResourceId::new(gateway.clone()).unwrap(),
+            ),
+        },
+    )
+    .await
+    .unwrap();
     let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
     let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
     storage.initialize().await.unwrap();
+    let record = Arc::new(NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new(&gateway).unwrap(),
+        Handle::current(),
+    ));
+    let mode = std::env::var("NESSA_ONLINE_GATE").unwrap_or_default();
+    // Gated reads need the receiver, known after the first start pairs.
+    let receiver_slot = Arc::new(OnceLock::new());
+    let state = ProductRouteState::new(
+        ResourceId::new(gateway.clone()).unwrap(),
+        OrganizationId::new(organization.clone()).unwrap(),
+        AudienceId::new(gateway.clone()).unwrap(),
+        ProductDependencies {
+            verifier: auth.clone(),
+            access: auth.clone(),
+            clock: Arc::new(SystemClock),
+            policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+            uptime_clock: RuntimeDependencies::default().clock,
+            agent_probe: Arc::new(NoAgents),
+        },
+    )
+    .with_passive_read(receivers.clone(), metadata.clone())
+    .with_record_source(Arc::new(GatedRead {
+        source: record.clone(),
+        storage: storage.clone(),
+        target: receiver_slot.clone(),
+        authority: receivers.clone(),
+        initiator: PrincipalId::new(owner.clone()).unwrap(),
+        mode: mode.clone(),
+        pages: AtomicUsize::new(0),
+        heads: AtomicUsize::new(0),
+    }))
+    .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
+        metadata.clone(),
+        Id::new(&gateway).unwrap(),
+    )));
+    let bound = bind(prepared, RuntimeDependencies::default().clock, state)
+        .await
+        .unwrap();
+    let native = bound.local_address();
+    if first_start {
+        private_write(&root.join("native-address"), native.to_string().as_bytes());
+    }
+    let (failure, _failed) = tokio::sync::watch::channel(None);
+    let _running = start(bound, failure);
+    let setup = match owner_evidence {
+        // First start: pair this test's device through the real listener.
+        Some(evidence) => {
+            let session = AuthenticateSession {
+                verifier: auth.as_ref(),
+                access: auth.as_ref(),
+                clock: &SystemClock,
+            }
+            .execute(&evidence, &AudienceId::new(gateway.clone()).unwrap())
+            .await
+            .unwrap();
+            let created = commands.create(&session).await.unwrap();
+            let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+            nessa_local_storage::create_directory_beneath(root, Path::new("device")).unwrap();
+            let device = Arc::new(FilePairingState::open(root, Path::new("device")).unwrap());
+            let client =
+                NativeEnrollmentClient::new(device.clone(), RuntimeDependencies::default().clock);
+            let claimed = client
+                .enroll(TcpStream::connect(native).unwrap(), code, OsEntropy)
+                .await
+                .unwrap();
+            assert!(matches!(claimed, NativePairingStatus::Claimed(_)));
+            let id = created.record().id();
+            let record = commands.status(&session, id).await.unwrap();
+            let (_, key) = record.claim_binding().unwrap();
+            let approved = commands.approve(&session, id, key).await.unwrap().record;
+            let (receiver, epoch) = approved.receiver_binding().unwrap();
+            let credential = approved.credential().unwrap().as_str().to_owned();
+            let active = client
+                .status(TcpStream::connect(native).unwrap(), None)
+                .await
+                .unwrap();
+            assert!(matches!(active, NativePairingStatus::Active { .. }));
+            client.shutdown().await;
+            drop(client);
+            drop(device);
+            let setup = Setup {
+                gateway: gateway.clone(),
+                organization: organization.clone(),
+                owner: owner.clone(),
+                credential,
+                receiver: receiver.as_str().to_owned(),
+                epoch,
+                conversation: uuid(),
+                empty: uuid(),
+            };
+            private_write(&setup_path, &serde_json::to_vec(&setup).unwrap());
+            private_write(
+                &root.join("profile.json"),
+                &serde_json::to_vec(&json!({"stateRoot":root,"stateDirectory":"device",
+                    "gatewayAddress":native.to_string()}))
+                .unwrap(),
+            );
+            setup
+        }
+        None => serde_json::from_slice::<Setup>(&std::fs::read(&setup_path).unwrap()).unwrap(),
+    };
+    receiver_slot
+        .set((
+            setup.receiver.clone(),
+            SessionId::new(setup.conversation.clone()).unwrap(),
+        ))
+        .unwrap();
+    if mode == "revoke" {
+        // The owner revokes the device's credential: its enrollment ends
+        // Terminal(CredentialRevoked) and its next pinned status says so.
+        auth.revoke_sync(RevokeCredentialRequest {
+            request_id: uuid(),
+            issuer_principal_id: setup.owner.clone(),
+            credential_id: setup.credential.clone(),
+            revoked_at: SystemClock.unix_seconds(),
+        })
+        .unwrap();
+    }
     for (target, large) in [(&setup.conversation, true), (&setup.empty, false)] {
         let id = ConversationId::new(target).unwrap();
         if metadata.load(&id).await.unwrap().is_none() {
@@ -357,7 +375,7 @@ async fn gateway_child() {
                     Conversation::new(
                         id,
                         OrganizationId::new(setup.organization.clone()).unwrap(),
-                        PrincipalId::new(setup.reader.clone()).unwrap(),
+                        PrincipalId::new(setup.owner.clone()).unwrap(),
                         "setup".into(),
                         uuid(),
                         SystemClock.unix_milliseconds(),
@@ -407,62 +425,8 @@ async fn gateway_child() {
             drop(lease);
         }
     }
-    let record = Arc::new(NessaRecordReadSource::new(
-        storage.clone(),
-        Id::new(&setup.gateway).unwrap(),
-        Handle::current(),
-    ));
-    let state = ProductRouteState::new(
-        ResourceId::new(setup.gateway.clone()).unwrap(),
-        OrganizationId::new(setup.organization.clone()).unwrap(),
-        AudienceId::new(setup.gateway.clone()).unwrap(),
-        ProductDependencies {
-            verifier: auth.clone(),
-            access: auth.clone(),
-            clock: Arc::new(SystemClock),
-            policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
-            uptime_clock: RuntimeDependencies::default().clock,
-            agent_probe: Arc::new(NoAgents),
-        },
-    )
-    .with_passive_read(receivers.clone(), metadata.clone())
-    .with_record_source(Arc::new(GatedRead {
-        source: record.clone(),
-        storage: storage.clone(),
-        conversation: SessionId::new(setup.conversation.clone()).unwrap(),
-        authority: receivers,
-        receiver: setup.receiver.clone(),
-        initiator: PrincipalId::new(setup.owner.clone()).unwrap(),
-        mode: std::env::var("NESSA_ONLINE_GATE").unwrap_or_default(),
-        pages: AtomicUsize::new(0),
-        heads: AtomicUsize::new(0),
-    }))
-    .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
-        metadata,
-        Id::new(&setup.gateway).unwrap(),
-    )));
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let endpoint = GatewayEndpoint::new(
-        format!("ws://{address}"),
-        EndpointIdentity::new(uuid(), std::process::id()).unwrap(),
-    )
-    .unwrap();
-    PublishGatewayEndpoint::new(&FileEndpointPublication::new(
-        root.into(),
-        "endpoint".into(),
-    ))
-    .execute(&GatewayEndpointAdvertisement::new(endpoint.clone(), None).unwrap())
-    .unwrap();
     println!("ONLINE_READY");
     io::stdout().flush().unwrap();
-    axum::serve(
-        listener,
-        crate::server::entrypoint::http::router(state)
-            .layer(Extension(endpoint.identity().clone())),
-    )
-    .await
-    .unwrap();
-    record.shutdown().await.unwrap();
-    storage.shutdown().await.unwrap();
+    // Serve until the test kills this process.
+    std::future::pending::<()>().await;
 }

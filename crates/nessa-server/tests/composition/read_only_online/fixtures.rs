@@ -1,4 +1,5 @@
-//! Canonical gateway setup and separate client process support.
+//! Canonical gateway setup, with the real native listener and a device paired
+//! through it, and separate client process support.
 #[path = "fixtures/client.rs"]
 mod client;
 #[path = "fixtures/gateway.rs"]
@@ -20,9 +21,8 @@ pub(super) struct Setup {
     pub(super) gateway: String,
     pub(super) organization: String,
     pub(super) owner: String,
-    pub(super) reader: String,
+    /// The paired device's issued credential id.
     pub(super) credential: String,
-    pub(super) membership: String,
     pub(super) receiver: String,
     pub(super) epoch: u64,
     pub(super) conversation: String,

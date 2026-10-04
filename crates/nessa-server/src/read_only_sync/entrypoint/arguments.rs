@@ -6,10 +6,20 @@ use nessa_sync::replication::domain::{Id, Scope};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 
-pub(crate) const HELP: &str = "read_only_sync sync-records CACHE PROFILE CONVERSATION PAGES\nread_only_sync check-records CACHE PROFILE CONVERSATION\nread_only_sync sync-catalogue CACHE PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status CACHE PROFILE\nread_only_sync sync-records CACHE PROFILE CONVERSATION PAGES\nread_only_sync check-records CACHE PROFILE CONVERSATION\nread_only_sync sync-catalogue CACHE PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
 
 pub(crate) enum Command {
     Local(LocalCommand),
+    /// Enroll this device with the code read from standard input.
+    Pair {
+        profile: PathBuf,
+    },
+    /// Read this device's enrollment status over the pinned gateway key; a
+    /// Terminal status purges the cache before the record goes.
+    Status {
+        cache: PathBuf,
+        profile: PathBuf,
+    },
     Records {
         cache: PathBuf,
         profile: PathBuf,
@@ -60,6 +70,17 @@ impl Display for CommandError {
 
 pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
     match args {
+        [name, profile] if name == "pair" => {
+            return Ok(Command::Pair {
+                profile: profile.into(),
+            })
+        }
+        [name, cache, profile] if name == "status" => {
+            return Ok(Command::Status {
+                cache: cache.into(),
+                profile: profile.into(),
+            })
+        }
         [name, cache, profile, conversation, pages] if name == "sync-records" => {
             return Ok(Command::Records {
                 cache: cache.into(),

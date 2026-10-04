@@ -171,11 +171,21 @@ fn current_enrollment_messages_preserve_their_representation() {
             message: vec![255, 0],
         },
         NativePairingRequest::Status(public()),
+        NativePairingRequest::OpenProduct,
     ] {
         let bytes = encode_request(&request).unwrap();
         let decoded = decode_request(&bytes).unwrap();
         assert_eq!(encode_request(&decoded).unwrap(), bytes);
     }
+    // Row PR1: the selector's spelling is the literal tag, with no fields.
+    assert_eq!(
+        encode_request(&NativePairingRequest::OpenProduct).unwrap(),
+        br#"{"kind":"openProduct"}"#
+    );
+    assert_eq!(
+        decode_request(br#"{"kind":"openProduct","credential":"x"}"#).unwrap_err(),
+        NativeWireError::Invalid
+    );
     assert!(
         matches!(decode_reply(&encode_hello(public()).unwrap()).unwrap(), NativePairingReply::Hello(value) if value == public())
     );
@@ -314,7 +324,8 @@ fn enrollment_syntax_is_strict_and_domain_values_are_validated() {
     for malformed in [
         br#"{"kind":"hello","attempt":[],"extra":true}"#.as_slice(),
         br#"{"kind":"hello","kind":"hello","attempt":[]}"#.as_slice(),
-        br#"{"kind":"openProduct"}"#.as_slice(),
+        br#"{"kind":"openProduct","kind":"openProduct"}"#.as_slice(),
+        br#"{"kind":"openProduct"}{}"#.as_slice(),
         br#"{"kind":"future"}"#.as_slice(),
     ] {
         assert_eq!(

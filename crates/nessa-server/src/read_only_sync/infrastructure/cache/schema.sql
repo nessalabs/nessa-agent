@@ -108,4 +108,16 @@ CREATE TABLE catalogue_resets (
     cause TEXT NOT NULL CHECK(cause='ExplicitReset'),
     initiator TEXT NOT NULL CHECK(initiator='LocalOperator')
 ) STRICT, WITHOUT ROWID;
+-- An authenticated Terminal enrollment status ended this receiver: its rows
+-- were deleted in the same transaction, and this receipt is the fence that
+-- refuses any later apply for it.
+CREATE TABLE cache_purges (
+    receiver TEXT PRIMARY KEY,
+    cause TEXT NOT NULL CHECK(cause='TerminalEnrollment'),
+    initiator TEXT NOT NULL CHECK(initiator='GatewayStatus'),
+    transcripts BLOB NOT NULL CHECK(length(transcripts)=8),
+    records BLOB NOT NULL CHECK(length(records)=8),
+    catalogue_entries BLOB NOT NULL CHECK(length(catalogue_entries)=8),
+    observed_at_ms BLOB NOT NULL CHECK(length(observed_at_ms)=8)
+) STRICT, WITHOUT ROWID;
 PRAGMA user_version = 1;

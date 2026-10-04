@@ -32,12 +32,13 @@ use nessa_auth::application::dto::{
     CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto,
 };
 use nessa_auth::application::ports::{
-    AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence,
+    AccessError, AccessSnapshot, CredentialEvidence, CredentialVerifier, Decision, PortFuture,
+    SessionEvidence, VerifiedCredential,
 };
 use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
-use nessa_auth::domain::{Action, CredentialId};
+use nessa_auth::domain::{Action, AudienceId, CredentialId};
 use serde_json::json;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -49,10 +50,56 @@ use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
 
+/// How credential evidence presented on one kind of connection is checked.
+/// It is the only thing that differs between the browser socket and a native
+/// device connection; authentication itself stays with `AuthenticateSession`
+/// and every later admission with this socket (design row PR1).
+pub(crate) trait SessionProof<S>: Send + Sync {
+    /// The verifier for evidence presented on `socket`. It may borrow what the
+    /// socket proved, but holds nothing of the socket across authentication.
+    fn verifier<'a>(
+        &'a self,
+        socket: &'a S,
+        state: &'a ProductRouteState,
+    ) -> Box<dyn CredentialVerifier + 'a>;
+}
+
+/// The browser socket's proof: the opaque bearer secret, checked by the
+/// composed `state.verifier`.
+struct BearerProof;
+impl<S> SessionProof<S> for BearerProof {
+    fn verifier<'a>(
+        &'a self,
+        _: &'a S,
+        state: &'a ProductRouteState,
+    ) -> Box<dyn CredentialVerifier + 'a> {
+        Box::new(Composed(state.verifier.as_ref()))
+    }
+}
+struct Composed<'a>(&'a dyn CredentialVerifier);
+impl CredentialVerifier for Composed<'_> {
+    fn verify<'a>(
+        &'a self,
+        evidence: &'a CredentialEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, VerifiedCredential> {
+        self.0.verify(evidence, audience)
+    }
+}
+
 /// Run one mandatory-authentication product session.
-pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
+pub async fn handle_socket<S>(socket: S, state: ProductRouteState)
 where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
+{
+    serve_session(socket, state, &BearerProof).await
+}
+
+/// Run one product session whose credential evidence `proof` checks.
+pub(crate) async fn serve_session<S, P>(mut socket: S, state: ProductRouteState, proof: &P)
+where
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
+    P: SessionProof<S>,
 {
     let deadline = Instant::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
@@ -78,7 +125,7 @@ where
         send(state.settings.write_timeout(), &mut socket, challenge)
             .await
             .map_err(|_| (String::new(), "temporarily_unavailable"))?;
-        receive_authentication(&mut socket, &state, &nonce, deadline).await
+        receive_authentication(&mut socket, &state, &nonce, deadline, proof).await
     })
     .await;
     let (request_id, session) = match authenticated {
@@ -135,14 +182,16 @@ where
     run_authenticated(socket, state, session).await;
 }
 
-async fn receive_authentication<S>(
+async fn receive_authentication<S, P>(
     socket: &mut S,
     state: &ProductRouteState,
     nonce: &str,
     deadline: Instant,
+    proof: &P,
 ) -> Result<(String, AuthenticatedSession), (String, &'static str)>
 where
     S: Stream<Item = Result<Message, Error>> + Unpin,
+    P: SessionProof<S>,
 {
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err((String::new(), "unauthorized"));
@@ -226,8 +275,9 @@ where
     }
     let evidence = CredentialEvidence::new(params.credential.into_bytes())
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
+    let verifier = proof.verifier(socket, state);
     let session = AuthenticateSession {
-        verifier: state.verifier.as_ref(),
+        verifier: verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
     }

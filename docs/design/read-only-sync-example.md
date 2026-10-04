@@ -220,22 +220,25 @@ already exist.
 
 The same example also accepts `sync-records CACHE PROFILE CONVERSATION PAGES`,
 `check-records CACHE PROFILE CONVERSATION` (zero pages), and
-`sync-catalogue CACHE PROFILE PAGES`. Online arguments name the issued private
-profile and target, never a guessed source origin or incarnation. Composition
-acquires the current endpoint and bounded credential before connection, then
-asks the authenticated gateway for the actual scope before opening the cache.
-The finite driver owns admitted source work; stdout delivery is separate from
-confirmed cache effects.
+`sync-catalogue CACHE PROFILE PAGES`, with `pair PROFILE` (the code on standard
+input) and `status CACHE PROFILE` for the device's enrollment. Online arguments
+name the private profile and target, never a guessed source origin or
+incarnation. Composition loads the device's issued credential, reads the
+gateway's pinned enrollment status, and only for Active opens the protected
+native session ([device pairing slice 3](auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3))
+with the receiver and epoch that status names; it then asks the authenticated
+gateway for the actual scope before opening the cache. The finite driver owns
+admitted source work; stdout delivery is separate from confirmed cache effects.
 
 | Row | Online command ordering | Owner / required evidence |
 | --- | --- | --- |
-| O1 | Malformed command/profile, unavailable current endpoint or refused credential acquisition | Parse/acquire before connect or opening cache; no network or cache write. Valid private profile counterpart reaches actual authenticated gateway. Actual read-only issued credential can read; actual write and credential-management commands are refused without effects. Wrong receiver/epoch is refused before opening cache. `online_profile_refusal_precedes_network_and_cache` |
-| O2 | Actual discovery scope differs from the saved six-part scope | Gateway facade supplies trusted exact scope; cache/core return explicit scope/reset refusal while saved bytes remain. The explicit regrant fixture revokes then canonically issues a distinct credential to the same principal/membership and regrants the same receiver; ordinary restart never issues or pairs again. No guessed origin or automatic reset. `online_scope_change_preserves_saved_cache` |
+| O1 | Malformed command/profile, no issued credential, or a pinned status that cannot be read | Parse/load before connect or opening cache; no read or cache write. Valid private profile counterpart reaches actual authenticated gateway. Actual read-only issued credential can read; actual write and credential-management commands are refused without effects. `online_profile_refusal_precedes_network_and_cache`, `online_unusable_enrollment_does_not_open_cache` |
+| O2 | Actual discovery scope differs from the saved six-part scope | Gateway facade supplies trusted exact scope; cache/core return explicit scope/reset refusal while saved bytes remain. The regrant fixture changes the receiver policy revision, which moves the receiver to a new epoch that the next pinned status reports; ordinary restart never issues or pairs again. No guessed origin or automatic reset. `online_scope_change_preserves_saved_cache` |
 | O3 | Actual receiver epoch changes before page admission, or after an admitted immutable page is read | Existing ScopeAuthorizer before the source read is the admission observation. A valid already admitted page may finish and commit after revoke; every subsequent page/read/command freshly authorizes and refuses, preserving confirmed prior D/A/checkpoint and marking freshness Unknown. Revocation before page admission adds no page effects. This is no atomic revoke-versus-SQL guarantee and adds no final head RPC. Positive unchanged binding commits the same actual page. `online_revocation_before_page_admission_has_no_page_effects`, `online_revocation_after_admission_preserves_confirmed_page` |
 | O4 | Zero head, zero-page check, pending physical fact or bounded catchup | Composition uses generated product `MAX_RECORD_PAGE_RECORDS` (16), `MAX_RECORD_PAGE_PAYLOAD_BYTES` (65546 from `RecordPageRequest.maxPayloadBytes.maximum`) and `MAX_PHYSICAL_RECORD_PAYLOAD_BYTES` (65546 per-record) ceilings when constructing core Limits. Real wire accepts the aggregate boundary and refuses its immediate successor; process fixture saves one actual fact spanning at least two physical pages. Real driver/SDK/cache return actual captured timestamped check, physical D and terminal A/facts/status separately; pending bytes seal only after later command. `online_process_restarts_reuse_actual_binding`, `online_product_aggregate_boundary_and_read_privilege_are_actual` |
 | O5 | Connection disappears or final observation fails after confirmed pages | Preserve already committed progress/data; typed transport/core/cache/freshness evidence remains independent, freshness becomes Unknown. JSON includes the consumed connection operation number as transient attempt correlation; it resets with a new connection and is never a durable source position or access epoch. A successful begin_pass preserves its immutable captured head/time even on later refusal; absence means no successful captured check, not absence of an attempted connection. No rollback claim or hidden retry. `online_connection_loss_preserves_confirmed_pages` |
 | O6 | Stdout fails after confirmed commit; command is repeated or offline state is reopened | Report output failure without repeating effects; reopening sees original confirmed D/A/data and exact-repeat semantics. `online_process_restarts_reuse_actual_binding` |
-| O7 | Client and gateway restart | Reopen the same credential, membership, receiver authority and source/cache stores; resolve current canonical endpoint publication and retain the issued receiver/profile. No new issue/pair/epoch. `online_process_restarts_reuse_actual_binding` |
+| O7 | Client and gateway restart | Reopen the same device credential, gateway key, receiver authority and source/cache stores; the native address is configured, so the profile is unchanged. No new issue/pair/epoch. `online_process_restarts_reuse_actual_binding` |
 | O8 | Source appends after finite pass capture | Finish original target and report original head/time; no retarget or extra head observation. Existing D4a driver regression plus `online_source_append_does_not_retarget_captured_pass`. |
 | O9 | Authenticated catalogue resolve refuses an entry exceeding the supplied remaining payload budget | Preserve core OversizedEntry separately from transient Unavailable and retain the exact gateway refusal cause; the connection closes without an implicit retry. `catalogue_resolve_preserves_oversized_entry_and_transport_cause` exercises the real session facade and correlated wire response. |
 
@@ -262,18 +265,18 @@ it returns. A later invocation asks the core to begin or resume again.
 | C17a | Cache composition supplies suffix limits above the SDK/core physical envelopes | The physical cache adapter asks published source ceilings before opening the database. The application policy owns only finite positive database/checkpoint allowances; decoder scope/position/frame/checkpoint failures map to typed cache outcomes, with SDK application decision causes preserved | `physical_cache_policy_refuses_before_database_open`, `invalid_semantic_page_has_no_effects`, `unsupported_reset_schema_has_no_effects` |
 | D8 | Explicit reset command supplies operation/caller, exact old/new six-part scopes and expected generation | Consume the existing attributed cache reset; output its original receipt with before/after meaning, cause, initiator and timestamp. Exact retries reuse caller-supplied operation identity; output failure does not retry or fabricate rollback | `reset_command_outputs_original_receipt_after_reopen` |
 
-The online command profile contains the issued receiver and numeric access epoch,
-a private credential file path, and the canonical endpoint publication root and
-relative namespace. It retains no copied endpoint instance or source scope.
-Composition reads a private profile of at most 16 KiB, resolves the current
-publication through `FileEndpointDiscovery`, and acquires credential UTF-8 bytes
-under a physical ceiling derived from the generated authentication character
-ceiling. The existing session/wire/auth owners decide semantic validity.
+The online command profile names the device's private enrollment state (an
+absolute root and a relative directory) and the gateway's numeric native
+address. It holds no secret, receiver, epoch or source scope: the device key,
+gateway pin, credential id and receiver live in the private state, and the
+epoch is read fresh from the pinned status each command. Composition reads a
+private profile of at most 16 KiB and opens the private state through its
+owner, which refuses unsafe storage and a second opener.
 
 | Row | Profile ordering | Result | Required evidence |
 | --- | --- | --- | --- |
-| D9 | Private profile is absent, malformed, oversized, has duplicate/unknown fields or invalid receiver syntax | Refuse before endpoint discovery or credential acquisition; decode only a bounded private file. Absolute root/credential paths make command location independent; the existing endpoint owner validates the relative namespace | `private_profile_admission_is_bounded_and_explicit` |
-| D10 | Current endpoint publication changes between commands; credential file is oversized or invalid UTF-8 | Resolve each command through the existing discovery owner and retain the actual endpoint identity. Bound credential bytes by four bytes per published character plus one refusal witness; preserve typed acquisition failures without exposing secret text | `profile_resolves_current_endpoint_without_copied_identity`, `credential_acquisition_uses_supplied_wire_ceiling` |
+| D9 | Private profile is absent, malformed, oversized, has duplicate/unknown fields, a hostname, a relative root or an absolute state directory | Refuse before opening private state or any connection; decode only a bounded private file | `private_profile_admission_is_bounded_and_explicit` |
+| D10 | The private state is first used, or already held by another command | Created beneath the root on first use; a second opener is refused while the first holds it | `profile_opens_one_private_state_owner` |
 
 Connection-check results belong to the current command. No durable last-contact
 timestamp or inferred successful check is added to the cache. The existing D/A
@@ -345,27 +348,32 @@ operator attribution. A refusal emits no receipt. Deletion evidence remains
 permanent under the cache reset owner. These commands do not contact the gateway.
 
 The production adapter consumes generated Rust DTOs and shared product codecs.
-It performs the actual `/session` challenge/authenticate/ready exchange, correlates
-RPC IDs and every returned scope/limit/target field, and configures bounded
-tungstenite frames/messages before reading. It has one outstanding passive RPC,
-one total request deadline, bounded unexpected-event handling and typed failures.
+Over the strictly pinned native TLS connection it selects the product session
+with `openProduct`, performs the challenge/authenticate/ready exchange with the
+device's credential id, correlates RPC IDs and every returned scope/limit/target
+field, and refuses an announced frame above the published response bound before
+reading it. It has one outstanding passive RPC, one total request deadline,
+bounded unexpected-event handling and typed failures.
 RecordsHead discovers actual scope from conversation/receiver/epoch; the client
 does not guess an incarnation or inspect gateway storage. Catalogue methods are
 provided by #297. Preparing is temporary unavailability, not an empty source.
 
-Disposable local setup verifies real writer/read credentials, current membership
-and Cedar delegation before invoking the canonical receiver pair owner. The
-same existing admin/member linkage is retained; the read credential has only
-conversation.read. Setup persists exact receiver/epoch/evidence once. Restart
-resolves the binding rather than issuing/pairing again. Secrets are read through
-private files or protected input, never command-line arguments or general logs.
+Setup pairs the device: the owner creates a code on the product socket, the
+device runs `pair` with the code on standard input, and the owner approves the
+exact claimed key, which stages the receiver and issues a credential holding
+only conversation.read for the owner's own principal. Restart reuses the
+binding rather than issuing or pairing again. The code is read from protected
+input, never command-line arguments or general logs.
 
 The CLI has finite record and catalogue sync, an online record check, offline
 `list`/`show`, and explicit reset. Experiment and watch controls remain future
 #262 work. Data goes to stdout as JSON and tracing to stderr.
 Offline cache readability is intentional local policy. Only correlated trusted
 grant/epoch/deletion contact evidence authorizes fencing/purge; generic auth
-failure or network absence supplies no such evidence.
+failure or network absence supplies no such evidence. The one purge is the
+pinned enrollment status reading Terminal: the device's record store purges
+the receiver's rows, with a receipt that fences it, before the enrollment
+record may go (device pairing rows PC3–PC5).
 
 ## Acceptance and dependencies
 
