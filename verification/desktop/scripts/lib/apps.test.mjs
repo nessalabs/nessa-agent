@@ -113,12 +113,13 @@ describe("exactly", () => {
     // Every character the pattern escapes, each where it would mean something.
     const literal = "^a.b*c+d?e{1}f(g)h|i[j]k$l\\m$"
     assert.ok(exactly(literal).test(literal))
+    // A bare `^` past the start matches nothing, so this one is shown by a match.
+    assert.ok(exactly("run ^a").test("run ^a"))
     for (const [text, unlike] of [
       ["run a.b", "run aXb"],
       ["run a*", "run "],
       ["run a+", "run aa"],
       ["run ab?", "run a"],
-      ["run ^a", "run a"],
       ["run a{2}", "run aa"],
       ["run a|b", "run a"],
       ["run (a)", "run a"],

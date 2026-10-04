@@ -441,7 +441,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   stop. At the same widths as the card above, with the tool's name short and
   as one word as long as the gateway allows (`maxMcpNameBytes`), the head
   stays inside the card; its row in the Agents overview is named "<title>. The
-  <server> app wants to run <tool> <command>.". _#436_ (`appCall` in
+  <server> app wants to run <tool> <arguments>.". _#436_ (`appCall` in
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
   _Check:_ `app-review.mjs --shots <dir>`.
