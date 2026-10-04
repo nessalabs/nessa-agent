@@ -47,7 +47,8 @@ and the SDK owns connection recovery for each client instance.
 
 ## Rust server
 
-`app::ports::Clock` is an application-owned trait. `RuntimeDependencies` holds
+`nessa_protocol::clock::Clock` is the monotonic clock port, owned by the
+protocol crate because the native pairing socket both ends share reads it. `RuntimeDependencies` holds
 an `clock: Arc<dyn Clock>` and supplies the default monotonic implementation.
 `CompositionRoot` constructs the dependencies and passes them to
 `AppState::with_dependencies`. State clones share the injected clock. Separate

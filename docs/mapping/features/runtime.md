@@ -930,7 +930,7 @@ Owners: [passive admission](../../../crates/nessa-server/src/conversation/applic
 [physical operation](../../../crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs),
 [socket capacity](../../../crates/nessa-server/src/product/socket.rs),
 [product dispatch](../../../crates/nessa-server/src/product/record_read/dispatch.rs),
-[page codec](../../../crates/nessa-server/src/product/record_read/wire.rs),
+[page codec](../../../crates/nessa-protocol/src/product/record_read.rs),
 and [SDK physical source](../../../crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs).
 This path opens no Agent, provider process, or writer lease. Its thread joins the
 SDK source worker before storage shutdown. Timeout delivery does not admit another
@@ -938,7 +938,7 @@ read while the original physical work still owns the socket/global lease.
 
 The SDK source can page up to 64 records and 512 KiB; the product transport is
 stricter: 16 records, 65,546 physical/page payload bytes, and 131,072 encoded response
-bytes, from [generated product constants](../../../crates/nessa-server/src/product/generated.rs)
+bytes, from [generated product constants](../../../crates/nessa-protocol/src/product/generated.rs)
 and their owner [product schema](../../../protocol/product/v1.json). Use the
 smaller applicable ceiling. The one-per-socket and four-global permit owners are
 [socket](../../../crates/nessa-server/src/product/socket.rs) and

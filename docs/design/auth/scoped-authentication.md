@@ -63,7 +63,7 @@ and no failure on `/session` falls back to the spike.
 | [Existing AppState](../../../crates/nessa-server/src/app/state.rs) | Keep legacy shared-token state unchanged; no registry added to it |
 | Original `connect/middleware/auth.rs` (removed) | Leave the spike's token comparison and hello flow unchanged |
 | Original `server/entrypoint/session.rs` (removed) | Keep spike state; introduce separate product connection state |
-| [Existing hello encoder](../../../crates/nessa-server/src/protocol/encode.rs) | Leave `HelloOk`, its scopes, and challenge semantics unchanged |
+| [Existing hello encoder](../../../crates/nessa-protocol/src/protocol/encode.rs) | Leave `HelloOk`, its scopes, and challenge semantics unchanged |
 | [HTTP router](../../../crates/nessa-server/src/server/entrypoint/http.rs) | Compose a separate `/session` route with route-local middleware dependencies |
 | New product middleware | Authenticate, construct AuthContext, check current grants, guard dispatch/output, and handle invalidation |
 | New credential provider | Production local-registry implementation or deterministic test implementation of the same contract |

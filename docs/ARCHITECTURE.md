@@ -871,7 +871,8 @@ provider adapters remain separate features. Existing design proposals do not rep
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
 The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. The server `device_pairing` consumer implements native enrollment on top of it: the
-JSON codec and framing, the gateway runtime and listener, and the device client —
+gateway runtime and listener, and the device client, over the JSON codec, framing
+and deadline socket both ends share in `crates/nessa-protocol` —
 owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
 It ends at Approved. When `config.json` names `native.listenAddress`, composition
 restores the gateway key before any bind, mounts the listener and joins its drain
@@ -897,10 +898,19 @@ it does not read the stage-scoped store or promise live environment refresh. See
 
 ## Shared product contract
 
-`product_contract/generated.rs` contains pure schema-derived product outcome
-values and close policy. Product DTOs/socket and read-only sync application ports
-consume that publication. The product schema owns its vocabulary; this contract
-contains no routing or IO and is separate from generic protocol frames.
+**Gateway protocol** (`crates/nessa-protocol`) — library, no binary. What both
+ends of a gateway connection agree on: wire frames and generated payloads, the
+product DTOs, handshake rules and read codecs, native pairing framing and its
+deadline socket, and the conversation read model (`ConversationView` and the
+projection that folds committed records into it). The gateway depends on it,
+and so does the device client; it depends on neither
+([ADR 483](adr/todo/483-protocol-and-client-core-crates.md)).
+
+`nessa-protocol/src/product_contract/generated.rs` contains pure schema-derived
+product outcome values and close policy. Product DTOs/socket and read-only sync
+application ports consume that publication. The product schema owns its
+vocabulary; this contract contains no routing or IO and is separate from generic
+protocol frames.
 
 ## Gateway authorization
 
