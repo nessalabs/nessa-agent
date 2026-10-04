@@ -13,6 +13,12 @@
     "readTimeoutMs": 10000,
     "clientAllowanceMs": 10000
   },
+  "x-changeWatchLimits": {
+    "globalOwners": 64,
+    "principalOwners": 8,
+    "recordTargets": 1,
+    "catalogueTargets": 1
+  },
   "$defs": {
     "SessionChallenge": {
       "type": "object",
@@ -156,7 +162,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 38,
+          "maxItems": 41,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -3592,6 +3598,149 @@
         "pairing_unavailable"
       ],
       "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later."
+    },
+    "ChangeWatchId": {
+      "type": "string",
+      "minLength": 38,
+      "maxLength": 57,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$",
+      "description": "Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement."
+    },
+    "ConversationWatchCatalogueParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receiverId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server-bound receiver identity requesting this owner catalogue.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        }
+      },
+      "required": ["receiverId", "accessEpoch"],
+      "description": "Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed."
+    },
+    "ConversationWatchRecordsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Conversation selected under authenticated ownership."
+        },
+        "receiverId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        }
+      },
+      "required": ["conversationId", "receiverId", "accessEpoch"],
+      "description": "Register stable conversation interest before final head recheck. Reset notices do not carry a source incarnation."
+    },
+    "ConversationWatchResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watchId": {
+          "$ref": "#/$defs/ChangeWatchId",
+          "description": "Opaque identity minted for this physical connection after producer installation; retain it only for this connection."
+        }
+      },
+      "required": ["watchId"],
+      "description": "A physically delivered acknowledgement activates this connection-local registration."
+    },
+    "ConversationUnwatchParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watchId": {
+          "$ref": "#/$defs/ChangeWatchId",
+          "description": "Exact identity minted on this connection whose source interest is to be removed."
+        }
+      },
+      "required": ["watchId"],
+      "description": "Remove only this connection’s watch interest. Repeating an allocated identity is idempotent."
+    },
+    "ConversationUnwatchResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watchId": {
+          "$ref": "#/$defs/ChangeWatchId",
+          "description": "Original connection identity echoed after interest removal; previously admitted authority or physical frame work may remain."
+        }
+      },
+      "required": ["watchId"],
+      "description": "Removal acknowledgement. An already-started frame may finish before this response; no subsequent hint is admitted."
+    },
+    "ConversationChanged": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watchId": {
+          "$ref": "#/$defs/ChangeWatchId",
+          "description": "Opaque connection identity of the advisory hint; this field carries no source progress or authority."
+        }
+      },
+      "required": ["watchId"],
+      "description": "Advisory payloadless dirty notice. Reauthorize and recheck heads; never advance progress from this event."
+    },
+    "ChangeWatchEndReason": {
+      "type": "string",
+      "enum": ["closed", "notification_failed"],
+      "description": "Terminal advisory producer state. Neither outcome proves current source freshness or lost permission."
+    },
+    "ConversationWatchEnded": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watchId": {
+          "$ref": "#/$defs/ChangeWatchId",
+          "description": "Opaque connection identity of the producer interest that ended."
+        },
+        "reason": {
+          "$ref": "#/$defs/ChangeWatchEndReason",
+          "description": "Typed terminal producer outcome; neither value proves source freshness or permission revocation."
+        }
+      },
+      "required": ["watchId", "reason"],
+      "description": "Terminal producer notice under the same bounded delivery owner as changed notices. Recover with explicit reads/fallback."
+    },
+    "ChangeWatchErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "wrong_owner",
+        "wrong_receiver",
+        "stale_epoch",
+        "unverifiable",
+        "temporarily_unavailable",
+        "watch_duplicate",
+        "watch_capacity",
+        "watch_closed",
+        "invalid_watch"
+      ],
+      "description": "Typed watch admission/refusal. Watch state never changes downloaded/applied progress."
     }
   }
 }

@@ -167,7 +167,7 @@ for line in sys.stdin:
         # carried, by method, for the test to read back; otherwise none.
         if mode == "stand-ins":
             record("mcp-servers-" + method.split("/")[1], json.dumps(servers))
-        else:
+        elif mode != "forwarded-result":
             assert servers == []
         assert options["settings"]["allowedMcpServers"] == [{"serverName": server["name"]} for server in servers]
         response = configs("alias" if mode == "wrong-model" else model, approval_mode)
@@ -298,6 +298,20 @@ for line in sys.stdin:
                     "status": "completed", "content": opaque + [
                         {"type": "content", "content": {"type": "text", "text": "after"}}
                     ]})
+            text("continued:" + user_text)
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
+        elif mode == "forwarded-result":
+            # The frames Claude ACP 0.76.0 sent for two MCP calls, replayed from
+            # the live recording (#435): `report_rows` completed, its result
+            # only as JSON text, and `always_fails`, an `isError` result,
+            # failed.
+            recording = pathlib.Path(__file__).resolve().parent.joinpath(
+                "../../../claude_acp/tools/fixtures/mcp_live_frames.json")
+            calls = json.loads(recording.read_text())["calls"]
+            for name in ("mcp__mcptest__report_rows", "mcp__mcptest__always_fails"):
+                for frame in calls[name]:
+                    update(frame)
             text("continued:" + user_text)
             result(pending, {"stopReason": "end_turn"})
             pending = None

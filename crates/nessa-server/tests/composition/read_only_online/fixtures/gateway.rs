@@ -14,7 +14,8 @@ use crate::conversation::domain::{
     Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
 };
 use crate::conversation::infrastructure::{
-    LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+    LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
+    NessaRecordReadSource, NessaRecordWatches,
 };
 use crate::device_pairing::infrastructure::{wire::NativePairingStatus, NativeEnrollmentClient};
 use crate::product::{ProductDependencies, ProductRouteState};
@@ -45,6 +46,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::runtime::Handle;
 
 struct NoAgents;
@@ -270,6 +272,12 @@ async fn gateway_child() {
         },
     )
     .with_passive_read(receivers.clone(), metadata.clone())
+    // The same producers `composition::local_auth` composes, over the same
+    // storage and metadata owners the reads use.
+    .with_change_watches(
+        Arc::new(NessaRecordWatches::new(storage.clone())),
+        metadata.clone(),
+    )
     .with_record_source(Arc::new(GatedRead {
         source: record.clone(),
         storage: storage.clone(),
@@ -426,8 +434,70 @@ async fn gateway_child() {
             drop(lease);
         }
     }
+    if mode == "live" {
+        tokio::spawn(live_control(
+            storage.clone(),
+            SessionId::new(setup.conversation.clone()).unwrap(),
+            receivers.clone(),
+            setup.receiver.clone(),
+            PrincipalId::new(setup.owner.clone()).unwrap(),
+        ));
+    }
     println!("ONLINE_READY");
     io::stdout().flush().unwrap();
     // Serve until the test kills this process.
     std::future::pending::<()>().await;
+}
+
+/// Live mode's control lines, each answered with `DONE <line>` once its effect
+/// is durable: `commit` appends one provider-context save to the conversation
+/// through this process's own storage owner, so its committed-change watch
+/// publishes; `revoke` removes the receiver's binding, as an owner would.
+async fn live_control(
+    storage: Arc<RecordStorage>,
+    conversation: SessionId,
+    receivers: Arc<LocalReceiverAuthority>,
+    receiver: String,
+    owner: PrincipalId,
+) {
+    let mut lines = BufReader::new(stdin()).lines();
+    let mut commits = 0_u64;
+    while let Ok(Some(line)) = lines.next_line().await {
+        match line.as_str() {
+            "commit" => {
+                commits += 1;
+                let lease = storage.open(conversation.clone()).await.unwrap();
+                let loaded = lease.load().await.unwrap();
+                let binding = loaded.binding().clone();
+                let mut snapshot = loaded.into_published(&conversation).unwrap().0.unwrap();
+                let before = snapshot.provider_context.clone();
+                snapshot.provider_context = ProviderContext::Recorded(
+                    ExecutionSessionId::new(format!("live-commit-{commits}")).unwrap(),
+                );
+                let after = snapshot.provider_context.clone();
+                lease
+                    .save_changes(
+                        binding,
+                        snapshot,
+                        vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
+                            before,
+                            after,
+                        }])
+                        .unwrap()],
+                    )
+                    .await
+                    .unwrap();
+                drop(lease);
+            }
+            "revoke" => {
+                receivers
+                    .change(receiver.clone(), None, false, owner.clone(), uuid())
+                    .await
+                    .unwrap();
+            }
+            other => panic!("unknown live control {other}"),
+        }
+        println!("DONE {line}");
+        io::stdout().flush().unwrap();
+    }
 }

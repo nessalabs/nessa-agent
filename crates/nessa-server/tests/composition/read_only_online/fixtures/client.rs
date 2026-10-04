@@ -15,6 +15,7 @@ use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTranspor
 use nessa_auth::application::pairing::ClientPendingStore;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -73,6 +74,14 @@ pub(crate) struct WireClient {
     transport: NativeTransport<TcpStream>,
     frames: FrameReader,
     next: u64,
+    // Frames that arrived while a call waited for its own response, in order.
+    held: VecDeque<Frame>,
+}
+/// One frame as it arrived: its decoded text with the exact encoded length, or
+/// the end of the connection. A native close carries no reason.
+pub(crate) enum Frame {
+    Text { value: Value, bytes: usize },
+    Closed,
 }
 impl WireClient {
     pub(crate) fn connect(root: &Path) -> Self {
@@ -105,6 +114,7 @@ impl WireClient {
             transport: selector.into_transport(),
             frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
             next: 0,
+            held: VecDeque::new(),
         };
         let challenge = client.value();
         let params = SessionAuthenticateParams {
@@ -121,12 +131,41 @@ impl WireClient {
         client
     }
     fn value(&mut self) -> Value {
+        match self.frame() {
+            Frame::Text { value, .. } => value,
+            Frame::Closed => panic!("the gateway closed the probe connection"),
+        }
+    }
+    /// The next frame in arrival order, held ones first.
+    pub(crate) fn frame(&mut self) -> Frame {
+        if let Some(frame) = self.held.pop_front() {
+            return frame;
+        }
+        self.read_frame()
+    }
+    fn read_frame(&mut self) -> Frame {
         loop {
             let buffer = self.frames.unfilled().unwrap();
-            let count = self.transport.read(buffer).unwrap();
-            assert!(count > 0, "the gateway closed the probe connection");
+            let count = match self.transport.read(buffer) {
+                Ok(0) => return Frame::Closed,
+                Ok(count) => count,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::UnexpectedEof
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    return Frame::Closed
+                }
+                Err(error) => panic!("frame read failed: {error}"),
+            };
             if let Some(body) = self.frames.filled(count).unwrap() {
-                return serde_json::from_slice(&body).unwrap();
+                return Frame::Text {
+                    value: serde_json::from_slice(&body).unwrap(),
+                    bytes: body.len(),
+                };
             }
         }
     }
@@ -138,9 +177,11 @@ impl WireClient {
         self.transport.write_all(&frame).unwrap();
         self.transport.flush().unwrap();
         for _ in 0..16 {
-            let value = self.value();
-            if value["id"] == id {
-                return value;
+            let frame = self.read_frame();
+            match &frame {
+                Frame::Text { value, .. } if value["id"] == id => return value.clone(),
+                Frame::Text { .. } => self.held.push_back(frame),
+                Frame::Closed => panic!("the gateway closed the probe connection during a call"),
             }
         }
         panic!("bounded fixture response capacity");

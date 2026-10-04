@@ -6,12 +6,14 @@ use crate::desktop_runtime::{
     infrastructure::{ConversationDirectory, RetirementFiles},
 };
 use crate::env::Environment;
+use crate::product::{ProductRouteState, WatchTaskFault};
 use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
     core::{
         Launch, NativeFailure, NativeShutdownFailure, PassiveReaderOutcomes,
-        PassiveReaderShutdownFailure, RunError, ShutdownFailure,
+        PassiveReaderShutdownFailure, RunError, ShutdownFailure, WatchDrainOutcome,
+        WatchShutdownFailure,
     },
     env::UptimeBackend,
 };
@@ -248,6 +250,7 @@ impl CompositionRoot {
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
         .map_err(RunError::Serve)?;
 
+        let shutdown_product = product.clone();
         let mut router = http::router(product).layer(Extension(endpoint_identity));
         if let Some(identity) = &desktop_identity {
             router = router.layer(Extension(identity.clone()));
@@ -374,8 +377,11 @@ impl CompositionRoot {
             if let Some(native) = native.as_mut() {
                 native.signal_stop();
             }
-            passive_cleanup(
+            // Then watch admission closes before any physical cleanup is
+            // polled (cleanup_product), and every outcome joins one report.
+            cleanup_product(
                 &slot,
+                &shutdown_product,
                 async {
                     match record_reader {
                         Some(reader) => reader.shutdown().await,
@@ -497,30 +503,71 @@ enum ShutdownReport {
     /// Callback has not yet published reader evidence.
     Unreported,
     /// The report retains each result as it is observed, including deadline evidence.
-    ReadersPending(PassiveReaderOutcomes),
+    DrainsPending {
+        readers: PassiveReaderOutcomes,
+        watches: WatchDrainOutcome,
+    },
     /// Both physical drains completed; conversation cleanup has not returned.
     ConversationsPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchShutdownFailure>,
     },
     /// Reader and conversation outcomes are known; MCP stop has not returned.
     ServersPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },
     /// MCP stop returned; native pairing's drain has not.
     NativePending {
         readers: Result<(), PassiveReaderShutdownFailure>,
+        watches: Result<(), WatchShutdownFailure>,
         conversations: Result<(), ConversationError>,
     },
     /// All cleanup owners returned; at least one failed.
     Failed(ShutdownFailure),
 }
 
+/// Normal host consumer: close watch admission before polling physical cleanup.
+/// ProductRouteState retains the original WatchOwners throughout this owned future.
+// Each argument is one independently owned cleanup stage (watches, two
+// readers, conversations, MCP, native) or the shared deadline; the report
+// orders them, so they stay separate parameters.
+#[allow(clippy::too_many_arguments)]
+async fn cleanup_product(
+    slot: &Mutex<ShutdownReport>,
+    product: &ProductRouteState,
+    record: impl Future<Output = Result<(), RecordReadError>>,
+    catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
+    conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
+    servers: impl Future<Output = ()>,
+    native: impl Future<Output = Result<(), NativeShutdownFailure>>,
+    deadline: Duration,
+) {
+    product.close_watch_admission();
+    passive_cleanup(
+        slot,
+        product.drain_watches(),
+        record,
+        catalogue,
+        conversations,
+        servers,
+        native,
+        deadline,
+    )
+    .await;
+}
+
 /// Own reader drain, conversation/MCP cleanup, and their report together.
 /// Each pending stage publishes known evidence before its next await. The final
 /// synchronous publication consumes that evidence rather than cloning errors.
+// Each argument is one independently owned cleanup stage (watches, two
+// readers, conversations, MCP, native) or the shared deadline; the report
+// orders them, so they stay separate parameters.
+#[allow(clippy::too_many_arguments)]
 async fn passive_cleanup(
     slot: &Mutex<ShutdownReport>,
+    watches: impl Future<Output = Result<(), WatchTaskFault>>,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
     conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
@@ -530,24 +577,35 @@ async fn passive_cleanup(
 ) {
     record_shutdown(
         slot,
-        ShutdownReport::ReadersPending(PassiveReaderOutcomes::default()),
+        ShutdownReport::DrainsPending {
+            readers: PassiveReaderOutcomes::default(),
+            watches: WatchDrainOutcome::default(),
+        },
     );
-    tokio::pin!(record, catalogue);
+    tokio::pin!(record, catalogue, watches);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
+    // One deadline covers every drain: it stays armed while any is pending and
+    // fires once, recording evidence only against the drains still pending.
+    let mut deadline_passed = false;
     loop {
-        let (record_pending, catalogue_pending, deadline_pending) = {
+        let (record_pending, catalogue_pending, watch_pending) = {
             let report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            let ShutdownReport::ReadersPending(outcomes) = &*report else {
+            let ShutdownReport::DrainsPending {
+                readers: outcomes,
+                watches,
+            } = &*report
+            else {
                 unreachable!()
             };
             (
                 outcomes.record().is_none(),
                 outcomes.catalogue().is_none(),
-                !outcomes.deadline_exceeded(),
+                !watches.complete(),
             )
         };
-        if !record_pending && !catalogue_pending {
+        let deadline_pending = !deadline_passed;
+        if !record_pending && !catalogue_pending && !watch_pending {
             break;
         }
         // Ready completions win over a simultaneous deadline, including zero.
@@ -556,21 +614,38 @@ async fn passive_cleanup(
             biased;
             result = &mut record, if record_pending => update_reader_report(slot, |outcomes| outcomes.observe_record(result)),
             result = &mut catalogue, if catalogue_pending => update_reader_report(slot, |outcomes| outcomes.observe_catalogue(result)),
+            result = &mut watches, if watch_pending => {
+                let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                let ShutdownReport::DrainsPending { watches, .. } = &mut *report else { unreachable!() };
+                watches.observe(result);
+            },
             _ = &mut timeout, if deadline_pending => {
-                update_reader_report(slot, PassiveReaderOutcomes::observe_deadline);
-                tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
+                deadline_passed = true;
+                let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                let ShutdownReport::DrainsPending { readers, watches } = &mut *report else { unreachable!() };
+                if !readers.complete() {
+                    readers.observe_deadline();
+                    tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
+                }
+                if !watches.complete() {
+                    watches.observe_deadline();
+                    tracing::error!("watch shutdown exceeded deadline; retaining runtime until original watch tasks end");
+                }
             }
         }
     }
     {
         let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::ReadersPending(outcomes) =
-            std::mem::replace(&mut *report, ShutdownReport::Unreported)
+        let ShutdownReport::DrainsPending {
+            readers: outcomes,
+            watches,
+        } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
         else {
             unreachable!()
         };
         *report = ShutdownReport::ConversationsPending {
             readers: outcomes.into_result(),
+            watches: watches.into_result(),
         };
     }
     let conversations = match conversations {
@@ -579,13 +654,14 @@ async fn passive_cleanup(
     };
     {
         let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::ConversationsPending { readers } =
+        let ShutdownReport::ConversationsPending { readers, watches } =
             std::mem::replace(&mut *report, ShutdownReport::Unreported)
         else {
             unreachable!()
         };
         *report = ShutdownReport::ServersPending {
             readers,
+            watches,
             conversations,
         };
     }
@@ -594,6 +670,7 @@ async fn passive_cleanup(
         let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
         let ShutdownReport::ServersPending {
             readers,
+            watches,
             conversations,
         } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
         else {
@@ -601,6 +678,7 @@ async fn passive_cleanup(
         };
         *report = ShutdownReport::NativePending {
             readers,
+            watches,
             conversations,
         };
     }
@@ -608,23 +686,36 @@ async fn passive_cleanup(
     let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
     let ShutdownReport::NativePending {
         readers,
+        watches,
         conversations,
     } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
     else {
         unreachable!()
     };
-    *report = match (readers, conversations, native) {
-        (readers, conversations, Err(native)) => ShutdownReport::Failed(ShutdownFailure::Native {
-            readers,
-            conversations,
-            native,
-        }),
-        (Ok(()), Ok(()), Ok(())) => ShutdownReport::Confirmed,
-        (Err(readers), Ok(()), Ok(())) => ShutdownReport::Failed(ShutdownFailure::Readers(readers)),
-        (Ok(()), Err(conversations), Ok(())) => {
+    *report = match (watches, readers, conversations, native) {
+        (watches, readers, conversations, Err(native)) => {
+            ShutdownReport::Failed(ShutdownFailure::Native {
+                readers,
+                watches,
+                conversations,
+                native,
+            })
+        }
+        (Err(watches), readers, conversations, Ok(())) => {
+            ShutdownReport::Failed(ShutdownFailure::Watches {
+                watches,
+                readers,
+                conversations,
+            })
+        }
+        (Ok(()), Ok(()), Ok(()), Ok(())) => ShutdownReport::Confirmed,
+        (Ok(()), Err(readers), Ok(()), Ok(())) => {
+            ShutdownReport::Failed(ShutdownFailure::Readers(readers))
+        }
+        (Ok(()), Ok(()), Err(conversations), Ok(())) => {
             ShutdownReport::Failed(ShutdownFailure::Conversations(conversations))
         }
-        (Err(readers), Err(conversations), Ok(())) => {
+        (Ok(()), Err(readers), Err(conversations), Ok(())) => {
             ShutdownReport::Failed(ShutdownFailure::Both {
                 readers,
                 conversations,
@@ -641,7 +732,10 @@ fn update_reader_report(
     update: impl FnOnce(&mut PassiveReaderOutcomes),
 ) {
     let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    let ShutdownReport::ReadersPending(outcomes) = &mut *report else {
+    let ShutdownReport::DrainsPending {
+        readers: outcomes, ..
+    } = &mut *report
+    else {
         unreachable!()
     };
     update(outcomes);
@@ -670,24 +764,29 @@ fn shutdown_result(report: &Mutex<ShutdownReport>) -> Result<(), RunError> {
     }
     let unconfirmed = match std::mem::replace(&mut *slot, ShutdownReport::Unreported) {
         ShutdownReport::Failed(error) => Some(error),
-        ShutdownReport::ReadersPending(outcomes) => {
-            Some(ShutdownFailure::ReadersUnreported { outcomes })
-        }
-        ShutdownReport::ConversationsPending { readers } => {
-            Some(ShutdownFailure::ConversationsUnreported { readers })
+        ShutdownReport::DrainsPending {
+            readers: outcomes,
+            watches,
+        } => Some(ShutdownFailure::DrainsUnreported { outcomes, watches }),
+        ShutdownReport::ConversationsPending { readers, watches } => {
+            Some(ShutdownFailure::ConversationsUnreported { readers, watches })
         }
         ShutdownReport::ServersPending {
             readers,
+            watches,
             conversations,
         } => Some(ShutdownFailure::ServersUnreported {
             readers,
+            watches,
             conversations,
         }),
         ShutdownReport::NativePending {
             readers,
+            watches,
             conversations,
         } => Some(ShutdownFailure::NativeUnreported {
             readers,
+            watches,
             conversations,
         }),
         // `Confirmed` returned above; named rather than wildcarded so a new
@@ -763,6 +862,7 @@ mod tests {
             };
             passive_cleanup(
                 &task_report,
+                std::future::ready(Ok(())),
                 async { Ok(()) },
                 async { Ok(()) },
                 conversations,
@@ -781,6 +881,7 @@ mod tests {
         let pending = match &*report.lock().unwrap() {
             ShutdownReport::ServersPending {
                 readers: Ok(()),
+                watches: Ok(()),
                 conversations,
             } => {
                 if conversation_failure {
@@ -835,6 +936,7 @@ mod tests {
     ) {
         let Err(RunError::Shutdown(Some(ShutdownFailure::ServersUnreported {
             readers,
+            watches: Ok(()),
             conversations,
         }))) = shutdown_result(report)
         else {
@@ -864,6 +966,7 @@ mod tests {
                 let task = tokio::spawn(async move {
                     passive_cleanup(
                         &task_report,
+                        std::future::ready(Ok(())),
                         async {
                             if reader_failure {
                                 Err(RecordReadError::WorkerPanicked)
@@ -899,6 +1002,7 @@ mod tests {
                 {
                     let stop = passive_cleanup(
                         &report,
+                        std::future::ready(Ok(())),
                         async {
                             if reader_failure {
                                 Err(RecordReadError::WorkerPanicked)
@@ -976,6 +1080,7 @@ mod tests {
             async move {
                 passive_cleanup(
                     &slot,
+                    std::future::ready(Ok(())),
                     async {
                         started.notify_one();
                         reader.await.unwrap();
@@ -1031,6 +1136,7 @@ mod tests {
             serve_with_cleanup(listener, Router::new(), async {}, async move {
                 passive_cleanup(
                     &slot,
+                    std::future::ready(Ok(())),
                     async { Ok(()) },
                     async { Ok(()) },
                     Some(async { Ok(()) }),
@@ -1068,6 +1174,7 @@ mod tests {
                     let cleaned = AtomicBool::new(false);
                     passive_cleanup(
                         &report,
+                        std::future::ready(Ok(())),
                         std::future::ready(record),
                         std::future::ready(catalogue.clone()),
                         Some(async {
@@ -1121,6 +1228,7 @@ mod tests {
         let task = tokio::spawn(async move {
             passive_cleanup(
                 &output,
+                std::future::ready(Ok(())),
                 std::future::ready(Err(RecordReadError::WorkerPanicked)),
                 async {
                     waiting.await.unwrap();
@@ -1170,6 +1278,7 @@ mod tests {
                 {
                     let stop = passive_cleanup(
                         &report,
+                        std::future::ready(Ok(())),
                         std::future::ready(result),
                         std::future::pending(),
                         Some(async {
@@ -1195,8 +1304,10 @@ mod tests {
                         );
                     }
                 }
-                let Err(RunError::Shutdown(Some(ShutdownFailure::ReadersUnreported { outcomes }))) =
-                    shutdown_result(&report)
+                let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
+                    outcomes,
+                    ..
+                }))) = shutdown_result(&report)
                 else {
                     panic!("pending reader evidence must survive")
                 };
@@ -1215,6 +1326,7 @@ mod tests {
             {
                 let stop = passive_cleanup(
                     &report,
+                    std::future::ready(Ok(())),
                     std::future::pending(),
                     std::future::pending(),
                     Some(std::future::ready(Ok(()))),
@@ -1235,8 +1347,9 @@ mod tests {
                     );
                 }
             }
-            let Err(RunError::Shutdown(Some(ShutdownFailure::ReadersUnreported { outcomes }))) =
-                shutdown_result(&report)
+            let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
+                outcomes, ..
+            }))) = shutdown_result(&report)
             else {
                 panic!("unknown is not successful")
             };
@@ -1253,6 +1366,7 @@ mod tests {
             {
                 let stop = passive_cleanup(
                     &report,
+                    std::future::ready(Ok(())),
                     std::future::ready(result),
                     std::future::ready(Ok(())),
                     Some(std::future::pending()),
@@ -1266,8 +1380,10 @@ mod tests {
                         .await
                 );
             }
-            let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported { readers }))) =
-                shutdown_result(&report)
+            let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
+                readers,
+                watches: Ok(()),
+            }))) = shutdown_result(&report)
             else {
                 panic!("conversation completion remains unknown")
             };
@@ -1287,6 +1403,7 @@ mod tests {
         let report = Mutex::new(ShutdownReport::Confirmed);
         passive_cleanup(
             &report,
+            std::future::ready(Ok(())),
             async {
                 tokio::time::sleep(Duration::from_secs(31)).await;
                 Ok(())
@@ -1316,6 +1433,7 @@ mod tests {
             let stop = passive_cleanup(
                 &report,
                 std::future::ready(Ok(())),
+                std::future::ready(Ok(())),
                 async {
                     waiting.await.unwrap();
                     Err(CatalogueReadError::OperationAndWorkerPanicked(Box::new(
@@ -1341,6 +1459,7 @@ mod tests {
             );
         }
         let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
+            watches: Ok(()),
             readers: Err(readers),
         }))) = shutdown_result(&report)
         else {
@@ -1361,6 +1480,7 @@ mod tests {
         let report = Mutex::new(ShutdownReport::Confirmed);
         passive_cleanup(
             &report,
+            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
@@ -1482,6 +1602,7 @@ mod tests {
             &confirmed,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
             async {},
             std::future::ready(Ok(())),
@@ -1493,6 +1614,7 @@ mod tests {
         let failed = Mutex::new(ShutdownReport::Confirmed);
         passive_cleanup(
             &failed,
+            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Err(ConversationError::Audit))),
@@ -1547,6 +1669,7 @@ mod tests {
                 &report,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
+                std::future::ready(Ok(())),
                 Some(std::future::ready(if conversation_fails {
                     Err(ConversationError::Audit)
                 } else {
@@ -1563,6 +1686,7 @@ mod tests {
             .await;
             let Err(RunError::Shutdown(Some(ShutdownFailure::Native {
                 readers: Ok(()),
+                watches: Ok(()),
                 conversations,
                 native,
             }))) = shutdown_result(&report)
@@ -1576,6 +1700,7 @@ mod tests {
         let report = Mutex::new(ShutdownReport::Unreported);
         passive_cleanup(
             &report,
+            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             None::<Ready<Result<(), ConversationError>>>,
@@ -1597,6 +1722,7 @@ mod tests {
                 &report,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
+                std::future::ready(Ok(())),
                 Some(std::future::ready(Err(ConversationError::Audit))),
                 async {},
                 std::future::pending(),
@@ -1609,11 +1735,42 @@ mod tests {
         }
         let Err(RunError::Shutdown(Some(ShutdownFailure::NativeUnreported {
             readers: Ok(()),
+            watches: Ok(()),
             conversations: Err(ConversationError::Audit),
         }))) = shutdown_result(&report)
         else {
             panic!("a pending native drain must not read as confirmed");
         };
+    }
+
+    /// Rows S12 and H2 together: a watch task fault and a native drain failure
+    /// in the same shutdown are both kept in the one report.
+    #[tokio::test]
+    async fn watch_and_native_shutdown_failures_are_both_retained() {
+        let fault = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
+        let report = Mutex::new(ShutdownReport::Unreported);
+        passive_cleanup(
+            &report,
+            std::future::ready(Err(WatchTaskFault::Panic)),
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            None::<Ready<Result<(), ConversationError>>>,
+            async {},
+            std::future::ready(Err(fault)),
+            Duration::from_secs(30),
+        )
+        .await;
+        let Err(RunError::Shutdown(Some(ShutdownFailure::Native {
+            readers: Ok(()),
+            watches: Err(watches),
+            conversations: Ok(()),
+            native,
+        }))) = shutdown_result(&report)
+        else {
+            panic!("both failures must survive into the result");
+        };
+        assert_eq!(native, fault);
+        assert_eq!(watches.fault(), Some(WatchTaskFault::Panic));
     }
 
     /// Row S14: a native listener failure stops the gateway like a process
@@ -1687,3 +1844,7 @@ mod tests {
         assert_eq!(config.stage, Stage::Ci);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/composition/watch_shutdown.rs"]
+mod watch_shutdown_tests;

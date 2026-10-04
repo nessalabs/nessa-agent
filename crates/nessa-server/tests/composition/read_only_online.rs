@@ -3,9 +3,10 @@
 mod fixtures;
 use crate::composition::{local_auth::SystemClock, read_only_example};
 use crate::product::generated::{
-    product_method, ConversationCloseParams, ConversationRecordsHeadParams,
-    ConversationRecordsHeadResult, ConversationRecordsPageParams, CredentialListParams,
-    RecordPageRequest, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+    product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
+    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
+    ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
+    MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
     MAX_RECORD_PAGE_RECORDS,
 };
 use crate::product::record_read::wire as record_wire;
@@ -785,4 +786,158 @@ fn default_budget_consumes_cumulative_valid_rpcs() {
     assert!(value["transportFailure"].is_null());
     assert_eq!(value["work"]["pages"], 1);
     assert_eq!(value["durable"]["progress"]["downloaded"], "1");
+}
+
+/// The finish line of #298 across real processes: a seeded receiver replays,
+/// registers before its final recheck, catches a commit made between the
+/// acknowledgement and that recheck, follows live hints, recovers a commit
+/// made while it was disconnected (so its hint was never sent) from its durable
+/// checkpoint, and ends with the same folded view a fresh
+/// full replay produces. Revocation stops hints and the next command is refused;
+/// a sleeping gateway leaves the saved view readable and the check failed.
+/// Rows L1–L7 of the delivery table in docs/design/committed-change-watches.md.
+#[test]
+fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let mut gateway = Gateway::start_live(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let cache = setup_cache(directory.path());
+    let facts = |report: &Value| report["durable"]["progress"]["facts"].clone();
+    let sync = |cache: &Path| {
+        let (ok, report) = command(record_command(&root, cache, &setup, "100"), false);
+        assert!(ok, "{report:?}");
+        let report = report.unwrap();
+        assert_eq!(report["work"]["complete"], true, "{report}");
+        assert_eq!(report["durable"]["status"], "complete", "{report}");
+        report
+    };
+    let watch_params = ConversationWatchRecordsParams {
+        conversation_id: setup.conversation.clone(),
+        receiver_id: setup.receiver.clone(),
+        access_epoch: setup.epoch.to_string(),
+    };
+    let hint = |receiver: &mut WireClient, watch: &str| match receiver.frame() {
+        Frame::Text { value, bytes } => {
+            assert_eq!(
+                value["event"],
+                product_event::CONVERSATION_CHANGED,
+                "{value}"
+            );
+            // The hint names the watch and nothing else: no head, cursor or content.
+            assert_eq!(value["payload"], json!({ "watchId": watch }));
+            bytes
+        }
+        Frame::Closed => panic!("closed instead of a hint"),
+    };
+
+    // L1: seeded replay to a durable checkpoint.
+    assert_eq!(facts(&sync(&cache)), "1");
+
+    // L2: register; a commit lands after the acknowledgement and before the
+    // final recheck (the install-to-acknowledgement window is the in-process
+    // row O2). The recheck
+    // from the checkpoint catches it, and the hint for it still arrives,
+    // because registration came first.
+    let mut receiver = WireClient::connect(&root);
+    let watched = receiver.call(product_method::CONVERSATION_WATCH_RECORDS, &watch_params);
+    assert_eq!(watched["ok"], true, "{watched}");
+    let first_watch = watched["payload"]["watchId"].as_str().unwrap().to_owned();
+    gateway.act("commit");
+    assert_eq!(facts(&sync(&cache)), "2");
+    let bytes = hint(&mut receiver, &first_watch);
+    // Real encoded size of one hint frame; bounded by the published watch-id
+    // bound plus the fixed event envelope.
+    assert!(
+        bytes <= MAX_CHANGE_WATCH_ID_BYTES + 128,
+        "{bytes} encoded hint bytes"
+    );
+
+    // L3: a later commit is hinted, and the hint is answered by a pass.
+    gateway.act("commit");
+    hint(&mut receiver, &first_watch);
+    assert_eq!(facts(&sync(&cache)), "3");
+
+    // L4: the receiver disconnects and the gateway commits meanwhile, so no
+    // hint for that commit is ever sent. A new connection gets a new watch identity, the old one is
+    // foreign to it, and the recheck from the durable checkpoint recovers.
+    drop(receiver);
+    gateway.act("commit");
+    let mut receiver = WireClient::connect(&root);
+    let watched = receiver.call(product_method::CONVERSATION_WATCH_RECORDS, &watch_params);
+    assert_eq!(watched["ok"], true, "{watched}");
+    let second_watch = watched["payload"]["watchId"].as_str().unwrap().to_owned();
+    assert_ne!(second_watch, first_watch);
+    // Same counter as the new watch, other connection's namespace: foreign.
+    let stale = receiver.call(
+        product_method::CONVERSATION_UNWATCH,
+        &ConversationUnwatchParams {
+            watch_id: first_watch.clone(),
+        },
+    );
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(stale["error"]["code"], "invalid_watch", "{stale}");
+    assert_eq!(facts(&sync(&cache)), "4");
+    gateway.act("commit");
+    hint(&mut receiver, &second_watch);
+    assert_eq!(facts(&sync(&cache)), "5");
+
+    // L5: replay plus live passes give the same folded view as one fresh replay.
+    let show = |cache: &Path| {
+        let (ok, view) = command(
+            vec![
+                "show".into(),
+                cache.to_string_lossy().into_owned(),
+                setup.receiver.clone(),
+                setup.gateway.clone(),
+                setup.conversation.clone(),
+            ],
+            false,
+        );
+        assert!(ok, "{view:?}");
+        let mut view = view.unwrap();
+        // Each `show` names its own rendering with a fresh revision; the
+        // folded content and progress are what must agree.
+        let revision = view["view"]["revision"].take();
+        assert!(revision.is_string(), "{view}");
+        view
+    };
+    let fresh_directory = tempfile::tempdir().unwrap();
+    let fresh = setup_cache(fresh_directory.path());
+    assert_eq!(facts(&sync(&fresh)), "5");
+    let live_view = show(&cache);
+    assert!(live_view["view"].is_object(), "{live_view}");
+    assert_eq!(live_view, show(&fresh));
+
+    // L6: access revoked mid-watch. The next commit's hint is refused at
+    // delivery: the connection closes with no hint (a native close carries no
+    // reason), and the next command is refused before it reads.
+    gateway.act("revoke");
+    gateway.act("commit");
+    match receiver.frame() {
+        Frame::Closed => {}
+        Frame::Text { value, .. } => panic!("frame after revocation: {value}"),
+    }
+    let (ok, denied) = command(record_command(&root, &cache, &setup, "100"), false);
+    assert!(!ok);
+    // The receiver no longer holds the pairing, so the native profile's
+    // pinned status check before any read is refused (row PC5): not an
+    // authenticated Terminal, so nothing is purged.
+    let denied = denied.unwrap();
+    assert_eq!(denied["connectionCheck"], "attempted", "{denied}");
+    assert_eq!(denied["enrollmentFailure"]["code"], "refused", "{denied}");
+    assert!(denied["purge"].is_null(), "{denied}");
+
+    // L7: the gateway sleeps. The check fails explicitly, and the saved view
+    // is still read offline, unchanged.
+    drop(gateway);
+    let (ok, asleep) = command(record_command(&root, &cache, &setup, "100"), false);
+    assert!(!ok);
+    let asleep = asleep.unwrap();
+    // The native profile has no endpoint file to find missing: the connection
+    // is attempted and its pinned status check fails on I/O.
+    assert_eq!(asleep["connectionCheck"], "attempted", "{asleep}");
+    assert_eq!(asleep["enrollmentFailure"]["code"], "io", "{asleep}");
+    assert_eq!(show(&cache), live_view);
 }
