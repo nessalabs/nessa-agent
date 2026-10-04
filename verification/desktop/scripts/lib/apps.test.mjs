@@ -110,8 +110,23 @@ describe("exactly", () => {
       assert.ok(!exactly(head).test(other), other)
   })
   it("W5: takes the text's characters literally", () => {
-    assert.ok(exactly("run a.b(c)$ \\d").test("run a.b(c)$ \\d"))
-    assert.ok(!exactly("run a.b").test("run aXb"))
+    // Every character the pattern escapes, each where it would mean something.
+    const literal = "^a.b*c+d?e{1}f(g)h|i[j]k$l\\m$"
+    assert.ok(exactly(literal).test(literal))
+    for (const [text, unlike] of [
+      ["run a.b", "run aXb"],
+      ["run a*", "run "],
+      ["run a+", "run aa"],
+      ["run ab?", "run a"],
+      ["run ^a", "run a"],
+      ["run a{2}", "run aa"],
+      ["run a|b", "run a"],
+      ["run (a)", "run a"],
+      ["run [ab]", "run a"],
+      ["run a$", "run a"],
+      ["run \\d", "run 1"],
+    ])
+      assert.ok(!exactly(text).test(unlike), `${text} took ${unlike}`)
   })
 })
 
