@@ -229,7 +229,7 @@ test("claude: the tools/call names the call in _meta, by the frames' toolCallId"
   assert.equal(await exited(agent.child, 5000), true)
 })
 
-test('codex: the tools/call names no call id (no _meta["claudecode/toolUseId"])', async (t) => {
+test(`codex: the tools/call names no call id (no _meta["${CLAUDE_CALL_ID}"])`, async (t) => {
   const recorder = recordingCalls(t)
   const agent = start("codex", codexEnv)
   const opened = await agent.request("session/new", {
