@@ -35,7 +35,9 @@ pub enum RecordReadStatus<T> {
     /// The requested operation completed using validated terminal evidence.
     Ready(T),
     /// More bounded validation work is needed, or this stream has another
-    /// validation owner. Retry with fresh authorization and the same scope.
+    /// validation owner. Call again with the same scope for the next step; a
+    /// host may make several calls within one authorized read and
+    /// reauthorizes before a later one.
     Preparing,
 }
 

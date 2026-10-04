@@ -56,6 +56,11 @@ impl ReadWorkers {
     pub(crate) fn admit(&self) -> Result<(), ReadWorkerError> {
         self.state.lock().unwrap().admit()
     }
+    /// Whether shutdown has started or a worker fault has fenced new reads.
+    /// Running work may read this between its own bounded steps to stop early.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.state.lock().unwrap().closed
+    }
     /// Preserve an inner source worker panic in the same lifecycle owner.
     pub(crate) fn worker_panicked(&self) {
         let mut state = self.state.lock().unwrap();
