@@ -1,8 +1,9 @@
 use super::{
-    app_sources, attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, MessageCommitClock, ProviderContext, QueueHistoryRecord,
-    SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    app_sources, attachment::AttachmentLease, steering_position::SteeringPosition,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, MessageCommitClock,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
+    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -657,16 +658,22 @@ impl SessionManager {
             })
             .map_err(AgentError::UnknownApp)?;
             let mut next = snapshot.clone();
+            // A steered message's offset is its target's saved event count;
+            // a target not saved has none, and is refused rather than saved
+            // as half a position.
             let target_event_offset = scheduling
                 .first()
                 .and_then(|edge| edge.target.as_ref())
-                .and_then(|target| {
-                    snapshot
-                        .invocations
-                        .iter()
-                        .find(|record| &record.request.execution_id == target)
+                .map(|target| {
+                    SteeringPosition::at_admission(target, &snapshot.invocations)
+                        .map(SteeringPosition::offset)
+                        .ok_or_else(|| {
+                            AgentError::InvalidInput(
+                                "steering target is not a saved invocation".into(),
+                            )
+                        })
                 })
-                .map(|record| record.events.len());
+                .transpose()?;
             next.invocations.push(InvocationRecord {
                 target_event_offset,
                 submission,

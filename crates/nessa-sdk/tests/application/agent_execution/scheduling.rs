@@ -1083,9 +1083,17 @@ async fn an_app_a_running_turn_drew_is_injected_into_that_turn() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        record(&storage, "shown").request.user_message,
-        shown.user_message
-    );
+    // The re-attached agent restored the steered message as saved.
+    let restored_shown = restored
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .invocations
+        .into_iter()
+        .find(|record| record.request.execution_id.as_str() == "shown")
+        .unwrap();
+    assert_eq!(restored_shown.request.user_message, shown.user_message);
+    assert_eq!(restored_shown.target_event_offset, Some(1));
     restored.close(close_action()).await.unwrap();
 }

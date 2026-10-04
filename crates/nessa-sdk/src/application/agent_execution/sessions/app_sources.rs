@@ -16,11 +16,11 @@
 //! once. A message steered into a running turn may name that turn's calls
 //! observed before it: admission and replay see only those, as they hold the
 //! turn as it stood then; a restored snapshot holds the whole turn, so
-//! [`validate_saved`] keeps the calls before the message's
-//! `target_event_offset`.
+//! [`validate_saved`] keeps the calls before the message's offset, which it
+//! is given as the [`SteeringPosition`] `steering_position` reads.
 #![deny(missing_docs)]
 
-use super::InvocationRecord;
+use super::{steering_position::SteeringPosition, InvocationRecord};
 use crate::application::agent_execution::executions::ExecutionUpdate;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
@@ -104,20 +104,22 @@ pub(crate) fn validate_app_sources<'a>(
 
 /// [`validate_app_sources`] for a saved message, against `observed`, which
 /// finds a named tool call with the index of the event that first observed
-/// it as an MCP call. A message steered into a running turn (`steered`: that
-/// turn, and the message's `target_event_offset`, the count of the turn's
-/// events saved when the message was admitted) names a call of that turn
-/// only if the call was observed before the offset; one observed at or after
-/// it was not recorded before the message, and is `NoMcpToolCall`.
+/// it as an MCP call. A message steered into a running turn (`steered`, its
+/// saved [`SteeringPosition`]) names a call of that turn only if the call was
+/// observed before the offset; one observed at or after it was not recorded
+/// before the message, and is `NoMcpToolCall`. Calls of other turns are not
+/// bounded by it.
 pub(crate) fn validate_saved<'a>(
     message: &UserMessage,
-    steered: Option<(&ExecutionId, usize)>,
+    steered: Option<SteeringPosition<'_>>,
     observed: impl Fn(&ExecutionId, &ToolCallId) -> Option<(usize, &'a McpTool)>,
 ) -> Result<(), UnknownApp> {
     validate_app_sources(message, |execution, tool_id| {
         observed(execution, tool_id)
             .filter(|&(index, _)| {
-                steered.is_none_or(|(target, offset)| target != execution || index < offset)
+                steered.is_none_or(|position| {
+                    position.target() != execution || index < position.offset()
+                })
             })
             .map(|(_, tool)| tool)
     })

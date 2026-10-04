@@ -153,13 +153,15 @@ fn image(media_type: ImageMediaType, size: u64) -> ImageReference {
     ImageReference::new(Sha256Digest::from_bytes([3; 32]), media_type, size).unwrap()
 }
 
-/// A provider whose model takes PNG images of at most six bytes (eight as
-/// base64), whose agent answers `agent` about images, and whose backend
-/// refuses every input with `refuses` when that is set.
+/// A provider whose model takes text and PNG images of at most six bytes
+/// (eight as base64), or those images alone (`taking_no_text`), whose agent
+/// answers `agent` about images, and whose backend refuses every input with
+/// `refuses` when that is set.
 struct ImageProvider {
     executions: Arc<AtomicUsize>,
     agent: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
+    capabilities: &'static EffectiveCapabilities,
 }
 struct ImageBackend {
     executions: Arc<AtomicUsize>,
@@ -173,10 +175,20 @@ impl ImageProvider {
             executions: Arc::default(),
             agent,
             refuses,
+            capabilities: image_capabilities_ref(true),
+        })
+    }
+    /// The same provider over a model that takes images and no text.
+    fn taking_no_text(agent: ProviderOperationCapabilities) -> Arc<Self> {
+        Arc::new(Self {
+            executions: Arc::default(),
+            agent,
+            refuses: None,
+            capabilities: image_capabilities_ref(false),
         })
     }
 }
-fn image_capabilities() -> EffectiveCapabilities {
+fn image_capabilities(takes_text: bool) -> EffectiveCapabilities {
     let text = ModalitiesDto {
         text: true,
         image: false,
@@ -187,8 +199,9 @@ fn image_capabilities() -> EffectiveCapabilities {
         model_id: "fixture".into(),
         display_name: "Fixture".into(),
         input: ModalitiesDto {
+            text: takes_text,
             image: true,
-            ..text
+            audio: false,
         },
         image_input: Some(ImageInputLimitsDto {
             media_types: vec!["image/png".into()],
@@ -207,7 +220,7 @@ fn image_capabilities() -> EffectiveCapabilities {
         documentation_url: "https://example.com".into(),
     })
     .unwrap();
-    let input = Modalities::new(true, true, false).unwrap();
+    let input = Modalities::new(takes_text, true, false).unwrap();
     let output = Modalities::new(true, false, false).unwrap();
     EffectiveCapabilities::new(
         &model,
@@ -219,16 +232,22 @@ fn image_capabilities() -> EffectiveCapabilities {
     )
     .unwrap()
 }
-fn image_capabilities_ref() -> &'static EffectiveCapabilities {
-    static CAPABILITIES: OnceLock<EffectiveCapabilities> = OnceLock::new();
-    CAPABILITIES.get_or_init(image_capabilities)
+fn image_capabilities_ref(takes_text: bool) -> &'static EffectiveCapabilities {
+    static WITH_TEXT: OnceLock<EffectiveCapabilities> = OnceLock::new();
+    static WITHOUT_TEXT: OnceLock<EffectiveCapabilities> = OnceLock::new();
+    let capabilities = if takes_text {
+        &WITH_TEXT
+    } else {
+        &WITHOUT_TEXT
+    };
+    capabilities.get_or_init(|| image_capabilities(takes_text))
 }
 impl AgentProvider for ImageProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("anthropic", "fixture", "workspace").unwrap()
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
-        image_capabilities_ref()
+        self.capabilities
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         let (_, restore, _control) = request.into_parts();
@@ -245,7 +264,7 @@ impl AgentProvider for ImageProvider {
                         refuses: self.refuses.clone(),
                         sender,
                     }),
-                    image_capabilities_ref().clone(),
+                    self.capabilities.clone(),
                 ),
                 events: Box::new(TestEvents(receiver)),
             })
@@ -581,16 +600,20 @@ fn drawn_app() -> nessa_sdk::domain::agent_execution::prompts::McpAppSource {
     .unwrap()
 }
 
-/// An agent over `storage` whose conversation holds one completed turn,
-/// `drawing`, that observed its tool call `call-1` as MCP `charts/show`
-/// (`drawn_app`). The turn is run, then its observation is added to the
-/// saved record and the conversation restored, which is the history
-/// admission reads.
+/// An agent of `provider` over `storage` whose conversation holds one
+/// completed turn, `drawing`, that observed its tool call `call-1` as MCP
+/// `charts/show` (`drawn_app`). The turn is run by a provider that takes
+/// text, then its observation is added to the saved record and the
+/// conversation restored with `provider`, which is the history admission
+/// reads.
 async fn agent_with_a_drawn_app(storage: &MemoryStorage, provider: Arc<ImageProvider>) -> Agent {
     use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
-    let agent = attached_agent(provider.clone(), storage.manager().await)
-        .await
-        .unwrap();
+    let agent = attached_agent(
+        ImageProvider::new(AGENT_TAKES_IMAGES, None),
+        storage.manager().await,
+    )
+    .await
+    .unwrap();
     agent.invoke(request("drawing"), actor()).await.unwrap();
     agent.close(actor()).await.unwrap();
     drop(agent);
@@ -700,5 +723,59 @@ async fn a_retry_that_changes_who_wrote_a_saved_message_is_refused_at_every_entr
             &MessageSender::Person
         );
         agent.close(actor()).await.unwrap();
+    }
+}
+
+/// B6 at every entry ("The values, saved and sent"): a message of images
+/// alone carrying an app's context, sent to a model that takes images and
+/// no text, is refused as a text message is, at the same point and with the
+/// same effects, because the context reaches the agent as text. The app is
+/// one the conversation recorded, so the refusal is the model's.
+#[tokio::test]
+async fn an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry() {
+    use nessa_sdk::domain::agent_execution::prompts::AppModelContext;
+    let context = AppModelContext::new(drawn_app(), "update-1", Some("x".into()), None)
+        .unwrap()
+        .unwrap();
+    let images = UserMessage::new(None, vec![image(ImageMediaType::Png, 6)], Vec::new()).unwrap();
+    let carrying = images.with_app_model_context(vec![context]).unwrap();
+    let text = UserMessage::text_only(PromptText::new("plot").unwrap());
+    for operation in 0..4 {
+        // The result, whether the provider was asked, how many writes, and
+        // the messages saved, for each message.
+        let mut outcomes = Vec::new();
+        for message in [&text, &carrying] {
+            let storage = MemoryStorage::default();
+            let provider = ImageProvider::taking_no_text(AGENT_TAKES_IMAGES);
+            let agent = agent_with_a_drawn_app(&storage, provider.clone()).await;
+            let writes = storage.0.lock().unwrap().writes;
+            let input = ExecutionRequest {
+                user_message: message.clone(),
+                ..request("with-context")
+            };
+            let result = submit(&agent, input, operation).await;
+            assert!(
+                matches!(result, Err(AgentError::InvalidInput(_))),
+                "operation {operation}: {result:?}"
+            );
+            let written = storage.0.lock().unwrap().writes - writes;
+            outcomes.push((
+                result,
+                provider.executions.load(Ordering::SeqCst),
+                written,
+                storage.snapshot().invocations.len(),
+            ));
+            agent.close(actor()).await.unwrap();
+        }
+        assert_eq!(outcomes[0], outcomes[1], "operation {operation}");
+        let (_, executions, writes, saved) = &outcomes[1];
+        assert_eq!(*executions, 0, "operation {operation}");
+        if operation == 3 {
+            // `steer` saves the message before the model's check, and
+            // settles it as refused: #477, for text and contexts alike.
+            assert_eq!(*saved, 2, "operation {operation}");
+        } else {
+            assert_eq!((*writes, *saved), (0, 1), "operation {operation}");
+        }
     }
 }

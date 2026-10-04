@@ -846,6 +846,49 @@ async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
     assert_eq!(accepted, [ExecutionId::new("drawn").unwrap()]);
 }
 
+/// Admission saves a steered message's target and offset together (A11): a
+/// target among the saved turns takes its saved event count as the offset,
+/// and a target that is not is refused, saving nothing, rather than saved
+/// without one.
+#[tokio::test]
+async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
+    let (manager, lease, active) = manager(0).await;
+    manager.event(text(&active)).await.unwrap();
+    manager.flush_observed().await.unwrap();
+    let saves = lease.changes.lock().unwrap().len();
+    let actor = ActionContext::new("user", "test", "steer").unwrap();
+    let steer = |id: &str, target: &ExecutionId| {
+        (
+            invocation(id, false).request,
+            InvocationSchedulingEvent {
+                kind: InvocationKind::Steering,
+                target: Some(target.clone()),
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(actor.clone()),
+            },
+        )
+    };
+    let (request, event) = steer("stray", &ExecutionId::new("unsaved").unwrap());
+    assert!(matches!(
+        manager
+            .begin_with_scheduling(request, actor.clone(), event, SubmissionMode::Steering)
+            .await,
+        Err(AgentError::InvalidInput(_))
+    ));
+    assert_eq!(lease.changes.lock().unwrap().len(), saves);
+    let (request, event) = steer("steered", &active);
+    manager
+        .begin_with_scheduling(request, actor.clone(), event, SubmissionMode::Steering)
+        .await
+        .unwrap();
+    let snapshot = manager.snapshot().await.unwrap();
+    let steered = snapshot.invocations.last().unwrap();
+    assert_eq!(steered.request.execution_id.as_str(), "steered");
+    assert_eq!(steered.target_event_offset, Some(1));
+}
+
 /// A call observed as `charts/show` and then reported as `charts/hide` keeps
 /// its first MCP identity: the second observation is refused and saved as
 /// nothing, so admission refuses an app naming `charts/hide`

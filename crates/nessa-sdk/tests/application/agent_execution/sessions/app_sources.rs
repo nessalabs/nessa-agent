@@ -310,15 +310,21 @@ fn a8_a_restored_message_naming_a_later_turns_call_is_corrupt() {
     );
 }
 
-/// The record log of `turn-1` running, observing `before`, then `message`
-/// steered natively into it as `turn-2` (its `target_event_offset` the count
-/// of `before`), then `turn-1` observing `after`.
+/// The steered message's own turn.
+const STEERED: &str = "steered";
+
+/// The record log of the completed turns `earlier`, then `target` running,
+/// observing `before`, then `message` steered natively into it as
+/// [`STEERED`] (its `target_event_offset` the count of `before`), then
+/// `target` observing `after`.
 fn steered_log(
+    earlier: &[InvocationRecord],
+    target: &str,
     message: UserMessage,
     before: Vec<ToolCallUpdate>,
     after: Vec<ToolCallUpdate>,
 ) -> Vec<SessionChange> {
-    let target = ExecutionId::new(DRAWN).unwrap();
+    let target = ExecutionId::new(target).unwrap();
     let event = |kind, target: Option<&ExecutionId>, before, stage, cause, actor| {
         InvocationSchedulingEvent {
             kind,
@@ -330,7 +336,7 @@ fn steered_log(
         }
     };
     let actor = || Some(ActionContext::new("user", "test", "invoke").unwrap());
-    let mut running = turn(DRAWN, text(), Vec::new());
+    let mut running = turn(target.as_str(), text(), Vec::new());
     running.events.clear();
     running.result = None;
     running.local_outcome = None;
@@ -343,7 +349,7 @@ fn steered_log(
         SchedulingCause::Submitted,
         actor(),
     )];
-    let mut steering = turn("turn-2", message, Vec::new());
+    let mut steering = turn(STEERED, message, Vec::new());
     steering.events.clear();
     steering.result = None;
     steering.local_outcome = None;
@@ -365,12 +371,9 @@ fn steered_log(
             ))
         })
     };
-    let mut changes = vec![
-        SessionChange::Opened {
-            id: SessionId::new("session").unwrap(),
-            provider: ProviderIdentity::new("provider", "model", "").unwrap(),
-            context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),
-        },
+    // Opened, then each earlier turn whole.
+    let mut changes = record_log(&snapshot(earlier.to_vec()));
+    changes.extend([
         SessionChange::InputAccepted(Box::new(running)),
         SessionChange::QueueDecision(QueueHistoryRecord {
             mutation: QueueMutation::Admitted {
@@ -396,11 +399,11 @@ fn steered_log(
                 None,
             ),
         },
-    ];
+    ]);
     changes.extend(observed(before));
     changes.push(SessionChange::InputAccepted(Box::new(steering)));
     changes.push(SessionChange::SchedulingTransition {
-        execution_id: ExecutionId::new("turn-2").unwrap(),
+        execution_id: ExecutionId::new(STEERED).unwrap(),
         event: event(
             InvocationKind::Steering,
             Some(&target),
@@ -414,20 +417,35 @@ fn steered_log(
     changes
 }
 
-/// A message steered into a running turn (A1b, A8): the rule as admission
-/// asks it of the turn's calls saved before the message, as a replayed record
-/// log does, and as restoration asks it of a snapshot that holds the turn
-/// whole, with the message edited in after a person's steered the same way.
-fn judged_steered(
+/// The saved invocation `id` of `snapshot`.
+fn invocation_mut<'a>(snapshot: &'a mut SessionSnapshot, id: &str) -> &'a mut InvocationRecord {
+    snapshot
+        .invocations
+        .iter_mut()
+        .find(|record| record.request.execution_id.as_str() == id)
+        .unwrap()
+}
+
+/// A message steered into a running turn (A1b, A1c, A8): the rule as
+/// admission asks it of `earlier` and the target's calls saved before the
+/// message, as a replayed record log does, and as restoration asks it of a
+/// snapshot that holds the target whole, with the message edited in after a
+/// person's steered the same way.
+fn judged_steered_after(
+    earlier: Vec<InvocationRecord>,
+    target: &str,
     message: UserMessage,
     before: Vec<ToolCallUpdate>,
     after: Vec<ToolCallUpdate>,
     expected: Result<(), UnknownApp>,
 ) {
-    let saved = turn(DRAWN, text(), before.clone());
+    let saved = turn(target, text(), before.clone());
     assert_eq!(
         validate_against(&message, |execution| {
-            (execution.as_str() == DRAWN).then_some(&saved)
+            earlier
+                .iter()
+                .chain([&saved])
+                .find(|record| &record.request.execution_id == execution)
         }),
         expected,
         "admission"
@@ -442,14 +460,31 @@ fn judged_steered(
     corrupt(
         fold_changes(
             None,
-            &steered_log(message.clone(), before.clone(), after.clone()),
+            &steered_log(
+                &earlier,
+                target,
+                message.clone(),
+                before.clone(),
+                after.clone(),
+            ),
         )
         .map(drop),
         "replay",
     );
-    let mut restored = fold_changes(None, &steered_log(text(), before, after)).unwrap();
-    restored.invocations[1].request.user_message = message;
+    let mut restored =
+        fold_changes(None, &steered_log(&earlier, target, text(), before, after)).unwrap();
+    invocation_mut(&mut restored, STEERED).request.user_message = message;
     corrupt(validation::validate(&restored), "restoration");
+}
+
+/// [`judged_steered_after`] with no earlier turn, steered into [`DRAWN`].
+fn judged_steered(
+    message: UserMessage,
+    before: Vec<ToolCallUpdate>,
+    after: Vec<ToolCallUpdate>,
+    expected: Result<(), UnknownApp>,
+) {
+    judged_steered_after(Vec::new(), DRAWN, message, before, after, expected);
 }
 
 #[test]
@@ -494,6 +529,86 @@ fn a8_a_message_steered_into_a_running_turn_naming_a_call_observed_at_or_after_i
             Err(UnknownApp::NoMcpToolCall),
         );
     }
+}
+
+#[test]
+fn a1c_a_message_steered_into_a_running_turn_names_an_earlier_turns_call_past_its_offset() {
+    // `turn-1` completed with `call-1` at its index 2; `turn-2` is running
+    // with no events when the message is steered into it (offset 0).
+    let earlier = turn(
+        DRAWN,
+        text(),
+        vec![
+            tool_call("plain"),
+            tool_call("other"),
+            tool_call("call-1").with_mcp_tool(mcp("charts", "show")),
+        ],
+    );
+    for message in [from(drawn()), carrying([drawn()])] {
+        judged_steered_after(
+            vec![earlier.clone()],
+            "turn-2",
+            message,
+            Vec::new(),
+            vec![tool_call("plain")],
+            Ok(()),
+        );
+    }
+}
+
+/// A saved steering position is both halves or neither (A11): a target
+/// without its offset, or an offset without a target, is `Corrupt` on
+/// restoration and on replay alike.
+#[test]
+fn a11_a_steering_target_and_offset_are_saved_together_or_not_at_all() {
+    let log = steered_log(&[], DRAWN, text(), Vec::new(), Vec::new());
+    let valid = fold_changes(None, &log).unwrap();
+    for (id, offset, refusal) in [
+        (STEERED, None, "steering target has no steering offset"),
+        (DRAWN, Some(0), "targetless input has a steering offset"),
+    ] {
+        let refused = Err(StorageError::Corrupt(refusal.into()));
+        let mut restored = valid.clone();
+        invocation_mut(&mut restored, id).target_event_offset = offset;
+        let mut replayed = log.clone();
+        for change in &mut replayed {
+            if let SessionChange::InputAccepted(record) = change {
+                if record.request.execution_id.as_str() == id {
+                    record.target_event_offset = offset;
+                }
+            }
+        }
+        assert_eq!(
+            (
+                validation::validate(&restored),
+                fold_changes(None, &replayed).map(drop)
+            ),
+            (refused.clone(), refused),
+            "restoration and replay, {id}"
+        );
+    }
+}
+
+/// Round 3's repro (A11 through A8): a steered snapshot whose offset was
+/// removed, naming a call its target observed after the message, was
+/// restored, as the offset bound was skipped. It is `Corrupt` now.
+#[test]
+fn a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call() {
+    let shown = || tool_call("call-1").with_mcp_tool(mcp("charts", "show"));
+    let mut restored = fold_changes(
+        None,
+        &steered_log(&[], DRAWN, text(), Vec::new(), vec![shown()]),
+    )
+    .unwrap();
+    let steered = invocation_mut(&mut restored, STEERED);
+    steered.request.user_message = from(drawn());
+    steered.target_event_offset = None;
+    assert_eq!(
+        validation::validate(&restored),
+        Err(StorageError::Corrupt(
+            "steering target has no steering offset".into()
+        ))
+    );
 }
 
 #[test]

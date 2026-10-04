@@ -4,6 +4,7 @@ pub(crate) mod continuation;
 
 use super::{
     queue_validation::QueueReplayUndo,
+    steering_position::SteeringPosition,
     validation::{InvocationContinuation, InvocationObservationUndo},
     SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
@@ -119,28 +120,20 @@ fn validate_target_prefix(
     snapshot: &SessionSnapshot,
     positions: &HashMap<ExecutionId, usize>,
     histories: &HashMap<ExecutionId, InvocationHistory>,
-    target: Option<&ExecutionId>,
-    offset: Option<usize>,
+    steering: Option<SteeringPosition<'_>>,
     exact: bool,
 ) -> Result<(), StorageError> {
-    let Some(target) = target else {
-        return offset
-            .is_none()
-            .then_some(())
-            .ok_or_else(|| corrupt("targetless input has a steering offset"));
+    let Some(steering) = steering else {
+        return Ok(());
     };
+    let target = steering.target();
     let record = positions
         .get(target)
         .and_then(|index| snapshot.invocations.get(*index))
         .ok_or_else(|| corrupt("steering target is not a prior invocation"))?;
     let count = record.events.len();
-    if offset.is_none_or(|offset| {
-        if exact {
-            offset != count
-        } else {
-            offset > count
-        }
-    }) {
+    let offset = steering.offset();
+    if (exact && offset != count) || offset > count {
         return Err(corrupt(
             "steering offset is outside the prior target history",
         ));
@@ -369,17 +362,8 @@ impl continuation::Continuation {
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("input precedes session open"))?;
-                validate_target_prefix(
-                    snapshot,
-                    positions,
-                    histories,
-                    record
-                        .scheduling
-                        .first()
-                        .and_then(|event| event.target.as_ref()),
-                    record.target_event_offset,
-                    true,
-                )?;
+                let steering = SteeringPosition::saved(record)?;
+                validate_target_prefix(snapshot, positions, histories, steering, true)?;
                 if snapshot.invocations.len() >= SessionSnapshot::MAX_INVOCATIONS {
                     return Err(corrupt("too many retained invocations"));
                 }
@@ -390,11 +374,7 @@ impl continuation::Continuation {
                 // (`validate_target_prefix`), as they stood at admission.
                 super::app_sources::validate_saved(
                     &record.request.user_message,
-                    record
-                        .scheduling
-                        .first()
-                        .and_then(|event| event.target.as_ref())
-                        .zip(record.target_event_offset),
+                    steering,
                     |execution, tool| {
                         positions.get(execution).and_then(|&index| {
                             invocations[index].mcp_tool(&snapshot.invocations[index], tool)
@@ -469,12 +449,14 @@ impl continuation::Continuation {
                         .get(execution_id)
                         .and_then(|index| snapshot.invocations.get(*index))
                         .ok_or_else(|| corrupt("semantic fact has no accepted input"))?;
+                    // Bounded by the admitted position: an injection naming
+                    // another target is refused below by
+                    // `InvocationHistory::schedule`.
                     validate_target_prefix(
                         snapshot,
                         positions,
                         histories,
-                        event.target.as_ref(),
-                        record.target_event_offset,
+                        SteeringPosition::saved(record)?,
                         false,
                     )?;
                 }

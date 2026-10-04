@@ -306,6 +306,7 @@ as itself in a saved error; on restoration, `StorageError::Corrupt`.
 | --- | --- | --- | --- | --- |
 | A1 | an earlier turn's tool call observed as MCP `server/tool` | a message from that app, or carrying its context | admitted | as any message |
 | A1b | a running turn whose tool call was observed as MCP `server/tool` | a message from that app is steered into that turn | injected | as any steered message |
+| A1c | a message steered natively into running turn `T2`, with offset `k` | it names an earlier turn `T1`'s call, observed at any index of `T1` | admitted | the offset bounds only `T2`'s calls, on all three paths |
 | A2 | — | an app naming a turn the session has no record of | — | `UnknownApp(NoMcpToolCall)`; nothing saved, queued or sent, at every entry |
 | A3 | the turn recorded, no such tool call in it | as A2 | — | `UnknownApp(NoMcpToolCall)` |
 | A4 | the tool call recorded, with no MCP identity | as A2 | — | `UnknownApp(NoMcpToolCall)` |
@@ -315,6 +316,7 @@ as itself in a saved error; on restoration, `StorageError::Corrupt`.
 | A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded before it. That means none, another server or tool, its own turn, a later turn, or, for a message steered into a running turn, a call that turn observed at or after the message's `target_event_offset` | — | `Corrupt`, and nothing is restored |
 | A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it, or recorded only by a unit that failed | — | `Corrupt` |
 | A10 | — | a person's message carrying no context | admitted | nothing looked up |
+| A11 | a restored snapshot or replayed log | a saved invocation with a steering target and no offset, or an offset and no target | — | `Corrupt`, the same on both paths |
 
 Restoration checks the order of the turns, which is what a snapshot keeps,
 and for a message steered natively into a running turn, its
@@ -322,9 +324,16 @@ and for a message steered natively into a running turn, its
 message was admitted, so only a call of that turn observed before the offset
 was recorded before the message (`app_sources::validate_saved`, which a
 replayed record log asks too; there the turn's observations end at the
-offset). It cannot tell whether an *earlier* turn's tool call was observed
-before a later message was admitted when the two turns overlapped (a
-recorded limit). Admission checks that it was.
+offset). The target and its offset are read from a saved invocation in one
+place, `sessions::steering_position`, which refuses either half without the
+other (A11); restoration, replay and `validate_saved` take the position it
+returns, and admission saves the offset through it, refusing a target that is
+not a saved turn. Each path still bounds the offset against the target
+history it holds: at most the target's preceding events on restoration,
+exactly its events so far on replay. Restoration cannot tell whether an
+*earlier* turn's tool call was observed before a later message was admitted
+when the two turns overlapped (a recorded limit). Admission checks that it
+was.
 
 ### The values, saved and sent
 
@@ -381,12 +390,16 @@ Each row above has a test, named after it:
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
 - An app in its conversation, the SDK's rows: "The app a message names",
   each row asked by admission, restoration and a replayed record log alike,
-  in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`,
+  in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`
+  (A1c and A11 among them, with round 3's repro of a steered snapshot
+  stripped of its offset,
+  `a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call`),
   admission against saved turns in `sessions/manager.rs`
   (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`,
-  `admission_keeps_a_calls_first_mcp_identity`), at every entry in
-  `agents/messages.rs` (refused, admitted, and a retry that changed the
-  writer), and at every steering entry while a turn runs in
+  `admission_keeps_a_calls_first_mcp_identity`, and A11's admission side,
+  `admission_saves_a_steering_target_with_its_offset_or_refuses_it`), at
+  every entry in `agents/messages.rs` (refused, admitted, and a retry that
+  changed the writer), and at every steering entry while a turn runs in
   `scheduling.rs`, where A1b is a valid app steered natively into the turn
   that drew it (`an_app_a_running_turn_drew_is_injected_into_that_turn`);
   that no durable history holds one call as two MCP tools, so the rule has
@@ -398,4 +411,7 @@ Each row above has a test, named after it:
   (it frames a save group by hand); P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
-  B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`.
+  B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`,
+  and at every entry, as a text message is refused, in `agents/messages.rs`
+  (`an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry`;
+  `steer` saves before the check, #477).

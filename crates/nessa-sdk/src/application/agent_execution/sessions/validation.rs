@@ -2,6 +2,7 @@
 mod observations;
 use super::app_sources;
 use super::retention::{Witness, WitnessUndo};
+use super::steering_position::SteeringPosition;
 use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     SessionSnapshot, StorageError, SubmissionAcknowledgement,
@@ -213,11 +214,7 @@ pub(super) fn continuation(
     for invocation in &snapshot.invocations {
         // The snapshot holds a steered message's target whole, so the offset
         // bounds which of its calls came before the message.
-        let steered = invocation
-            .scheduling
-            .first()
-            .and_then(|edge| edge.target.as_ref())
-            .zip(invocation.target_event_offset);
+        let steered = SteeringPosition::saved(invocation)?;
         app_sources::validate_saved(
             &invocation.request.user_message,
             steered,
@@ -232,16 +229,12 @@ pub(super) fn continuation(
             },
         )
         .map_err(corrupt)?;
-        if let Some(offset) = invocation.target_event_offset {
-            let target = invocation
-                .scheduling
-                .first()
-                .and_then(|edge| edge.target.as_ref());
+        if let Some(position) = steered {
             // A target with no preceding history at all fails the same way an
             // offset past that history does: neither can be a position in it.
-            if target
-                .and_then(|target| event_counts.get(target))
-                .is_none_or(|count| offset > *count)
+            if event_counts
+                .get(position.target())
+                .is_none_or(|count| position.offset() > *count)
             {
                 return Err(corrupt(
                     "steering offset is outside the preceding target history",
@@ -267,13 +260,13 @@ pub(super) fn continuation(
         }
         if let Some(first) = invocation.scheduling.first() {
             validate_admission_actor(invocation, first)?;
-            if let Some(target) = &first.target {
-                if target == &invocation.request.execution_id || !identities.contains_key(target) {
-                    return Err(corrupt("steering target is not a prior invocation"));
-                }
-                if identities.get(target) != Some(&true) {
-                    return Err(corrupt("steering target was never dispatched"));
-                }
+        }
+        if let Some(target) = steered.map(SteeringPosition::target) {
+            if target == &invocation.request.execution_id || !identities.contains_key(target) {
+                return Err(corrupt("steering target is not a prior invocation"));
+            }
+            if identities.get(target) != Some(&true) {
+                return Err(corrupt("steering target was never dispatched"));
             }
         }
         positions.insert(&invocation.request.execution_id, states.len());
