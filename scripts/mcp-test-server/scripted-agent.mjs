@@ -65,8 +65,8 @@ const STOP_GRACE_MS = 2_000
  * a promise taken at spawn that it has ended: its `exit`, by which it is
  * reaped (not `close`, which a process of its own holding its pipes can put
  * off forever), or an `error`, which a spawn that failed emits in place of
- * `exit` (as does a kill the system refuses, which a stand-in of our own
- * user never meets).
+ * `exit` (a kill the system refuses also emits `error`, and ends the wait
+ * though the process lives on; a stand-in of our own user never meets one).
  * One that has already ended has nothing left to wait for. Stopped when the
  * agent's input closes or its output fails.
  */
