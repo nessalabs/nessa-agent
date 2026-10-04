@@ -172,6 +172,79 @@ test("claude: the model from session/new, and the recorded four frames", async (
   assert.equal(await exited(agent.child, 5000), true)
 })
 
+/**
+ * The test server as `mcptest`, answering as `server.mjs` does, that also
+ * writes the params of each `tools/call` it receives, one JSON line each, to a
+ * file: `calls()` reads them back. Like `server.mjs`, it exits when its input
+ * closes, so an agent killed after the test leaves it nothing to run on.
+ */
+function recordingCalls() {
+  const callsFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "calls")
+  const server = JSON.stringify(join(here, "server.mjs"))
+  const script = `const { answer } = await import(${server})
+const { appendFileSync } = await import("node:fs")
+const { createInterface } = await import("node:readline")
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line)
+  if (m.method === "tools/call") appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(m.params) + "\\n")
+  const reply = answer(m)
+  if (reply) process.stdout.write(JSON.stringify(reply) + "\\n")
+})`
+  const calls = () =>
+    existsSync(callsFile)
+      ? readFileSync(callsFile, "utf8").trim().split("\n").map(JSON.parse)
+      : []
+  return {
+    server: { ...mcptest, args: ["--input-type=module", "-e", script] },
+    calls,
+  }
+}
+
+test("claude: the tools/call names the call in _meta, by the frames' toolCallId", async () => {
+  const recorder = recordingCalls()
+  const agent = start("claude")
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [recorder.server],
+    _meta: { claudeCode: { options: { model: "claude-test" } } },
+  })
+  const turn = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.deepEqual(turn.result, { stopReason: "end_turn" })
+  const ids = new Set(
+    turn.notes.map((note) => note.params.update.toolCallId).filter(Boolean),
+  )
+  assert.equal(ids.size, 1)
+  const calls = recorder.calls()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].name, "review_rows")
+  assert.equal(calls[0]._meta["claudecode/toolUseId"], [...ids][0])
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("codex: the tools/call carries no _meta", async () => {
+  const recorder = recordingCalls()
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [recorder.server],
+  })
+  const turn = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.deepEqual(turn.result, { stopReason: "end_turn" })
+  const calls = recorder.calls()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].name, "review_rows")
+  assert.equal(Object.hasOwn(calls[0], "_meta"), false)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
 test("a stand-in that does not start fails session/new", async () => {
   const agent = start("codex", codexEnv)
   const opened = await agent.request("session/new", {

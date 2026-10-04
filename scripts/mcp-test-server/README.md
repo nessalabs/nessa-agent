@@ -98,8 +98,14 @@ which a gateway can run as that agent's runtime (an explicit `command`). It
 answers the handshake as the harness pinned in
 `crates/nessa-sdk/harnesses/<agent>-acp/package.json`, and to each prompt makes
 one real call of `<tool>`, with the recorded call's arguments, through the stand-in the gateway
-gave it for `mcptest`. It then reports that call in the frames the harness was
-recorded sending, says DONE, and ends the turn. The frames are the recorded
+gave it for `mcptest`. As Claude, that call carries the call's id in
+`_meta["claudecode/toolUseId"]`, where Claude's harness names a forwarded call
+and the gateway's stand-in keeps its `structuredContent` for that call (the
+SDK's `CALL_ID` in `stand_in.rs`); as Codex, it carries no `_meta`, as Codex's
+harness names none. This is the one value taken from the harness's MCP side
+rather than from the recordings, which hold only ACP frames. It then reports
+that call in the frames the harness was recorded sending, under the same id,
+says DONE, and ends the turn. The frames are the recorded
 `show_chart` call from the parser fixtures above, value for value, with only
 the call's id, its tool's name and the server's result written at the places
 that harness carries them (`scripted-frames.mjs`'s `PLACES`). The test checks

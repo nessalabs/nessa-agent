@@ -25,6 +25,15 @@
  *
  * Not replayed: a harness's permission request for the call. The recordings
  * hold only `session/update` frames, so the scripted agent asks for none.
+ *
+ * Not from the recordings: where the call's `tools/call` names it. Claude's
+ * harness puts the call's ACP `toolCallId` in its params'
+ * `_meta["claudecode/toolUseId"]`, and the gateway's stand-in keeps the
+ * result's `structuredContent` under that id for the SDK to attach to the call
+ * (the SDK's `CALL_ID` in `stand_in.rs`, and its `forwarded.rs` tests). Codex's
+ * harness names none, so its call carries no `_meta`. This is the one value
+ * the replay takes from the real harness's MCP side, since the recordings
+ * hold only the ACP frames.
  */
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -41,6 +50,12 @@ import {
   setOption,
 } from "./scripted-frames.mjs"
 import { SERVER } from "./local-gateway.mjs"
+
+/**
+ * Where Claude's harness names a forwarded call in its `tools/call` params'
+ * `_meta`: the call's ACP `toolCallId` (the SDK's `CALL_ID`, `stand_in.rs`).
+ */
+const CLAUDE_CALL_ID = "claudecode/toolUseId"
 
 /** How long an MCP request waits for its stand-in's answer. */
 const MCP_DEADLINE_MS = 10_000
@@ -243,9 +258,18 @@ const handlers = {
     if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
     const prompt = { cancelled: false }
     session.prompt = prompt
+    // The call's id, chosen before the call: Claude's harness names the call
+    // by it in the `tools/call`, and the frames below carry the same one.
+    const id =
+      agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`
+    const call = {
+      name: tool,
+      arguments: args,
+      ...(agent === "claude" ? { _meta: { [CLAUDE_CALL_ID]: id } } : {}),
+    }
     let result
     try {
-      result = await server.request("tools/call", { name: tool, arguments: args })
+      result = await server.request("tools/call", call)
     } catch (error) {
       // A cancel decides the turn however the call settles.
       if (prompt.cancelled) return { stopReason: "cancelled" }
@@ -256,8 +280,6 @@ const handlers = {
     // Cancelled while the call was in flight: the turn ends so, and reports
     // nothing (the recordings hold no cancelled call).
     if (prompt.cancelled) return { stopReason: "cancelled" }
-    const id =
-      agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`
     const update = (update) =>
       send({ method: "session/update", params: { sessionId, update } })
     for (const frame of callFrames(agent, recorded, { id, tool, result })) update(frame)
