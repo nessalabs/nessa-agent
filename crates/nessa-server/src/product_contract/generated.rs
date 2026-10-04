@@ -66,6 +66,102 @@ impl SessionCloseReason {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ConversationErrorCode {
+    AgentNotConfigured,
+    AgentUnsupported,
+    ModelUnavailable,
+    ApprovalModeUnavailable,
+    ApprovalModeNotApplied,
+    ApprovalModeUncertain,
+    ApprovalRequestConflict,
+    TurnRunning,
+    ConversationsNotConfigured,
+    UnknownMethod,
+    InvalidRequest,
+    ConversationNotFound,
+    ConversationCapacity,
+    ConversationClosed,
+    ConversationConfigurationChanged,
+    ConversationStateUnreadable,
+    ConversationStorageUnavailable,
+    TemporarilyUnavailable,
+    AuditUnavailable,
+    SubmissionConflict,
+    SubmissionUnresolved,
+    StalePermission,
+    AgentStartupDeadline,
+    AgentOperationFailed,
+    ImageInputUnsupported,
+    AttachmentNotFound,
+    AttachmentUnavailable,
+    AttachmentCapacity,
+    AttachmentStorageUnavailable,
+    AttachmentCleanupUnavailable,
+    ConversationDeleted,
+    ConversationErasureIncomplete,
+    McpAppUnknown,
+    McpServerMismatch,
+    McpToolNotForApp,
+    McpSessionUnavailable,
+    McpApprovalDenied,
+    McpApprovalExpired,
+    McpCancelled,
+    McpRequestTooLarge,
+    McpResultTooLarge,
+    McpTimedOut,
+    McpRemoteError,
+}
+impl ConversationErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentNotConfigured => "agent_not_configured",
+            Self::AgentUnsupported => "agent_unsupported",
+            Self::ModelUnavailable => "model_unavailable",
+            Self::ApprovalModeUnavailable => "approval_mode_unavailable",
+            Self::ApprovalModeNotApplied => "approval_mode_not_applied",
+            Self::ApprovalModeUncertain => "approval_mode_uncertain",
+            Self::ApprovalRequestConflict => "approval_request_conflict",
+            Self::TurnRunning => "turn_running",
+            Self::ConversationsNotConfigured => "conversations_not_configured",
+            Self::UnknownMethod => "unknown_method",
+            Self::InvalidRequest => "invalid_request",
+            Self::ConversationNotFound => "conversation_not_found",
+            Self::ConversationCapacity => "conversation_capacity",
+            Self::ConversationClosed => "conversation_closed",
+            Self::ConversationConfigurationChanged => "conversation_configuration_changed",
+            Self::ConversationStateUnreadable => "conversation_state_unreadable",
+            Self::ConversationStorageUnavailable => "conversation_storage_unavailable",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+            Self::AuditUnavailable => "audit_unavailable",
+            Self::SubmissionConflict => "submission_conflict",
+            Self::SubmissionUnresolved => "submission_unresolved",
+            Self::StalePermission => "stale_permission",
+            Self::AgentStartupDeadline => "agent_startup_deadline",
+            Self::AgentOperationFailed => "agent_operation_failed",
+            Self::ImageInputUnsupported => "image_input_unsupported",
+            Self::AttachmentNotFound => "attachment_not_found",
+            Self::AttachmentUnavailable => "attachment_unavailable",
+            Self::AttachmentCapacity => "attachment_capacity",
+            Self::AttachmentStorageUnavailable => "attachment_storage_unavailable",
+            Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
+            Self::ConversationDeleted => "conversation_deleted",
+            Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
+            Self::McpAppUnknown => "mcp_app_unknown",
+            Self::McpServerMismatch => "mcp_server_mismatch",
+            Self::McpToolNotForApp => "mcp_tool_not_for_app",
+            Self::McpSessionUnavailable => "mcp_session_unavailable",
+            Self::McpApprovalDenied => "mcp_approval_denied",
+            Self::McpApprovalExpired => "mcp_approval_expired",
+            Self::McpCancelled => "mcp_cancelled",
+            Self::McpRequestTooLarge => "mcp_request_too_large",
+            Self::McpResultTooLarge => "mcp_result_too_large",
+            Self::McpTimedOut => "mcp_timed_out",
+            Self::McpRemoteError => "mcp_remote_error",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RecordReadErrorCode {
     InvalidRequest,
     Unauthorized,
@@ -178,6 +274,8 @@ impl ChangeWatchErrorCode {
         }
     }
 }
+/// Published bound from the product schema.
+pub const MAX_MCP_MESSAGE_BYTES: usize = 8192;
 /// Published MCP App call timing from the product schema, in milliseconds.
 pub const MCP_APP_REVIEW_DEADLINE_MS: u64 = 300000;
 /// Published MCP App call timing from the product schema, in milliseconds.

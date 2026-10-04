@@ -26,7 +26,7 @@
 //! the step, from the injected clock — not the unknown time of the server's
 //! effect — and the first writer's observation is the one kept.
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, McpAppAsk, McpAppAudit, McpAppAuditPhase,
+    ContextDrop, ConversationError, ConversationFuture, McpAppAsk, McpAppAudit, McpAppAuditPhase,
     McpAppAuditRecord, McpAppInitiator, McpAppOutcome, McpAppWithdrawal, TicketEnd,
 };
 use nessa_auth::application::ports::Clock;
@@ -299,19 +299,38 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
             "ticketDigest": ticket_digest,
             "cause": ticket_end(*cause),
         }),
-        McpAppAuditPhase::MessageSent { execution_id } => {
-            json!({"kind": "message_sent", "executionId": execution_id})
+        McpAppAuditPhase::MessageSent { execution_id, code } => {
+            let mut sent = json!({"kind": "message_sent", "executionId": execution_id});
+            if let Some(code) = code {
+                sent["code"] = json!(code.as_str());
+            }
+            sent
         }
-        McpAppAuditPhase::MessageNotSent { execution_id } => {
-            json!({"kind": "message_not_sent", "executionId": execution_id})
-        }
-        McpAppAuditPhase::MessageUnresolved { execution_id } => {
-            json!({"kind": "message_unresolved", "executionId": execution_id})
-        }
+        McpAppAuditPhase::MessageNotSent { execution_id, code } => json!({
+            "kind": "message_not_sent",
+            "executionId": execution_id,
+            "code": code.as_str(),
+        }),
+        McpAppAuditPhase::MessageUnresolved { execution_id, code } => json!({
+            "kind": "message_unresolved",
+            "executionId": execution_id,
+            "code": code.as_str(),
+        }),
         McpAppAuditPhase::ContextHeld { bytes } => {
             json!({"kind": "context_held", "bytes": bytes})
         }
         McpAppAuditPhase::ContextCleared => json!({"kind": "context_cleared"}),
+        McpAppAuditPhase::ContextDropped { cause } => {
+            json!({"kind": "context_dropped", "cause": context_drop(*cause)})
+        }
+    }
+}
+
+fn context_drop(cause: ContextDrop) -> &'static str {
+    match cause {
+        ContextDrop::Released => "released",
+        ContextDrop::ConversationEnded => "conversation_ended",
+        ContextDrop::NotHeld => "not_held",
     }
 }
 

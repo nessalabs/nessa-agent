@@ -17,9 +17,11 @@ use crate::conversation::application::app_reviews::{
 use crate::conversation::application::view::{
     ConversationMessageApp, ConversationMessageStatus, ConversationPermissionOrigin,
 };
+use crate::conversation::application::{ContextDrop, McpAppAsk};
 use crate::conversation::application::{
     ConversationLimits, SubmissionMode, SubmittedImage, SubmittedMessage, MAX_APP_CALLS,
 };
+use crate::product_contract::generated::ConversationErrorCode;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, MessageSender, UserMessage};
@@ -167,6 +169,33 @@ async fn approved_on_record(fixture: &Fixture, from: usize) {
     })
     .await
     .unwrap();
+}
+
+/// The drops on record, each with who dropped it and why — each recorded
+/// against the update that held what it dropped, whose `ContextHeld` is on
+/// record before it.
+fn drops(fixture: &Fixture) -> Vec<(ContextDrop, McpAppInitiator)> {
+    let records = fixture.audit.records.lock().unwrap().clone();
+    records
+        .iter()
+        .enumerate()
+        .filter_map(|(at, record)| match record.phase {
+            McpAppAuditPhase::ContextDropped { cause } => {
+                assert!(
+                    records[..at].iter().any(|held| {
+                        matches!(held.phase, McpAppAuditPhase::ContextHeld { .. })
+                            && held.call_id == record.call_id
+                            && held.request_id == record.request_id
+                            && held.app == record.app
+                            && held.ask == record.ask
+                    }),
+                    "a drop of no update on record: {record:?}"
+                );
+                Some((cause, record.initiator.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The app's message, from the mount `instance`, as the request `request`,
@@ -408,7 +437,8 @@ async fn m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_agai
         [
             McpAppAuditPhase::Admitted,
             McpAppAuditPhase::MessageSent {
-                execution_id: first.clone()
+                execution_id: first.clone(),
+                code: None,
             },
         ]
     );
@@ -440,7 +470,8 @@ async fn m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_agai
         [
             McpAppAuditPhase::Admitted,
             McpAppAuditPhase::MessageNotSent {
-                execution_id: first.clone()
+                execution_id: first.clone(),
+                code: ConversationErrorCode::SubmissionConflict,
             },
         ]
     );
@@ -476,6 +507,77 @@ async fn m17_a_retry_of_a_sent_message_after_a_reopening_is_not_asked_again() {
     .unwrap();
     assert_eq!(again, first);
     assert!(fixture.app_reviews().await.is_empty());
+}
+
+#[tokio::test]
+async fn m6b_the_same_request_while_it_is_in_flight_is_refused() {
+    let fixture = Fixture::new().await;
+    let (first, review) = fixture.asked(INSTANCE, "request-1", "hello").await;
+    // The same request again while the first is in review: one review, and
+    // the second refused by the system, on record.
+    let from = fixture.audit.phases().len();
+    let second = sending(&fixture, INSTANCE, "request-1", "hello")
+        .await
+        .unwrap();
+    assert!(
+        matches!(second, Err(ConversationError::Unavailable)),
+        "{second:?}"
+    );
+    let records = fixture.audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), from + 1);
+    assert_eq!(
+        records[from].phase,
+        McpAppAuditPhase::Refused(McpAppCode::TemporarilyUnavailable)
+    );
+    assert_eq!(records[from].initiator, McpAppInitiator::System);
+    assert_eq!(fixture.app_reviews().await.len(), 1);
+    // The first goes on, and once it settled the same request is a retry of
+    // its turn (row M6): not asked again.
+    fixture.answer(&review, ALLOW).await;
+    let sent = first.await.unwrap().unwrap();
+    fixture.idle().await;
+    let again = tokio::time::timeout(
+        Duration::from_secs(5),
+        sending(&fixture, INSTANCE, "request-1", "hello"),
+    )
+    .await
+    .expect("a retry once the first settled asked the person again")
+    .unwrap()
+    .unwrap();
+    assert_eq!(again, sent);
+}
+
+#[tokio::test]
+async fn m6b_a_request_whose_caller_went_is_free_to_be_sent_again() {
+    let fixture = Fixture::new().await;
+    let (first, review) = fixture.asked(INSTANCE, "request-1", "hello").await;
+    first.abort();
+    let _ = first.await;
+    on_record(
+        &fixture,
+        0,
+        &McpAppAuditPhase::Withdrawn {
+            permission_id: review.permission_id.clone(),
+            cause: McpAppWithdrawal::RequestCancelled,
+        },
+    )
+    .await;
+    // The call ended when its caller went — its task is done — and the same
+    // request asks again.
+    assert!(
+        fixture
+            .service
+            .app_calls_finished(Duration::from_secs(5))
+            .await
+    );
+    let (again, review) = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.asked(INSTANCE, "request-1", "hello"),
+    )
+    .await
+    .expect("the request was still in flight after its caller went");
+    fixture.answer(&review, ALLOW).await;
+    again.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -557,7 +659,8 @@ async fn m7_m8_m12_a_message_asks_and_allowed_lands_as_the_persons_turn_written_
             ),
             (
                 McpAppAuditPhase::MessageSent {
-                    execution_id: execution.clone()
+                    execution_id: execution.clone(),
+                    code: None,
                 },
                 the_app()
             ),
@@ -913,6 +1016,142 @@ async fn m10_a_message_admitted_in_one_opening_is_not_sent_into_another() {
 }
 
 #[tokio::test]
+async fn m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not_unresolved() {
+    let fixture = Fixture::new().await;
+    let executions = fixture.provider.executions.lock().unwrap().len();
+    let (message, review) = fixture.held_message(INSTANCE, "hello").await;
+    // The person's allowing is held mid-record; the gateway stops meanwhile.
+    let hold = Hold::default();
+    *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
+    fixture.answer(&review, ALLOW).await;
+    hold.waiting.notified().await;
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.shutdown().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.service.inner.retirement.get().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    hold.go.add_permits(1);
+    assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
+    let records = fixture.audit.records.lock().unwrap().clone();
+    let last = records.last().unwrap();
+    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(last.initiator, McpAppInitiator::System);
+    assert!(!records
+        .iter()
+        .any(|record| matches!(record.phase, McpAppAuditPhase::MessageUnresolved { .. })));
+    assert_eq!(
+        fixture.provider.executions.lock().unwrap().len(),
+        executions
+    );
+    let _ = stopping.await.unwrap();
+}
+
+#[tokio::test]
+async fn m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message() {
+    let fixture = Fixture::new().await;
+    let executions = fixture.provider.executions.lock().unwrap().len();
+    let (message, review) = fixture.held_message(INSTANCE, "across a delete").await;
+    // Something holds the conversation's submission lock; the person's
+    // delete waits on it, and then the app's message, once allowed.
+    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let deleting = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        tokio::spawn(async move { service.delete(id, caller("delete")).await })
+    };
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    let from = fixture.audit.phases().len();
+    fixture.answer(&review, ALLOW).await;
+    approved_on_record(&fixture, from).await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    drop(held);
+    // The fixture names no eraser for the agent's own session: the delete
+    // happens, and may say its erasure is unfinished.
+    let deleted = deleting.await.unwrap();
+    assert!(
+        matches!(
+            deleted,
+            Ok(_) | Err(ConversationError::DeletionIncomplete(_))
+        ),
+        "{deleted:?}"
+    );
+    assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
+    let records = fixture.audit.records.lock().unwrap().clone();
+    let last = records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.ask
+                == McpAppAsk::SendMessage {
+                    server: SERVER.into(),
+                }
+        })
+        .unwrap();
+    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(last.initiator, McpAppInitiator::System);
+    assert_eq!(
+        fixture.provider.executions.lock().unwrap().len(),
+        executions
+    );
+}
+
+#[tokio::test]
+async fn m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothing_runs() {
+    let fixture = Fixture::new().await;
+    // The person's message waits as its turn is prepared: the view shows it
+    // waiting, and nothing running.
+    let began = Arc::new(Notify::new());
+    let (go, gate) = oneshot::channel();
+    *fixture.provider.prepare_gate.lock().unwrap() = Some((began.clone(), gate));
+    fixture.person_sends("waiting", "after you").await;
+    began.notified().await;
+    let view = fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    assert!(
+        !view
+            .messages
+            .iter()
+            .any(|message| message.status == ConversationMessageStatus::Running),
+        "{:?}",
+        view.messages
+    );
+    assert!(!fixture
+        .provider
+        .executions
+        .lock()
+        .unwrap()
+        .contains(&"waiting".to_owned()));
+    let from = fixture.audit.phases().len();
+    let result = fixture.sent(INSTANCE, "me too").await;
+    assert!(
+        matches!(result, Err(ConversationError::TurnRunning)),
+        "{result:?}"
+    );
+    assert_eq!(
+        fixture.audit.phases().last(),
+        Some(&McpAppAuditPhase::Refused(McpAppCode::TurnRunning))
+    );
+    assert!(fixture.audit.phases().len() > from);
+    let _ = go.send(());
+    fixture.idle().await;
+    let execution = fixture.sent(INSTANCE, "me too").await.unwrap();
+    assert_eq!(fixture.given(&execution).await.text_str(), "me too");
+}
+
+#[tokio::test]
 async fn m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs() {
     let fixture = Fixture::new().await;
     fixture
@@ -1014,7 +1253,12 @@ async fn m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carrie
         "{result:?}"
     );
     let phases = fixture.audit.phases();
-    let Some(McpAppAuditPhase::MessageSent { execution_id }) = phases.last() else {
+    // On record as sent, with what failed (row M14).
+    let Some(McpAppAuditPhase::MessageSent {
+        execution_id,
+        code: Some(ConversationErrorCode::AuditUnavailable),
+    }) = phases.last()
+    else {
         panic!("{phases:?}");
     };
     let app_turn = execution_id.clone();
@@ -1037,7 +1281,7 @@ async fn m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carrie
 }
 
 #[tokio::test]
-async fn m15_a_message_whose_submission_task_failed_is_on_record_as_unresolved() {
+async fn m13_a_message_whose_submission_task_failed_before_the_agent_was_asked_is_not_sent() {
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("kept"), None)
@@ -1045,6 +1289,8 @@ async fn m15_a_message_whose_submission_task_failed_is_on_record_as_unresolved()
         .unwrap();
     let executions = fixture.provider.executions.lock().unwrap().len();
     let (task, review) = fixture.held_message(INSTANCE, "hello").await;
+    // The submission's own task falls over reading the conversation's
+    // record: before the agent was asked to take anything.
     fixture
         .repository
         .verification_panics
@@ -1059,11 +1305,15 @@ async fn m15_a_message_whose_submission_task_failed_is_on_record_as_unresolved()
         matches!(result, Err(ConversationError::Unavailable)),
         "{result:?}"
     );
+    // Known not to have reached the agent: not sent, not unresolved.
     let phases = fixture.audit.phases();
     assert!(
         matches!(
             phases.last().unwrap(),
-            McpAppAuditPhase::MessageUnresolved { .. }
+            McpAppAuditPhase::MessageNotSent {
+                code: ConversationErrorCode::TemporarilyUnavailable,
+                ..
+            }
         ),
         "{phases:?}"
     );
@@ -1072,6 +1322,75 @@ async fn m15_a_message_whose_submission_task_failed_is_on_record_as_unresolved()
         executions
     );
     assert_eq!(fixture.held_now(), ["kept"]);
+}
+
+#[tokio::test]
+async fn m15_a_message_the_agent_could_not_settle_is_on_record_as_unresolved() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("kept"), None)
+        .await
+        .unwrap();
+    let (task, review) = fixture.held_message(INSTANCE, "hello").await;
+    // The agent's own admission task falls over saving it: it cannot say
+    // whether it has the message.
+    fixture.storage_panics.store(true, Ordering::SeqCst);
+    fixture.answer(&review, ALLOW).await;
+    let result = task.await.unwrap();
+    fixture.storage_panics.store(false, Ordering::SeqCst);
+    assert!(
+        matches!(
+            result,
+            Err(ConversationError::Agent(AgentError::SubmissionUnresolved))
+        ),
+        "{result:?}"
+    );
+    let phases = fixture.audit.phases();
+    assert!(
+        matches!(
+            phases.last().unwrap(),
+            McpAppAuditPhase::MessageUnresolved {
+                code: ConversationErrorCode::SubmissionUnresolved,
+                ..
+            }
+        ),
+        "{phases:?}"
+    );
+    // Not taken, as far as anyone knows: nothing let go of.
+    assert_eq!(fixture.held_now(), ["kept"]);
+}
+
+#[tokio::test]
+async fn m15_a_message_whose_submission_task_failed_once_the_agent_was_asked_is_unresolved() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held_message(INSTANCE, "hello").await;
+    // The submission's own task falls over after the agent took it, as the
+    // conversation's list entry is written.
+    fixture
+        .summaries
+        .record_panics
+        .store(true, Ordering::SeqCst);
+    fixture.answer(&review, ALLOW).await;
+    let result = task.await.unwrap();
+    fixture
+        .summaries
+        .record_panics
+        .store(false, Ordering::SeqCst);
+    assert!(
+        matches!(result, Err(ConversationError::Unavailable)),
+        "{result:?}"
+    );
+    let phases = fixture.audit.phases();
+    assert!(
+        matches!(
+            phases.last().unwrap(),
+            McpAppAuditPhase::MessageUnresolved {
+                code: ConversationErrorCode::TemporarilyUnavailable,
+                ..
+            }
+        ),
+        "{phases:?}"
+    );
 }
 
 #[tokio::test]
@@ -1142,7 +1461,8 @@ async fn m18_a_release_past_the_locks_check_finds_the_message_sent() {
     assert_eq!(
         fixture.audit.phases().last(),
         Some(&McpAppAuditPhase::MessageSent {
-            execution_id: execution
+            execution_id: execution,
+            code: None,
         })
     );
 }
@@ -1743,10 +2063,51 @@ async fn c14_a_mounts_release_drops_its_context_unsent() {
         .await
         .unwrap();
     assert_eq!(fixture.held_now(), ["other"]);
+    // On record, against the update that held it, by the releaser.
+    assert_eq!(
+        drops(&fixture),
+        [(ContextDrop::Released, person_by("release"))]
+    );
+    // Released again: nothing more to drop, nothing more on record.
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    assert_eq!(drops(&fixture).len(), 1);
     fixture.person_turn("next").await;
     assert_eq!(
         fixture.contexts_given("next").await,
         [Some("other".to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn c14_a_drop_that_cannot_be_recorded_is_dropped_and_the_release_says_so() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("mine"), None)
+        .await
+        .unwrap();
+    let (waiting, _review) = fixture.held_message(INSTANCE, "hello").await;
+    fixture.audit.failing.store(true, Ordering::SeqCst);
+    let released = fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await;
+    assert!(
+        matches!(released, Err(ConversationError::Audit)),
+        "{released:?}"
+    );
+    // Released all the same: the context dropped, the review withdrawn, and
+    // the mount refused from now on.
+    assert!(fixture.held_now().is_empty());
+    assert!(fixture.app_reviews().await.is_empty());
+    assert!(waiting.await.unwrap().is_err());
+    fixture.audit.failing.store(false, Ordering::SeqCst);
+    assert_eq!(
+        refused(fixture.update_context(INSTANCE, Some("again"), None).await),
+        McpAppError::Cancelled
     );
 }
 
@@ -1764,6 +2125,10 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
         .await
         .unwrap();
     assert!(fixture.held_now().is_empty());
+    assert_eq!(
+        drops(&fixture),
+        [(ContextDrop::ConversationEnded, person_by("close"))]
+    );
     fixture.person_turn("reopened").await;
     assert!(fixture
         .given("reopened")
@@ -1779,6 +2144,21 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
         .unwrap();
     fixture.service.stop_active_agents().await.unwrap();
     assert!(fixture.held_now().is_empty());
+    assert_eq!(
+        drops(&fixture),
+        [(ContextDrop::ConversationEnded, McpAppInitiator::System)]
+    );
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("x"), None)
+        .await
+        .unwrap();
+    fixture.service.shutdown().await.unwrap();
+    assert!(fixture.held_now().is_empty());
+    assert_eq!(
+        drops(&fixture),
+        [(ContextDrop::ConversationEnded, McpAppInitiator::System)]
+    );
 
     // A delete.
     let fixture = Fixture::new().await;
@@ -1800,6 +2180,26 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
         "{deleted:?}"
     );
     assert!(fixture.held_now().is_empty());
+    assert_eq!(
+        drops(&fixture),
+        [(ContextDrop::ConversationEnded, person_by("delete"))]
+    );
+
+    // An end whose drop cannot be recorded: dropped all the same, and the
+    // close goes on.
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("x"), None)
+        .await
+        .unwrap();
+    fixture.audit.failing.store(true, Ordering::SeqCst);
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert!(fixture.held_now().is_empty());
+    assert!(drops(&fixture).is_empty());
 }
 
 #[tokio::test]
@@ -1848,12 +2248,13 @@ async fn c17_a_release_between_the_record_and_the_hold_holds_nothing() {
         .await
         .unwrap();
     hold.go.add_permits(1);
-    // On record, and answered applied: the release came after it.
+    // On record, and answered applied: the release came after it. That it
+    // was never held is on record too, as the system's.
     update.await.unwrap().unwrap();
-    assert!(matches!(
-        fixture.audit.phases().last(),
-        Some(McpAppAuditPhase::ContextHeld { .. })
-    ));
+    assert_eq!(
+        drops(&fixture),
+        [(ContextDrop::NotHeld, McpAppInitiator::System)]
+    );
     assert!(fixture.held_now().is_empty());
     fixture.person_turn("next").await;
     assert!(fixture.given("next").await.app_model_context().is_empty());

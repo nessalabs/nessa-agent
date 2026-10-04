@@ -123,12 +123,17 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   and the agent is given it as the person's. Every message waits on its own
   review in `permissions`, as a destructive tool's call does. Text is at most
   what `conversation.send` takes; past the schema's bound it is
-  `invalid_request`. While a turn runs or input waits it is refused
+  `invalid_request`, refused before anything is recorded. It is shown whole
+  in its review, which must fit the 16 000 bytes an app's review may take of
+  the view: text heavy in quotes or control characters can be past that
+  while within the schema's bound, and is refused `mcp_request_too_large`
+  with no review opened. While a turn runs or input waits it is refused
   `turn_running`: an app's message is never queued behind the person's. Any
   other refusal of the message is its own conversation code. Its turn is
   derived from the conversation, the mount and `requestId`: the same request
   again is the same turn, which the agent settles without anyone being asked
-  again.
+  again; sent again while the first is still in review or being sent, it is
+  refused `temporarily_unavailable`.
 - **`mcp.updateModelContext`** (MCP Apps `ui/update-model-context`) holds
   what a mount gives the model, in place of what it gave; an update with
   neither part, or only an empty text, clears it. The next message admitted
@@ -141,7 +146,10 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   before it is held; the structured content is held exactly as given. They
   are not part of the transcript. A release of the mount, or the end of the
   opening, drops a context unsent. The schema states its bounds
-  (`McpUpdateModelContextParams`).
+  (`McpUpdateModelContextParams`): a part past its own is `invalid_request`,
+  refused before anything is recorded, as every schema bound of both
+  methods is; both parts together past what one context holds are
+  `mcp_request_too_large`.
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's

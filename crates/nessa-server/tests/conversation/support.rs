@@ -488,6 +488,8 @@ pub(crate) struct MemorySummaries {
     pub(crate) load_fails: AtomicBool,
     pub(crate) record_fails: AtomicBool,
     pub(crate) erase_fails: AtomicBool,
+    /// While set, a write panics: whatever wrote it fails on its own task.
+    pub(crate) record_panics: AtomicBool,
     /// Holds the next `load` after it has read, saying so on the first
     /// sender, until the second channel is let go.
     pub(crate) load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
@@ -516,6 +518,10 @@ impl ConversationSummaries for MemorySummaries {
         let id = id.clone();
         Box::pin(async move {
             self.writes.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                !self.record_panics.load(Ordering::SeqCst),
+                "the summary's store fell over"
+            );
             if self.record_fails.load(Ordering::SeqCst) {
                 return Err(ConversationError::Metadata);
             }
@@ -621,6 +627,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) executions: Mutex<Vec<String>>,
     /// The next turn fails as it is prepared, before its prompt is sent.
     pub(crate) prepare_failure: Mutex<Option<AgentError>>,
+    /// When set, the next turn waits as it is prepared, before its prompt is
+    /// sent, saying so first, until the test lets it go.
+    pub(crate) prepare_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) execution_started: Notify,
     pub(crate) execution_gate: Mutex<Option<Receiver<()>>>,
     /// One explicit provider settlement used by failure-path projection tests.
@@ -1081,7 +1090,12 @@ impl ProviderSessionBackend for Backend {
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
+        let gate = self.factory.prepare_gate.lock().unwrap().take();
         Box::pin(async move {
+            if let Some((began, go)) = gate {
+                began.notify_one();
+                let _ = go.await;
+            }
             match self.factory.prepare_failure.lock().unwrap().take() {
                 Some(error) => Err(ProviderOperationFailure::new(
                     error,

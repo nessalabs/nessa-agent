@@ -19,9 +19,9 @@ use super::super::app_reviews::{
     APP_REVIEW_DEADLINE,
 };
 use super::super::mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppCode, McpAppError,
-    McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
-    TicketRefusal,
+    ContextDrop, HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppCode,
+    McpAppError, McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    McpAppWithdrawal, TicketRefusal,
 };
 use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
 use super::super::session_key::conversation_session;
@@ -29,8 +29,9 @@ use super::super::view::{ConversationPermission, ConversationTranscriptState, Co
 use super::super::SubmittedMessage;
 use super::{
     ConversationCaller, ConversationError, ConversationService, LiveConversation, SubmissionMode,
-    Writer,
+    SubmitFailure, Writer,
 };
+use crate::conversation::application::error_code;
 use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
@@ -213,7 +214,10 @@ impl ConversationService {
     /// The caller tore the mount `app` down: withdraw its open reviews
     /// (their calls answer `mcp_cancelled`), let go of what was held for it,
     /// and open or issue nothing for it again — each recorded as the
-    /// caller's. Idempotent; it never opens the conversation.
+    /// caller's. Idempotent; it never opens the conversation. A context it
+    /// dropped whose drop cannot be recorded is dropped all the same, and the
+    /// release answers [`ConversationError::Audit`]
+    /// (`c14_a_drop_that_cannot_be_recorded_is_dropped_and_the_release_says_so`).
     pub async fn release_app(
         &self,
         id: ConversationId,
@@ -227,17 +231,56 @@ impl ConversationService {
         // The conversation's apps, open or not: a release before the
         // conversation is open, or while it opens, is kept all the same.
         let tickets = self.inner.mcp_apps.as_ref().map(|ports| &ports.tickets);
-        self.apps_of(&id).release_app(&app, &by, || {
+        let dropped = self.apps_of(&id).release_app(&app, &by, || {
             if let Some(tickets) = tickets {
                 tickets.release_app(&id, &app, &by);
             }
         });
-        Ok(())
+        self.record_dropped(Dropped {
+            updates: dropped,
+            cause: ContextDrop::Released,
+            by,
+        })
+        .await
+    }
+
+    /// Record each context `dropped` held as dropped unsent, against the
+    /// record of the update that gave it. Each is dropped already, so a
+    /// record that cannot be written does not stop the rest, or anything
+    /// else: it is logged, the next is tried, and the answer says one failed.
+    pub(super) async fn record_dropped(&self, dropped: Dropped) -> Result<(), ConversationError> {
+        let Dropped { updates, cause, by } = dropped;
+        let Some(ports) = &self.inner.mcp_apps else {
+            return Ok(());
+        };
+        let mut recorded = Ok(());
+        for update in updates {
+            let record = McpAppAuditRecord {
+                phase: McpAppAuditPhase::ContextDropped { cause },
+                initiator: by.clone(),
+                ..update
+            };
+            let (conversation_id, call_id) =
+                (record.conversation_id.clone(), record.call_id.clone());
+            if let Err(error) = ports.audit.record(record).await {
+                tracing::error!(
+                    %conversation_id,
+                    %call_id,
+                    ?cause,
+                    ?error,
+                    "an MCP App context's drop could not be audited; it is dropped all the same"
+                );
+                recorded = Err(error);
+            }
+        }
+        recorded
     }
 
     /// Whether the conversation `id`, live now, has the turn `execution`
-    /// already. Nothing is opened to answer: a conversation not live has no
-    /// turn an app's message could be sent into without its opening.
+    /// already. Nothing is opened to answer it; a conversation not live
+    /// answers no, and its message is asked about. (The app's call may have
+    /// opened the conversation already, as #348's calls do; M10 holds only
+    /// that a message admitted in one opening is not sent into another.)
     async fn holds_turn(&self, id: &ConversationId, execution: &str) -> bool {
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         let Some(Ok(live)) = slot.as_ref().and_then(|slot| slot.value.get()) else {
@@ -270,31 +313,42 @@ impl ConversationService {
     /// apps take no more work, ever, and keep nothing. Kept as that — made
     /// so if it had none in this run — not removed, so that a release or an
     /// opening racing the delete finds them deleted, and cannot build them
-    /// afresh.
-    pub(super) fn close_apps_for_good(&self, id: &ConversationId) {
-        self.apps_of(id).delete(|| {
+    /// afresh. The contexts it drops, `by` the person who deleted it.
+    pub(super) fn close_apps_for_good(&self, id: &ConversationId, by: &McpAppInitiator) -> Dropped {
+        let updates = self.apps_of(id).delete(|| {
             if let Some(ports) = &self.inner.mcp_apps {
                 ports
                     .tickets
                     .release_conversation(id, &McpAppInitiator::System);
             }
         });
+        Dropped {
+            updates,
+            cause: ContextDrop::ConversationEnded,
+            by: by.clone(),
+        }
     }
 
     /// `by` ended `live`'s conversation: withdraw its apps' reviews, let go
     /// of what was held for them, and open or issue nothing for them again.
-    /// Idempotent.
+    /// Idempotent. The contexts it drops are the caller's to record
+    /// ([`Self::record_dropped`]), once whatever it is bounded by is done.
     pub(super) fn end_apps(
         &self,
         id: &ConversationId,
         live: &LiveConversation,
         by: &McpAppInitiator,
-    ) {
-        live.app_reviews.end(live.app_epoch, by, || {
+    ) -> Dropped {
+        let updates = live.app_reviews.end(live.app_epoch, by, || {
             if let Some(ports) = &self.inner.mcp_apps {
                 ports.tickets.release_conversation(id, by);
             }
         });
+        Dropped {
+            updates,
+            cause: ContextDrop::ConversationEnded,
+            by: by.clone(),
+        }
     }
 
     /// One of the [`MAX_APP_CALLS`], for a call's task to hold until it ends.
@@ -565,6 +619,19 @@ impl ConversationService {
         if opening.admit(&message.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
+        // One request at a time: while the same one is in review or being
+        // sent, it is not asked about twice
+        // (`m6b_the_same_request_while_it_is_in_flight_is_refused`). Free again
+        // however this call ends.
+        let Some(_in_flight) = opening.apps.start_message(&execution_id) else {
+            return Err(step
+                .ended(
+                    McpAppAuditPhase::Refused(McpAppCode::TemporarilyUnavailable),
+                    Some(McpAppInitiator::System),
+                    ConversationError::Unavailable,
+                )
+                .await);
+        };
         if self.holds_turn(&id, &execution_id).await {
             step.record(McpAppAuditPhase::Admitted, None).await?;
         } else {
@@ -580,8 +647,9 @@ impl ConversationService {
             self.approved(&opening, &step, asked, &mut gone).await?;
         }
         // Checked once more under the conversation's submission lock, just
-        // before it is enqueued (`submit_as`): a close that took the lock
-        // first, a release, or another opening refuses it there.
+        // before it is enqueued (`submit_as`): a close or a delete that took
+        // the lock first, a release, another opening, or the gateway stopping
+        // refuses it there.
         let submitted = self
             .submit_as(
                 id,
@@ -601,40 +669,59 @@ impl ConversationService {
                 },
             )
             .await;
-        let sent = McpAppAuditPhase::MessageSent {
+        let sent = |code| McpAppAuditPhase::MessageSent {
             execution_id: execution_id.clone(),
+            code,
+        };
+        let not_sent = |error: &ConversationError| McpAppAuditPhase::MessageNotSent {
+            execution_id: execution_id.clone(),
+            code: error_code(error),
+        };
+        let unresolved = |error: &ConversationError| McpAppAuditPhase::MessageUnresolved {
+            execution_id: execution_id.clone(),
+            code: error_code(error),
         };
         match submitted {
             Ok(_) => {
-                step.record(sent, None).await?;
+                step.record(sent(None), None).await?;
                 Ok(execution_id)
             }
-            Err(ConversationError::TurnRunning) => Err(step
+            Err(SubmitFailure::NotAsked(ConversationError::TurnRunning)) => Err(step
                 .refuse_as(McpAppCode::TurnRunning, ConversationError::TurnRunning)
                 .await),
-            // Released, ended or reopened while it waited for the lock: by
-            // that other command, so the system's.
-            Err(ConversationError::McpApp(McpAppError::Cancelled)) => {
-                Err(step.refuse_by_system(McpAppError::Cancelled).await)
+            // Released, ended, deleted, reopened, or the gateway stopping or
+            // retiring, before the agent was asked to take it: by that other
+            // command, so the system's; nothing was sent (row M10).
+            Err(SubmitFailure::NotAsked(
+                ConversationError::McpApp(McpAppError::Cancelled)
+                | ConversationError::Deleted
+                | ConversationError::Unavailable,
+            )) => Err(step.refuse_by_system(McpAppError::Cancelled).await),
+            // Refused, or failed, before the agent was asked: nothing reached
+            // it, and the answer says why (row M13).
+            Err(SubmitFailure::NotAsked(error)) => {
+                Err(step.ended(not_sent(&error), None, error).await)
             }
-            // Whether the agent has it is not known: the submission's own
-            // task failed, or the agent could not say. Said so, not guessed.
-            Err(
-                error @ (ConversationError::Unavailable
-                | ConversationError::Agent(AgentError::SubmissionUnresolved)),
-            ) => Err(step
-                .ended(
-                    McpAppAuditPhase::MessageUnresolved { execution_id },
-                    None,
-                    error,
-                )
-                .await),
-            // The agent has it; what failed is its evidence, which the
-            // answer says — unless its own record cannot be written either,
-            // when the answer is that, and the evidence's failure is kept in
-            // the log rather than lost.
-            Err(error @ ConversationError::AdmissionEvidence { .. }) => {
-                match step.record(sent, None).await {
+            Err(SubmitFailure::TaskFailed { asked: false }) => {
+                let error = ConversationError::Unavailable;
+                Err(step.ended(not_sent(&error), None, error).await)
+            }
+            // Whether the agent has it is not known: it could not say, or the
+            // submission's own task failed once it was asked. Said so, not
+            // guessed (row M15).
+            Err(SubmitFailure::Asked(
+                error @ ConversationError::Agent(AgentError::SubmissionUnresolved),
+            )) => Err(step.ended(unresolved(&error), None, error).await),
+            Err(SubmitFailure::TaskFailed { asked: true }) => {
+                let error = ConversationError::Unavailable;
+                Err(step.ended(unresolved(&error), None, error).await)
+            }
+            // The agent has it; what failed is its evidence, which the record
+            // and the answer say — unless its own record cannot be written
+            // either, when the answer is that, and the evidence's failure is
+            // kept in the log rather than lost (row M14).
+            Err(SubmitFailure::Asked(error @ ConversationError::AdmissionEvidence { .. })) => {
+                match step.record(sent(Some(error_code(&error))), None).await {
                     Ok(()) => Err(error),
                     Err(audit) => {
                         tracing::error!(
@@ -645,13 +732,10 @@ impl ConversationService {
                     }
                 }
             }
-            Err(error) => Err(step
-                .ended(
-                    McpAppAuditPhase::MessageNotSent { execution_id },
-                    None,
-                    error,
-                )
-                .await),
+            // The agent refused it (row M13).
+            Err(SubmitFailure::Asked(error)) => {
+                Err(step.ended(not_sent(&error), None, error).await)
+            }
         }
     }
 
@@ -729,9 +813,22 @@ impl ConversationService {
         // never reaches the model, and one that could not be recorded
         // changes nothing (`c16_an_update_that_cannot_be_recorded_changes_nothing`).
         step.record(phase, None).await?;
-        // A release or an end since came after it, and it is not held
+        // A release or an end since came after it, and it is not held: that
+        // is on record too, as the other command's
         // (`c17_a_release_between_the_record_and_the_hold_holds_nothing`).
-        opening.apps.hold(opening.epoch, &update.app, context);
+        if opening
+            .apps
+            .hold(opening.epoch, &update.app, context, &step.record)
+            .is_err()
+        {
+            step.record(
+                McpAppAuditPhase::ContextDropped {
+                    cause: ContextDrop::NotHeld,
+                },
+                Some(McpAppInitiator::System),
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -960,6 +1057,15 @@ struct Asked<'a> {
     shown: &'a str,
 }
 
+/// Contexts dropped unsent — the records of the updates that gave them —
+/// why, and by whom: for [`ConversationService::record_dropped`].
+#[must_use]
+pub(super) struct Dropped {
+    pub(super) updates: Vec<McpAppAuditRecord>,
+    pub(super) cause: ContextDrop,
+    pub(super) by: McpAppInitiator,
+}
+
 /// What an app call keeps of the conversation it is in: its apps, and the
 /// opening it was admitted in.
 struct Opening {
@@ -1025,7 +1131,7 @@ fn admitted(
 }
 
 /// A person, by an explicit command of theirs.
-fn person(by: &ReviewAnswerer) -> McpAppInitiator {
+pub(super) fn person(by: &ReviewAnswerer) -> McpAppInitiator {
     McpAppInitiator::Person {
         principal_id: by.principal_id.clone(),
         surface_id: by.surface_id.clone(),

@@ -1778,9 +1778,12 @@ async fn a_conversation_deleted_with_no_apps_in_this_run_has_them_deleted() {
     // build them afresh.
     let fixture = Fixture::new().await;
     let never = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
-    fixture.service.close_apps_for_good(&never);
+    let dropped = fixture
+        .service
+        .close_apps_for_good(&never, &McpAppInitiator::System);
+    assert!(dropped.updates.is_empty());
     let apps = fixture.service.apps_of(&never);
-    let opening = apps.begin();
+    let (opening, _) = apps.begin();
     assert_eq!(
         apps.admit(opening, &fixture.app(INSTANCE)),
         Err(ReviewRefusal::Ended)

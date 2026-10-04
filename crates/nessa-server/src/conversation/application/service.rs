@@ -2,7 +2,7 @@ use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
-    mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
+    mcp_apps::{ContextDrop, McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
@@ -29,6 +29,7 @@ use crate::conversation::domain::{
     Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
     ConversationModelId, ConversationSummary, ProviderSessionErasure, ProviderSessionLink,
 };
+use crate::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -375,6 +376,28 @@ impl ConversationAgents {
             return Err(ConversationError::InvalidInput);
         }
         Ok(configured)
+    }
+}
+/// How a submission failed, by how far it got.
+#[derive(Debug)]
+pub(super) enum SubmitFailure {
+    /// Refused before the agent was asked to take it: nothing reached it.
+    NotAsked(ConversationError),
+    /// The agent was asked to take it, and this is what came of it: refused,
+    /// not settled, or taken without its evidence.
+    Asked(ConversationError),
+    /// Its own task failed; `asked`, whether the agent had been asked to
+    /// take it by then.
+    TaskFailed { asked: bool },
+}
+impl SubmitFailure {
+    /// The answer, whatever it got to: a task that failed is
+    /// [`ConversationError::Unavailable`].
+    fn into_error(self) -> ConversationError {
+        match self {
+            Self::NotAsked(error) | Self::Asked(error) => error,
+            Self::TaskFailed { .. } => ConversationError::Unavailable,
+        }
     }
 }
 #[derive(Clone, Copy)]
@@ -738,10 +761,13 @@ impl ConversationService {
             deletion_budgets,
             clock,
         } = dependencies;
+        // The input bound is never larger than what the protocol carries of
+        // a message, the person's or an app's (`MAX_MCP_MESSAGE_BYTES`, held
+        // equal to `conversation.send`'s by the generator).
         if workspace.as_ref().is_some_and(|value| value.len() > 4096)
             || limits.max_conversations == 0
             || limits.max_input_bytes == 0
-            || limits.max_input_bytes > 8192
+            || limits.max_input_bytes > MAX_MCP_MESSAGE_BYTES
         {
             return Err(ConversationError::InvalidInput);
         }
@@ -1201,7 +1227,18 @@ impl ConversationService {
                                 });
                             }
                             let app_reviews = service.apps_of(&id);
-                            let app_epoch = app_reviews.begin();
+                            let (app_epoch, dropped) = app_reviews.begin();
+                            // Every opening is ended before the next begins,
+                            // so this drops nothing; should one not be, what
+                            // it held is on record as ended by the system.
+                            // Logged per record; the opening goes on.
+                            let _logged = service
+                                .record_dropped(app_calls::Dropped {
+                                    updates: dropped,
+                                    cause: ContextDrop::ConversationEnded,
+                                    by: McpAppInitiator::System,
+                                })
+                                .await;
                             let live = Arc::new(LiveConversation {
                                 agent,
                                 reserved_output_tokens: configured.reserved_output_tokens,
@@ -1759,6 +1796,7 @@ impl ConversationService {
     ) -> Result<SubmissionReceipt, ConversationError> {
         self.submit_as(id, caller, execution_id, message, mode, Writer::Person)
             .await
+            .map_err(SubmitFailure::into_error)
     }
     /// [`Self::submit`], written by `writer`. A message admitted while the
     /// conversation is idle — nothing runs, nothing waits — carries the
@@ -1771,6 +1809,16 @@ impl ConversationService {
     /// turn runs or input waits, so it never queues behind the person's own
     /// or fills the queue
     /// (`m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`).
+    ///
+    /// What M10 guarantees of an app's message (`docs/design/mcp-app-calls.md`):
+    /// one admitted in one opening is never sent into another, and its
+    /// submission opens none — a closed conversation is not opened again for
+    /// it (`m10_a_message_admitted_in_one_opening_is_not_sent_into_another`,
+    /// `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`).
+    ///
+    /// A failure says how far the submission got: whether the agent was
+    /// asked to take it, so that one refused or failed before then is known
+    /// not to have reached it ([`SubmitFailure`]).
     pub(super) async fn submit_as(
         &self,
         id: ConversationId,
@@ -1779,9 +1827,13 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
-    ) -> Result<SubmissionReceipt, ConversationError> {
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
         let service = self.clone();
-        supervised(async move {
+        // Set just before the agent is asked to take it, on the submission's
+        // own task: what the caller reads to know whether it was.
+        let asked = Arc::new(AtomicBool::new(false));
+        let asking = asked.clone();
+        let outcome = tokio::spawn(async move {
             let SubmittedMessage {
                 text,
                 images,
@@ -1988,6 +2040,7 @@ impl ConversationService {
                 estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
                 reserved_output_tokens: reserved,
             };
+            asking.store(true, Ordering::SeqCst);
             let delivery = match mode {
                 SubmissionMode::Queue => live
                     .agent
@@ -2061,7 +2114,14 @@ impl ConversationService {
                 }
             }
         })
-        .await
+        .await;
+        let asked = asked.load(Ordering::SeqCst);
+        match outcome {
+            Ok(Ok(receipt)) => Ok(receipt),
+            Ok(Err(error)) if asked => Err(SubmitFailure::Asked(error)),
+            Ok(Err(error)) => Err(SubmitFailure::NotAsked(error)),
+            Err(_) => Err(SubmitFailure::TaskFailed { asked }),
+        }
     }
     /// `new_submission` is false for a retry of a submission the agent already
     /// had. One found already settled then says nothing new, so its reply is
@@ -2515,7 +2575,9 @@ impl ConversationService {
             } else {
                 match service.resolve(&id, &caller).await {
                     Ok(live) => {
-                        service.end_apps(&id, &live, &initiator_of(&actor));
+                        let dropped = service.end_apps(&id, &live, &initiator_of(&actor));
+                        // Logged per record; the close goes on.
+                        let _logged = service.record_dropped(dropped).await;
                         let result = live.agent.close(actor).await;
                         if result.is_ok() {
                             live.join_attachment_owner().await;
@@ -2675,7 +2737,10 @@ impl ConversationService {
             let finished = service.finish_deletion(record).await;
             // Its agent stopped — its apps ended by the deleter — or not:
             // either way nothing names it again, and its apps take no more.
-            service.close_apps_for_good(&id);
+            // A context still held is dropped by the deleter; logged per
+            // record, and the delete goes on.
+            let dropped = service.close_apps_for_good(&id, &app_calls::person(&answerer(&caller)));
+            let _logged = service.record_dropped(dropped).await;
             match finished {
                 Ok(()) => {
                     // Nothing is left for the worker to carry
@@ -3536,6 +3601,9 @@ impl ConversationService {
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
     ) -> Result<(), StopFailure> {
+        // The contexts its apps' end dropped: recorded once the stop is done,
+        // so their records take nothing of its budget.
+        let mut dropped = None;
         let attempt = async {
             loop {
                 let ready = slot.ready.notified();
@@ -3544,7 +3612,7 @@ impl ConversationService {
                 if let Some(value) = slot.value.get() {
                     return match value {
                         Ok(live) => {
-                            self.end_apps(id, live, ended_by);
+                            dropped = Some(self.end_apps(id, live, ended_by));
                             match live.agent.close(actor.clone()).await {
                                 Ok(_) => {
                                     live.join_attachment_owner().await;
@@ -3563,10 +3631,15 @@ impl ConversationService {
                 ready.await;
             }
         };
-        match tokio::time::timeout(self.inner.deletion_budgets.stop, attempt).await {
+        let stopped = match tokio::time::timeout(self.inner.deletion_budgets.stop, attempt).await {
             Ok(result) => result.map_err(StopFailure::Failed),
             Err(_) => Err(StopFailure::OverBudget),
+        };
+        if let Some(dropped) = dropped {
+            // Logged per record; the stop is what it was.
+            let _logged = self.record_dropped(dropped).await;
         }
+        stopped
     }
 
     async fn release_live_slot(&self, id: &ConversationId, live: &Arc<LiveConversation>) {
@@ -3597,7 +3670,9 @@ impl ConversationService {
             // first, by whoever stopped it; this is for any other way out,
             // and does nothing to apps already ended.
             if let Some(Ok(live)) = slot.value.get() {
-                self.end_apps(id, live, &McpAppInitiator::System);
+                let dropped = self.end_apps(id, live, &McpAppInitiator::System);
+                // Logged per record.
+                let _logged = self.record_dropped(dropped).await;
             }
         }
     }

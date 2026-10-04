@@ -4,7 +4,7 @@
 //! conversation service's.
 use super::ConversationFuture;
 use crate::conversation::domain::ConversationId;
-use crate::product_contract::generated::MCP_RESOURCE_TICKET_MS;
+use crate::product_contract::generated::{ConversationErrorCode, MCP_RESOURCE_TICKET_MS};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
@@ -203,6 +203,19 @@ pub enum TicketEnd {
     ConversationEnded,
 }
 
+/// Why a mount's context was dropped unsent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextDrop {
+    /// Its mount was released.
+    Released,
+    /// The conversation's opening ended — closed, deleted, stopped, the
+    /// gateway stopping — or another began.
+    ConversationEnded,
+    /// Its mount was released, or its opening ended, after the update was
+    /// recorded and before it was held: it never was.
+    NotHeld,
+}
+
 /// One step of an app call's life. Each is recorded before the step's
 /// effect is reported; a refusal and a withdrawal, as much as a success.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,24 +253,39 @@ pub enum McpAppAuditPhase {
         cause: TicketEnd,
     },
     /// The agent took the app's message as the turn `execution_id`, whose
-    /// own record holds what it said.
-    MessageSent { execution_id: String },
-    /// The conversation refused the app's message: nothing reached the
-    /// agent. Its code is the answer's.
-    MessageNotSent { execution_id: String },
-    /// Whether the agent has the app's message is not known: the
-    /// submission's own task failed, or the agent could not settle it.
-    MessageUnresolved { execution_id: String },
+    /// own record holds what it said. `code` is the answer's when the
+    /// agent's evidence of taking it failed.
+    MessageSent {
+        execution_id: String,
+        code: Option<ConversationErrorCode>,
+    },
+    /// The conversation refused the app's message, or its submission failed
+    /// before it reached the agent: nothing did. `code` is the answer's.
+    MessageNotSent {
+        execution_id: String,
+        code: ConversationErrorCode,
+    },
+    /// Whether the agent has the app's message is not known: the agent
+    /// could not settle it, or the submission's own task failed once the
+    /// agent was asked to take it. `code` is the answer's.
+    MessageUnresolved {
+        execution_id: String,
+        code: ConversationErrorCode,
+    },
     /// The mount's context, `bytes` of it, is held for the next message
     /// admitted while the conversation is idle, in place of what it held.
     /// The conversation's updates are recorded in the order they are held
     /// in, one at a time. A turn that carries it names this call's id
     /// (`AppModelContext::update_id`). Why one was never sent is read from
-    /// the record of what replaced, released or ended it, or from the
-    /// turn's own record.
+    /// the record of the update that replaced or cleared it, from its own
+    /// [`Self::ContextDropped`], or from the record of the turn that
+    /// carried it.
     ContextHeld { bytes: usize },
     /// What the mount held, if anything, is let go of unsent.
     ContextCleared,
+    /// The context this update held, or was to hold, was dropped unsent,
+    /// and why; taken by whoever released the mount or ended the opening.
+    ContextDropped { cause: ContextDrop },
 }
 
 /// Immutable evidence of one step: its target (the conversation, the app,

@@ -188,6 +188,9 @@ const sharedOutcomes = new Set([
   "CatalogueReadErrorCode",
   "ChangeWatchErrorCode",
   "ChangeWatchEndReason",
+  // The gateway's own layers record the code a conversation's command was
+  // answered with (an app's message not sent, say), so it is the contract's.
+  "ConversationErrorCode",
 ])
 // Outcome enums referenced by typed payload fields serialize through Serde.
 // Unreferenced code vocabularies and close-policy enums also expose string codes.
@@ -482,12 +485,16 @@ for (const name of [
   "maxRecordPageRecords",
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
-  // An app's message past it is refused at the wire, before anything is
-  // recorded: the gateway's own input bound is never larger.
-  "maxMcpMessageBytes",
+  // Each part of an app's context past it is refused at the wire, before
+  // anything is recorded; both together are the gateway's to bound.
+  "maxMcpContextBytes",
 ]) {
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
+// An app's message past it is refused at the wire, before anything is
+// recorded; and the conversation's own input bound is never larger, which the
+// gateway's configuration holds to it — so it sits with the contract.
+contractRs += `/// Published bound from the product schema.\npub const MAX_MCP_MESSAGE_BYTES: usize = ${bounds.maxMcpMessageBytes};\n`
 for (const [name, value] of Object.entries(passiveReadTiming)) {
   rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
 }

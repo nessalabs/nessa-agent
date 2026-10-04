@@ -1,7 +1,11 @@
 //! Opening failures retain their actionable meaning at the product boundary.
 use super::{
     error_code, permission_answer_failure, AgentError, ConversationError, ConversationErrorCode,
-    DeletionFailures, ImageInputRefusal, OutgoingMessage, PermissionSelectionState, StorageError,
+    OutgoingMessage, PermissionSelectionState,
+};
+use crate::conversation::application::{wire_code, DeletionFailures};
+use nessa_sdk::application::agent_execution::{
+    providers::ImageInputRefusal, sessions::StorageError,
 };
 use nessa_sdk::{
     application::agent_execution::{
@@ -404,7 +408,7 @@ fn each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with() {
 fn every_code_audit_names_is_on_the_wire_as_itself() {
     use crate::conversation::application::McpAppCode;
     for code in McpAppCode::ALL {
-        assert_eq!(super::wire_code(code).as_str(), code.as_str());
+        assert_eq!(wire_code(code).as_str(), code.as_str());
     }
 }
 

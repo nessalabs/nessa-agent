@@ -836,7 +836,7 @@ export interface McpReleaseAppParams {
   /** The mount torn down. */
   app: McpAppReference
 }
-/** An MCP App sends a message into its conversation (mcp.sendMessage, MCP Apps ui/message): the person's turn, written by the app on their behalf and shown in the transcript as the app's (ConversationMessage.app). Every message waits for the person's approval in the conversation's permissions, origin {kind: app}, answered with conversation.answer or conversation.cancel whatever the approval mode. Refused turn_running while a turn runs or input waits, so it is never queued behind the person's own; any other refusal of the message is its own conversation code. The same requestId again, from the same mount, is the same turn: one the agent has already is not asked again, and the agent settles it, the same text answering the first delivery and other text submission_conflict. It travels on the app lane. */
+/** An MCP App sends a message into its conversation (mcp.sendMessage, MCP Apps ui/message): the person's turn, written by the app on their behalf and shown in the transcript as the app's (ConversationMessage.app). Every message waits for the person's approval in the conversation's permissions, origin {kind: app}, answered with conversation.answer or conversation.cancel whatever the approval mode. Refused turn_running while a turn runs or input waits, so it is never queued behind the person's own; any other refusal of the message is its own conversation code. The same requestId again, from the same mount, is the same turn: one the agent has already is not asked again, and the agent settles it, the same text answering the first delivery and other text submission_conflict; one sent again while the first is still in review or being sent is refused temporarily_unavailable. It travels on the app lane. */
 export interface McpSendMessageParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -846,7 +846,7 @@ export interface McpSendMessageParams {
   app: McpAppReference
   /** The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch. */
   server: string
-  /** The message, as text: at most 8192 UTF-8 bytes, what conversation.send takes, and not blank (invalid_request). Past the conversation's own input bound it is refused mcp_request_too_large. It is shown whole in its review, which must fit the 16 000 bytes an app's review may take of the view, encoded; text heavy in quotes or control characters can be past that while within 8192 bytes (mcp_request_too_large, and no review is opened). */
+  /** The message, as text: at most 8192 UTF-8 bytes, what conversation.send takes (invalid_request past it, refused before anything is recorded), and not blank (invalid_request). Past the conversation's own input bound, which is never larger, it is refused mcp_request_too_large. It is shown whole in its review, which must fit the 16 000 bytes an app's review may take of the view, encoded; text heavy in quotes or control characters can be past that while within 8192 bytes (mcp_request_too_large, and no review is opened). */
   text: string
 }
 /** The conversation's agent took the message. */
@@ -854,7 +854,7 @@ export interface McpSendMessageResult {
   /** The turn the message became, as the transcript names it. */
   executionId: string
 }
-/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson, or with only an empty text, clears it. It is held for the mount until the next message admitted into the conversation while nothing runs and no input waits, the person's or an app's, carries it ahead of what the message says; it is not shown in the transcript. It is let go of once the agent has saved that message: if the turn then fails, it is lost, and the app may give it again. A message queued behind a running turn, or steered into one, carries none and leaves it held. A release of the mount (mcp.releaseApp) or the end of the conversation's opening drops it unsent. A conversation's updates are taken one at a time, each recorded before it is held. Text and structured content together take at most 8192 UTF-8 bytes, as each part does on its own (mcp_request_too_large past either), and at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
+/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson, or with only an empty text, clears it. It is held for the mount until the next message admitted into the conversation while nothing runs and no input waits, the person's or an app's, carries it ahead of what the message says; it is not shown in the transcript. It is let go of once the agent has saved that message: if the turn then fails, it is lost, and the app may give it again. A message queued behind a running turn, or steered into one, carries none and leaves it held. A release of the mount (mcp.releaseApp) or the end of the conversation's opening drops it unsent. A conversation's updates are taken one at a time, each recorded before it is held. Each part takes at most 8192 UTF-8 bytes (invalid_request past it, refused before anything is recorded), and text and structured content together at most 8192 (mcp_request_too_large past it); at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
 export interface McpUpdateModelContextParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -864,9 +864,9 @@ export interface McpUpdateModelContextParams {
   app: McpAppReference
   /** The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch. */
   server: string
-  /** The context as text. Empty is none. */
+  /** The context as text: at most 8192 UTF-8 bytes (invalid_request past it). Empty is none. */
   text?: string
-  /** The context's structured content: one JSON object, encoded (invalid_request if it is not one), held exactly as given. Absent is none. */
+  /** The context's structured content: one JSON object, encoded (invalid_request if it is not one, or past 8192 UTF-8 bytes), held exactly as given. Absent is none. */
   structuredContentJson?: string
 }
 /** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */

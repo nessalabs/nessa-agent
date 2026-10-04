@@ -698,8 +698,9 @@ before any agent is built. The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
 `mcp_servers/infrastructure/apps.rs`; the calls' flow, and an app's
 messages and model context (#390), are the conversation service's
-(`conversation/application/service/app_calls.rs`, with the reviews and held
-contexts in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
+(`conversation/application/service/app_calls.rs`, with the reviews, held
+contexts and messages in flight in `app_reviews.rs` and the ports in
+`mcp_apps.rs`), their audit
 `conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
 `product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
 one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
@@ -1484,9 +1485,11 @@ the export builds in its `wire-contract` subdirectory.
 
 `crates/nessa-server/src/product_contract/generated.rs` publishes the pure typed
 product error/close values and their schema-derived policy. The product schema
-remains their owner. Generated product DTOs, the product socket and read-only
-sync application ports consume this publication; it contains no routing, IO or
-runtime state. Generic frame protocol types remain under `protocol/`.
+remains their owner. Generated product DTOs, the product socket, read-only
+sync application ports and the conversation service consume this publication —
+the conversation's error codes are mapped once, in
+`conversation/application/error_code.rs`, which the wire answers by and an app
+message's audit records; it contains no routing, IO or runtime state. Generic frame protocol types remain under `protocol/`.
 
 ### Record read benchmark
 

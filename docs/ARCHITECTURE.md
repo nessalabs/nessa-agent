@@ -898,8 +898,9 @@ it does not read the stage-scoped store or promise live environment refresh. See
 ## Shared product contract
 
 `product_contract/generated.rs` contains pure schema-derived product outcome
-values and close policy. Product DTOs/socket and read-only sync application ports
-consume that publication. The product schema owns its vocabulary; this contract
+values and close policy. Product DTOs/socket, read-only sync application ports
+and the conversation service (its one mapping of errors to codes, which the wire
+answers by and audit records) consume that publication. The product schema owns its vocabulary; this contract
 contains no routing or IO and is separate from generic protocol frames.
 
 ## Gateway authorization

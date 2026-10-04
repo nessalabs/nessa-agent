@@ -95,6 +95,7 @@ pub use catalogue_watch::{
 };
 mod catalogue_read;
 mod error;
+mod error_code;
 mod locks;
 mod mcp_apps;
 mod passive_read;
@@ -118,10 +119,11 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
+pub use error_code::{error_code, wire_code};
 pub use mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppCode,
-    McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts,
-    McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
+    ContextDrop, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord,
+    McpAppCode, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome,
+    McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
     MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
 pub use passive_read::{

@@ -45,9 +45,11 @@ use uuid::Uuid;
 pub(crate) const SERVER: &str = "charts";
 
 /// Session storage that saves nothing while `refusing` is set, as a disk that
-/// went away would, and behaves otherwise.
+/// went away would, panics on a save while `panicking` is, and behaves
+/// otherwise.
 struct Refusing {
     refusing: Arc<AtomicBool>,
+    panicking: Arc<AtomicBool>,
     inner: Arc<InMemoryStorage>,
 }
 impl SessionStorage for Refusing {
@@ -56,15 +58,21 @@ impl SessionStorage for Refusing {
     }
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let refusing = self.refusing.clone();
+        let panicking = self.panicking.clone();
         let inner = self.inner.clone();
         Box::pin(async move {
             let inner = inner.open(id).await?;
-            Ok(Box::new(RefusingLease { refusing, inner }) as Box<dyn SessionStorageLease>)
+            Ok(Box::new(RefusingLease {
+                refusing,
+                panicking,
+                inner,
+            }) as Box<dyn SessionStorageLease>)
         })
     }
 }
 struct RefusingLease {
     refusing: Arc<AtomicBool>,
+    panicking: Arc<AtomicBool>,
     inner: Box<dyn SessionStorageLease>,
 }
 impl SessionStorageLease for RefusingLease {
@@ -77,6 +85,10 @@ impl SessionStorageLease for RefusingLease {
         snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
+        assert!(
+            !self.panicking.load(Ordering::SeqCst),
+            "the session's storage fell over mid-save"
+        );
         if self.refusing.load(Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
@@ -343,6 +355,12 @@ pub(crate) struct Fixture {
     /// While set, the agent's session storage saves nothing: it refuses
     /// whatever it is asked to admit.
     pub(crate) storage_refuses: Arc<AtomicBool>,
+    /// While set, a save of the agent's session storage panics: the agent's
+    /// own admission task fails, and it cannot say what became of the
+    /// message (`submission_unresolved`).
+    pub(crate) storage_panics: Arc<AtomicBool>,
+    /// The conversations' list entries.
+    pub(crate) summaries: Arc<MemorySummaries>,
     /// The tool call whose UI the app is.
     pub(crate) execution_id: String,
     pub(crate) tool_id: String,
@@ -362,6 +380,8 @@ impl Fixture {
         };
         let provider = Arc::new(ProviderFactory::default());
         let storage_refuses = Arc::new(AtomicBool::new(false));
+        let storage_panics = Arc::new(AtomicBool::new(false));
+        let summaries = Arc::new(MemorySummaries::default());
         provider
             .execution_updates
             .lock()
@@ -400,6 +420,7 @@ impl Fixture {
                 .unwrap(),
                 storage: Arc::new(Refusing {
                     refusing: storage_refuses.clone(),
+                    panicking: storage_panics.clone(),
                     inner: Arc::new(InMemoryStorage::new()),
                 }),
                 metadata: repository.clone(),
@@ -407,7 +428,7 @@ impl Fixture {
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
-                summaries: Arc::new(MemorySummaries::default()),
+                summaries: summaries.clone(),
                 listing: Arc::new(Unlisted),
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
                 provider_sessions: ProviderSessionErasers::default(),
@@ -485,6 +506,8 @@ impl Fixture {
             repository,
             execution_audit,
             storage_refuses,
+            storage_panics,
+            summaries,
         }
     }
 

@@ -117,7 +117,8 @@ mod mcp_app_lane {
     use super::*;
     use crate::app_call_test_support::{Fixture, INSTANCE, SERVER};
     use crate::conversation::application::{ConversationCaller, MAX_APP_CALLS};
-    use crate::product::generated::MAX_MCP_MESSAGE_BYTES;
+    use crate::product::generated::MAX_MCP_CONTEXT_BYTES;
+    use crate::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
     use nessa_auth::domain::{OrganizationId, PrincipalId};
     use std::collections::HashMap;
 
@@ -477,10 +478,24 @@ mod mcp_app_lane {
         assert_eq!(fixture.audit.phases().len(), records);
         assert!(fixture.app_reviews().await.is_empty());
 
-        // A context part past the schema's own bound is too large, as the
-        // gateway judges it, and on record (row C3).
+        // Each context part past the schema's own bound is refused at the
+        // wire too, with nothing recorded: one rule for every schema bound of
+        // both methods (row C3).
+        for part in ["text", "structuredContentJson"] {
+            let mut long = context("long");
+            long[part] = json!(format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_MCP_CONTEXT_BYTES)));
+            send_command(&peer, "long", "mcp.updateModelContext", long);
+            let refused = response(&mut peer).await;
+            assert_eq!(refused["id"], "long");
+            assert_eq!(refused["error"]["code"], "invalid_request", "{part}");
+            assert_eq!(fixture.audit.phases().len(), records, "{part}");
+        }
+        // Both within it, and together past what one context may hold: the
+        // gateway's own bound, on record.
         let mut long = context("long");
-        long["structuredContentJson"] = json!(format!("{{\"a\":{}1}}", " ".repeat(8192)));
+        long["text"] = json!("x".repeat(MAX_MCP_CONTEXT_BYTES / 2 + 1));
+        long["structuredContentJson"] =
+            json!(format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_MCP_CONTEXT_BYTES / 2)));
         send_command(&peer, "long", "mcp.updateModelContext", long);
         let refused = response(&mut peer).await;
         assert_eq!(refused["id"], "long");
