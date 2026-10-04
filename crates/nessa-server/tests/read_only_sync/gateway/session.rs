@@ -944,3 +944,6 @@ fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
         peer.join().unwrap();
     }
 }
+
+#[path = "session/watch.rs"]
+mod watch;

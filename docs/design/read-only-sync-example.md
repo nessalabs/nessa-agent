@@ -367,8 +367,10 @@ binding rather than issuing or pairing again. The code is read from protected
 input, never command-line arguments or general logs.
 
 The CLI has finite record and catalogue sync, an online record check, offline
-`list`/`show`, and explicit reset. Experiment and watch controls remain future
-#262 work. Data goes to stdout as JSON and tracing to stderr.
+`list`/`show`, explicit reset, and one bounded `watch PROFILE CONVERSATION
+PAGES MAX_PASSES` that follows live hints on one connection (rows W1–W15 in
+[committed change watches](committed-change-watches.md#298c-the-example-client-follows-hints)).
+Experiment controls and weak-link shaping remain future #262 work. Data goes to stdout as JSON and tracing to stderr.
 Offline cache readability is intentional local policy. Only correlated trusted
 grant/epoch/deletion contact evidence authorizes fencing/purge; generic auth
 failure or network absence supplies no such evidence. The one purge is the

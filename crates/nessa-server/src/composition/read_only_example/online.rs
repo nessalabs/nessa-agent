@@ -6,6 +6,8 @@
 //!                     --> Terminal: purge the saved receiver, with receipt
 //!   --> an authority refusal during the run --> pinned status again
 //! ```
+//! `watch` holds the same session for its bounded loop: registration, then
+//! one finite records pass per operation, each from the durable checkpoint.
 //! Arrows are calls in order (design rows PC1–PC6). No read happens without a
 //! fresh Active status, and nothing is purged without a Terminal one.
 use super::device::{self, client_failure, pinned, status_json, Device};
@@ -18,13 +20,18 @@ use crate::read_only_sync::application::device::{
     asks_status, CachePurges, PinnedStatus, PurgeBeforeEnd, PurgeReceipt,
 };
 use crate::read_only_sync::application::driver::{run_catalogue, run_records};
+use crate::read_only_sync::application::watch::{
+    follow, PassResult, Registered, Wait, WatchPass, WatchSession,
+};
 use crate::read_only_sync::application::{
     CacheError, CachePolicy, Cancellation, GatewayError, GatewayPolicy,
 };
+use crate::read_only_sync::entrypoint::watch::WatchLines;
 use crate::read_only_sync::entrypoint::{online, Command, CommandError};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
-    DeviceEvidence, GatewayConnection, LocalConnector, Session,
+    DeviceEvidence, GatewayAuthorizer, GatewayConnection, LocalConnector, RecordGatewaySource,
+    Session,
 };
 use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_auth::application::pairing::ClientPendingStore;
@@ -33,6 +40,7 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use std::cell::RefCell;
 use std::io::{Read, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -137,11 +145,14 @@ pub(super) fn execute(
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
     let profile_path = match command {
-        Command::Records { profile, .. } | Command::Catalogue { profile, .. } => profile,
+        Command::Records { profile, .. }
+        | Command::Catalogue { profile, .. }
+        | Command::Watch { profile, .. } => profile,
         _ => return Err(CommandError::Arguments),
     };
     let operation = match command {
         Command::Records { .. } => "records",
+        Command::Watch { .. } => "watch",
         _ => "catalogue",
     };
     let paired = match open_paired(profile_path, policy) {
@@ -232,6 +243,12 @@ pub(super) fn execute(
             ..
         } => run.records(conversation.clone(), *pages, output),
         Command::Catalogue { pages, .. } => run.catalogue(*pages, output),
+        Command::Watch {
+            conversation,
+            pages,
+            max_passes,
+            ..
+        } => run.watch(conversation.clone(), *pages, *max_passes, output),
         _ => Err(CommandError::Arguments),
     }
 }
@@ -414,6 +431,47 @@ impl Run<'_> {
             output,
         )
     }
+    /// Rows W1–W15: discovery and the cache as for `sync-records`, then the
+    /// bounded watch loop on this one connection.
+    fn watch(
+        self,
+        conversation: ConversationId,
+        pages: usize,
+        max_passes: NonZeroUsize,
+        output: &mut dyn Write,
+    ) -> Result<(), CommandError> {
+        let mut source = self.connection.records(
+            self.receiver.clone(),
+            self.access_epoch,
+            conversation.clone(),
+        );
+        let discovery = self
+            .connection
+            .run(|| source.discover())
+            .map_err(CommandError::Gateway)?;
+        let scope = match discovery.result {
+            Some(Ok((scope, _))) => scope,
+            _ => return self.discovery_failure(discovery.outcome, output),
+        };
+        let cache = open_cache(self.cache_path, self.policy, output)?;
+        let authorizer = source.authorizer();
+        let mut session = ConnectionWatch {
+            run: &self,
+            conversation,
+            pages,
+            scope,
+            source,
+            authorizer,
+            cache,
+        };
+        let mut lines = WatchLines::new(output, self.enrollment.clone());
+        let end = follow(&mut session, &mut lines, max_passes).map_err(|_| CommandError::Output)?;
+        // Row PC5: `recheck` asks only after an authority refusal.
+        let recheck = end
+            .cause
+            .map_or(Value::Null, |cause| recheck(self.paired, cause));
+        lines.end(end, recheck)
+    }
     fn catalogue(self, pages: usize, output: &mut dyn Write) -> Result<(), CommandError> {
         let mut source = self
             .connection
@@ -458,6 +516,66 @@ impl Run<'_> {
             output,
         )?;
         Err(CommandError::OnlineRefused)
+    }
+}
+
+/// The watch loop's session port over this run's connection, driver and cache.
+struct ConnectionWatch<'a> {
+    run: &'a Run<'a>,
+    conversation: ConversationId,
+    pages: usize,
+    scope: nessa_sync::replication::domain::Scope,
+    source: RecordGatewaySource,
+    authorizer: GatewayAuthorizer,
+    cache: ReadOnlyCache,
+}
+impl WatchSession for ConnectionWatch<'_> {
+    type Report = Value;
+    fn register(&mut self) -> Result<Registered, GatewayError> {
+        self.run.connection.watch_records(
+            &self.run.receiver,
+            self.run.access_epoch,
+            &self.conversation,
+        )
+    }
+    fn wait(&mut self) -> Result<Wait, GatewayError> {
+        self.run.connection.wait_hint()
+    }
+    fn pass(&mut self) -> WatchPass<Value> {
+        let attempt = self.run.connection.run(|| {
+            run_records(
+                &self.scope,
+                &mut self.authorizer,
+                &mut self.source,
+                &mut self.cache,
+                self.run.policy.suffix_page(),
+                self.pages,
+                &SystemClock,
+            )
+        });
+        let attempt = match attempt {
+            Ok(attempt) => attempt,
+            // The operation could not begin: nothing was read or saved.
+            Err(error) => {
+                return WatchPass {
+                    report: json!({"operation":"records","successful":false,"connectionCheck":"performed","transportFailure":online::gateway_failure(error)}),
+                    result: PassResult::Failed(Some(error)),
+                }
+            }
+        };
+        let refusal = self.cache.take_refusal();
+        let saved = self.cache.retained_transcript_state(
+            self.scope.receiver(),
+            self.scope.origin(),
+            self.scope.stream(),
+        );
+        let (report, successful) = online::records_report(&attempt, saved, refusal);
+        let result = match &attempt.result {
+            _ if !successful => PassResult::Failed(attempt.outcome.failure),
+            Some(Ok(run)) if run.complete => PassResult::Complete,
+            _ => PassResult::Incomplete,
+        };
+        WatchPass { report, result }
     }
 }
 

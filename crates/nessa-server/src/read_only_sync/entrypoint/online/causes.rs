@@ -32,6 +32,7 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
         GatewayError::Busy => ("busy", None),
         GatewayError::Record(reason) => ("record", Some(reason.as_str())),
         GatewayError::Catalogue(reason) => ("catalogue", Some(reason.as_str())),
+        GatewayError::Watch(reason) => ("watch", Some(reason.as_str())),
     };
     json!({"code":code,"productCode":product})
 }

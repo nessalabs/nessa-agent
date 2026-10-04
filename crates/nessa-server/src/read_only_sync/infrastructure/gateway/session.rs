@@ -6,6 +6,11 @@
 //! `openProduct` envelope, and authenticates with its issued credential id.
 //! Product messages then travel one per length-prefixed frame (design
 //! "Protected reads over the native channel", rows PR1, PR3, PR9).
+//!
+//! A session may hold one record watch. Its hints are kept in the session's
+//! `WatchInbox` whenever they arrive, so an operation waiting for its own
+//! response never counts them as unexpected events (committed change watches,
+//! rows W6, W10, W15).
 use super::deadline_stream::{io_cause, DeadlineStream};
 use crate::app::ports::Clock;
 use crate::device_pairing::infrastructure::{
@@ -16,17 +21,22 @@ use crate::device_pairing::infrastructure::{
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
 use crate::product::generated::{
-    product_event, wire_shape_product_session_ready, wire_shape_session_authenticate_params,
-    wire_shape_session_challenge, ProductClientMetadata, ProductSessionReady,
-    SessionAuthenticateParams, SessionChallenge, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    product_event, product_method, wire_shape_product_session_ready,
+    wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
+    ConversationChanged, ConversationWatchEnded, ConversationWatchRecordsParams,
+    ConversationWatchResult, ProductClientMetadata, ProductSessionReady, SessionAuthenticateParams,
+    SessionChallenge, MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_CHANGE_WATCH_ID_BYTES,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use crate::product::passive_read::wire::{encode_request, ReadEncodeError};
 use crate::product::wire::{authentication_close_reason, supports_product_version};
-use crate::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
-use crate::protocol::{OutgoingMessage, ResponseFrame};
+use crate::product_contract::generated::{
+    CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, RecordReadErrorCode,
+};
+use crate::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
 use crate::read_only_sync::application::{
-    Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy, GatewayStream,
+    watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
+    GatewayStream,
 };
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use serde::de::DeserializeOwned;
@@ -136,6 +146,64 @@ pub(super) enum RpcKind {
     Authentication,
     Record,
     Catalogue,
+    Watch,
+}
+
+/// What the session holds for its one registered watch: whether any hint
+/// arrived since the last wait took it (many hints are one bit), and the
+/// watch's end, once the gateway sends it.
+struct WatchInbox {
+    watch: ChangeWatchId,
+    dirty: bool,
+    ended: Option<ChangeWatchEndReason>,
+}
+
+/// How events are read for one session: the watch's own events go to its
+/// inbox; every other event counts toward the operation's capacity.
+struct Events {
+    policy: GatewayPolicy,
+    unexpected: usize,
+    inbox: Option<WatchInbox>,
+}
+impl Events {
+    fn new(policy: GatewayPolicy) -> Self {
+        Self {
+            policy,
+            unexpected: 0,
+            inbox: None,
+        }
+    }
+    /// A watch event names a watch this connection minted, or the connection
+    /// is broken: identities are per connection, so none can be foreign
+    /// (rows U2, W15).
+    fn observe(&mut self, event: EventFrame) -> Result<(), GatewayError> {
+        let watch = match event.event.as_str() {
+            product_event::CONVERSATION_CHANGED => {
+                strict_decode::<ConversationChanged>(event.payload)?.watch_id
+            }
+            product_event::CONVERSATION_WATCH_ENDED => {
+                let ended = strict_decode::<ConversationWatchEnded>(event.payload)?;
+                let inbox = self.own_inbox(&ended.watch_id)?;
+                inbox.ended.get_or_insert(ended.reason);
+                return Ok(());
+            }
+            _ => {
+                if self.unexpected >= self.policy.unexpected_events() {
+                    return Err(GatewayError::EventCapacity);
+                }
+                self.unexpected += 1;
+                return Ok(());
+            }
+        };
+        self.own_inbox(&watch)?.dirty = true;
+        Ok(())
+    }
+    fn own_inbox(&mut self, watch: &str) -> Result<&mut WatchInbox, GatewayError> {
+        self.inbox
+            .as_mut()
+            .filter(|inbox| inbox.watch == watch)
+            .ok_or(GatewayError::Protocol)
+    }
 }
 
 pub(crate) struct Session {
@@ -146,7 +214,7 @@ pub(crate) struct Session {
     next_operation: u64,
     active: Option<GatewayOutcome>,
     ready: ProductSessionReady,
-    events: usize,
+    events: Events,
 }
 impl Session {
     /// Open one protected product session at the gateway's native `address`.
@@ -200,7 +268,7 @@ impl Session {
             transport: selector.into_transport(),
             frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
         };
-        let mut events = 0;
+        let mut events = Events::new(policy);
         let mut message = read_opening_frame(&mut socket)?;
         let challenge = loop {
             match message {
@@ -213,7 +281,7 @@ impl Session {
                     )?;
                 }
                 OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
-                _ => count_event(policy, &mut events)?,
+                OutgoingMessage::Event(event) => events.observe(event)?,
             }
             message = read_frame(&mut socket)?;
         };
@@ -236,7 +304,7 @@ impl Session {
         }
         let request_id = "0";
         send_request(&mut socket, request_id, PRODUCT_HANDSHAKE_METHOD, &params)?;
-        let response = read_response(&mut socket, request_id, policy, &mut events)?;
+        let response = read_response(&mut socket, request_id, &mut events)?;
         let ready = shape_decode::<ProductSessionReady>(
             response_payload(response, RpcKind::Authentication)?,
             wire_shape_product_session_ready,
@@ -249,7 +317,7 @@ impl Session {
             next_operation: 1,
             active: None,
             ready,
-            events: 0,
+            events: Events::new(policy),
         })
     }
     pub(crate) fn ready(&self) -> &ProductSessionReady {
@@ -275,7 +343,7 @@ impl Session {
             operation,
             failure: None,
         });
-        self.events = 0;
+        self.events.unexpected = 0;
         Ok(operation)
     }
     pub(crate) fn finish(&mut self) -> Result<GatewayOutcome, GatewayError> {
@@ -303,6 +371,62 @@ impl Session {
         let result = self.rpc_inner(method, params, kind);
         result.map_err(|error| self.fail(error))
     }
+    /// Register this connection's one record watch inside the current
+    /// operation. Its hints are kept from the acknowledgement on.
+    pub(crate) fn watch_records(
+        &mut self,
+        params: &ConversationWatchRecordsParams,
+    ) -> Result<ChangeWatchId, GatewayError> {
+        let value = self.rpc(
+            product_method::CONVERSATION_WATCH_RECORDS,
+            params,
+            RpcKind::Watch,
+        )?;
+        let result = strict_decode::<ConversationWatchResult>(value)
+            .and_then(|result| {
+                // The published identity bound, so the inbox holds no more.
+                (result.watch_id.len() <= MAX_CHANGE_WATCH_ID_BYTES)
+                    .then_some(result)
+                    .ok_or(GatewayError::Protocol)
+            })
+            .map_err(|error| self.fail(error))?;
+        self.events.inbox = Some(WatchInbox {
+            watch: result.watch_id.clone(),
+            dirty: false,
+            ended: None,
+        });
+        Ok(result.watch_id)
+    }
+    /// Wait, inside the current operation and under its deadline, until the
+    /// watch has a hint or has ended. A hint already kept from an earlier
+    /// operation returns at once; the watch's end comes before a hint.
+    pub(crate) fn wait_hint(&mut self) -> Result<Wait, GatewayError> {
+        let active = self.active.as_ref().ok_or(GatewayError::Busy)?;
+        if let Some(error) = active.failure {
+            return Err(error);
+        }
+        let result = self.wait_inner();
+        result.map_err(|error| self.fail(error))
+    }
+    fn wait_inner(&mut self) -> Result<Wait, GatewayError> {
+        let mut during_pass = true;
+        loop {
+            let inbox = self.events.inbox.as_mut().ok_or(GatewayError::Busy)?;
+            if let Some(reason) = inbox.ended {
+                return Ok(Wait::Ended(reason));
+            }
+            if std::mem::take(&mut inbox.dirty) {
+                return Ok(Wait::Hint { during_pass });
+            }
+            during_pass = false;
+            let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
+            match read_frame(socket)? {
+                // Nothing is pending while waiting (row W15).
+                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
+                OutgoingMessage::Event(event) => self.events.observe(event)?,
+            }
+        }
+    }
     fn rpc_inner<T: Serialize>(
         &mut self,
         method: &str,
@@ -313,7 +437,7 @@ impl Session {
         self.next_request = self.next_request.checked_add(1).ok_or(GatewayError::Busy)?;
         let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
         send_request(socket, &id, method, params)?;
-        let response = read_response(socket, &id, self.policy, &mut self.events)?;
+        let response = read_response(socket, &id, &mut self.events)?;
         response_payload(response, kind)
     }
 }
@@ -324,6 +448,10 @@ fn shape_decode<T: DeserializeOwned>(
     if !shape(&value) {
         return Err(GatewayError::Protocol);
     }
+    serde_json::from_value(value).map_err(|_| GatewayError::Protocol)
+}
+/// The generated watch DTOs refuse unknown fields; no other shape check exists.
+fn strict_decode<T: DeserializeOwned>(value: Value) -> Result<T, GatewayError> {
     serde_json::from_value(value).map_err(|_| GatewayError::Protocol)
 }
 fn send_request<T: Serialize>(
@@ -338,24 +466,16 @@ fn send_request<T: Serialize>(
     })?;
     socket.send(&text)
 }
-fn count_event(policy: GatewayPolicy, events: &mut usize) -> Result<(), GatewayError> {
-    if *events >= policy.unexpected_events() {
-        return Err(GatewayError::EventCapacity);
-    }
-    *events += 1;
-    Ok(())
-}
 fn read_response(
     socket: &mut Channel,
     id: &str,
-    policy: GatewayPolicy,
-    events: &mut usize,
+    events: &mut Events,
 ) -> Result<ResponseFrame, GatewayError> {
     loop {
         match read_frame(socket)? {
             OutgoingMessage::Response(response) if response.id == id => return Ok(response),
             OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
-            OutgoingMessage::Event(_) => count_event(policy, events)?,
+            OutgoingMessage::Event(event) => events.observe(event)?,
         }
     }
 }
@@ -397,6 +517,9 @@ fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, Gat
                 .map(GatewayError::Catalogue)
                 .map_or_else(|_| Err(GatewayError::Protocol), Err)
         }
+        RpcKind::Watch => serde_json::from_value::<ChangeWatchErrorCode>(Value::String(error.code))
+            .map(GatewayError::Watch)
+            .map_or_else(|_| Err(GatewayError::Protocol), Err),
         RpcKind::Authentication => Err(GatewayError::Authentication(authentication_close_reason(
             &error.code,
         ))),

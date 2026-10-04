@@ -179,6 +179,10 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::Catalogue(CatalogueReadErrorCode::Forbidden),
         GatewayError::Catalogue(CatalogueReadErrorCode::WrongReceiver),
         GatewayError::Catalogue(CatalogueReadErrorCode::StaleEpoch),
+        GatewayError::Watch(ChangeWatchErrorCode::Unauthorized),
+        GatewayError::Watch(ChangeWatchErrorCode::Forbidden),
+        GatewayError::Watch(ChangeWatchErrorCode::WrongReceiver),
+        GatewayError::Watch(ChangeWatchErrorCode::StaleEpoch),
     ] {
         assert!(asks_status(asks), "{asks:?}");
     }
@@ -193,6 +197,10 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::Record(RecordReadErrorCode::Unverifiable),
         GatewayError::Record(RecordReadErrorCode::SourcePreparing),
         GatewayError::Catalogue(CatalogueReadErrorCode::ServerBusy),
+        GatewayError::Watch(ChangeWatchErrorCode::WrongOwner),
+        GatewayError::Watch(ChangeWatchErrorCode::WatchCapacity),
+        GatewayError::Watch(ChangeWatchErrorCode::WatchDuplicate),
+        GatewayError::Watch(ChangeWatchErrorCode::TemporarilyUnavailable),
     ] {
         assert!(!asks_status(keeps), "{keeps:?}");
     }

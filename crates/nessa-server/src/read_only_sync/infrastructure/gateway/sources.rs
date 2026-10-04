@@ -18,12 +18,15 @@ use crate::{
             ConversationCatalogueManifestResult, ConversationCatalogueResolveParams,
             ConversationCatalogueResolveResult, ConversationRecordsHeadParams,
             ConversationRecordsHeadResult, ConversationRecordsPageParams,
-            ConversationRecordsPageResult,
+            ConversationRecordsPageResult, ConversationWatchRecordsParams,
         },
         passive_read::wire::ReadWireError,
         record_read::wire as record_wire,
     },
-    read_only_sync::application::{GatewayAttempt, GatewayError, GatewayOutcome},
+    read_only_sync::application::{
+        watch::{Registered, Wait},
+        GatewayAttempt, GatewayError, GatewayOutcome,
+    },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::infrastructure::session_storage::physical_record_schema;
@@ -92,6 +95,36 @@ impl GatewayConnection {
             outcome: self.finish()?,
         })
     }
+    /// Register the connection's one record watch as its own operation.
+    pub(crate) fn watch_records(
+        &self,
+        receiver: &Id,
+        epoch: u64,
+        conversation: &ConversationId,
+    ) -> Result<Registered, GatewayError> {
+        let params = ConversationWatchRecordsParams {
+            conversation_id: conversation.to_string(),
+            receiver_id: receiver.as_str().to_owned(),
+            access_epoch: epoch.to_string(),
+        };
+        let attempt = self.run(|| {
+            self.0
+                .try_borrow_mut()
+                .map_err(|_| GatewayError::Busy)?
+                .watch_records(&params)
+        })?;
+        let operation = attempt.outcome.operation;
+        settled(attempt).map(|watch| Registered { watch, operation })
+    }
+    /// Wait for the watch's next hint or end as its own operation.
+    pub(crate) fn wait_hint(&self) -> Result<Wait, GatewayError> {
+        settled(self.run(|| {
+            self.0
+                .try_borrow_mut()
+                .map_err(|_| GatewayError::Busy)?
+                .wait_hint()
+        })?)
+    }
     pub(crate) fn records(
         &self,
         receiver: Id,
@@ -114,6 +147,14 @@ impl GatewayConnection {
             target: Target::Catalogue,
             descriptors: None,
         })
+    }
+}
+/// One operation's value, or the first failure the operation retained.
+fn settled<R>(attempt: GatewayAttempt<Result<R, GatewayError>>) -> Result<R, GatewayError> {
+    match (attempt.result, attempt.outcome.failure) {
+        (_, Some(failure)) => Err(failure),
+        (Some(result), None) => result,
+        (None, None) => Err(GatewayError::DriverPanicked),
     }
 }
 impl GatewaySource {

@@ -394,24 +394,34 @@ fn online_unusable_enrollment_does_not_open_cache() {
         profile["cache"] = json!(cache);
         let path = root.join(format!("wrong-{index}.json"));
         private_write(&path, &serde_json::to_vec(&profile).unwrap());
-        let (ok, report) = command(
+        let path = path.to_string_lossy().into_owned();
+        // Row W1: `watch` is refused at the same point, the same way.
+        for args in [
             vec![
                 "check-records".into(),
-                path.to_string_lossy().into_owned(),
+                path.clone(),
                 setup.conversation.clone(),
             ],
-            false,
-        );
-        assert!(!ok);
-        assert!(!cache.exists());
-        let report = report.unwrap();
-        assert_eq!(report["connectionCheck"], connection, "{report}");
-        let code = if index == 0 {
-            &report["configurationFailure"]
-        } else {
-            &report["enrollmentFailure"]["code"]
-        };
-        assert_eq!(code, failure, "{report}");
+            vec![
+                "watch".into(),
+                path.clone(),
+                setup.conversation.clone(),
+                "1".into(),
+                "1".into(),
+            ],
+        ] {
+            let (ok, report) = command(args, false);
+            assert!(!ok);
+            assert!(!cache.exists());
+            let report = report.unwrap();
+            assert_eq!(report["connectionCheck"], connection, "{report}");
+            let code = if index == 0 {
+                &report["configurationFailure"]
+            } else {
+                &report["enrollmentFailure"]["code"]
+            };
+            assert_eq!(code, failure, "{report}");
+        }
     }
 }
 
@@ -940,4 +950,233 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     assert_eq!(asleep["connectionCheck"], "attempted", "{asleep}");
     assert_eq!(asleep["enrollmentFailure"]["code"], "io", "{asleep}");
     assert_eq!(show(&cache), live_view);
+}
+
+/// The next line of a watch, which must be of `kind`, and when it arrived.
+fn watch_line(child: &mut WatchChild, kind: &str) -> (Value, Instant) {
+    let (line, at) = child.next_line();
+    assert_eq!(line["kind"], kind, "{line}");
+    (line, at)
+}
+/// A successful complete pass with this trigger, holding `facts` facts.
+fn watch_pass(child: &mut WatchChild, trigger: &str, facts: u64) -> Instant {
+    let (line, at) = watch_line(child, "pass");
+    assert_eq!(line["trigger"], trigger, "{line}");
+    assert_eq!(line["report"]["successful"], true, "{line}");
+    assert_eq!(line["report"]["work"]["complete"], true, "{line}");
+    assert_eq!(
+        line["report"]["durable"]["progress"]["facts"],
+        facts.to_string(),
+        "{line}"
+    );
+    at
+}
+fn watch_hint(child: &mut WatchChild, watch: &Value, during_pass: bool) {
+    let (line, _) = watch_line(child, "hint");
+    assert_eq!(line["watchId"], *watch, "{line}");
+    assert_eq!(line["duringPass"], during_pass, "{line}");
+}
+/// Registration, and the watch identity it names.
+fn watch_registered(child: &mut WatchChild) -> Value {
+    let (line, _) = watch_line(child, "registered");
+    assert_eq!(line["enrollment"]["phase"], "active", "{line}");
+    assert!(line["watchId"].is_string(), "{line}");
+    line["watchId"].clone()
+}
+fn watch_end(mut child: WatchChild, reason: &str) -> bool {
+    let (line, _) = watch_line(&mut child, "ended");
+    assert_eq!(line["reason"], reason, "{line}");
+    assert!(line["recheck"].is_null(), "{line}");
+    child.succeeded()
+}
+/// Nearest-rank percentile of sorted samples.
+fn percentile(sorted: &[f64], percent: usize) -> f64 {
+    let rank = (sorted.len() * percent).div_ceil(100).max(1);
+    sorted[rank - 1]
+}
+
+/// Committed change watches rows L8–L10 and W2–W13, with the example
+/// client's own `watch` command on two paired devices in separate processes
+/// against one gateway that is never restarted.
+#[test]
+fn online_two_devices_follow_live_hints_and_converge() {
+    // Step 1.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let mut gateway = Gateway::start_live(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let receiver_b = setup.second_receiver.clone().unwrap();
+    assert_ne!(receiver_b, setup.receiver);
+    let cache_a = setup_cache(&directory.path().join("a"));
+    let cache_b = setup_cache(&directory.path().join("b"));
+    let profile_a = profile_for(&root, &cache_a);
+    let profile_b = profile_for_device(&root, "profile-b.json", &cache_b);
+    let watch = |profile: &str, passes: &str| {
+        WatchChild::spawn(vec![
+            "watch".into(),
+            profile.into(),
+            setup.conversation.clone(),
+            "100".into(),
+            passes.into(),
+        ])
+    };
+    let show = |cache: &Path, receiver: &str| {
+        let (ok, view) = command(
+            vec![
+                "show".into(),
+                cache.to_string_lossy().into_owned(),
+                receiver.into(),
+                setup.gateway.clone(),
+                setup.conversation.clone(),
+            ],
+            false,
+        );
+        assert!(ok, "{view:?}");
+        let mut view = view.unwrap();
+        // Each `show` names its own rendering with a fresh revision.
+        assert!(view["view"]["revision"].take().is_string(), "{view}");
+        view
+    };
+
+    // Steps 2–3 (W2, W4, W6, L9): A registers; a commit lands while its
+    // recheck pass is reading the head (the fixture holds that read 2 s).
+    // The recheck already holds it, and its hint, read during that pass,
+    // causes exactly one more pass.
+    let mut a = watch(&profile_a, "2");
+    let watch_a = watch_registered(&mut a);
+    gateway.act("commit");
+    watch_pass(&mut a, "recheck", 2);
+    watch_hint(&mut a, &watch_a, true);
+    watch_pass(&mut a, "hint", 2);
+    assert!(watch_end(a, "passesExhausted"));
+
+    // Step 4 (L8): two live watchers on one gateway; B's recheck is its
+    // initial replay.
+    let mut a = watch(&profile_a, "11");
+    let mut b = watch(&profile_b, "11");
+    let watch_a = watch_registered(&mut a);
+    let watch_b = watch_registered(&mut b);
+    assert_ne!(watch_a, watch_b);
+    watch_pass(&mut a, "recheck", 2);
+    watch_pass(&mut b, "recheck", 2);
+
+    // Step 5 (W5, L8, L10): each commit is one hint and one pass per
+    // device, timed from the commit's durable acknowledgement.
+    let mut samples = vec![];
+    for commit in 1..=10 {
+        gateway.act("commit");
+        let acknowledged = Instant::now();
+        for (child, watch) in [(&mut a, &watch_a), (&mut b, &watch_b)] {
+            watch_hint(child, watch, false);
+            let visible = watch_pass(child, "hint", 2 + commit);
+            samples.push(
+                visible
+                    .saturating_duration_since(acknowledged)
+                    .as_secs_f64()
+                    * 1000.0,
+            );
+        }
+    }
+    // Eleven passes: the recheck and exactly one per commit.
+    assert!(watch_end(a, "passesExhausted"));
+    assert!(watch_end(b, "passesExhausted"));
+
+    // Step 6 (W4, S2): a commit while nobody is connected is never hinted;
+    // the next watch's recheck from the checkpoint recovers it.
+    gateway.act("commit");
+    let mut a = watch(&profile_a, "2");
+    let watch_a = watch_registered(&mut a);
+    watch_pass(&mut a, "recheck", 13);
+    gateway.act("commit");
+    watch_hint(&mut a, &watch_a, false);
+    watch_pass(&mut a, "hint", 14);
+    assert!(watch_end(a, "passesExhausted"));
+
+    // Step 7 (L5, L8): both devices and a fresh replay hold the same folded
+    // view and progress, so neither cache has a duplicate or missing record.
+    let mut b = watch(&profile_b, "1");
+    watch_registered(&mut b);
+    watch_pass(&mut b, "recheck", 14);
+    assert!(watch_end(b, "passesExhausted"));
+    let fresh = setup_cache(&directory.path().join("fresh"));
+    let (ok, replay) = command(record_command(&root, &fresh, &setup, "100"), false);
+    assert!(ok, "{replay:?}");
+    let view_a = show(&cache_a, &setup.receiver);
+    let view_b = show(&cache_b, &receiver_b);
+    assert_eq!(view_a["facts"], "14", "{view_a}");
+    assert!(view_a["view"].is_object(), "{view_a}");
+    assert_eq!(view_a, view_b);
+    assert_eq!(view_a, show(&fresh, &setup.receiver));
+
+    // Step 8 (W11, A2): revoking B's receiver closes B's connection with no
+    // hint and refuses its next command; A goes on.
+    let mut a = watch(&profile_a, "5");
+    let mut b = watch(&profile_b, "5");
+    let watch_a = watch_registered(&mut a);
+    watch_registered(&mut b);
+    watch_pass(&mut a, "recheck", 14);
+    watch_pass(&mut b, "recheck", 14);
+    gateway.act("revoke b");
+    gateway.act("commit");
+    watch_hint(&mut a, &watch_a, false);
+    watch_pass(&mut a, "hint", 15);
+    assert!(!watch_end(b, "connectionClosed"));
+    let (ok, denied) = command(
+        vec![
+            "sync-records".into(),
+            profile_b.clone(),
+            setup.conversation.clone(),
+            "100".into(),
+        ],
+        false,
+    );
+    assert!(!ok);
+    let denied = denied.unwrap();
+    assert_eq!(denied["connectionCheck"], "attempted", "{denied}");
+    assert_eq!(denied["enrollmentFailure"]["code"], "refused", "{denied}");
+    assert_eq!(show(&cache_b, &receiver_b), view_b);
+
+    // Step 9 (W1, W11, L7): the gateway goes away. A's watch ends on the
+    // close; the next commands fail explicitly before connecting; A's saved
+    // view stays readable.
+    let view_a = show(&cache_a, &setup.receiver);
+    assert_eq!(view_a["facts"], "15", "{view_a}");
+    drop(gateway);
+    assert!(!watch_end(a, "connectionClosed"));
+    for args in [
+        vec![
+            "sync-records".into(),
+            profile_a.clone(),
+            setup.conversation.clone(),
+            "100".into(),
+        ],
+        vec![
+            "watch".into(),
+            profile_a.clone(),
+            setup.conversation.clone(),
+            "100".into(),
+            "1".into(),
+        ],
+    ] {
+        let (ok, asleep) = command(args, false);
+        assert!(!ok);
+        let asleep = asleep.unwrap();
+        assert_eq!(asleep["connectionCheck"], "attempted", "{asleep}");
+        assert_eq!(asleep["enrollmentFailure"]["code"], "io", "{asleep}");
+    }
+    assert_eq!(show(&cache_a, &setup.receiver), view_a);
+
+    // Step 10 (L10): the loopback measurement, one machine-readable line.
+    samples.sort_by(f64::total_cmp);
+    let round = |value: f64| (value * 10.0).round() / 10.0;
+    println!(
+        "{}",
+        json!({"measurement":"commitAckToVisibleMs","transport":"loopback",
+            "gateway":"composition fixture",
+            "build":if cfg!(debug_assertions) { "debug" } else { "release" },
+            "devices":2,"samples":samples.len(),
+            "p50":round(percentile(&samples, 50)),"p95":round(percentile(&samples, 95)),
+            "max":round(samples[samples.len() - 1]),"passesPerCommitMax":1})
+    );
 }
