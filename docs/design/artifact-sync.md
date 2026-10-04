@@ -304,7 +304,8 @@ digest/media identity omitted stored byte length, and the scan collapsed validat
 active retention with unreadability. The current structural correction keeps one
 application report validator and one ephemeral filesystem retention result. It
 preserves prior review history; at most two full rounds follow this rework before
-the bounded draft handoff rule applies. Issue383's bulk cost policy stays open.
+the bounded draft handoff rule applies. Bulk audit delivery is the contract in
+[Bulk audit delivery](#bulk-audit-delivery).
 
 | Input / ordering | Required result | One owner |
 | --- | --- | --- |
@@ -318,4 +319,74 @@ the bounded draft handoff rule applies. Issue383's bulk cost policy stays open.
 
 The report describes confirmed stored facts, not proof that an arbitrary adapter
 performed its claimed physical effects. Validation does not establish exactly-once
-audit delivery, and issue383 retains the separate bulk-audit policy limit.
+audit delivery. Bulk delivery order and its resource bounds are
+[Bulk audit delivery](#bulk-audit-delivery).
+
+## Bulk audit delivery
+
+Owner: [#383](https://github.com/nessalabs/nessa-agent/issues/383). The
+application service is the only owner of this order. `AttachmentLimits` owns
+the three numbers: `audit_deadline` (one attempt), `audit_budget` (how long the
+caller waits), and `audit_admission` (how many sink calls are in flight). A
+constructed service admits at least one call; a configured zero is raised to
+one so a phase cannot be left with no slot.
+
+This covers two bulk phases: `release` (withdrawn tickets, then retired holds,
+then removed blobs) and the expiry sweep inside `begin`. Single-record writes
+— issuance, redemption, refusal, creation — keep their own `audit_deadline`
+and do not take an admission slot. Cleanup of tickets, holds, and unheld bytes
+finishes before either bulk phase starts, and it is not undone by audit.
+
+One phase moves its records into one delivery task. That task is not one task
+per record, and it is not a queue that accepts further work. It admits the
+next record only when a service-wide slot is free, then waits at most
+`audit_deadline`. The slot's wait is not part of the deadline. The caller
+waits until every record in the phase has been acknowledged or `audit_budget`
+elapses, whichever comes first, and then returns. The delivery task keeps
+going. Dropping the caller does not cancel it. Dropping the service does: the
+service is the owner of the task.
+
+The count returned to the caller is how many records were not yet acknowledged
+when the caller stopped waiting. A sink that accepts a record after that is
+late. The caller's failure stays, and the stored record keeps the cause and
+caller it was built with. Nothing reconciles the two into exactly-once
+delivery. A refusal and a deadline are the same count as a record the caller
+did not see acknowledged: not acknowledged in time. Storage failures stay a
+separate count.
+
+The records are the phase's metadata, not blob bytes. The task retains that
+list until it has handed each record over, and at most `audit_admission`
+records are inside a sink call.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Service as AttachmentService
+    participant Task as Delivery task
+    participant Sink as AttachmentAudit
+    Caller->>Service: release or begin sweep
+    Service->>Service: Cleanup already finished
+    Service->>Task: One task, the phase's records
+    Task->>Sink: Next record, full audit_deadline
+    alt Acknowledged before audit_budget
+        Sink-->>Task: Accepted
+        Task-->>Caller: Unacknowledged count is zero
+    else Caller stops waiting
+        Caller-->>Caller: Count everything not yet acknowledged
+        Note over Task,Sink: The attempt continues for its own deadline
+        Sink-->>Task: Late accept or refusal
+        Note over Caller,Sink: The caller's count is unchanged
+    end
+```
+
+| Ordering | Required result | Enforced by |
+| --- | --- | --- |
+| Sink acknowledges every record before the budget | Caller returns then, not at the end of the budget. Count is zero. Original cause and caller are on each record | `an_acknowledged_release_returns_when_the_records_are_written` |
+| Sink refuses at once | Every record is attempted. Each refusal counts. Cleanup has already finished. The caller does not spend the budget | `a_refusing_sink_is_attempted_for_every_record_without_spending_the_budget` |
+| Sink never answers, release | Caller returns at the budget with every record unacknowledged and cleanup done. Each record is still handed over for a full deadline, including one that starts after the caller has returned. The budget does not shorten a deadline | `a_stalled_release_still_attempts_every_record_for_its_own_deadline` |
+| Sink never answers, expiry sweep | `begin` returns `Audit` at the budget. Each expiry record still gets a full deadline, including one that starts after the caller has returned | `a_stalled_expiry_sweep_still_attempts_every_ticket` |
+| Expiry cleanup before acknowledgement | The swept tickets are already gone, so the book can issue its full capacity while an expiry attempt is still in flight | `expired_tickets_free_their_places_before_the_sweep_is_acknowledged` |
+| Caller dropped after the first attempt has started | Cleanup stays done. The remaining records are still attempted for a full deadline. A record the sink then accepts keeps the original release cause and caller | `a_lost_release_caller_does_not_cancel_the_remaining_attempts` |
+| Sink accepts only after the caller has returned | The returned failure count stays. The stored record keeps the original cause and caller | `a_record_acknowledged_after_the_caller_gave_up_stays_a_failure` |
+| More records than `audit_admission` | Only that many sink calls are in flight. The next record starts when a slot frees | `bulk_delivery_does_not_admit_more_than_its_limit` |
+| `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |

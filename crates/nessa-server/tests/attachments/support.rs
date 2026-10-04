@@ -25,6 +25,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, Notify};
 
@@ -104,6 +105,9 @@ pub(crate) struct RecordingAudit {
     pub(crate) refusing: AtomicBool,
     pub(crate) stalled: AtomicBool,
     pub(crate) attempts: AtomicUsize,
+    /// How long each `record` future lived, in call order. A deadline drops
+    /// the future, so this is the attempt the service actually gave it.
+    durations: Mutex<Vec<Duration>>,
     /// Signalled once per acknowledged record, so a test can wait for one
     /// without guessing how long it takes.
     pub(crate) recorded: Notify,
@@ -132,10 +136,45 @@ impl RecordingAudit {
         records.retain(|record| !matches!(record, AttachmentAuditRecord::TicketIssued { .. }));
         records
     }
+    /// How long each attempt lived, in the order the sink was asked.
+    pub(crate) fn durations(&self) -> Vec<Duration> {
+        self.durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+    /// Forget timings from earlier phases, so a later assertion reads only
+    /// the attempts it is about.
+    pub(crate) fn clear_durations(&self) {
+        self.durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
 }
+
+/// Times one sink call, including the drop that ends a deadline.
+struct AttemptSpan<'a> {
+    audit: &'a RecordingAudit,
+    started: tokio::time::Instant,
+}
+impl Drop for AttemptSpan<'_> {
+    fn drop(&mut self) {
+        self.audit
+            .durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(self.started.elapsed());
+    }
+}
+
 impl AttachmentAudit for RecordingAudit {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
         Box::pin(async move {
+            let _span = AttemptSpan {
+                audit: self,
+                started: tokio::time::Instant::now(),
+            };
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
             let gate = {
                 let mut gate = self.gate.lock().unwrap();

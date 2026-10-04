@@ -9,6 +9,7 @@ use crate::attachments::domain::{
     Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
     TicketLimits, UploadMismatch, UploadTicket,
 };
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use nessa_auth::{
     application::ports::Clock,
     domain::{OrganizationId, PrincipalId},
@@ -17,12 +18,16 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::Duration,
 };
 use tokio::{
-    sync::Semaphore,
-    time::{timeout, Instant},
+    sync::{oneshot, Semaphore},
+    task::JoinHandle,
+    time::timeout,
 };
 
 /// A close is admitted by the conversation context and then has to be written
@@ -94,13 +99,17 @@ pub struct AttachmentLimits {
     /// How long one audit record may take to be acknowledged. Every record
     /// gets this much; one slow record does not spend another's time.
     pub audit_deadline: Duration,
-    /// How long all the records of one phase may take together: a release's
-    /// withdrawals, releases and removals, or one sweep of expired tickets.
-    /// Those lists are as long as a conversation has holds or the book has
-    /// tickets, so a phase without a budget would wait for as many deadlines
-    /// as it found records. Records the budget does not reach are reported as
-    /// unrecorded, and the cleanup they describe still happens.
+    /// How long the caller of one bulk phase waits to learn which records were
+    /// acknowledged. A release's withdrawals, hold releases and removals, or
+    /// one sweep of expired tickets, can be as long as a conversation's holds
+    /// or the book's tickets. The caller stops waiting here. Delivery does not:
+    /// a record the budget did not see acknowledged is still handed to the sink
+    /// for [`Self::audit_deadline`].
     pub audit_budget: Duration,
+    /// How many bulk sink calls may be in flight at once, across every phase
+    /// this service is delivering. The next record waits for a slot; that wait
+    /// is not taken out of its deadline.
+    pub audit_admission: usize,
 }
 impl Default for AttachmentLimits {
     fn default() -> Self {
@@ -115,6 +124,7 @@ impl Default for AttachmentLimits {
             upload_deadline: Duration::from_secs(120),
             audit_deadline: Duration::from_secs(5),
             audit_budget: Duration::from_secs(30),
+            audit_admission: 1,
         }
     }
 }
@@ -140,6 +150,13 @@ struct Inner {
     book: Mutex<TicketBook>,
     uploads: Arc<Semaphore>,
     normalizations: Semaphore,
+    /// Bulk delivery shares these slots. Single-record writes do not.
+    /// This is [`AttachmentLimits::audit_admission`], and at least one.
+    audit_admission: usize,
+    audit_slots: Arc<Semaphore>,
+    /// One task per bulk phase still delivering. The caller does not own it:
+    /// returning, or being dropped, leaves the task here until it finishes.
+    audit_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 /// Issues tickets, receives uploads under them, and releases holds. Clones
@@ -160,6 +177,9 @@ impl AttachmentService {
             normalizer,
             clock,
         } = dependencies;
+        // A phase with no slot would report every record lost and never hand
+        // one over. One is the smallest admission that can attempt.
+        let audit_admission = limits.audit_admission.max(1);
         Self {
             inner: Arc::new(Inner {
                 store,
@@ -168,10 +188,13 @@ impl AttachmentService {
                 secrets,
                 normalizer,
                 clock,
-                limits,
                 book: Mutex::new(TicketBook::new(limits.tickets)),
                 uploads: Arc::new(Semaphore::new(limits.max_uploads)),
                 normalizations: Semaphore::new(limits.max_normalizations),
+                audit_admission,
+                audit_slots: Arc::new(Semaphore::new(audit_admission)),
+                audit_tasks: Mutex::new(Vec::new()),
+                limits,
             }),
         }
     }
@@ -200,30 +223,100 @@ impl AttachmentService {
         }
     }
 
-    /// Hand one phase's records to the sink, one at a time, inside one budget
-    /// for the whole phase. Each record still gets its own attempt, shortened
-    /// by whatever the budget has left. Returns how many were not acknowledged,
-    /// the ones the budget did not reach included: those are reported as lost
-    /// evidence rather than presented as recorded.
+    /// Hand one phase's records to the sink. Each gets [`AttachmentLimits::audit_deadline`],
+    /// taken only once a delivery slot is free. The caller waits at most
+    /// [`AttachmentLimits::audit_budget`] and then returns how many were not yet
+    /// acknowledged. The attempts keep going: an earlier timeout does not spend
+    /// a later record's deadline, and the caller stopping — or being dropped —
+    /// does not cancel them. A sink that answers after the caller has returned
+    /// does not change the count. The order is the bulk-audit table in
+    /// `docs/design/artifact-sync.md`.
     async fn audit_all(&self, records: Vec<AttachmentAuditRecord>) -> usize {
-        let limits = self.inner.limits;
-        let closes_at = Instant::now() + limits.audit_budget;
-        let mut unrecorded = 0_usize;
-        for record in records {
-            let left = closes_at.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                unrecorded += 1;
-                continue;
+        let total = records.len();
+        if total == 0 {
+            return 0;
+        }
+        self.reap_audit_tasks().await;
+        let acknowledged = Arc::new(AtomicUsize::new(0));
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let audit = Arc::clone(&self.inner.audit);
+        let slots = Arc::clone(&self.inner.audit_slots);
+        let deadline = self.inner.limits.audit_deadline;
+        let budget = self.inner.limits.audit_budget;
+        let admission = self.inner.audit_admission;
+        let acknowledged_task = Arc::clone(&acknowledged);
+        let supervisor = tokio::spawn(async move {
+            let mut pending = records.into_iter();
+            let mut in_flight = FuturesUnordered::new();
+            loop {
+                while in_flight.len() < admission {
+                    let Some(record) = pending.next() else {
+                        break;
+                    };
+                    let audit = Arc::clone(&audit);
+                    let slots = Arc::clone(&slots);
+                    let acknowledged_task = Arc::clone(&acknowledged_task);
+                    in_flight.push(async move {
+                        // A closed semaphore means the service is going away.
+                        // Still hand the record over: skipping it is the
+                        // failure this phase exists to avoid.
+                        let permit = slots.acquire_owned().await.ok();
+                        let delivered = timeout(deadline, audit.record(record)).await;
+                        drop(permit);
+                        if matches!(delivered, Ok(Ok(()))) {
+                            acknowledged_task.fetch_add(1, Ordering::SeqCst);
+                        }
+                    });
+                }
+                if in_flight.next().await.is_none() {
+                    break;
+                }
             }
-            let attempt = timeout(
-                limits.audit_deadline.min(left),
-                self.inner.audit.record(record),
-            );
-            if !matches!(attempt.await, Ok(Ok(()))) {
-                unrecorded += 1;
+            let _ = finished_tx.send(());
+        });
+        self.park_audit_task(supervisor);
+        // Waiting on the signal, not the task. Dropping this wait — the budget,
+        // or the caller — leaves the task parked on the service.
+        let _ = timeout(budget, finished_rx).await;
+        self.reap_audit_tasks().await;
+        total - acknowledged.load(Ordering::SeqCst)
+    }
+
+    fn park_audit_task(&self, task: JoinHandle<()>) {
+        self.audit_tasks().push(task);
+    }
+
+    fn audit_tasks(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
+        self.inner
+            .audit_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Surface a delivery task that panicked, and drop the ones that finished.
+    /// A task still handing records over stays parked.
+    async fn reap_audit_tasks(&self) {
+        let finished = {
+            let mut tasks = self.audit_tasks();
+            let mut running = Vec::new();
+            let mut finished = Vec::new();
+            for task in tasks.drain(..) {
+                if task.is_finished() {
+                    finished.push(task);
+                } else {
+                    running.push(task);
+                }
+            }
+            *tasks = running;
+            finished
+        };
+        for task in finished {
+            if let Err(error) = task.await {
+                if error.is_panic() {
+                    std::panic::resume_unwind(error.into_panic());
+                }
             }
         }
-        unrecorded
     }
 
     /// Remove every ticket whose time has passed and record each expiry. They
@@ -839,9 +932,8 @@ impl AttachmentService {
                     .map(|removed| AttachmentAuditRecord::BlobRemoved { removed }),
             );
         }
-        // One budget for the whole release: a conversation's holds are not
-        // bounded, and a sink that answers slowly must not keep a close open
-        // for one deadline per hold. Cleanup is already done by this point.
+        // Cleanup is already done. The caller waits at most the phase budget;
+        // every record is still attempted for its own deadline.
         let audit_failures = self.audit_all(records).await;
         if storage_failures == 0 && audit_failures == 0 {
             return Ok(());

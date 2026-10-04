@@ -966,11 +966,60 @@ async fn a_release_that_cannot_be_recorded_still_releases_and_says_so() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_sink_that_never_answers_costs_a_release_its_budget_and_no_more() {
-    // Two holds and their two removals: four records, and a budget that pays
-    // for two and a half of them. A conversation's holds are not bounded, so
-    // what stops a slow sink holding a close open is the budget, not the
-    // number of records.
+async fn an_acknowledged_release_returns_when_the_records_are_written() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let started = tokio::time::Instant::now();
+
+    fixture
+        .service
+        .release(release_request(CONVERSATION))
+        .await
+        .unwrap();
+
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_release_records(&fixture.audit.taken());
+    assert!(fixture.store.held().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusing_sink_is_attempted_for_every_record_without_spending_the_budget() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    fixture.audit.refusing.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let started = tokio::time::Instant::now();
+
+    assert_eq!(
+        fixture.service.release(release_request(CONVERSATION)).await,
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 4
+        })
+    );
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.blob_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_release_still_attempts_every_record_for_its_own_deadline() {
+    // Two holds and their two removals. The budget pays for two deadlines and
+    // a bit of a third; it must not shorten that third, and it must not skip
+    // the fourth. The caller is what the budget bounds.
     let fixture = Fixture::new(AttachmentLimits {
         audit_deadline: Duration::from_secs(5),
         audit_budget: Duration::from_secs(12),
@@ -978,6 +1027,8 @@ async fn a_sink_that_never_answers_costs_a_release_its_budget_and_no_more() {
     });
     fixture.upload(CONVERSATION, b"first", PDF).await;
     fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    fixture.audit.clear_durations();
     fixture.audit.stalled.store(true, Ordering::SeqCst);
     let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
     let started = tokio::time::Instant::now();
@@ -986,24 +1037,33 @@ async fn a_sink_that_never_answers_costs_a_release_its_budget_and_no_more() {
         fixture.service.release(release_request(CONVERSATION)).await,
         Err(ReleaseError::Incomplete {
             storage_failures: 0,
-            // Every record is accounted for, the one the budget never reached
-            // included: it is reported as lost, never as delivered.
             audit_failures: 4
         })
     );
-    // Two full deadlines and what was left of the budget for the third; the
-    // fourth was never handed over, because there was no time to give it.
-    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 3);
     assert_eq!(started.elapsed(), Duration::from_secs(12));
-    // The files went all the same: a lost record never stops cleanup.
+    // Two attempts have used a full deadline. The third is in flight and was
+    // not cut off when the caller returned.
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 3);
+    assert_eq!(
+        fixture.audit.durations(),
+        vec![Duration::from_secs(5), Duration::from_secs(5)]
+    );
     assert!(fixture.store.held().is_empty());
     assert_eq!(fixture.store.blob_count(), 0);
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 3);
+    assert_eq!(fixture.audit.durations().len(), 2);
+
+    // Past the fourth deadline. A sleep that lands on it can be polled before
+    // the attempt's own timer, and then the drop has not been timed yet.
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
+    assert_eq!(fixture.audit.durations(), vec![Duration::from_secs(5); 4]);
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_sweep_of_stale_tickets_is_bounded_by_the_same_budget() {
-    // A begin sweeps whatever the book has, which is as many tickets as the
-    // book holds, so it is bounded the same way a release is.
+async fn a_stalled_expiry_sweep_still_attempts_every_ticket() {
     let fixture = Fixture::new(AttachmentLimits {
         tickets: tickets(4),
         audit_deadline: Duration::from_secs(5),
@@ -1017,6 +1077,7 @@ async fn a_sweep_of_stale_tickets_is_bounded_by_the_same_budget() {
     }
     fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS + 1);
     fixture.audit.taken_all();
+    fixture.audit.clear_durations();
     fixture.audit.stalled.store(true, Ordering::SeqCst);
     let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
     let started = tokio::time::Instant::now();
@@ -1031,15 +1092,215 @@ async fn a_sweep_of_stale_tickets_is_bounded_by_the_same_budget() {
             .await,
         Err(BeginError::Audit)
     );
-    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
     assert_eq!(started.elapsed(), Duration::from_secs(7));
-    // The tickets are gone whether or not their expiry could be recorded, so
-    // the book's places are free again.
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+    assert_eq!(fixture.audit.durations(), vec![Duration::from_secs(5)]);
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+    assert_eq!(fixture.audit.durations().len(), 1);
+
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 3);
+    assert_eq!(fixture.audit.durations(), vec![Duration::from_secs(5); 3]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn expired_tickets_free_their_places_before_the_sweep_is_acknowledged() {
+    let fixture = Fixture::new(AttachmentLimits {
+        tickets: tickets(4),
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(7),
+        ..AttachmentLimits::default()
+    });
+    for request_id in ["one", "two", "three"] {
+        fixture
+            .ticket_as(request_id, CONVERSATION, request_id.as_bytes(), PDF)
+            .await;
+    }
+    fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS + 1);
+    fixture.audit.taken_all();
+    fixture.audit.stalled.store(true, Ordering::SeqCst);
+
+    assert_eq!(
+        fixture
+            .service
+            .begin(
+                caller("org", "owner"),
+                begin_request(CONVERSATION, BYTES, PDF)
+            )
+            .await,
+        Err(BeginError::Audit)
+    );
+    // One expiry attempt is still inside its own deadline. The tickets are
+    // already gone, so the book can issue again.
     fixture.audit.stalled.store(false, Ordering::SeqCst);
     for request_id in ["four", "five", "six", "seven"] {
         fixture
             .ticket_as(request_id, CONVERSATION, request_id.as_bytes(), PDF)
             .await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_release_caller_does_not_cancel_the_remaining_attempts() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) == attempts + 4 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
+    assert_release_records(&fixture.audit.taken());
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.blob_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_record_acknowledged_after_the_caller_gave_up_stays_a_failure() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(10),
+        audit_budget: Duration::from_secs(1),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let started = tokio::time::Instant::now();
+
+    let result = fixture.service.release(release_request(CONVERSATION)).await;
+
+    assert_eq!(started.elapsed(), Duration::from_secs(1));
+    assert_eq!(
+        result,
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 4
+        })
+    );
+    assert!(fixture.audit.taken_all().is_empty());
+    gate.send(()).unwrap();
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) == attempts + 4 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
+    assert_release_records(&fixture.audit.taken());
+    assert_eq!(
+        result,
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 4
+        })
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn bulk_delivery_does_not_admit_more_than_its_limit() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        audit_admission: 2,
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    fixture.audit.clear_durations();
+    fixture.audit.stalled.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let release = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) >= attempts + 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
+    let result = release.await.unwrap();
+    assert_eq!(
+        result,
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 4
+        })
+    );
+    assert_eq!(fixture.audit.durations(), vec![Duration::from_secs(5); 4]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_zero_admission_still_attempts_every_record() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(1),
+        audit_admission: 0,
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    let started = tokio::time::Instant::now();
+
+    fixture
+        .service
+        .release(release_request(CONVERSATION))
+        .await
+        .unwrap();
+
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(fixture.audit.taken().len(), 2);
+}
+
+/// Both uploads were released in the closer's name, for the close that asked.
+fn assert_release_records(records: &[AttachmentAuditRecord]) {
+    assert_eq!(records.len(), 4, "{records:?}");
+    for record in records {
+        let release = match record {
+            AttachmentAuditRecord::HoldReleased { hold, was, release } => {
+                assert_eq!(*was, HoldState::Held);
+                assert_eq!(hold.uploaded_by().principal_id(), &principal("owner"));
+                release
+            }
+            AttachmentAuditRecord::BlobRemoved { removed } => {
+                assert_eq!(removed.retirements().len(), 1);
+                let RetirementEvidence::Release(release) = &removed.retirements()[0].evidence()
+                else {
+                    panic!("expected explicit release")
+                };
+                release
+            }
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(release.caller.action_id(), "close-1");
+        assert_eq!(release.caller.principal_id(), &principal("closer"));
+        assert_eq!(release.caller.surface_id(), "phone");
+        assert_eq!(release.cause, ReleaseCause::ConversationClosed);
     }
 }
 
