@@ -588,9 +588,13 @@ async fn read_past_its_work_budget_answers_preparing_and_releases_its_permit() {
         1,
         "stopped after one step"
     );
-    // The waiting read gets the permit, and finds the first read's progress.
+    // The waiting read gets the permit, and finds the first read's progress:
+    // one step short of the whole history, it reaches the head only by
+    // resuming where the first read stopped. Only the step count may stop
+    // it; the real clock must not.
     let next = capacity.clone().try_acquire_owned().unwrap();
-    source.work_budget = operation::READ_WORK_BUDGET;
+    source.work_budget = Duration::from_secs(3600);
+    source.discovery_steps = usize::try_from(tail.div_ceil(16) - 1).unwrap();
     source.between_steps = None;
     let response = source
         .read(
