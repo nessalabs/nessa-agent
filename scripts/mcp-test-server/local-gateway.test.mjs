@@ -44,6 +44,11 @@ if (command === "auth") {
 if (process.env.FAKE_NESSA_FAIL) {
   process.stderr.write("could not bind\\n", () => process.exit(3))
 } else {
+  // What it was started with, for the test of a signed-out gateway.
+  require("node:fs").writeFileSync(
+    join(process.env.NESSA_DATA_DIR, "server-env.json"),
+    JSON.stringify(process.env),
+  )
   const server = require("node:http")
     .createServer((request, response) => response.end("ok"))
     .listen(Number(process.env.NESSA_PORT), "127.0.0.1")
@@ -72,8 +77,9 @@ async function freePort() {
   return port
 }
 
-const start = async () =>
+const start = async (more = {}) =>
   startLocalGateway({
+    ...more,
     agent: "claude",
     port: await freePort(),
     instance: "local-gateway-test",
@@ -144,4 +150,39 @@ test("the live check's gateway.log is read after the stop, so it holds the gatew
 
 test("the live check's gateway.log holds the output of a gateway that failed to start", async () => {
   assert.equal(await liveCheckLog(true), "could not bind\n")
+})
+
+test("a signed-out gateway is started with no credential and a home of its own", async (t) => {
+  const planted = ["OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
+  t.after(() => {
+    delete process.env.MCP_LIVE_NESSA
+    for (const name of planted) delete process.env[name]
+  })
+  process.env.MCP_LIVE_NESSA = nessa
+  for (const name of planted) process.env[name] = "planted"
+  const seen = async (more) => {
+    const gateway = await start(more)
+    const env = JSON.parse(
+      readFileSync(join(gateway.directory, "server-env.json"), "utf8"),
+    )
+    await gateway.stop()
+    return { env, directory: gateway.directory }
+  }
+  const { env, directory } = await seen({ signedOut: true })
+  for (const name of planted) assert.equal(env[name], undefined, name)
+  assert.equal(env.HOME, join(directory, "home"))
+  assert.equal(env.ANTHROPIC_API_KEY, "signed-out-gateway-placeholder")
+  const names = Object.keys(env).filter(
+    (name) => !name.startsWith("NESSA_") && !name.startsWith("__CF"),
+  )
+  assert.deepEqual(
+    names.filter(
+      (name) =>
+        !["PATH", "HOME", "TMPDIR", "RUST_LOG", "ANTHROPIC_API_KEY"].includes(name),
+    ),
+    [],
+  )
+  // Not signed out, it is this process's environment.
+  const live = await seen({})
+  for (const name of planted) assert.equal(live.env[name], "planted", name)
 })

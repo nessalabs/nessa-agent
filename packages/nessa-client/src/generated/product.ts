@@ -776,11 +776,11 @@ export interface ConversationRuntime {
 export interface ConversationPart {
   /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
   offset: number
-  /** Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice. */
+  /** Text, exposed thought content, a tool call, or a Nessa-owned runtime notice. A tool call is one part however many updates it has, at its first update's offset; its current state is its entry in tools. */
   kind: "text" | "thought" | "tool" | "local_notice"
-  /** Exact text fragment for text, thought, or local notice observations; empty for tool observations. */
+  /** Exact text fragment for text, thought, or local notice observations; empty for a tool call. */
   text: string
-  /** Owning tool identity for a tool observation; empty otherwise. */
+  /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
   /** Stable execution-scoped declined-review identity for a local notice; empty otherwise. */
   noticeId: string
@@ -800,7 +800,7 @@ export interface ConversationPermissionOrigin {
   kind: ConversationPermissionOriginKind
   /** For app: the app's server, on which the tool would be called. */
   server?: string
-  /** For app: the tool the app asked to call. */
+  /** For app: the tool the app asked to call, the review's toolName. */
   tool?: string
 }
 /** An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. instanceId names which mount of it is asking. */

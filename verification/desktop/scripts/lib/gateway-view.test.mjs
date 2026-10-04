@@ -4,13 +4,20 @@
  * answers and what it makes of the ended turn (A1–A6), and which review is a
  * step's and when it has gone (R1–R5). When each step takes its baseline is
  * the check's own, and is exercised only by running it.
+ *
+ * And `gateway-window.mjs`'s: what a text-only turn said, which its steps W2
+ * and W3 compare the window's transcript with (#419), and the turns it cannot
+ * compare.
  */
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
+import { CannotRun } from "./cli.mjs"
+
 import {
   admitOnce,
   callsOf,
+  lastTurn,
   newReview,
   reviewKeys,
   setupOutcome,
@@ -181,5 +188,71 @@ describe("newReview", () => {
     const opened = review("new")
     assert.equal(stillPending([stale, opened], opened), true)
     assert.equal(stillPending([stale], opened), false)
+  })
+})
+
+describe("lastTurn", () => {
+  const turn = (userText, parts) => ({ executionId: "e", userText, parts })
+  const said =
+    (parts, userText = "say it") =>
+    () =>
+      lastTurn({ messages: [turn(userText, parts)] })
+
+  it("reads the last turn's text-only reply, its text parts joined and folded", () => {
+    const view = {
+      messages: [
+        turn("first", [{ kind: "text", text: "old" }]),
+        turn("say  it:\n", [
+          { kind: "text", text: "Wab", messageId: "m1" },
+          { kind: "text", text: "c12.\n", messageId: "m2" },
+        ]),
+      ],
+    }
+    assert.deepEqual(lastTurn(view), { user: "say it:", reply: "Wabc12." })
+  })
+
+  it("a reply with a tool or a local notice in it is not text-only: could not run", () => {
+    for (const other of [
+      { kind: "tool", toolId: "t" },
+      { kind: "local_notice", text: "stopped" },
+    ])
+      assert.throws(
+        said([{ kind: "text", text: "Wab" }, other, { kind: "text", text: "c12" }]),
+        (error) => error instanceof CannotRun && /not text-only/.test(error.message),
+      )
+  })
+
+  it("a thought part is left out, as the window does not draw it", () => {
+    assert.deepEqual(
+      said([
+        { kind: "thought", text: "**Planning** `x`" },
+        { kind: "text", text: "Wab" },
+        { kind: "thought", text: "more" },
+        { kind: "text", text: "c12" },
+      ])(),
+      { user: "say it", reply: "Wabc12" },
+    )
+    assert.throws(
+      said([{ kind: "thought", text: "only a thought" }]),
+      (error) => error instanceof CannotRun && /empty/.test(error.message),
+    )
+  })
+
+  it("text the window draws otherwise — code, strong, anything not plain — could not run", () => {
+    for (const text of ["`Wabc12`", "**Wabc12**", "Wabc12 *", "Wabc12 <b>"])
+      assert.throws(
+        said([{ kind: "text", text }]),
+        (error) => error instanceof CannotRun && /not plain text/.test(error.message),
+      )
+    assert.throws(
+      said([{ kind: "text", text: "Wabc12" }], "say `it`"),
+      (error) => error instanceof CannotRun && /person's message/.test(error.message),
+    )
+  })
+
+  it("an empty reply, a turn not yet answered, or no turn: could not run", () => {
+    for (const parts of [[], [{ kind: "text", text: " \n" }]])
+      assert.throws(said(parts), CannotRun)
+    assert.throws(() => lastTurn({ messages: [] }), CannotRun)
   })
 })

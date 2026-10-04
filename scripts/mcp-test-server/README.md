@@ -29,7 +29,8 @@ recording can be compared with another.
 | `model_only_chart` | a text block | a tool hidden from apps that declares a UI (the chart's) |
 
 The review app's own calls are what the desktop's real-gateway check
-(`verification/desktop/scripts/mcp-apps-gateway.mjs`) reads in the window.
+(`verification/desktop/scripts/mcp-apps-gateway.mjs`, on
+`verification/desktop/scripts/lib/gateway-stack.mjs`) reads in the window.
 
 Arguments outside a tool's schema return an `isError` result and are never
 echoed back. The server's tests are `server.test.mjs`, and the local
@@ -90,3 +91,40 @@ with their `node_modules` (default: `crates/nessa-sdk/harnesses` in this
 checkout); `MCP_LIVE_NESSA` the gateway binary (default: this checkout's
 `target/debug/nessa`); `MCP_LIVE_PORT` (default 7431) and `MCP_LIVE_POLLS` (seconds,
 default 300) adjust the run.
+
+## The scripted agent
+
+`scripted-agent.mjs codex|claude <tool>` is a stdio ACP agent with no model,
+which a gateway can run as that agent's runtime (an explicit `command`). It
+answers the handshake as the harness pinned in
+`crates/nessa-sdk/harnesses/<agent>-acp/package.json`, and to each prompt makes
+one real call of `<tool>`, with the recorded call's arguments, through the stand-in the gateway
+gave it for `mcptest`. As Claude, that call carries the call's id in
+`_meta["claudecode/toolUseId"]`, where Claude's harness names a forwarded call
+and the gateway's stand-in keeps its `structuredContent` for that call (the
+SDK's `CALL_ID` in `stand_in.rs`, which a test holds `scripted-frames.mjs`'s
+`CLAUDE_CALL_ID` to); as Codex, it names no call id (no
+`_meta["claudecode/toolUseId"]`), as Codex's harness names none. This is the
+one value taken from the harness's MCP side rather than from the recordings,
+which hold only ACP frames. It then reports
+that call in the frames the harness was recorded sending, under the same id,
+says DONE, and ends the turn. The frames are the recorded
+`show_chart` call from the parser fixtures above, value for value, with only
+the call's id, its tool's name and the server's result written at the places
+that harness carries them (`scripted-frames.mjs`'s `PLACES`). The test checks
+those places against the recordings: a recording that carries the call
+anywhere else fails it. It replays only what that call can stand for: one of
+the test server's tools, under a name no harness rewrites, with the recorded
+call's arguments, whose result is shaped as the recorded one is (the same
+keys, as many text blocks, a non-empty object of `structuredContent`). Anything else — a
+failure, a text-only result, a dotted name — is refused, since the harnesses
+report those in frames of their own. A cancel during the call ends the turn
+`cancelled` with nothing reported, whether the call then answers or fails. It does not ask permission for the call, as a harness
+does: the recordings hold no permission request.
+
+It reads no credential: `startLocalGateway({ signedOut: true })` starts the
+gateway from `PATH`, `TMPDIR` and `RUST_LOG` alone, with a home of its own and
+a placeholder `ANTHROPIC_API_KEY` (which keeps the gateway from reading
+Claude's from the keychain). The desktop's real-gateway check runs it with
+`--scripted`. Its design table is on #418, and its tests are
+`scripted-frames.test.mjs` and `scripted-agent.test.mjs`.

@@ -417,10 +417,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
   the answer to Allow Once and to Deny; closing the pane of a mount with a
-  call waiting withdraws the review, and the inline mount stays. _#349
+  call waiting withdraws the review, the window's card for it goes once it is
+  withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
+- [ ] **One tool call is drawn once** (#418): a harness reports one call as an
+  announcement and then updates under its id (Codex three frames, Claude
+  four), and the window draws it as one transcript step and one inline app
+  frame, so the app mounts once. _#418 design._ _Check:_
+  `mcp-apps-gateway.mjs --agent codex --scripted` and `--agent claude
+  --scripted`, `renders`: its step and frame counts (no model, no sign-in: the
+  scripted agent replays the recorded frames under the real gateway).
 
 ## Composer and approval card
 
@@ -429,6 +437,21 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
+- [ ] **An app's review is drawn, and names the app, not the agent**, in the
+  window over a fake gateway (`fixtures/app-review/`, dev server only): at
+  rest, a conversation whose turn has ended is not read again; when its app
+  calls a destructive tool, the fake opens the review only once the
+  conversation has been read twice since the call (nothing in the list row
+  moves), and the card is drawn within 8 s, its head "The <server> app wants
+  to run <tool>" (`data-origin="app"`); Allow Once sends one answer, Allow for
+  that review, the card goes, the app's call comes back ok, and the reads
+  stop. At the same widths as the card above, with the tool's name short and
+  as one word as long as the gateway allows (`maxMcpNameBytes`), the head
+  stays inside the card; its row in the Agents overview is named "<title>. The
+  <server> app wants to run <tool> <arguments>.". _#436_ (`appCall` in
+  `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
+  `approvalHead` and `approvalAsker` in `approval-request.tsx`).
+  _Check:_ `app-review.mjs --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
@@ -572,6 +595,91 @@ mounts, `index.html` shows the fallback on that stage.
   reduced motion. The breathing avatar stays centred on its layout box; its
   full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
+
+## The window's gateway
+
+The desktop app's window reads the local gateway over the panel's credential,
+which its host serves it once the gateway is ready (#419). When it cannot, it
+says why where the conversations would be.
+
+- [ ] **Signed out, the host refusing the credential, the gateway not ready
+  yet, and no gateway listening each say why in the chat area, with Try
+  Again; never the sample in its place.** A gateway refusing the credential
+  says "This window isn’t signed in to the local server."; the rest say "Nessa
+  couldn’t read the local server’s conversations just now." While the gateway
+  is not ready the host refuses the endpoint and the credential is never asked
+  for. The status sits
+  inside the chat area and the window, Try Again is at least 24px tall with
+  nothing over it, and no session row or sample plugin is drawn. Try Again
+  reads the index again (the status goes while it reads, which no poll does)
+  and connects at once though the poller waits, and says the same while
+  nothing changed. Try Again is told from the poller by a clock the script
+  holds, not by timing: Playwright's clock runs the page's timers, in real time
+  until the host has gone unasked for two poll rounds (the unasked spell), when
+  it pauses. With no timer firing, a host ask after the click can only be Try
+  Again's own connect; with none, Try Again did not connect, or joined a
+  connect still in flight, or its connect waits on a page timer, which the
+  paused clock holds. That rests on a premise: Try Again's connect reaches its
+  first host ask with no page timer, as React's scheduler and IPC promises use
+  none. If that stops holding, a correct product fails, never a broken one
+  passes. The pause must also come while the poller still waits: under a round
+  short of its wait after the last ask (the quiet), at least one refused round
+  is still owed. Given that check, a broken Try Again fails, and a connect
+  still in flight or a held timer can only make a correct one fail, never a
+  broken one pass. It fails when the host is never unasked for two rounds
+  within the poller's wait and three rounds more, when the host was asked
+  within two rounds of the pause, when the pause came after the poller's wait
+  could have ended, when no failed connect came before the click, when Try
+  Again could not be clicked, when no ask follows the click, or when Try Again
+  did not read the index again. Timing numbers that are missing or not
+  positive could not run, and so could a quiet too short for the unasked spell
+  and the lead before the pause to fit under it (C0–C4, #419 comment
+  5977020094; C5, #419 comment 5978179804).
+  While signed out, and while the gateway is not ready, the window does not
+  ask the host at all for a round short of the poller's wait after its last
+  ask, then asks exactly once by three rounds after it: after a failed connect
+  it waits out several poll rounds rather than asking the host every second,
+  and then tries again on its own. The
+  wait, `pollMs × reconnectRounds`, is read from the gateway source's own
+  `defaultGatewayTiming` in the page (so the script needs `--mode dev`); the
+  unit tests pin the rule, `reconnectRounds + 1` rounds, S10.
+  _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
+  `gateway-states.mjs` (runs the real frontend as the desktop app, against a
+  fake host whose endpoint and credential commands answer per scenario, and a
+  fake gateway socket that refuses the credential as `product/socket.rs` does).
+- [ ] **A gateway that answers shows its conversations in the main window, and
+  a turn made elsewhere without a reload.** Over the host's endpoint and the
+  panel's credential (the file the gateway provisioned, which the native host
+  reads), the window's socket goes to the host's endpoint, its handshake names
+  client `nessa-panel` and is answered with principal `surface:nessa-panel`;
+  the window lists the conversation by the title the gateway gives it, with no
+  failure status and no sample; opened, its transcript draws the person's
+  message and then the agent's reply, each exactly the text the gateway's
+  `conversation.read` holds, inside the chat area; and a turn sent from
+  another surface under the same credential, once the gateway holds it, is
+  drawn in the open transcript as its last two messages, the page not
+  reloaded (the gateway source's poller). Every handshake the window makes,
+  each reconnect's too, is the first's: the host's endpoint, client
+  `nessa-panel`, principal `surface:nessa-panel`. No console error, page error
+  or failed request at any point. In Chromium and WebKit. The reply compared
+  is a text-only one (only text parts, plain text, not empty), which the
+  window draws as its text alone; an agent that answers otherwise leaves the
+  steps "could not run", not failed.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
+  _Check:_ `gateway-window.mjs` (runs the real frontend as the desktop app —
+  `hostGateway`, `connectDevSession`, the gateway source — against a fake host
+  whose endpoint and credential commands answer with a real gateway's, started
+  by `lib/gateway-stack.mjs` with a real agent; needs the agent signed in).
+  _Not in a browser:_ the native host's side — readiness, endpoint discovery,
+  the credential file read and its refusals — is the Rust host tests'
+  (`src-tauri/src/surface_credential.rs`,
+  `src-tauri/src/gateway_endpoint/entrypoint/command.rs`,
+  `src-tauri/src/gateway/infrastructure/commands.rs`); WKWebView's own IPC and
+  the packaged app's `tauri://localhost` origin are the live `pnpm app` run's.
+- [ ] **A gateway that answers shows its servers' MCP Apps in the main
+  window.** _By hand:_ `pnpm app` against a gateway with
+  `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
+  #436 lands.
 
 ## Console errors
 

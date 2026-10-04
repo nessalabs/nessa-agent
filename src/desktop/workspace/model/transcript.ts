@@ -50,11 +50,20 @@ export interface Message {
   readonly delivery?: Delivery
 }
 
-/** A command the agent asks to run, waiting on the person's answer. */
+/**
+ * Who asks for an approval: the agent, or an MCP App, which names the tool
+ * it asked to call on its own server.
+ */
+export type ApprovalOrigin =
+  | { readonly kind: "agent" }
+  | { readonly kind: "app"; readonly server: string; readonly tool: string }
+
+/** A command the agent, or an MCP App, asks to run, waiting on the person's answer. */
 export interface Approval {
   readonly id: string
   readonly command: string
   readonly reason: string
+  readonly origin: ApprovalOrigin
 }
 
 /** What a running agent is doing, and since when; absent while its reply streams in. */

@@ -14,7 +14,7 @@ use nessa_sync::replication::catalogue::{CatalogueError, CatalogueProgress};
 use serde_json::{json, Value};
 use std::io::Write;
 mod causes;
-pub(crate) use causes::{cache_failure, gateway_failure};
+pub(crate) use causes::{cache_failure, gateway_failure, watch_ended};
 use causes::{catalogue_failure, core_failure};
 
 /// `device` carries the enrollment evidence the run was admitted under, and
@@ -26,6 +26,23 @@ pub(crate) fn write_records(
     device: Value,
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
+    let (report, successful) = records_report(attempt, saved, cache_refusal, device);
+    write(report, output)?;
+    if successful {
+        Ok(())
+    } else {
+        Err(CommandError::OnlineRefused)
+    }
+}
+/// The one presentation of a records attempt with the device's fields
+/// (`enrollment`, `recheck`), and whether it succeeded: `sync-records` writes
+/// it, and each `watch` pass line carries it.
+pub(crate) fn records_report(
+    attempt: &GatewayAttempt<Result<RecordRun, RecordDriverError>>,
+    saved: Result<Option<(CachedProgress, CommittedStatus)>, CacheError>,
+    cache_refusal: Option<CacheError>,
+    device: Value,
+) -> (Value, bool) {
     let (check, work, cause, freshness_failure) = match &attempt.result {
         Some(Ok(run)) => (
             Some(json!({"head":run.checked_head.to_string(),"checkedAtMs":run.checked_at_ms})),
@@ -64,18 +81,13 @@ pub(crate) fn write_records(
         && attempt.outcome.failure.is_none()
         && saved_ok
         && cache_refusal.is_none();
-    write(
+    (
         joined(
             json!({"operation":"records","successful":successful,"connectionCheck":"performed","connectionOperation":attempt.outcome.operation.to_string(), "capturedCheck":check,"work":work,"durable":durable,"transportFailure":attempt.outcome.failure.map(gateway_failure),"driverFailure":cause,"cacheRefusal":cache_refusal.as_ref().map(cache_failure),"freshnessFailure":freshness_failure}),
             device,
         ),
-        output,
-    )?;
-    if successful {
-        Ok(())
-    } else {
-        Err(CommandError::OnlineRefused)
-    }
+        successful,
+    )
 }
 pub(crate) fn write_catalogue(
     attempt: &GatewayAttempt<Result<CatalogueRun, CatalogueError>>,

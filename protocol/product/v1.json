@@ -1950,19 +1950,19 @@
         "kind": {
           "type": "string",
           "enum": ["text", "thought", "tool", "local_notice"],
-          "description": "Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice."
+          "description": "Text, exposed thought content, a tool call, or a Nessa-owned runtime notice. A tool call is one part however many updates it has, at its first update's offset; its current state is its entry in tools."
         },
         "text": {
           "type": "string",
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
-          "description": "Exact text fragment for text, thought, or local notice observations; empty for tool observations."
+          "description": "Exact text fragment for text, thought, or local notice observations; empty for a tool call."
         },
         "toolId": {
           "type": "string",
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Owning tool identity for a tool observation; empty otherwise."
+          "description": "The tool call's identity, which names its entry in tools; empty otherwise."
         },
         "noticeId": {
           "type": "string",
@@ -2008,7 +2008,7 @@
           "minLength": 1,
           "maxLength": 128,
           "x-utf8MaxBytes": 128,
-          "description": "For app: the tool the app asked to call."
+          "description": "For app: the tool the app asked to call, the review's toolName."
         }
       },
       "required": ["kind"]

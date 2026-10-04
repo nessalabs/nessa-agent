@@ -4,6 +4,14 @@
  * the check's verdicts are tested without a gateway or an agent.
  */
 
+/**
+ * Whether a turn in the gateway's view has ended. `unresolved` has not: a
+ * live turn reads so for a moment, as it becomes live and before its result
+ * is committed (#449); a turn really interrupted stays so, and runs out the
+ * caller's wait.
+ */
+export const turnEnded = (status) => ["completed", "failed", "cancelled"].includes(status)
+
 /** Parsed recorder lines, skipping any that are not JSON. */
 export function parseRecording(text) {
   return text
