@@ -175,6 +175,6 @@ What the receiver does after a hint — re-read from its checkpoint — is the e
 
 ### Remaining for #298 and #277
 
-- The example client watching continuously: holding a connection, scheduling passes from hints, keeping finite-pass lifetimes, and reporting stale or unavailable state while the gateway sleeps. This slice drives one pass per hint from the test.
+- The example client watching continuously: holding a connection, scheduling passes from hints, keeping finite-pass lifetimes, and presenting stale or unavailable status continuously while the gateway sleeps. This slice drives one pass per hint from the test; a single pass against a sleeping gateway already fails explicitly and keeps the saved view (row L7).
 - Two-device convergence and #277's assembled fold equality beyond the single-conversation `show` comparison here; and that a copied fact never dispatches an agent action.
 - Hosted platform checks.
