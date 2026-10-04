@@ -17,7 +17,6 @@
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
 use super::runtime_config::NativeConfig;
-use crate::app::ports::Clock as MonotonicClock;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
 use crate::device_pairing::infrastructure::{
@@ -40,6 +39,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, Resource},
 };
+use nessa_protocol::clock::Clock as MonotonicClock;
 use std::{
     io::{ErrorKind, Result as IoResult},
     net::SocketAddr,

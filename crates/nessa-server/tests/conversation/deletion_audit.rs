@@ -1,8 +1,9 @@
 //! The local deletion record: one per conversation, private, and never
 //! written over by a record that says something else.
 use super::*;
-use crate::conversation::domain::{ConversationId, ProviderSessionErasure};
+use crate::conversation::domain::ProviderSessionErasure;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::sync::atomic::{AtomicU64, Ordering};
 

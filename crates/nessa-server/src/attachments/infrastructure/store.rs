@@ -35,22 +35,20 @@ mod source;
 use source::SourceReads;
 
 use super::hold_record::{decode, encode, HoldRecord, RecordState};
-use crate::{
-    attachments::{
-        application::{
-            AttachmentStore, Confirmation, Discard, HoldClaim, Kept, PortFuture, ReceivedBytes,
-            ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
-            RevertCause, StagedUpload, StoreUnavailable,
-        },
-        domain::{ArtifactId, Attachment, Hold, RetiredFrom},
+use crate::attachments::{
+    application::{
+        AttachmentStore, Confirmation, Discard, HoldClaim, Kept, PortFuture, ReceivedBytes,
+        ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence, RevertCause,
+        StagedUpload, StoreUnavailable,
     },
-    conversation::domain::ConversationId,
+    domain::{ArtifactId, Attachment, Hold, RetiredFrom},
 };
 use nessa_auth::domain::OrganizationId;
 use nessa_local_storage::{
     create_directory, create_directory_beneath, open_beneath, sync_directory,
     sync_directory_beneath, verify_directory, OpenMode, PrivateTempFile,
 };
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{

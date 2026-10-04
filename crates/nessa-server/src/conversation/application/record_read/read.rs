@@ -1,11 +1,11 @@
 //! Fresh passive admission followed by one exact, bounded physical record read.
 
-use super::super::{
-    passive_read_selector, validate_passive_read_selector, AdmitPassiveRead, ReadRefusal,
-    ReceiverReadScope,
-};
-use crate::conversation::domain::ConversationId;
+use super::super::AdmitPassiveRead;
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::read_scope::{
+    passive_read_selector, validate_record_selector, ReadRefusal, ReceiverReadScope,
+};
 use nessa_sync::replication::domain::{Page, PageRequest, Scope};
 use std::{future::Future, pin::Pin};
 
@@ -74,16 +74,6 @@ pub trait RecordReadSource: Send + Sync {
         operation: RecordReadOperation,
         lease: RecordReadLease,
     ) -> RecordReadFuture<'a, RecordReadResponse>;
-}
-
-pub(crate) fn validate_record_selector(
-    admitted: &ReceiverReadScope,
-    scope: &Scope,
-) -> Result<(), ReadRefusal> {
-    if scope.stream().as_str() != admitted.conversation_id.to_string() {
-        return Err(ReadRefusal::WrongOwner);
-    }
-    validate_passive_read_selector(&admitted.receiver_id, admitted.access_epoch, scope)
 }
 
 /// One call reauthorizes, checks physical identity, then reads a bounded result.

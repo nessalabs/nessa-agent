@@ -71,3 +71,19 @@ test("a missing selected package makes the gate fail explicitly", () => {
     'expected exactly one workspace package named "missing", found 0',
   ])
 })
+
+test("a package on the selected crate's denylist is rejected, transitively", () => {
+  const graph = metadata({
+    portable: [["bridge", "bridge"]],
+    bridge: [["host", "host"]],
+  })
+  assert.deepEqual(rustDependencyGraphViolations(graph, ["portable"], {}), [])
+  assert.match(
+    rustDependencyGraphViolations(graph, ["portable"], { portable: ["host"] })[0],
+    /"portable" reaches denied package "host" through portable@0\.1\.0 --bridge--> bridge@0\.1\.0 --host--> host@0\.1\.0/,
+  )
+  assert.deepEqual(
+    rustDependencyGraphViolations(graph, ["bridge"], { portable: ["host"] }),
+    [],
+  )
+})

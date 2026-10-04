@@ -1,5 +1,5 @@
 //! Passive retained catalogue presentation; no source authority or live controls.
-use crate::conversation::application::CatalogueMetadata;
+use nessa_protocol::conversation::catalogue_metadata::CatalogueMetadata;
 use nessa_sync::replication::catalogue::{CatalogueProgress, EntryKey, ManifestEntry};
 
 #[derive(Debug)]

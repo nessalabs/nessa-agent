@@ -1,9 +1,7 @@
 //! Existing SDK interest and UUID namespace adapters; no notification authority.
 
-use crate::conversation::{
-    application::{WatchNamespaces, WatchRecords},
-    domain::ConversationId,
-};
+use crate::conversation::application::{WatchNamespaces, WatchRecords};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::sessions::{ChangeWatchError, CommittedChangeWatch},
     domain::agent_execution::sessions::SessionId,

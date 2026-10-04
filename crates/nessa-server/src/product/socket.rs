@@ -1,27 +1,17 @@
 use super::change_watch::{
     ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
-#[cfg(test)]
-use super::generated::wire_shape_product_session_ready;
-use super::generated::{
-    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
-    PRODUCT_VERSION,
-};
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::record_read::refusal_code;
 use super::state::ProductRouteState;
-use super::wire::*;
+use super::wire::ready_frame;
 use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
-use crate::conversation::application::{ReadRefusal, RecordReadLease};
+use crate::conversation::application::{access_refusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
-use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
-use crate::protocol::{
-    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
-    ResponseFrame, MAX_PAYLOAD_BYTES,
-};
 use axum::extract::ws::{CloseFrame, Message};
 use axum::Error;
 use futures_util::stream::{FuturesUnordered, SplitSink};
@@ -42,6 +32,20 @@ use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
 use nessa_auth::domain::{Action, AudienceId, CredentialId};
+#[cfg(test)]
+use nessa_protocol::product::generated::wire_shape_product_session_ready;
+use nessa_protocol::product::generated::{
+    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
+    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination, MAX_RECORD_RESPONSE_BYTES,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
+};
+use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
+use nessa_protocol::product_contract::generated::SessionCloseReason;
+use nessa_protocol::protocol::{
+    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
+    ResponseFrame, MAX_PAYLOAD_BYTES,
+};
 use serde_json::json;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -216,7 +220,7 @@ where
     }
     let params: SessionAuthenticateParams =
         serde_json::from_value(frame.params).map_err(|_| (frame.id.clone(), "unauthorized"))?;
-    if !params.supports_v1() {
+    if !supports_product_version(params.min_version, params.max_version) {
         return Err((frame.id, "protocol_incompatible"));
     }
     if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
@@ -936,7 +940,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = RecordReadErrorCode::from(ReadRefusal::from(error));
+    let code = refusal_code(access_refusal(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -1254,7 +1258,7 @@ fn session_ready(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     snapshot: &AccessSnapshot,
-) -> SessionReady {
+) -> ProductSessionReady {
     let grants = snapshot
         .credential
         .grants()
@@ -1267,7 +1271,7 @@ fn session_ready(
             },
         })
         .collect();
-    SessionReady::from_session(
+    ready_frame(
         state.gateway_id().as_str(),
         session,
         grants,
@@ -1574,28 +1578,18 @@ pub(crate) use tests::watches::HostWatchFixture;
 
 #[cfg(test)]
 mod tests {
-    use super::super::generated::{
-        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
-        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-    };
-    use super::super::passive_read::wire::encode_response;
     use super::super::state::SessionSettings;
     use super::*;
-    use crate::agents::domain::AgentId;
     use crate::agents_test_support::StubAgentProbe;
-    use crate::app::ports::Clock as UptimeClock;
     use crate::browser_session::application::SessionStore;
     use crate::browser_session::domain::value_objects::{
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope,
-        RecordReadError, RecordReadFuture, RecordReadOperation, RecordReadResponse,
-        RecordReadSource,
+        ConversationRepository, ReceiverAuthority, ReceiverBinding, RecordReadError,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
     };
-    use crate::conversation::domain::{
-        Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-    };
+    use crate::conversation::domain::Conversation;
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -1612,6 +1606,17 @@ mod tests {
         AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
         MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
     };
+    use nessa_protocol::agents::AgentId;
+    use nessa_protocol::clock::Clock as UptimeClock;
+    use nessa_protocol::conversation::domain::{
+        ConversationApprovalMode, ConversationId, ConversationModelId,
+    };
+    use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
+    use nessa_protocol::product::generated::{
+        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_protocol::product::passive_read::encode_response;
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
         ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -2931,7 +2936,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.len() > MAX_PAYLOAD_BYTES as usize);
-        assert!(record.len() <= super::super::generated::MAX_RECORD_RESPONSE_BYTES);
+        assert!(record.len() <= MAX_RECORD_RESPONSE_BYTES);
 
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));

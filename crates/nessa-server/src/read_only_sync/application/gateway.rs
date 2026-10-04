@@ -1,4 +1,4 @@
-use crate::product_contract::generated::{
+use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
 use std::io::{Read, Result as IoResult, Write};

@@ -9,15 +9,14 @@
 //! when it sees Active; this module only maps what the gateway said.
 use super::profile::Profile;
 use crate::app::dependencies::RuntimeDependencies;
-use crate::device_pairing::infrastructure::{
-    wire::NativePairingStatus, NativeClientError, NativeEnrollmentClient,
-};
+use crate::device_pairing::infrastructure::{NativeClientError, NativeEnrollmentClient};
 use crate::read_only_sync::application::device::PinnedStatus;
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy},
     application::pairing::ClientPendingStore,
     domain::pairing::{AttemptOutcome, TerminalCause},
 };
+use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_sync::replication::domain::Id;
 use serde_json::{json, Value};
 use std::{

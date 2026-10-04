@@ -2,7 +2,6 @@ mod acquisition;
 
 use super::catalogue_changes::CatalogueChanges;
 
-use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
     CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationCatalogue,
@@ -12,15 +11,19 @@ use crate::conversation::application::{
     ListedConversation, ListedConversations, UnfinishedDeletions, WatchCatalogue,
 };
 use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-    ConversationModelId, ConversationPreview, ConversationSummary, ConversationTitle,
-    DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
+    Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
+    ProviderSessionLink,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{
     params, Connection, Error, OptionalExtension, Row, TransactionBehavior,
 };
 use nessa_local_database::{rusqlite, OpenError, Schema};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationPreview,
+    ConversationSummary, ConversationTitle,
+};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::catalogue::{validate_manifest_request, MAX_CATALOGUE_ENTRIES};
 use nessa_sync::replication::domain::{Id, MAX_ID_BYTES};

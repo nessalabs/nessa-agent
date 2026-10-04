@@ -9,17 +9,18 @@ use crate::agent_warm_up::application::{
     AgentWarmUp, WarmUpAudit, WarmUpAuditRecord, WarmUpFuture, WarmUpRecords, WarmUpSessionPorts,
 };
 use crate::agent_warm_up::domain::RuntimeFingerprint;
-use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
-    ConversationLifecyclePhase, ConversationLimits, ConversationService, ProviderSessionErasers,
+    ConversationLimits, ConversationService, ProviderSessionErasers,
 };
-use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
     fixture, AcceptingCreationAudit, AcceptingDeletionAudit, MemorySummaries, Provider,
     ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::ConversationLifecyclePhase;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc, Mutex};

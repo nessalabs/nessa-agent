@@ -8,29 +8,24 @@ use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 #[cfg(unix)]
 use crate::conversation::infrastructure::NessaRecordWatches;
-use crate::product::generated::AgentsListResult;
-#[cfg(unix)]
-use crate::product::generated::{
-    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
-    ApprovalModeChoice as WireApprovalModeChoice,
-};
 #[cfg(unix)]
 use crate::{
-    agent_warm_up::application::{AgentWarmUp, WarmUpSessionPorts},
     agent_warm_up::{
+        application::{AgentWarmUp, WarmUpSessionPorts},
         domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
-    agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
+    agents::infrastructure::AgentLaunchFiles,
     attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{
-        ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts, McpToolUis,
-        NoMcpToolUis,
-    },
-    conversation::infrastructure::{
-        DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
-        LocalConversationStore,
+    conversation::{
+        application::{
+            ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts,
+        },
+        infrastructure::{
+            DurableConversationCreationAudit, DurableConversationDeletionAudit,
+            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+            LocalConversationStore,
+        },
     },
 };
 use crate::{
@@ -38,15 +33,14 @@ use crate::{
         application::{AgentCredentialSource, AgentProbe},
         infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
-    app::ports::Clock as ServerClock,
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
-    conversation::application::{
-        ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
-        WatchCatalogue, WatchRecords,
-    },
-    conversation::infrastructure::{
-        LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+    conversation::{
+        application::{
+            ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+            WatchCatalogue, WatchRecords,
+        },
+        infrastructure::{LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource},
     },
     core::RunError,
     env::Environment,
@@ -65,6 +59,18 @@ use nessa_auth::{
         ports::{Clock, PortFuture},
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
+};
+use nessa_protocol::clock::Clock as ServerClock;
+use nessa_protocol::product::generated::AgentsListResult;
+#[cfg(unix)]
+use nessa_protocol::product::generated::{
+    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
+    ApprovalModeChoice as WireApprovalModeChoice,
+};
+#[cfg(unix)]
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};

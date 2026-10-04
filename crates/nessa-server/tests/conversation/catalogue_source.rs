@@ -1,14 +1,13 @@
 use super::*;
-use crate::{
-    agents::domain::AgentId,
-    conversation::{
-        application::ConversationRepository,
-        domain::{
-            Conversation, ConversationApprovalMode, ConversationDeletion, ConversationModelId,
-        },
-    },
+use crate::conversation::{
+    application::ConversationRepository,
+    domain::{Conversation, ConversationDeletion},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::domain::{ConversationApprovalMode, ConversationModelId},
+};
 use uuid::Uuid;
 
 #[tokio::test]

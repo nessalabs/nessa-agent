@@ -523,7 +523,7 @@ epoch and #265 request/scope/nonce evidence at the existing admission owners.
 
 | Row | Existing clock seam and nested physical work | Required result | Enforcing evidence |
 | --- | --- | --- | --- |
-| P59 | Native server/client deadline construction, socket read/write/flush, buffered input, KSF, pending save or pinned status | Consume the same injected `app::ports::Clock` monotonic elapsed owner supplied by RuntimeDependencies. The shared absolute deadline computes remaining time before each nested socket operation; buffered KE3 and post-KSF/storage/status boundaries ask that same owner. No direct clock reads or fallback timer authority. Checked deadline overflow refuses before dispatch. Actual socket timeout bounds blocked syscalls while injected clock substitution proves authority-boundary expiry | substituted-clock partial frame and buffered completion refusal; matching real-clock enrollment/status tests |
+| P59 | Native server/client deadline construction, socket read/write/flush, buffered input, KSF, pending save or pinned status | Consume the same injected `nessa_protocol::clock::Clock` monotonic elapsed owner supplied by RuntimeDependencies. The shared absolute deadline computes remaining time before each nested socket operation; buffered KE3 and post-KSF/storage/status boundaries ask that same owner. No direct clock reads or fallback timer authority. Checked deadline overflow refuses before dispatch. Actual socket timeout bounds blocked syscalls while injected clock substitution proves authority-boundary expiry | substituted-clock partial frame and buffered completion refusal; matching real-clock enrollment/status tests |
 
 The P59 confirmation boundary is one private decision owner: after bounded decode,
 it asks the retained shared deadline and matches the exact Confirm/PublicIntent
@@ -1061,8 +1061,8 @@ lifetimes from the same eight native connection permits.
 | Caller-owned outputs | Public immutable response output has published individual wire/method bounds; there is no maximum number of successful historical outputs a caller can retain | A caller can keep prior outputs while beginning later successful passes. Physical connection/pass permits bound in-flight work, not that historical collection | Whole application acceptance requires the actual calling owner and retained-output policy; a producer-only ceiling cannot claim arbitrary caller retention |
 
 Source owners. Implemented native enrollment: server
-device_pairing/infrastructure/connection/wake.rs and
-infrastructure/enrollment_channel.rs. Existing files whose native protected-read
+nessa-protocol pairing/socket/wake.rs and
+pairing/enrollment_channel.rs. Existing files whose native protected-read
 role is proposed, not built: server product/socket.rs and protocol/json.rs. Auth
 adapters/local/registry.rs and registry/pairing/{device_verifier,projection}.rs;
 SDK infrastructure/session_storage/{record,record_source}.rs. The global
@@ -1599,8 +1599,8 @@ listener, protected route, SDK receiver, or whole-resource acceptance.
 
 ## Native enrollment wire format (B0)
 
-The server's enrollment codec is `device_pairing/infrastructure/wire/`, and the
-status it encodes is `device_pairing/application/status.rs`. It is pure: no
+The enrollment codec is `nessa-protocol/src/pairing/wire/`, and the
+status it encodes is `nessa-protocol/src/pairing/status.rs`. It is pure: no
 socket, clock or file. Auth's domain constructors validate every decoded value;
 the codec issues no grant.
 

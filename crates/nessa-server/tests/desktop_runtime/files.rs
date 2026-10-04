@@ -5,10 +5,10 @@ use crate::desktop_runtime::{
 };
 use crate::{
     conversation::application::{ConversationCaller, ConversationLimits},
-    conversation::domain::ConversationId,
     conversation_test_support::fixture,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use std::io::Write;
 

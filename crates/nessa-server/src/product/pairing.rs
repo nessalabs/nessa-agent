@@ -6,21 +6,12 @@
 //! enrollment decision; nothing here decides one. Design rows O1–O4, O7 and W1
 //! in `docs/design/auth/device-pairing.md` ("Owner routes and mounting").
 use super::{
-    generated::{
-        PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateResult,
-        PairingErrorCode, PairingInitiator as WireInitiator, PairingInitiatorKind,
-        PairingInvitationParams, PairingOwnerPhase, PairingOwnerStatus, PairingPendingResult,
-        PairingReceiver, PairingTerminal, PairingTerminalCause,
-    },
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::{
-    device_pairing::{
-        application::OwnerError,
-        infrastructure::{PairingRuntimeError, RegistrationError},
-    },
-    protocol::{OutgoingMessage, RequestFrame},
+use crate::device_pairing::{
+    application::OwnerError,
+    infrastructure::{PairingRuntimeError, RegistrationError},
 };
 use nessa_auth::{
     application::{
@@ -34,6 +25,13 @@ use nessa_auth::{
         TerminalCause,
     },
 };
+use nessa_protocol::product::generated::{
+    PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateResult,
+    PairingErrorCode, PairingInitiator as WireInitiator, PairingInitiatorKind,
+    PairingInvitationParams, PairingOwnerPhase, PairingOwnerStatus, PairingPendingResult,
+    PairingReceiver, PairingTerminal, PairingTerminalCause,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde_json::json;
 
 pub(super) async fn dispatch(

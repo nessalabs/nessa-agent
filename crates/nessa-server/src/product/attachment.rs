@@ -1,15 +1,15 @@
 //! `attachment.begin` translates into the attachment service. The socket has
 //! already checked current access and the `conversation.write` grant.
 use super::{
-    generated::{AttachmentBeginParams, AttachmentBeginResult, ConversationErrorCode},
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::{
-    attachments::application::{AttachmentCaller, BeginError, BeginOutcome, BeginUpload},
-    protocol::{OutgoingMessage, RequestFrame},
-};
+use crate::attachments::application::{AttachmentCaller, BeginError, BeginOutcome, BeginUpload};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    AttachmentBeginParams, AttachmentBeginResult, ConversationErrorCode,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
 pub(super) async fn dispatch(
     state: &ProductRouteState,

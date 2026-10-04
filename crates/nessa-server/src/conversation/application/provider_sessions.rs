@@ -1,7 +1,7 @@
 use super::{ConversationError, ConversationFuture};
-use crate::agents::domain::AgentId;
 use crate::conversation::domain::ProviderSessionErasure;
 use futures_util::future::join_all;
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 

@@ -3,9 +3,30 @@ use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
     mcp_apps::{McpAppInitiator, McpAppPorts},
-    projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
+    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+};
+use crate::conversation::domain::{
+    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
+};
+use futures_util::{future::join_all, FutureExt};
+use nessa_auth::application::ports::Clock;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+};
+use nessa_protocol::conversation::{
+    projection::{bound_view, clipped, Projection, MAX_TEXT},
+    tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
@@ -15,23 +36,7 @@ use super::{
         ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
         SubmissionReceipt,
     },
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
-    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    McpToolUis, NoMcpToolUis, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-    ConversationModelId, ConversationSummary, ProviderSessionErasure, ProviderSessionLink,
-};
-use futures_util::{future::join_all, FutureExt};
-use nessa_auth::application::ports::Clock;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
     agents::{
         AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,

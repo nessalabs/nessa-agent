@@ -1,10 +1,9 @@
 //! Queue moves cross the authenticated service and actual SDK runner.
-use super::{
-    ConversationCaller, ConversationLimits, ConversationMessageStatus, ConversationReorderOutcome,
-    SubmissionMode, SubmittedMessage,
-};
-use crate::{conversation::domain::ConversationId, conversation_test_support::fixture};
+use super::{ConversationCaller, ConversationLimits, SubmissionMode, SubmittedMessage};
+use crate::conversation_test_support::fixture;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::{ConversationMessageStatus, ConversationReorderOutcome};
 use std::time::Duration;
 use tokio::sync::oneshot;
 

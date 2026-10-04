@@ -3150,6 +3150,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "nessa-auth",
+ "nessa-local-storage",
+ "nessa-sdk",
+ "nessa-sync",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "nessa-sdk"
 version = "0.1.0"
 dependencies = [
@@ -3194,6 +3211,7 @@ dependencies = [
  "nessa-images",
  "nessa-local-database",
  "nessa-local-storage",
+ "nessa-protocol",
  "nessa-sdk",
  "nessa-sync",
  "regex",

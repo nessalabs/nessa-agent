@@ -1,6 +1,7 @@
 //! Offline reads return retained evidence without a credential or source port.
 use super::{CacheError, CachedCataloguePage, CachedProgress};
-use crate::conversation::{application::ConversationView, domain::ConversationId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::ConversationView;
 use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
 use uuid::Uuid;
 

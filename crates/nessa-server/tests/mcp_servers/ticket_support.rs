@@ -6,9 +6,9 @@ use crate::conversation::application::{
     ConversationError, ConversationFuture, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
     McpAppAuditRecord, McpAppInitiator, McpAppRef, ResourceTickets,
 };
-use crate::conversation::domain::ConversationId;
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,

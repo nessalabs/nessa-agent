@@ -1,12 +1,4 @@
 //! Native Rust enrollment/recovery, with one physically retained client KSF worker.
-use super::connection::wake::{NativeWakeReport, WakeEndpoint, WakeEndpoints};
-use super::worker::worker_fault;
-use super::{
-    connection::{begin_enrollment_phase, check_deadline, DeadlineStream, NativeDeadline},
-    wire::{self, NativePairingReply, NativePairingRequest, NativePairingStatus, NativeWireError},
-    EnrollmentChannel, NativeConnectionError, NativeConnectionFailure, NativeFrameError,
-};
-use crate::app::ports::Clock;
 use nessa_auth::{
     adapters::pairing::{
         ClientAttempt, CryptoRng, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
@@ -14,6 +6,15 @@ use nessa_auth::{
     },
     application::pairing::{ClientPendingStore, PairingWorkerFault, PrivateStateError},
     domain::pairing::{AttemptId, DisclosedConsent, PublicIntent},
+};
+use nessa_protocol::clock::Clock;
+use nessa_protocol::pairing::{
+    socket::{
+        begin_enrollment_phase, check_deadline, worker_fault, DeadlineError, DeadlineStream,
+        NativeDeadline, NativeWakeReport, WakeEndpoint, WakeEndpoints,
+    },
+    wire::{self, NativePairingReply, NativePairingRequest, NativePairingStatus, NativeWireError},
+    EnrollmentChannel, NativeFrameError,
 };
 use std::{
     io::{ErrorKind, Read, Write},
@@ -412,10 +413,10 @@ fn complete_enrollment<R: RngCore + CryptoRng>(
     Ok(status)
 }
 
-fn physical_error(error: NativeConnectionError) -> NativeClientError {
-    match error.failure {
-        NativeConnectionFailure::Io(kind) => NativeClientError::Io(kind),
-        _ => NativeClientError::Phase,
+fn physical_error(error: DeadlineError) -> NativeClientError {
+    match error {
+        DeadlineError::Io(kind) => NativeClientError::Io(kind),
+        DeadlineError::Phase => NativeClientError::Phase,
     }
 }
 fn send<S: Read + Write>(

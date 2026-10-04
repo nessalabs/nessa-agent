@@ -63,7 +63,7 @@ Ownership and links:
   own URI bounds, visibility, and unique matching. [SDK MCP domain tests](../../../crates/nessa-sdk/tests/domain/mcp_apps.rs)
   and [MCP protocol/session tests](../../../crates/nessa-sdk/tests/infrastructure/mcp)
   cover metadata and connection boundaries.
-- [Projection](../../../crates/nessa-server/src/conversation/application/projection.rs)
+- [Projection](../../../crates/nessa-protocol/src/conversation/projection.rs)
   attaches the URI at read time and incorporates it into the revision when present.
   [Conversation view](../../../src/conversation/application/view.ts) keeps optional
   `mcp`/`structuredContent`; [transcript adapter](../../../src/conversation/adapters/agent-stream/transcript.ts)

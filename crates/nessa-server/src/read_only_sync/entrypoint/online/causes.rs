@@ -1,6 +1,6 @@
 //! Stable sanitized JSON values preserve each typed refusal owner.
-use crate::product_contract::generated::ChangeWatchEndReason;
 use crate::read_only_sync::application::{CacheError, GatewayError};
+use nessa_protocol::product_contract::generated::ChangeWatchEndReason;
 use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sync::replication::{
     application::{SourceError, StoreError, SyncError},

@@ -1,11 +1,11 @@
 //! Bounded physical catalogue reads; core owns semantic progress and revision rules.
 use super::rows;
-use crate::conversation::application::CatalogueMetadata;
-use crate::conversation::domain::ConversationId;
-use crate::conversation::infrastructure::catalogue_payload;
 use crate::read_only_sync::application::CacheError;
 use nessa_local_database::rusqlite::types::ValueRef;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension};
+use nessa_protocol::conversation::catalogue_metadata::CatalogueMetadata;
+use nessa_protocol::conversation::catalogue_payload;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::catalogue::{
     validate_catalogue_progress, validate_manifest_entry, validate_resolved, CataloguePass,
     CatalogueProgress, EntryKey, ManifestEntry, ResolvedEntry, MAX_CATALOGUE_PAYLOAD_BYTES,

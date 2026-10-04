@@ -15,8 +15,6 @@ pub mod env;
 pub mod health;
 pub mod mcp_servers;
 pub mod product;
-mod product_contract;
-pub mod protocol;
 mod read_only_sync;
 pub mod server;
 

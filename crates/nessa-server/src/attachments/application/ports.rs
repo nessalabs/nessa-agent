@@ -1,8 +1,6 @@
-use crate::{
-    attachments::domain::{Attachment, Caller, Hold, HoldState, RetiredFrom, UploadTicket},
-    conversation::domain::ConversationId,
-};
+use crate::attachments::domain::{Attachment, Caller, Hold, HoldState, RetiredFrom, UploadTicket};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{future::Future, pin::Pin};
 

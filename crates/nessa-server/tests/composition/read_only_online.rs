@@ -2,14 +2,6 @@
 #[path = "read_only_online/fixtures.rs"]
 mod fixtures;
 use crate::composition::{local_auth::SystemClock, read_only_example};
-use crate::product::generated::{
-    product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
-    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
-    ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
-    MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
-    MAX_RECORD_PAGE_RECORDS,
-};
-use crate::product::record_read::wire as record_wire;
 use crate::read_only_sync::{
     application::{reset::CacheResets, CachePolicy},
     domain::CacheReset,
@@ -17,6 +9,14 @@ use crate::read_only_sync::{
 };
 use fixtures::*;
 use nessa_local_database::rusqlite::Connection;
+use nessa_protocol::product::generated::{
+    product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
+    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
+    ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
+    MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+    MAX_RECORD_PAGE_RECORDS,
+};
+use nessa_protocol::product::record_read;
 use nessa_sync::replication::{
     application::ReplicaStore,
     catalogue::{
@@ -510,7 +510,7 @@ fn online_saved_projection_handles_competing_owner() {
     );
     let head: ConversationRecordsHeadResult =
         serde_json::from_value(response["payload"].clone()).unwrap();
-    let (scope, target) = record_wire::decode_head(head).unwrap();
+    let (scope, target) = record_read::decode_head(head).unwrap();
     let limits = Limits::new(
         1,
         MAX_RECORD_PAGE_PAYLOAD_BYTES,
@@ -534,10 +534,10 @@ fn online_saved_projection_handles_competing_owner() {
             &ConversationRecordsPageParams {
                 conversation_id: setup.conversation.clone(),
                 access_epoch: setup.epoch.to_string(),
-                request: record_wire::wire_request(&request),
+                request: record_read::wire_request(&request),
             },
         );
-        let page = record_wire::decode_page_result(
+        let page = record_read::decode_page_result(
             serde_json::from_value(response["payload"].clone()).unwrap(),
             &request,
         )

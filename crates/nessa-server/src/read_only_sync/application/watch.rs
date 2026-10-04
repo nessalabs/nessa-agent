@@ -16,7 +16,7 @@
 //! asks the pinned status again for an end whose cause `asks_status` names
 //! (row PC5).
 use super::{device::asks_status, GatewayAttempt, GatewayError};
-use crate::product_contract::generated::{ChangeWatchEndReason, RecordReadErrorCode};
+use nessa_protocol::product_contract::generated::{ChangeWatchEndReason, RecordReadErrorCode};
 use std::num::NonZeroUsize;
 
 /// What one wait for a hint found.

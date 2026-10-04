@@ -66,7 +66,7 @@ const MAXIMUM_NAME_LENGTH: usize = 64;
 /// shape is settled once, here, and every layer downstream holds a name that
 /// already is one.
 ///
-/// Deliberately open, and deliberately not [`crate::agents::domain::AgentId`]:
+/// Deliberately open, and deliberately not [`nessa_protocol::agents::AgentId`]:
 /// that enum lists the agents this build can *drive*, and installing is not
 /// driving. A pin can exist for an agent no adapter has been written for yet —
 /// that is the state an agent passes through while it is being added — and a

@@ -6,9 +6,10 @@
 use super::operation;
 use crate::conversation::application::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
-    CatalogueReadScope, CatalogueReadSource, ConversationCatalogue, RecordReadLease,
+    CatalogueReadSource, ConversationCatalogue, RecordReadLease,
 };
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
+use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::Id;
 use std::sync::Arc;
 
