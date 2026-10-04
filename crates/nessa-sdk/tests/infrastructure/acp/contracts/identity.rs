@@ -123,8 +123,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
 /// The MCP server list is attached to each open, like the stand-in grant, and
 /// selects no provider context (ADR 344, #391): adding one keeps the identity,
 /// and a conversation saved without it restores with it, launching no process
-/// to find out. The identity it had under the earlier fingerprint, which did
-/// hash the servers, differs — even with none (state table R16).
+/// to find out.
 #[tokio::test]
 async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
     let _slot = process_test_slot().await;
@@ -157,10 +156,6 @@ async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
     });
     let changed = provider(changed, &model);
     assert_eq!(changed.identity(), identity);
-    assert_ne!(
-        changed.previous_identity(),
-        provider(config, &model).previous_identity()
-    );
     let restored = attached_agent(Arc::new(changed), manager().await.unwrap())
         .await
         .unwrap();
@@ -171,69 +166,6 @@ async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
     )
     .unwrap();
     assert_eq!(resumed[0]["name"], "nessa");
-}
-
-#[test]
-fn previous_identity_differs_with_no_mcp_servers() {
-    let (_root, config, model) = test_acp_configuration("echo", 16);
-    assert!(config.mcp_servers.is_empty());
-    let current = provider(config, &model);
-    let previous = current.previous_identity();
-    assert_ne!(previous, current.identity());
-    assert_eq!(previous.name(), current.identity().name());
-    assert_eq!(previous.model_id(), current.identity().model_id());
-}
-
-/// The previous identity is the one the earlier fingerprint (`acfd824f`,
-/// `acp/sessions/identity.rs`) gave this exact configuration. The value was
-/// computed independently of this crate, from that commit's hashing order.
-#[test]
-fn previous_identity_is_the_one_the_earlier_fingerprint_gave() {
-    let (_root, mut config, model) = test_acp_configuration("echo", 16);
-    config.arguments = vec!["/fixture/handler.py".into(), "echo".into()];
-    config.workspace = "/fixture/workspace".into();
-    config.mcp_servers.push(StdioMcpServer {
-        name: "nessa".into(),
-        command: "/trusted/nessa-mcp".into(),
-        args: vec!["--workspace".into(), "/different".into()],
-    });
-    assert_eq!(
-        provider(config, &model).previous_identity().context(),
-        "sha256:e0279dde8476dba881711d2f24cf89425355fc2a9b11c6113322861b6034995c"
-    );
-}
-
-/// The earlier fingerprint hashed each server, not only how many there were.
-#[test]
-fn previous_identity_differs_by_mcp_server_name_command_and_arguments() {
-    let (_root, config, model) = test_acp_configuration("echo", 16);
-    let server = StdioMcpServer {
-        name: "nessa".into(),
-        command: "/trusted/nessa-mcp".into(),
-        args: vec!["--workspace".into(), "/one".into()],
-    };
-    let with = |server: StdioMcpServer| {
-        let mut config = config.clone();
-        config.mcp_servers.push(server);
-        provider(config, &model).previous_identity()
-    };
-    let original = with(server.clone());
-    for changed in [
-        StdioMcpServer {
-            name: "other".into(),
-            ..server.clone()
-        },
-        StdioMcpServer {
-            command: "/trusted/other-mcp".into(),
-            ..server.clone()
-        },
-        StdioMcpServer {
-            args: vec!["--workspace".into(), "/two".into()],
-            ..server.clone()
-        },
-    ] {
-        assert_ne!(with(changed), original);
-    }
 }
 
 #[test]

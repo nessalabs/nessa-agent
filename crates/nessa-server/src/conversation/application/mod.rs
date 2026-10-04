@@ -78,11 +78,6 @@
 //! conversation's apps — their reviews, and the lock nothing is opened or
 //! issued past once a mount is released or the conversation ended — are
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
-//!
-//! `identity_retrofit` is the one-shot pass composition runs as the gateway
-//! starts, before the service exists, moving each conversation saved under the
-//! restoration fingerprint that still hashed MCP servers to the current one
-//! (#391, ADR 344). It is temporary; its module map says what leaves with it.
 mod app_reviews;
 mod change_watch;
 pub use change_watch::{WatchNamespaces, WatchRecords};
@@ -93,7 +88,6 @@ pub use catalogue_watch::{
 };
 mod catalogue_read;
 mod error;
-pub mod identity_retrofit;
 mod locks;
 mod mcp_apps;
 mod passive_read;

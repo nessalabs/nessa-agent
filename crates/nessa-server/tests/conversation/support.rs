@@ -762,7 +762,6 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
                 provider,
                 execution_audit: Arc::new(AcceptingAudit),
                 reserved_output_tokens: 4096,
-                previous_identity: None,
                 readiness: None,
             },
         )]),
@@ -807,7 +806,6 @@ impl ModeAgentSource {
             provider: Arc::new(Provider::new(self.provider.clone()).with_mode(mode)),
             execution_audit: self.audit.clone(),
             reserved_output_tokens: 4096,
-            previous_identity: None,
             readiness: None,
         }
     }
