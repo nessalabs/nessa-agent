@@ -10,17 +10,22 @@
 //! ```
 //!
 //! Arrows are calls, in order. One deadline on the injected clock covers the
-//! launch, the handshake and every read. Past it — while opening or while
-//! reading — the session is dropped, which kills the process group at once
-//! rather than waiting out the SDK's grace for a server whose stdin closed
+//! launch, the handshake, every read and the close. Shutdown's stop
+//! ([`InspectStop`]) is observed beside it at each step: given before the
+//! launch, nothing is launched (`stopping`); given after, the inspection is
+//! cut ([`InspectCut::Stopping`]). Past the deadline, or once stopped —
+//! while opening, reading or closing — the session is dropped, which kills
+//! the process group at once rather than waiting out the SDK's grace for a
+//! server whose stdin closed
 //! (`i2_a_server_that_never_initializes_times_out_and_its_group_is_killed`,
-//! `a_server_that_hangs_after_initialize_is_killed_at_the_deadline`). Any
-//! other end of the reading closes the session gracefully. Either way the
-//! server is stopped before the answer.
+//! `a_server_that_hangs_after_initialize_is_killed_at_the_deadline`,
+//! `a_stop_mid_read_cuts_the_inspection_and_kills_its_group`). Any other end
+//! of the reading closes the session gracefully, within what is left of the
+//! deadline. Either way the server is stopped before the answer.
 use super::live_set::LaunchSettings;
 use crate::mcp_servers::application::{
-    InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectedTool, InspectedUi,
-    Inspection, ServerInspector,
+    InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectStop, InspectedTool,
+    InspectedUi, Inspection, ServerInspector,
 };
 use crate::mcp_servers::domain::ConfiguredMcpServer;
 use nessa_sdk::domain::mcp_apps::UiResourceUri;
@@ -31,9 +36,9 @@ use nessa_sdk::infrastructure::{
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Inspections on the live set's SDK client — registered there, so the
-/// client stopping ends one under way, though the gateway waits for them
-/// first — launched as the live set launches a server, with deadlines on
-/// `clock`.
+/// client stopping ends one under way, though the gateway stops and drains
+/// them first — launched as the live set launches a server, with deadlines
+/// on `clock`.
 pub struct McpServerInspector {
     servers: McpServers,
     launches: LaunchSettings,
@@ -51,26 +56,59 @@ impl McpServerInspector {
 }
 
 impl ServerInspector for McpServerInspector {
-    fn inspect(&self, server: &ConfiguredMcpServer, bounds: InspectBounds) -> InspectFuture<'_> {
+    fn inspect(
+        &self,
+        server: &ConfiguredMcpServer,
+        bounds: InspectBounds,
+        mut stop: InspectStop,
+    ) -> InspectFuture<'_> {
         let launch = self.launches.launch(server);
         Box::pin(async move {
+            // Stopped already: nothing is launched.
+            if stop.given() {
+                return Err(InspectFailure::Stopping);
+            }
             let deadline = self.clock.now() + bounds.deadline;
-            // Dropped at the deadline, the opening kills what it launched.
+            // Dropped at the deadline or the stop, the opening kills what it
+            // launched.
             let session = tokio::select! {
                 opened = self.servers.open_once(&launch) => opened.map_err(opening)?,
                 () = self.clock.sleep_until(deadline) => return Err(InspectFailure::TimedOut),
+                () = stop.wait() => return Ok(stopped()),
             };
             let read = tokio::select! {
                 read = read(&session, bounds) => read,
                 () = self.clock.sleep_until(deadline) => Err(InspectFailure::TimedOut),
+                () = stop.wait() => Ok(stopped()),
             };
-            match read {
-                // Out of time: the last clone dropped kills the group now.
-                Err(InspectFailure::TimedOut) => drop(session),
-                _ => session.close().await,
+            let killed = match &read {
+                Err(InspectFailure::TimedOut) => true,
+                Ok(inspection) => inspection.cut == Some(InspectCut::Stopping),
+                Err(_) => false,
+            };
+            if !killed {
+                // Asked to exit, within what is left of the deadline and
+                // until the stop: either one first drops the close, which
+                // kills the group at once.
+                tokio::select! {
+                    () = session.close() => {}
+                    () = self.clock.sleep_until(deadline) => {}
+                    () = stop.wait() => {}
+                }
             }
+            // Otherwise, or after a dropped close: the last clone dropped
+            // kills the group now.
+            drop(session);
             read
         })
+    }
+}
+
+/// An inspection the stop cut after the server was started: no tools.
+fn stopped() -> Inspection {
+    Inspection {
+        tools: Vec::new(),
+        cut: Some(InspectCut::Stopping),
     }
 }
 
@@ -131,9 +169,9 @@ async fn ui(
 /// gateway is stopping — not started, and not the server gone
 /// (`an_inspection_once_the_servers_stop_is_refused_as_stopping_and_starts_nothing`).
 /// The SDK answers stopped too for a stop that lands mid-handshake, after
-/// the launch; this gateway never does that while an inspection runs,
-/// because shutdown waits for admitted inspections before the servers stop
-/// (`McpServerSettings::shutdown`).
+/// the launch; this gateway stops and drains its inspections before the
+/// servers stop (`composition::mcp_servers::stop`), so that is reached only
+/// by one still running past the drain's bound.
 fn opening(error: McpError) -> InspectFailure {
     match error {
         McpError::Stopped => InspectFailure::Stopping,

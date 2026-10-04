@@ -777,16 +777,13 @@ before messages could point at files does not reopen. See
 [ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md) for why a migration
 script was written for exactly this and then deleted.
 
-Taking the MCP server list out of the fingerprint changed every saved
-conversation's identity once. The gateway moves those conversations itself, once,
-as it starts and before any can be opened: each whose saved identity is exactly
-what its agent, model and mode resolved to under the earlier fingerprint gets one
-appended `ProviderIdentity` fact moving it to the current identity, with intent,
-outcome and a run summary under `conversations/audit/fingerprint-retrofit/`, and
-`conversations/retrofit/391-fingerprint.done` written once nothing transient was
-left. A conversation whose identity differs for any other reason is left as it
-was and still answers `conversation_configuration_changed`. The runner and the
-earlier fingerprint are temporary (ADR 344).
+The release that takes the MCP server list out of the fingerprint answers
+`conversation_configuration_changed` for conversations saved before it, once:
+their saved fingerprint hashed the MCP servers, and with them the gateway
+executable's path. That is what every app update already does, because each
+version runs its gateway from a new directory. After that release, neither a
+change to the MCP servers nor a move of the gateway's executable strands a saved
+conversation (ADR 344).
 
 ### Conversation activity surfaces
 

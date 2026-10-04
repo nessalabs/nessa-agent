@@ -97,6 +97,12 @@ fn stored(record: &McpServerAuditRecord) -> Value {
             "outcome",
             json!({"outcome": "failed", "reason": reason, "before": before.as_ref().map(names)}),
         ),
+        // Whether the server was started is said either way, so a record of
+        // `stopping` says that nothing ran.
+        McpServerAuditPhase::Outcome(McpServerOutcome::InspectFailed { reason, started }) => (
+            "outcome",
+            json!({"outcome": "failed", "reason": reason, "started": started}),
+        ),
         McpServerAuditPhase::Outcome(McpServerOutcome::Inspected { tools, cut }) => (
             "outcome",
             json!({
@@ -106,6 +112,7 @@ fn stored(record: &McpServerAuditRecord) -> Value {
                     InspectCut::Tools => "tools",
                     InspectCut::Ui => "ui",
                     InspectCut::Bytes => "bytes",
+                    InspectCut::Stopping => "stopping",
                 }),
             }),
         ),

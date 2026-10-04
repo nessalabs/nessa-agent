@@ -2,10 +2,11 @@
 //! SDK's MCP tests), rows I1–I4 of the #391 PR 2 state table: a command that
 //! is not there, a server that never answers (on a manual clock, its process
 //! group killed), one that exits while listed, and the caps on pages and UI
-//! reads. Every inspection stops its server before it answers.
+//! reads; and shutdown's stop (rows I8 and I9) and the close within the
+//! deadline (I10). Every inspection stops its server before it answers.
 use super::McpServerInspector;
 use crate::mcp_servers::application::{
-    InspectBounds, InspectCut, InspectFailure, InspectedUi, ServerInspector,
+    InspectBounds, InspectCut, InspectFailure, InspectStop, InspectedUi, ServerInspector,
 };
 use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer};
 use crate::mcp_servers::infrastructure::settings_test_support::ManualClock;
@@ -36,6 +37,30 @@ fn fixture(args: &[&str]) -> ConfiguredMcpServer {
         },
         enabled: false,
         env: BTreeMap::new(),
+    }
+}
+
+/// A stop nothing gives: its sender is gone.
+fn unstopped() -> InspectStop {
+    InspectStop::new(tokio::sync::watch::channel(false).1)
+}
+
+/// A stop, and what gives it.
+fn stop() -> (tokio::sync::watch::Sender<bool>, InspectStop) {
+    let (give, given) = tokio::sync::watch::channel(false);
+    (give, InspectStop::new(given))
+}
+
+/// Wait, a few real seconds at most, until `file` exists.
+async fn written(file: &std::path::Path) {
+    let started = std::time::Instant::now();
+    while !file.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{} never written",
+            file.display()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -95,7 +120,7 @@ async fn an_inspection_lists_hints_and_apps_then_stops_the_server() {
     let pid_file = directory.path().join("pid");
     let server = fixture(&["--apps", "2", "--pid-file", pid_file.to_str().unwrap()]);
     let inspection = inspector(Arc::new(RuntimeClock::new()))
-        .inspect(&server, BOUNDS)
+        .inspect(&server, BOUNDS, unstopped())
         .await
         .unwrap();
     assert_eq!(inspection.cut, None);
@@ -135,7 +160,7 @@ async fn i1_a_missing_command_fails_to_start() {
     server.server.command = PathBuf::from("/nonexistent/mcp-server");
     assert_eq!(
         inspector(Arc::new(RuntimeClock::new()))
-            .inspect(&server, BOUNDS)
+            .inspect(&server, BOUNDS, unstopped())
             .await,
         Err(InspectFailure::StartFailed)
     );
@@ -157,6 +182,7 @@ async fn an_inspection_once_the_servers_stop_is_refused_as_stopping_and_starts_n
         .inspect(
             &fixture(&["--pid-file", pid_file.to_str().unwrap()]),
             BOUNDS,
+            unstopped(),
         )
         .await
         .unwrap_err();
@@ -183,7 +209,8 @@ async fn i2_a_server_that_never_initializes_times_out_and_its_group_is_killed() 
     ]);
     let clock = Arc::new(ManualClock::default());
     let inspector = inspector(clock.clone());
-    let inspecting = tokio::spawn(async move { inspector.inspect(&server, BOUNDS).await });
+    let inspecting =
+        tokio::spawn(async move { inspector.inspect(&server, BOUNDS, unstopped()).await });
     let pid = pid_in(&pid_file).await;
     let child = pid_in(&child_pid_file).await;
     assert!(alive(pid) && alive(child));
@@ -225,7 +252,8 @@ async fn a_server_that_hangs_after_initialize_is_killed_at_the_deadline() {
     ]);
     let clock = Arc::new(ManualClock::default());
     let inspector = inspector(clock.clone());
-    let inspecting = tokio::spawn(async move { inspector.inspect(&server, BOUNDS).await });
+    let inspecting =
+        tokio::spawn(async move { inspector.inspect(&server, BOUNDS, unstopped()).await });
     let pid = pid_in(&pid_file).await;
     let child = pid_in(&child_pid_file).await;
     // Past the handshake: the list has been asked, and is not answered.
@@ -254,7 +282,7 @@ async fn a_server_that_hangs_after_initialize_is_killed_at_the_deadline() {
 async fn i3_a_server_that_exits_mid_list_is_gone() {
     assert_eq!(
         inspector(Arc::new(RuntimeClock::new()))
-            .inspect(&fixture(&["--exit-on-list"]), BOUNDS)
+            .inspect(&fixture(&["--exit-on-list"]), BOUNDS, unstopped())
             .await,
         Err(InspectFailure::Gone)
     );
@@ -267,7 +295,7 @@ async fn i3_a_server_that_exits_mid_list_is_gone() {
 async fn i4_tools_or_apps_past_their_caps_are_cut_and_named() {
     let inspector = inspector(Arc::new(RuntimeClock::new()));
     let pages = inspector
-        .inspect(&fixture(&["--pages", "4"]), BOUNDS)
+        .inspect(&fixture(&["--pages", "4"]), BOUNDS, unstopped())
         .await
         .unwrap();
     let names: Vec<_> = pages.tools.iter().map(|tool| tool.name.as_str()).collect();
@@ -275,15 +303,148 @@ async fn i4_tools_or_apps_past_their_caps_are_cut_and_named() {
     assert_eq!(pages.tools[0].read_only_hint, Some(true));
     assert_eq!(pages.cut, Some(InspectCut::Tools));
     let all_pages = inspector
-        .inspect(&fixture(&["--pages", "3"]), BOUNDS)
+        .inspect(&fixture(&["--pages", "3"]), BOUNDS, unstopped())
         .await
         .unwrap();
     assert_eq!((all_pages.tools.len(), all_pages.cut), (3, None));
     let apps = inspector
-        .inspect(&fixture(&["--apps", "3"]), BOUNDS)
+        .inspect(&fixture(&["--apps", "3"]), BOUNDS, unstopped())
         .await
         .unwrap();
     let read: Vec<_> = apps.tools.iter().map(|tool| tool.ui.is_some()).collect();
     assert_eq!(read, [true, true, false]);
     assert_eq!(apps.cut, Some(InspectCut::Ui));
+}
+
+/// I8: shutdown's stop, given while the server is being opened — it never
+/// answers `initialize` — or while it is being read — it answered
+/// `initialize`, is asked for its tools, never answers and ignores its stdin
+/// closing — cuts the inspection at once: `cut: stopping` with no tools, the
+/// server and its child killed with their group, well before the deadline
+/// and the SDK's grace.
+#[tokio::test]
+async fn a_stop_mid_read_cuts_the_inspection_and_kills_its_group() {
+    for while_reading in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let child_pid_file = directory.path().join("child");
+        let listed_file = directory.path().join("listed");
+        let server = fixture(&[
+            if while_reading {
+                "--silent-on-list"
+            } else {
+                "--silent"
+            },
+            "--ignore-eof",
+            "--child",
+            "--pid-file",
+            pid_file.to_str().unwrap(),
+            "--child-pid-file",
+            child_pid_file.to_str().unwrap(),
+            "--listed-file",
+            listed_file.to_str().unwrap(),
+        ]);
+        // The deadline never passes: only the stop ends it.
+        let inspector = inspector(Arc::new(ManualClock::default()));
+        let (give, stop) = stop();
+        let inspecting =
+            tokio::spawn(async move { inspector.inspect(&server, BOUNDS, stop).await });
+        let pid = pid_in(&pid_file).await;
+        let child = pid_in(&child_pid_file).await;
+        if while_reading {
+            written(&listed_file).await;
+        }
+        assert!(!inspecting.is_finished());
+        give.send_replace(true);
+        let stopped = std::time::Instant::now();
+        let answered = tokio::time::timeout(Duration::from_secs(5), inspecting)
+            .await
+            .expect("answered once stopped")
+            .unwrap();
+        assert!(
+            stopped.elapsed() < Duration::from_millis(1000),
+            "{while_reading}: {:?}",
+            stopped.elapsed()
+        );
+        let inspection = answered.unwrap();
+        assert_eq!(
+            inspection.cut,
+            Some(InspectCut::Stopping),
+            "{while_reading}"
+        );
+        assert!(inspection.tools.is_empty());
+        gone(pid).await;
+        gone(child).await;
+    }
+}
+
+/// I9: a stop given before the inspection begins launches nothing: the
+/// server is not started (`stopping`).
+#[tokio::test]
+async fn a_stop_given_before_the_launch_starts_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("pid");
+    let (give, stop) = stop();
+    give.send_replace(true);
+    let failure = inspector(Arc::new(RuntimeClock::new()))
+        .inspect(
+            &fixture(&["--pid-file", pid_file.to_str().unwrap()]),
+            BOUNDS,
+            stop,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure, InspectFailure::Stopping);
+    assert!(!failure.started());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!pid_file.exists(), "a server was launched");
+}
+
+/// I10: the close after a complete reading is within the deadline and
+/// ends at the stop: a server that ignores its stdin closing would hold the
+/// answer for the SDK's two-second grace, but reaching the deadline, or the
+/// stop, while it is being closed kills its group at once. The reading
+/// stands.
+#[tokio::test]
+async fn the_close_ends_at_the_deadline_or_the_stop() {
+    for by_stop in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let closed_file = directory.path().join("closed");
+        let server = fixture(&[
+            "--ignore-eof",
+            "--pid-file",
+            pid_file.to_str().unwrap(),
+            "--closed-file",
+            closed_file.to_str().unwrap(),
+        ]);
+        let clock = Arc::new(ManualClock::default());
+        let inspector = inspector(clock.clone());
+        let (give, stop) = stop();
+        let inspecting =
+            tokio::spawn(async move { inspector.inspect(&server, BOUNDS, stop).await });
+        let pid = pid_in(&pid_file).await;
+        // Read, and being closed: its stdin has closed, and it runs on.
+        written(&closed_file).await;
+        assert!(!inspecting.is_finished());
+        if by_stop {
+            give.send_replace(true);
+        } else {
+            clock.advance(BOUNDS.deadline);
+        }
+        let ended = std::time::Instant::now();
+        let answered = tokio::time::timeout(Duration::from_secs(5), inspecting)
+            .await
+            .expect("answered")
+            .unwrap();
+        assert!(
+            ended.elapsed() < Duration::from_millis(1000),
+            "{by_stop}: {:?}",
+            ended.elapsed()
+        );
+        let inspection = answered.unwrap();
+        assert_eq!(inspection.cut, None, "{by_stop}");
+        assert!(!inspection.tools.is_empty(), "{by_stop}");
+        gone(pid).await;
+    }
 }

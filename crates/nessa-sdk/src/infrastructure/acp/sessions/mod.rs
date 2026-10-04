@@ -20,12 +20,7 @@
 //! advertises, whatever it calls it. `stand_ins` holds the host's grant for
 //! one open, whose environment every MCP server process of that open gets;
 //! `forwarded` holds the results that open's stand-ins forwarded, and attaches
-//! each to the completed call it answers. `identity` is the restoration
-//! fingerprint every profile's provider identity carries; `retrofit` keeps the
-//! fingerprint it replaced, which still hashed the MCP servers, only so each
-//! profile can say what identity a conversation was saved under before that
-//! change (`previous_identity`). `retrofit` is temporary and leaves with the
-//! gateway's one-shot retrofit runner (ADR 344).
+//! each to the completed call it answers.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
@@ -33,7 +28,6 @@ pub(crate) mod configuration;
 pub(crate) mod deletion;
 pub(crate) mod forwarded;
 pub(crate) mod identity;
-pub(crate) mod retrofit;
 mod stand_ins;
 pub(crate) mod thought_level;
 pub use config::{

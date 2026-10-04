@@ -2,9 +2,9 @@
 //! configuration file and its lock, the audit, the clock, and the server an
 //! inspection starts — each able to fail, and the settings built over them.
 use crate::mcp_servers::application::{
-    AuditUnavailable, InspectBounds, InspectFailure, InspectFuture, Inspection, McpServerAudit,
-    McpServerAuditPhase, McpServerAuditRecord, McpServerInitiator, McpServerSettings,
-    ServerInspector, StoreLock,
+    AuditUnavailable, InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectStop,
+    Inspection, LiveServerSet, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+    McpServerInitiator, McpServerSettings, ServerInspector, StoreLock,
 };
 use crate::mcp_servers::domain::{
     ConfigurationKey, ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME,
@@ -181,7 +181,8 @@ impl Clock for ManualClock {
 
 /// An inspector that answers what it is given, records the servers and
 /// bounds it was asked with, and — while `gate` holds no permit — waits for
-/// one before answering.
+/// one before answering. It observes the stop as the real one does: given
+/// before it starts, `stopping`; while it waits, cut `stopping`.
 pub(crate) struct ScriptedInspector {
     pub(crate) answer: Mutex<Result<Inspection, InspectFailure>>,
     pub(crate) asked: Mutex<Vec<(ConfiguredMcpServer, InspectBounds)>>,
@@ -200,19 +201,49 @@ impl Default for ScriptedInspector {
     }
 }
 impl ServerInspector for ScriptedInspector {
-    fn inspect(&self, server: &ConfiguredMcpServer, bounds: InspectBounds) -> InspectFuture<'_> {
+    fn inspect(
+        &self,
+        server: &ConfiguredMcpServer,
+        bounds: InspectBounds,
+        mut stop: InspectStop,
+    ) -> InspectFuture<'_> {
         self.asked.lock().unwrap().push((server.clone(), bounds));
         Box::pin(async move {
-            let _passed = self.gate.acquire().await.unwrap();
-            self.answer.lock().unwrap().clone()
+            if stop.given() {
+                return Err(InspectFailure::Stopping);
+            }
+            tokio::select! {
+                passed = self.gate.acquire() => {
+                    let _passed = passed.unwrap();
+                    self.answer.lock().unwrap().clone()
+                }
+                () = stop.wait() => Ok(Inspection {
+                    tools: Vec::new(),
+                    cut: Some(InspectCut::Stopping),
+                }),
+            }
         })
+    }
+}
+
+/// `unix`, a path written from the root, as an absolute path on the
+/// platform the tests run on: unchanged on Unix, and on drive `C:` on
+/// Windows, where a path naming no drive is not absolute and the SDK refuses
+/// it as a server's command (`StdioMcpServer::problem`). Every fixture
+/// command that reaches that rule is written through this; the tests that
+/// read a command back compare it with this too, so they hold on both.
+pub(crate) fn absolute(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{unix}")
+    } else {
+        unix.to_owned()
     }
 }
 
 pub(crate) fn server(name: &str) -> StdioServer {
     StdioServer {
         name: name.into(),
-        command: PathBuf::from("/usr/bin/python3"),
+        command: PathBuf::from(absolute("/usr/bin/python3")),
         args: vec![format!("/{name}.py")],
     }
 }
@@ -221,7 +252,7 @@ pub(crate) fn managed() -> ConfiguredMcpServer {
     ConfiguredMcpServer {
         server: StdioServer {
             name: MANAGED_SERVER_NAME.into(),
-            command: PathBuf::from("/bundle/nessa-mcp"),
+            command: PathBuf::from(absolute("/bundle/nessa-mcp")),
             args: vec!["--workspace".into(), "/w".into()],
         },
         enabled: true,
@@ -231,7 +262,8 @@ pub(crate) fn managed() -> ConfiguredMcpServer {
 
 /// A stored entry as `config.json` has it.
 pub(crate) fn entry(name: &str) -> Value {
-    json!({"name": name, "command": "/usr/bin/python3", "args": [format!("/{name}.py")]})
+    json!({"name": name, "command": absolute("/usr/bin/python3"),
+        "args": [format!("/{name}.py")]})
 }
 
 /// A configuration whose `agents.mcpServers` is `servers`.
@@ -298,6 +330,37 @@ fn started_with(
     inspector: Arc<dyn ServerInspector>,
     startup: &[ConfiguredMcpServer],
 ) -> (McpServerSettings, McpServers) {
+    live_through(files, audit, clock, inspector, startup, |live| {
+        Arc::new(live)
+    })
+}
+
+/// [`settings_for`], inspecting with `inspector`, and with the live set
+/// seen through `live` — wrapped, so it can be made to fail.
+pub(crate) fn settings_through(
+    files: Arc<MemoryFiles>,
+    audit: Arc<RecordingAudit>,
+    inspector: Arc<dyn ServerInspector>,
+    live: impl FnOnce(LiveMcpServers) -> Arc<dyn LiveServerSet>,
+) -> (McpServerSettings, McpServers) {
+    live_through(
+        files,
+        audit,
+        Arc::new(LeapingClock::default()),
+        inspector,
+        &[managed()],
+        live,
+    )
+}
+
+fn live_through(
+    files: Arc<MemoryFiles>,
+    audit: Arc<RecordingAudit>,
+    clock: Arc<dyn Clock>,
+    inspector: Arc<dyn ServerInspector>,
+    startup: &[ConfiguredMcpServer],
+    live: impl FnOnce(LiveMcpServers) -> Arc<dyn LiveServerSet>,
+) -> (McpServerSettings, McpServers) {
     let store = ConfigJsonStore::new(
         files.clone(),
         ConfigCheck {
@@ -323,7 +386,7 @@ fn started_with(
     let settings = McpServerSettings::new(
         Arc::new(store),
         audit,
-        Arc::new(LiveMcpServers::new(servers.clone(), launches)),
+        live(LiveMcpServers::new(servers.clone(), launches)),
         inspector,
     );
     (settings, servers)

@@ -22,7 +22,7 @@ use super::agent::{agent_search_path, AgentsConfig};
 use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
 use crate::core::RunError;
 use crate::mcp_servers::{
-    application::McpServerSettings,
+    application::{McpServerSettings, Unfinished},
     domain::{relay_arguments, ConfigurationKey},
     infrastructure::{
         bind, launch_digest, BoundRelay, ConfigCheck, ConfigFiles, ConfigJsonStore,
@@ -271,9 +271,9 @@ pub(super) async fn compose(
 /// and its lock, checked by the runtime configuration's own parse and bound;
 /// the audit in `audit` (`<namespace>/conversations/audit/mcp-servers`);
 /// `mcp`'s live set, replaced after each publish; and an inspector on the
-/// same SDK client — the server lifecycle drains admitted inspections before
-/// it stops that client ([`McpServerSettings::shutdown`]), and a stop past
-/// the drain's bound still ends one under way. A
+/// same SDK client — [`stop`] stops and drains the inspections before it
+/// stops that client, and a stop past the drain's bound still ends one under
+/// way. A
 /// file with no `agents` block gains one from `agents`' catalog and
 /// workspace on its first write. Every write re-serialises the whole file
 /// (`ConfigJsonStore`).
@@ -332,6 +332,31 @@ pub(super) fn settings_over(
             Arc::new(RuntimeClock::new()),
         )),
     ))
+}
+
+/// The gateway's MCP stop, in its one order: `settings` — when this gateway
+/// manages its stored servers — admits no more changes or inspections, stops
+/// the inspections under way, and drains every admitted one to its outcome
+/// record ([`McpServerSettings::shutdown`]); then `servers` stop, whatever
+/// the drain answered. Called once, by the gateway's cleanup
+/// (`root::cleanup_product`), after conversations
+/// (`the_mcp_stop_drains_admitted_writes_before_the_servers_stop`).
+///
+/// # Errors
+///
+/// [`Unfinished`] when the drain ran out of time: the servers are stopped
+/// all the same, and the shutdown report is not confirmed
+/// (`an_unfinished_drain_is_an_unconfirmed_shutdown`).
+pub(super) async fn stop(
+    settings: Option<&McpServerSettings>,
+    servers: &McpServers,
+) -> Result<(), Unfinished> {
+    let drained = match settings {
+        Some(settings) => settings.shutdown().await,
+        None => Ok(()),
+    };
+    servers.stop().await;
+    drained
 }
 
 #[cfg(all(test, unix))]

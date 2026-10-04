@@ -24,14 +24,12 @@ use crate::{
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
     conversation::application::{
-        identity_retrofit::{run_identity_retrofit, IdentityRetrofitPorts, RetrofitRun},
         ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts, McpToolUis,
         NoMcpToolUis,
     },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableConversationModeAudit,
-        DurableIdentityRetrofitAudit, DurableMcpAppAudit, FileIdentityRetrofitMarker,
+        DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
         LocalConversationStore,
     },
 };
@@ -733,39 +731,6 @@ async fn conversations(
         images: attachments.images.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
-    // Once per namespace, before the conversation service exists and so
-    // before anything can hold a session lease: move every conversation saved
-    // under the restoration fingerprint that still hashed MCP servers to the
-    // current one (#391, ADR 344). Its own module says what is left and why;
-    // nothing it leaves stops the gateway starting, and a run that left
-    // something transient writes no marker, so the next start runs again.
-    let retrofit = run_identity_retrofit(&IdentityRetrofitPorts {
-        conversations: metadata.clone(),
-        metadata: metadata.clone(),
-        storage: storage.clone(),
-        identities: resolver.clone(),
-        audit: Arc::new(
-            DurableIdentityRetrofitAudit::new(
-                root.join("audit").join("fingerprint-retrofit"),
-                clock.clone(),
-            )
-            .map_err(|error| RunError::Agent(error.to_string()))?,
-        ),
-        marker: Arc::new(FileIdentityRetrofitMarker::new(root.join("retrofit"))),
-    })
-    .await;
-    match retrofit {
-        RetrofitRun::AlreadyDone => {}
-        RetrofitRun::Done(summary) => {
-            tracing::info!(?summary, "conversation identity retrofit finished");
-        }
-        RetrofitRun::Incomplete(summary) => {
-            tracing::warn!(
-                ?summary,
-                "conversation identity retrofit left work for the next start"
-            );
-        }
-    }
     let selected = resolver.default_agent()?;
     // The one registry of how each agent deletes its own record of a session:
     // the fixed agents' bindings, built above, and OpenCode's, whose binding

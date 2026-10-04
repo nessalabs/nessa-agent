@@ -5,6 +5,7 @@
 use crate::mcp_servers::domain::ConfiguredMcpServer;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
+use tokio::sync::watch;
 
 /// The stored servers, as one read sees them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,15 +184,19 @@ pub enum McpServerOutcome {
         reason: &'static str,
         before: Option<ServerNames>,
     },
-    /// Failed before anything was written — or, for an inspection, the
-    /// server failed it; `before` as for a refusal.
+    /// Failed before anything was written; `before` as for a refusal.
     Failed {
         reason: &'static str,
         before: Option<ServerNames>,
     },
+    /// An inspection the server failed, or that was not started; `started`
+    /// says whether its process was ([`InspectFailure::started`]), so a
+    /// record of `stopping` says in so many words that nothing ran.
+    InspectFailed { reason: &'static str, started: bool },
     /// An inspection read what the server offered, within its bounds, and
     /// the server was stopped. `cut` names the bound that stopped the
-    /// reading early; the answer's own byte bound is the wire's, after this.
+    /// reading early — shutdown among them ([`InspectCut::Stopping`]); the
+    /// answer's own byte bound is the wire's, after this.
     Inspected {
         tools: usize,
         cut: Option<InspectCut>,
@@ -268,6 +273,10 @@ pub enum InspectCut {
     Ui,
     /// The answer would pass its byte bound; tools were dropped from the end.
     Bytes,
+    /// The gateway began to stop after the server was started: the reading
+    /// was dropped, with what it had read, and the server's process group
+    /// killed at once. Its tools are none.
+    Stopping,
 }
 
 /// What a server offered, as one inspection read it.
@@ -323,13 +332,43 @@ impl InspectFailure {
     }
 }
 
+/// Shutdown's word to the inspections under way, observed beside each
+/// one's deadline: once given, an inspection not yet started is not
+/// ([`InspectFailure::Stopping`]), and one started is cut
+/// ([`InspectCut::Stopping`]) with its process group killed. Given by
+/// [`McpServerSettings::shutdown`](super::McpServerSettings::shutdown).
+#[derive(Clone, Debug)]
+pub struct InspectStop(watch::Receiver<bool>);
+impl InspectStop {
+    /// The stop `given` reports: given once it holds `true`. A sender gone
+    /// without giving it is never given.
+    pub fn new(given: watch::Receiver<bool>) -> Self {
+        Self(given)
+    }
+    /// Whether the stop has been given.
+    pub fn given(&self) -> bool {
+        *self.0.borrow()
+    }
+    /// Once the stop is given; never, if its sender goes without giving it.
+    pub async fn wait(&mut self) {
+        if self.0.wait_for(|given| *given).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 /// What [`ServerInspector::inspect`] answers.
 pub type InspectFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Inspection, InspectFailure>> + Send + 'a>>;
 
 /// Starts one stored server once, outside any conversation, reads what it
-/// offers within `bounds`, and stops it with its process group before
-/// answering — however the reading ended.
+/// offers within `bounds` — or until `stop` is given — and stops it with
+/// its process group before answering, however the reading ended.
 pub trait ServerInspector: Send + Sync {
-    fn inspect(&self, server: &ConfiguredMcpServer, bounds: InspectBounds) -> InspectFuture<'_>;
+    fn inspect(
+        &self,
+        server: &ConfiguredMcpServer,
+        bounds: InspectBounds,
+        stop: InspectStop,
+    ) -> InspectFuture<'_>;
 }

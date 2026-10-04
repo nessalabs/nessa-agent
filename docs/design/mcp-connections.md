@@ -497,18 +497,32 @@ to the outcome record — publish, replace the live set, record — whether or
 not the caller's future is still polled
 (`a_caller_gone_mid_write_still_replaces_the_live_set_and_records_the_outcome`).
 The audit evidence never depends on the response, and the file and the live
-set never disagree. Gateway shutdown closes admission as it begins
+set never disagree. A task that panics answers by how far it got, which it
+marks as it goes: past the publish — for an inspection, past asking for the
+start — `audit_unavailable` with `applied: true`, as its outcome was never
+recorded; before it, `mcp_servers_storage_unavailable`.
+
+Gateway shutdown closes admission as it begins
 (`ProductRouteState::close_mcp_server_admission`, beside watch admission):
 a later request answers `mcp_servers_stopping`, unaudited, having started
-nothing. Then, after conversations and before `McpServers::stop`, it waits
-for every admitted task (`McpServerSettings::shutdown`), bounded by the
-store's lock wait (2 s) plus the inspection deadline (30 s) plus 5 s for the
-file system; past that it logs how many were still running and goes on.
-Draining before the stop is what lets an inspection under way finish on the
-client it runs on, rather than be cut short mid-handshake
+nothing. The MCP stop has one owner, `composition::mcp_servers::stop`, which
+the gateway's cleanup (`cleanup_product`) runs after conversations. It stops
+the inspections under way at once — they change nothing, so they are not
+waited out: one not yet started is recorded `stopping` with `started: false`,
+one started is cut (`cut: stopping`, no tools) and its process group killed
+— then waits for every admitted task to record its outcome
+(`McpServerSettings::shutdown`), then stops the servers
+(`McpServers::stop`). The wait is bounded by the store's lock wait (2 s)
+plus 5 s for the file system (`drain_bound`), well inside the 30 s the
+supervisors give a stopping gateway before they kill it (launchd's
+`ExitTimeOut`, systemd's `TimeoutStopSec`). A drain that runs out of time
+still stops the servers, but is a shutdown failure: the report's MCP stop
+is `Failed(Unfinished { running })` and does not confirm
 (`shutdown_during_a_save_returns_after_its_outcome_is_recorded`,
-`shutdown_during_an_inspection_returns_after_its_outcome_is_recorded`,
-`a_request_after_shutdown_began_is_stopping_and_starts_nothing`).
+`shutdown_stops_a_running_inspection_and_records_it_cut`,
+`a_request_after_shutdown_began_is_stopping_and_starts_nothing`,
+`the_mcp_stop_drains_admitted_writes_before_the_servers_stop`,
+`an_unfinished_drain_is_an_unconfirmed_shutdown`).
 
 Each change, in order:
 
@@ -590,7 +604,12 @@ meet the stand-in and forwarded-result rows above.
 | LS3 | Two saves at one revision at once | The lock serialises them: with the first held between its re-read and its publish, the second reads nothing; the first wins, the second gets LS2 | `s3_two_saves_at_one_revision_are_serialised_and_the_second_conflicts`, `s3_two_saves_at_one_revision_over_the_real_lock_are_serialised` |
 | LS3a | The file edited outside the lock between a change's read and its re-read | `revision_conflict` with the revision now; nothing written; the live set kept. Between the re-read and the publish it is overwritten: narrowed, not closed | `a_change_made_outside_the_lock_after_the_read_is_a_conflict` |
 | LS3b | The caller goes away while the write is under way | The change's own task runs on: the lock held until the write has finished, the live set replaced, the outcome recorded | `a_caller_gone_mid_write_still_replaces_the_live_set_and_records_the_outcome` |
-| LS3c | Shutdown while a save or an inspection runs | Admission closes; shutdown returns only after its outcome is recorded, bounded | `shutdown_during_a_save_returns_after_its_outcome_is_recorded`, `shutdown_during_an_inspection_returns_after_its_outcome_is_recorded` |
+| LS3c | Shutdown while a save or remove runs | Admission closes; the MCP stop returns only after its outcome is recorded — its live set replaced — and only then stops the servers, within `drain_bound` | `shutdown_during_a_save_returns_after_its_outcome_is_recorded`, `the_mcp_stop_drains_admitted_writes_before_the_servers_stop` |
+| LS3e | Shutdown while an inspection runs, started | Stopped at once, not waited out: outcome `inspected`, `cut: stopping`, no tools, recorded before the MCP stop returns; its process group killed; the stop returns well within `drain_bound` | `shutdown_stops_a_running_inspection_and_records_it_cut`, `shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_stop`, `a_stop_mid_read_cuts_the_inspection_and_kills_its_group` |
+| LS3f | Shutdown while an inspection is admitted, not yet started | Nothing launched: `mcp_servers_stopping`, recorded `failed`, `stopping`, `started: false` | `a_stop_given_before_the_launch_starts_nothing`, `an_inspection_is_not_started_unaudited_and_keeps_both_causes`, `a_stopping_record_says_the_server_was_not_started` |
+| LS3g | The drain runs out of time (a write held past `drain_bound`) | The servers stop all the same; the shutdown report's MCP stop is `Failed(Unfinished { running })`, unconfirmed | `an_unfinished_drain_is_an_unconfirmed_shutdown` |
+| LS3h | `drain_bound` against the supervisors' 30 s stop window | The lock wait plus the grace, not an inspection's deadline: at most a quarter of the window | `the_drain_bound_is_inside_the_supervisors_stop_window` |
+| LS3i | An owned task panics after the publish, or after asking for the inspected server's start; or before either | After: `audit_unavailable`, `applied: true`, the file new, no outcome record. Before: `mcp_servers_storage_unavailable`, nothing written. The lock and the admission let go either way | `a_panic_after_the_publish_answers_applied_and_before_it_storage_unavailable` |
 | LS3d | A save, remove or inspection once shutdown has begun | `mcp_servers_stopping`; nothing locked, read, started or recorded | `a_request_after_shutdown_began_is_stopping_and_starts_nothing`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
 | LS4 | Lock held past its bound | `busy`; nothing written | `s4_a_lock_held_past_its_bound_is_busy_and_nothing_is_written`, `composed_settings_publish_privately_under_the_lock_and_audit_without_values` |
 | LS5 | Publish fails | `storage_unavailable`; the old file and live set kept; outcome `failed` | `s5_a_failed_publish_keeps_the_old_file_and_live_set` |
@@ -623,9 +642,9 @@ meet the stand-in and forwarded-result rows above.
 turned on or off, never one not yet saved — outside any conversation, with no
 relay and no session token, through `McpServers::open_once(launch)`: launched
 as the live set launches it (`LaunchSettings`), on the live set's SDK client —
-which the gateway stops only after admitted inspections have ended, so a
-stop past the drain's bound still ends it — never kept for `tool_ui`, and with no
-background list. It lists the tools (`McpSession::list_tool_pages`) with
+which the gateway stops only after it has stopped and drained the
+inspections, so a stop past the drain's bound still ends one — never kept
+for `tool_ui`, and with no background list. It lists the tools (`McpSession::list_tool_pages`) with
 `readOnlyHint` and `destructiveHint` as the server gave them, reads each
 distinct UI resource's CSP and permissions as `mcp.readResource` does, then
 closes the session, which kills the process group, before it answers:
@@ -635,12 +654,14 @@ csp, permissions}}]}`, `csp` and `permissions` in `mcp.readResource`'s shapes.
 
 Its bounds are published in the schema (`x-mcpServerInspect`) and read as
 generated constants: one deadline (30 s) on the injected gateway clock from
-before the launch until the last read, past which the reading is dropped and
-the process group killed at once — not closed with the two seconds' grace a
-server asked to exit gets; at most 8 pages of tools; at most 32 distinct UI
+before the launch until the close, past which the reading — or the close —
+is dropped and the process group killed at once, not left the two seconds'
+grace a server asked to exit gets; shutdown's stop is observed beside it at
+each step the same way; at most 8 pages of tools; at most 32 distinct UI
 reads; at most 2 inspections at once, a third answered `mcp_servers_busy`.
-`cut` names the first bound that stopped the reading early — `tools`, `ui` —
-or `bytes`, when the answer would pass the frame's 64 KiB and tools were
+`cut` names the first bound that stopped the reading early — `tools`, `ui`,
+`stopping` (shutdown, after the server was started; no tools) — or `bytes`,
+when the answer would pass the frame's 64 KiB and tools were
 dropped from the end until it fits (the product layer measures the frame
 it writes). The client waits the deadline plus its allowance.
 
@@ -651,7 +672,8 @@ conversation records it. `requested` (target, the revision the server was
 read at, and the server as stored — `{name, command, args, enabled,
 envNames}`, what ran) is written before the
 launch — when it cannot be, nothing is started — and the outcome
-(`inspected` with the tool count and cut, or `failed` with the reason) after
+(`inspected` with the tool count and cut, or `failed` with the reason and
+whether the server was `started`) after
 the server has stopped; when that cannot be written, `audit_unavailable` says
 whether the server was started, with the failure's `code`. What starts
 nothing is not audited: `nessa` (`mcp_servers_reserved_name`), an unknown
@@ -659,8 +681,9 @@ name (`mcp_servers_not_found`), no free slot, an unreadable file, a gateway
 already stopping (`mcp_servers_stopping`).
 
 Failures: `mcp_server_start_failed` (could not launch), `mcp_servers_stopping`
-(the SDK refused to start it because its client is stopping: recorded
-`stopping`, not started — never `gone`), `mcp_server_timed_out` (the
+(shutdown began before it was started, or the SDK refused to start it
+because its client is stopping: recorded `stopping`, `started: false` —
+never `gone`), `mcp_server_timed_out` (the
 deadline, or a request's own budget), `mcp_server_gone` (it ended, or its
 open session was closed by the stop), `mcp_server_malformed` (not MCP, or a UI that is not an
 MCP App within its bounds), `mcp_server_remote_error` (a JSON-RPC error,
@@ -680,54 +703,21 @@ answer is only ever one a bound cut.
 | I7 | An unknown name, or `nessa` | `mcp_servers_not_found`, `mcp_servers_reserved_name`; nothing started or audited | `i7_an_unknown_or_managed_name_starts_nothing_and_records_nothing` |
 | — | A server that answers | Its tools, hints and apps' CSP and permissions; stopped before the answer | `an_inspection_lists_hints_and_apps_then_stops_the_server`, `mcp_servers_inspect_answers_typed_tools_and_typed_failures` |
 | — | The audit | `requested` before the launch, the outcome after the stop; an unwritable `requested` starts nothing; an unwritable outcome keeps both causes | `an_inspection_starts_a_stored_server_on_or_off_and_is_audited_both_sides`, `an_inspection_is_not_started_unaudited_and_keeps_both_causes`, `composed_settings_publish_privately_under_the_lock_and_audit_without_values` |
+| I8 | Shutdown's stop while it is opened or read | `cut: stopping`, no tools — on the wire `{complete: false, cut: "stopping", tools: []}`; killed with its group at once, well before the deadline | `a_stop_mid_read_cuts_the_inspection_and_kills_its_group`, `shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_stop`, `mcp_servers_inspect_answers_typed_tools_and_typed_failures` |
+| I9 | Shutdown's stop before it is launched | `mcp_servers_stopping`, nothing launched | `a_stop_given_before_the_launch_starts_nothing` |
+| I10 | The deadline, or the stop, while a server that ignores its stdin closing is being closed after a complete reading | Killed with its group at once, not after the SDK's grace; the reading answered | `the_close_ends_at_the_deadline_or_the_stop` |
 | — | `open_once` | No SDK session, no background list, nothing for `tool_ui`; an invalid launch refused before launching; ended by `stop` | `a_session_opened_once_belongs_to_no_conversation_and_stops_with_the_servers`, `listing_tool_pages_stops_at_its_bound_and_says_there_was_more` |
 
 ## MCP servers leave the restoration identity (#391)
 
-Removing the server loop from the fingerprint changed every saved
-conversation's identity once — the old hash wrote the number of servers even
-when it was zero. Saved sessions are an append-only, replayed log, so a
-snapshot cannot be edited in place; the gateway appends one durable
-`SessionChange::ProviderIdentity { before, after }` per conversation instead,
-once, as it starts (`conversation::application::identity_retrofit`). It runs
-after session storage initialises and the agent resolver exists, before the
-conversation service is built, so nothing can hold a session lease yet; the
-registry lock already refuses a second gateway. Each conversation's agent,
-model and approval mode resolve through the same resolver reopening uses, to
-the current identity and the one the same provider had under the old
-fingerprint (`previous_identity`); OpenCode is observed under its 5-second
-deadline without admitting a warm-up.
-
-Run: `NotRun → Running → Done (marker) | Incomplete (no marker)`.
-Conversation: `Unexamined → Rewritten | AlreadyCurrent | Foreign | NoHistory |
-Tombstoned | LeftPermanent(reason) | LeftTransient(reason)`. A rewrite is
-audited twice under `conversations/audit/fingerprint-retrofit/` — intent
-(`rewriting`, before/after identities, conversation, cause
-`mcp_servers_left_restoration_identity`, initiator system/gateway start) before
-the append and the outcome after it — and every run records a summary of counts
-and leftovers. The marker is `conversations/retrofit/391-fingerprint.done`.
-The runner, its audit and marker, and the SDK's earlier fingerprint are
-temporary; [#471](https://github.com/nessalabs/nessa-agent/issues/471) deletes
-them together.
-
-| # | State / event | Expected | Marker | Test |
-| --- | --- | --- | --- | --- |
-| R1 | Saved provider == old fingerprint over current config | One `ProviderIdentity` unit appended; reopen restores with no `IdentityMismatch`; audit holds the intent, then `rewritten` | yes | `r1_a_conversation_saved_under_the_previous_identity_is_moved_and_reopens` |
-| R2 | Saved provider == new fingerprint | No write, counted | yes | `r2_a_conversation_already_current_is_counted_and_not_written` |
-| R3 | Matches neither | Untouched, `foreign`; reopen still answers `IdentityMismatch` | yes | `r3_a_conversation_matching_neither_identity_is_left_foreign` |
-| R4 | Next start with the marker present | Nothing opened, nothing audited | n/a | `r4_with_the_marker_present_nothing_is_opened_or_audited` |
-| R5 | Crash after the unit, before `SaveComplete` | Next start reads the prior publication (still old) and retries the exact move; the writer accepts it | after R1 | `r5_a_move_interrupted_before_its_completion_is_retried_exactly` |
-| R6 | Crash after the append, before the marker | Next start: R2 for that conversation, then the marker | yes | `r6_a_run_that_stopped_before_its_marker_finds_the_move_already_current` |
-| R7 | `open_existing` answers `Busy`, or a storage I/O error | `LeftTransient`, recorded | **no** | `r7_a_busy_or_failing_history_is_left_for_the_next_start` |
-| R8 | Never opened (no session stream) | `NoHistory` | yes | `r8_a_conversation_never_opened_has_no_history` |
-| R9 | Log corrupt, wrong stream key, or unfinished and refused | `LeftPermanent(corrupt)`, not repaired | yes | `r9_a_corrupt_or_foreign_keyed_history_is_left_for_good`, `r9_an_unfinished_save_that_is_not_this_move_is_left_for_good` |
-| R10 | Agent not configured or installed, model or mode unavailable, unsupported agent | `LeftPermanent(reason)` | yes | `r10_an_unresolvable_selection_is_left_for_good_with_its_reason` |
-| R11 | OpenCode resolver times out | `LeftTransient(unavailable)`; other conversations still processed, the selection resolved once | **no** | `r11_a_resolver_timeout_leaves_its_conversations_and_processes_the_rest` |
-| R12 | Audit cannot be written before the rewrite | No unit appended, `LeftTransient(audit)` | **no** | `r12_no_move_is_appended_when_its_intent_cannot_be_recorded` |
-| R13 | Intent audited, then the append fails | Outcome `left: storage`, log unchanged | **no** | `r13_a_failed_append_after_its_intent_is_recorded_as_left`, `r13_a_finished_save_whose_move_is_refused_as_corrupt_is_left_for_the_next_start` |
-| R14 | Conversation tombstoned | Skipped; deletion owns it | yes | `r14_a_deleted_conversation_is_skipped` |
-| R15 | Second gateway in the same namespace | Refused earlier by the registry lock; the retrofit never starts | n/a | existing `bootstrap_is_explicit_private_and_exclusively_locked` (`nessa-auth` local registry) |
-| R16 | Zero MCP servers configured | Still R1: the old hash included the zero length | yes | `r16_with_no_mcp_servers_the_previous_identity_still_differs` (SDK), `previous_identity_differs_with_no_mcp_servers` |
-| R17 | Folding `ProviderIdentity` whose `before` ≠ published, or `before == after` | Refused as corrupt, nothing published | n/a | `a_provider_identity_change_that_does_not_continue_the_published_one_is_refused` |
-| R18 | Summary audit cannot be written | No marker; the next start re-runs and finds R2 | **no** | `r18_no_marker_is_written_when_the_summary_cannot_be_recorded` |
-| R19 | A conversation's metadata row cannot be read (found while building) | `LeftTransient(metadata)`: the store cannot tell a damaged row from a failed read | **no** | `r19_an_unreadable_metadata_row_is_left_for_the_next_start` |
+Removing the server loop from the fingerprint changes every saved
+conversation's identity once: the old hash wrote the number of servers even
+when it was zero, and each server's command, which for a stand-in is the
+gateway's executable path. The release that ships this therefore strands the
+conversations saved before it once — they answer
+`conversation_configuration_changed`, as every app update already does today,
+because each version runs its gateway from a new directory. Nothing moves them
+and no reader of the earlier fingerprint is kept (one current contract). From
+that release on, neither an MCP server change nor a move of the gateway's
+executable strands a saved conversation; only the inputs that still select the
+provider's context do.

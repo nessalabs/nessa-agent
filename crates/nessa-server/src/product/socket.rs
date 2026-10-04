@@ -2301,7 +2301,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_servers_on_the_wire_carry_names_only_and_typed_refusals() {
         use crate::mcp_servers::infrastructure::settings_test_support::{
-            config, settings_for, MemoryFiles, RecordingAudit,
+            absolute, config, settings_for, MemoryFiles, RecordingAudit,
         };
         let (bare, _) = fixture(MembershipRole::Admin);
         let session = authenticate(&bare).await;
@@ -2331,8 +2331,9 @@ mod tests {
         let listed = list(&state).await;
         assert_eq!(listed["servers"][0]["kind"], "stdio");
         assert_eq!(listed["servers"][0]["managed"], true);
+        let command = absolute("/usr/bin/python3");
         let input = |env: Value| {
-            json!({"kind": "stdio", "name": "mcptest", "command": "/usr/bin/python3",
+            json!({"kind": "stdio", "name": "mcptest", "command": command,
                 "args": ["/s.py"], "env": env, "enabled": true})
         };
         let (ok, saved) = mcp_servers_call(
@@ -2348,7 +2349,7 @@ mod tests {
         assert_eq!(listed["revision"], saved["revision"]);
         assert_eq!(
             listed["servers"][0],
-            json!({"kind": "stdio", "name": "mcptest", "command": "/usr/bin/python3",
+            json!({"kind": "stdio", "name": "mcptest", "command": command,
                 "args": ["/s.py"], "envNames": ["API_TOKEN"], "enabled": true, "managed": false})
         );
         assert!(!listed.to_string().contains("secret-value"));
@@ -2495,8 +2496,8 @@ mod tests {
 
     /// `mcpServers.inspect` on the wire: the tools with their hints and each
     /// app's CSP and permissions in `mcp.readResource`'s shapes; each failure
-    /// typed, a server's JSON-RPC error with its details; and a stored name
-    /// required.
+    /// typed, a server's JSON-RPC error with its details; an inspection cut
+    /// by shutdown; and a stored name required.
     #[tokio::test]
     async fn mcp_servers_inspect_answers_typed_tools_and_typed_failures() {
         use crate::mcp_servers::application::{
@@ -2608,6 +2609,18 @@ mod tests {
             *inspector.answer.lock().unwrap() = Err(failure);
             assert_eq!(inspect("a").await, (false, expected));
         }
+        // Cut by shutdown after the server was started: incomplete, no tools.
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        });
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "stopping", "tools": []})
+            )
+        );
         assert_eq!(
             inspect("unknown").await,
             (

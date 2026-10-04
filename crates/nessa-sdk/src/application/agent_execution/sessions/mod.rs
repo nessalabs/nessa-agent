@@ -50,16 +50,6 @@
 //! or a tool/review/terminal or settlement save.
 //! A process failure may lose unfinished text. Consequential changes require saved
 //! evidence; snapshots expose only committed state. Adapters choose its encoding.
-//!
-//! In the fold that replays saved changes (`records::Continuation::stage_change`)
-//! only the `SessionChange::Opened` and `SessionChange::ProviderIdentity` arms
-//! write a snapshot's provider identity, and the second is refused unless it
-//! continues the published one
-//! (`a_provider_identity_change_that_does_not_continue_the_published_one_is_refused`,
-//! `moving_to_the_published_identity_is_refused_by_the_fold`). The second records that the identity a
-//! conversation restores under moved, with no provider effect, for a host
-//! whose way of computing it changed; `SavedProviderIdentity` reads the saved
-//! identity under a writer lease and appends that move.
 
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
@@ -83,10 +73,10 @@ pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use storage::{
     CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
-    ProviderContext, QueueHistoryRecord, SavedProviderIdentity, SessionChange, SessionLoad,
-    SessionLoadState, SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture, StorageShutdownFailure, SubmissionAcknowledgement,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad, SessionLoadState,
+    SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    StorageShutdownFailure, SubmissionAcknowledgement,
 };
 
 pub(crate) use transcript::CommittedTransactionState;

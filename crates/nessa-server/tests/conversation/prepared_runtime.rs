@@ -108,7 +108,6 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
                         provider: Arc::new(Provider::new(provider.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
-                        previous_identity: None,
                         readiness: Some(Arc::new(PreparedRuntime(warm_up.clone()))),
                     },
                 )]),

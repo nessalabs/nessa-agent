@@ -14,8 +14,9 @@ writing PATH once asked when --listed-file PATH is given;
 --exit-on-list exits when its tools are listed; --pages N lists one tool
 per page over N pages; --apps N lists N tools, each with an MCP App of its
 own (ui://fixture/app-<i>.html, asking for a CSP and the camera);
---pid-file PATH writes the process id to PATH once started; and
---child-pid-file PATH writes the --child's process id to PATH.
+--pid-file PATH writes the process id to PATH once started;
+--child-pid-file PATH writes the --child's process id to PATH; and
+--closed-file PATH writes PATH once its stdin has closed.
 """
 import json
 import os
@@ -125,6 +126,10 @@ for line in sys.stdin:
         reply = {"jsonrpc": "2.0", "id": message["id"], "result": result}
     sys.stdout.write(json.dumps(reply) + "\n")
     sys.stdout.flush()
+
+if option("--closed-file"):
+    with open(option("--closed-file"), "w") as closed_file:
+        closed_file.write("closed")
 
 if "--ignore-eof" in sys.argv:
     while True:

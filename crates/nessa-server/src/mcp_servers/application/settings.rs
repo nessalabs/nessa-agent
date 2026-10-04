@@ -9,8 +9,9 @@
 //!         ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (revision again, parse, bound, publish)
 //!         ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
 //! inspect ─▶ a slot (or busy) ─▶ read ─▶ the stored server ─▶ audit requested
-//!         ─▶ ServerInspector::inspect (deadline, caps; stopped after) ─▶ audit outcome
-//! shutdown ─▶ admit no more ─▶ wait for every admitted task (bounded) ─▶ the servers may stop
+//!         ─▶ ServerInspector::inspect (deadline, caps, the stop; stopped after) ─▶ audit outcome
+//! shutdown ─▶ admit no more ─▶ stop the inspections ─▶ wait for every admitted task (bounded)
+//!          ─▶ the servers may stop
 //! ```
 //!
 //! Arrows are order. An admitted save, remove or inspection has one owner:
@@ -21,13 +22,20 @@
 //! (`a_caller_gone_mid_write_still_replaces_the_live_set_and_records_the_outcome`),
 //! so the file and the live set never disagree and no record depends on the
 //! response. Shutdown admits no more — a later request is refused
-//! [`McpServerSettingsError::Stopping`], unaudited, as it starts nothing — and
-//! then waits for every admitted task, bounded by the store's lock wait plus
-//! the inspection deadline and a grace for the file system
+//! [`McpServerSettingsError::Stopping`], unaudited, as it starts nothing —
+//! stops the inspections under way at once, as they change nothing (one not
+//! yet started is recorded `stopping`, one started `cut: stopping`, its
+//! process group killed), and then waits for every admitted task, bounded by
+//! the store's lock wait and a grace for the file system ([`drain_bound`])
 //! (`shutdown_during_a_save_returns_after_its_outcome_is_recorded`,
-//! `shutdown_during_an_inspection_returns_after_its_outcome_is_recorded`).
-//! The gateway drains it before it stops the servers, so an inspection under
-//! way has its server's client until it ends.
+//! `shutdown_stops_a_running_inspection_and_records_it_cut`). The gateway
+//! drains it before it stops the servers (`composition::mcp_servers::stop`).
+//!
+//! A task that panics answers by how far it got, which it marks as it goes:
+//! past the publish — or, for an inspection, past asking for the start — it is
+//! `AuditUnavailable { applied: true }`, as its outcome record was not
+//! written; before it, `StorageUnavailable`
+//! (`a_panic_after_the_publish_answers_applied_and_before_it_storage_unavailable`).
 //!
 //! The lock is held from the read to the replacement, so two changes publish
 //! and replace in the same order
@@ -49,8 +57,8 @@
 //! unreadable configuration, a gateway stopping before admission. When its
 //! first record cannot be written, nothing is started.
 use super::ports::{
-    AuditUnavailable, AuditedServer, InspectBounds, InspectFailure, Inspection, LiveServerSet,
-    McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+    AuditUnavailable, AuditedServer, InspectBounds, InspectFailure, InspectStop, Inspection,
+    LiveServerSet, McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
     McpServerChangeRequest, McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector,
     ServerNames, ServerProblem, StoreError, StoreLock, StoredServers,
 };
@@ -61,7 +69,14 @@ use crate::product_contract::generated::{
     MCP_SERVER_INSPECT_DEADLINE_MS, MCP_SERVER_INSPECT_MAX_CONCURRENT,
     MCP_SERVER_INSPECT_MAX_TOOL_PAGES, MCP_SERVER_INSPECT_MAX_UI_READS,
 };
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::sync::{watch, Semaphore};
 
 /// What one inspection may spend, as the product schema publishes it
@@ -72,9 +87,18 @@ pub const INSPECT_BOUNDS: InspectBounds = InspectBounds {
     max_ui_reads: MCP_SERVER_INSPECT_MAX_UI_READS,
 };
 
-/// What a drain allows past the store's lock wait and the inspection
-/// deadline: the blocking publish and the records, on the file system.
+/// What a drain allows past the store's lock wait: the blocking publish and
+/// the records, on the file system, and a stopped inspection's kill.
 pub const DRAIN_GRACE: Duration = Duration::from_secs(5);
+
+/// How long shutdown waits for the admitted changes and inspections:
+/// `lock_wait` — the store's bounded wait for its lock — plus
+/// [`DRAIN_GRACE`]. Inspections are stopped, not waited out, so their
+/// deadline is no part of it; the bound must stay inside the supervisors'
+/// stop window (`the_drain_bound_is_inside_the_supervisors_stop_window`).
+pub fn drain_bound(lock_wait: Duration) -> Duration {
+    lock_wait + DRAIN_GRACE
+}
 
 /// One row of `mcpServers.list`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,12 +144,17 @@ pub enum McpServerSettingsError {
     ConfigInvalid,
     ConfigTooLarge,
     /// The configuration could not be read, locked or published — or the
-    /// task that owned the request panicked.
+    /// task that owned the request panicked before it published, or before
+    /// it asked for the inspected server to be started.
     StorageUnavailable,
     /// The gateway is stopping: the request was not admitted, and nothing
     /// was started, written or recorded.
     Stopping,
-    /// A record could not be made durable. `applied` says whether the change
+    /// A record could not be made durable — or the task that owned the
+    /// request panicked after it published, or after it asked for the
+    /// inspected server to be started, so the outcome was not recorded
+    /// (`applied: true`).
+    /// `applied` says whether the change
     /// was published all the same — the live set may not have been replaced
     /// if the gateway is stopping; `cause` is
     /// what it would have been answered otherwise — the refusal or failure
@@ -210,6 +239,10 @@ struct Operations {
     /// One permit per inspection that may run at once
     /// (`i6_a_third_inspection_at_once_is_busy`).
     inspections: Arc<Semaphore>,
+    /// Shutdown's stop for the inspections, given once by
+    /// [`McpServerSettings::shutdown`]; each inspection observes it
+    /// ([`InspectStop`]).
+    stop: watch::Sender<bool>,
 }
 
 impl McpServerSettings {
@@ -226,6 +259,7 @@ impl McpServerSettings {
                 live,
                 inspector,
                 inspections: Arc::new(Semaphore::new(MCP_SERVER_INSPECT_MAX_CONCURRENT)),
+                stop: watch::channel(false).0,
             }),
             admissions: Admissions::default(),
         }
@@ -262,15 +296,20 @@ impl McpServerSettings {
         edit: ServerEdit,
     ) -> Result<String, McpServerSettingsError> {
         let operations = self.operations.clone();
-        self.owned(async move { operations.edit(initiator, revision, edit).await })
-            .await
+        self.owned(
+            |reached| async move { operations.edit(initiator, revision, edit, &reached).await },
+        )
+        .await
     }
 
     /// Start the server stored as `name` once, for `initiator`, read what it
     /// offers within [`INSPECT_BOUNDS`], and stop it — a server turned off as
-    /// well as one turned on. The process runs before the answer whatever
+    /// well as one turned on. The process stops before the answer whatever
     /// the answer; it is recorded before it is started and after it stops.
-    /// Once admitted, it runs to its outcome record on a task of its own.
+    /// Once admitted, it runs to its outcome record on a task of its own;
+    /// shutdown stops it — not started, `Inspect(Stopping)`; started, an
+    /// inspection cut [`InspectCut::Stopping`](super::InspectCut::Stopping)
+    /// with no tools.
     ///
     /// # Errors
     ///
@@ -293,7 +332,7 @@ impl McpServerSettings {
         }
         let operations = self.operations.clone();
         let name = name.to_owned();
-        self.owned(async move { operations.inspect(initiator, &name).await })
+        self.owned(|reached| async move { operations.inspect(initiator, &name, &reached).await })
             .await
     }
 
@@ -303,38 +342,72 @@ impl McpServerSettings {
         self.admissions.close();
     }
 
-    /// [`Self::close`], then wait for every admitted change and inspection
-    /// to record its outcome — at most the store's lock wait, plus the
-    /// inspection deadline, plus [`DRAIN_GRACE`]. Called before the servers
-    /// stop, so an inspection under way keeps its client.
+    /// How long [`Self::shutdown`] waits at most: [`drain_bound`] of the
+    /// store's lock wait.
+    pub fn drain_bound(&self) -> Duration {
+        drain_bound(self.operations.store.lock_wait())
+    }
+
+    /// [`Self::close`], stop every inspection under way ([`InspectStop`]),
+    /// then wait for every admitted change and inspection to record its
+    /// outcome — at most [`Self::drain_bound`]. Called before the servers
+    /// stop (`composition::mcp_servers::stop`).
     ///
     /// # Errors
     ///
     /// [`Unfinished`] with how many were still running at the bound.
     pub async fn shutdown(&self) -> Result<(), Unfinished> {
         self.close();
-        let bound = self.operations.store.lock_wait() + INSPECT_BOUNDS.deadline + DRAIN_GRACE;
-        self.admissions.drained(bound).await
+        self.operations.stop.send_replace(true);
+        self.admissions.drained(self.drain_bound()).await
     }
 
-    /// `work` on a task this owns and tracks, when admitted; its answer, or
-    /// `StorageUnavailable` when it panicked.
-    async fn owned<T: Send + 'static>(
+    /// `work` on a task this owns and tracks, when admitted, given the mark
+    /// it sets once it has published or asked for a server to start; its answer — or,
+    /// when it panicked, `AuditUnavailable { applied: true }` past that mark
+    /// and `StorageUnavailable` before it.
+    async fn owned<T: Send + 'static, F>(
         &self,
-        work: impl Future<Output = Result<T, McpServerSettingsError>> + Send + 'static,
-    ) -> Result<T, McpServerSettingsError> {
+        work: impl FnOnce(Reached) -> F,
+    ) -> Result<T, McpServerSettingsError>
+    where
+        F: Future<Output = Result<T, McpServerSettingsError>> + Send + 'static,
+    {
         let running = self
             .admissions
             .admit()
             .ok_or(McpServerSettingsError::Stopping)?;
+        let reached = Reached::default();
+        let work = work(reached.clone());
         // Dropping the handle with the caller's future leaves the task
         // running; `running` goes with the task, however it ends.
-        tokio::spawn(async move {
+        let answered = tokio::spawn(async move {
             let _running = running;
             work.await
         })
-        .await
-        .unwrap_or(Err(McpServerSettingsError::StorageUnavailable))
+        .await;
+        match answered {
+            Ok(answer) => answer,
+            Err(_) if reached.applied() => Err(McpServerSettingsError::AuditUnavailable {
+                applied: true,
+                cause: None,
+            }),
+            Err(_) => Err(McpServerSettingsError::StorageUnavailable),
+        }
+    }
+}
+
+/// How far an owned task got: set once its change is published, or its
+/// inspected server asked to start, so a panic after that is not answered as if
+/// nothing happened.
+#[derive(Clone, Default)]
+struct Reached(Arc<AtomicBool>);
+impl Reached {
+    fn applied(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+    fn mark_applied(&self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 
@@ -438,6 +511,7 @@ impl Operations {
         initiator: McpServerInitiator,
         revision: String,
         edit: ServerEdit,
+        reached: &Reached,
     ) -> Result<String, McpServerSettingsError> {
         let request = McpServerChangeRequest {
             action: match edit {
@@ -468,7 +542,7 @@ impl Operations {
                 applied: false,
                 cause: None,
             })?;
-        let result = self.change(&revision, &edit).await;
+        let result = self.change(&revision, &edit, reached).await;
         let outcome = match &result {
             Ok(change) => McpServerOutcome::Applied {
                 before: change.before.clone(),
@@ -507,6 +581,7 @@ impl Operations {
         &self,
         initiator: McpServerInitiator,
         name: &str,
+        reached: &Reached,
     ) -> Result<Inspection, McpServerSettingsError> {
         let _slot = self
             .inspections
@@ -543,15 +618,17 @@ impl Operations {
                 applied: false,
                 cause: None,
             })?;
-        let result = self.inspector.inspect(server, INSPECT_BOUNDS).await;
+        reached.mark_applied();
+        let stop = InspectStop::new(self.stop.subscribe());
+        let result = self.inspector.inspect(server, INSPECT_BOUNDS, stop).await;
         let outcome = match &result {
             Ok(inspection) => McpServerOutcome::Inspected {
                 tools: inspection.tools.len(),
                 cut: inspection.cut,
             },
-            Err(failure) => McpServerOutcome::Failed {
+            Err(failure) => McpServerOutcome::InspectFailed {
                 reason: McpServerSettingsError::Inspect(failure.clone()).reason(),
-                before: None,
+                started: failure.started(),
             },
         };
         let recorded = self
@@ -579,6 +656,7 @@ impl Operations {
         &self,
         revision: &str,
         edit: &ServerEdit,
+        reached: &Reached,
     ) -> Result<Change, (McpServerSettingsError, Option<ServerNames>)> {
         let lock = self
             .store
@@ -596,7 +674,7 @@ impl Operations {
             ServerEdit::Remove { name } => name,
         };
         let before = names(&stored.revision, &stored.servers, Some(before_target));
-        let result = self.publish(revision, edit, stored, lock).await;
+        let result = self.publish(revision, edit, stored, lock, reached).await;
         match result {
             Ok((after, live_set_replaced)) => Ok(Change {
                 before,
@@ -615,6 +693,7 @@ impl Operations {
         edit: &ServerEdit,
         stored: StoredServers,
         lock: StoreLock,
+        reached: &Reached,
     ) -> Result<(ServerNames, bool), McpServerSettingsError> {
         if stored.revision != revision {
             return Err(McpServerSettingsError::RevisionConflict {
@@ -653,6 +732,7 @@ impl Operations {
             .await
             .ok_or(McpServerSettingsError::StorageUnavailable)?;
         let after = after?;
+        reached.mark_applied();
         // Published: the live set follows, under the same lock. Refused only
         // once the gateway is stopping: the change still answers success,
         // its outcome record says the live set was not replaced, and the

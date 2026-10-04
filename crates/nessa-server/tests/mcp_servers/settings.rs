@@ -17,7 +17,7 @@ use crate::mcp_servers::infrastructure::settings_test_support::{
     settings_over, settings_started_with, LeapingClock, MemoryFiles, RecordingAudit,
     ScriptedInspector, UNPARSEABLE,
 };
-use crate::mcp_servers::infrastructure::{sdk_server, LaunchSettings};
+use crate::mcp_servers::infrastructure::{sdk_server, LaunchSettings, LOCK_WAIT};
 use nessa_sdk::infrastructure::{
     acp::sessions::MAX_MCP_SERVERS, clock::RuntimeClock, mcp::MCP_SESSION_VARIABLE,
 };
@@ -983,10 +983,12 @@ async fn shutdown_during_a_save_returns_after_its_outcome_is_recorded() {
     assert!(bounded(editing).await.is_ok());
 }
 
-/// Shutdown during an inspection: it returns only once the inspection has
-/// ended and its outcome is recorded.
+/// Shutdown during an inspection: the inspection is stopped, not waited
+/// out — its gate is never let go — and shutdown returns once its outcome,
+/// `cut: stopping` with no tools, is recorded; the caller is answered the
+/// same.
 #[tokio::test]
-async fn shutdown_during_an_inspection_returns_after_its_outcome_is_recorded() {
+async fn shutdown_stops_a_running_inspection_and_records_it_cut() {
     let files = MemoryFiles::holding(config(vec![entry("a")]));
     let audit = Arc::new(RecordingAudit::default());
     let (settings, inspector) = inspecting(files, audit.clone());
@@ -1005,21 +1007,131 @@ async fn shutdown_during_an_inspection_returns_after_its_outcome_is_recorded() {
         let settings = settings.clone();
         async move { settings.shutdown().await }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(
-        !stopping.is_finished(),
-        "shutdown did not wait for the inspection"
-    );
-    inspector.gate.add_permits(1);
     assert_eq!(bounded(stopping).await, Ok(()));
+    // Recorded before shutdown returned.
     assert_eq!(
         outcome(&audit),
         McpServerOutcome::Inspected {
             tools: 0,
-            cut: None
+            cut: Some(InspectCut::Stopping),
         }
     );
-    assert!(bounded(inspecting).await.is_ok());
+    assert_eq!(
+        bounded(inspecting).await,
+        Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        })
+    );
+}
+
+/// The supervisors that run the gateway kill it 30 s after asking it to
+/// stop: launchd's `ExitTimeOut` (`src-tauri/src/gateway/infrastructure/macos.rs`)
+/// and systemd's `TimeoutStopSec` (`src-tauri/src/gateway/infrastructure/linux/unit.rs`),
+/// both 30. Not reachable from this crate, so pinned here: raising either
+/// does not loosen this.
+const SUPERVISOR_STOP_WINDOW: Duration = Duration::from_secs(30);
+
+/// The drain before the servers stop waits the store's lock wait and a
+/// grace, not an inspection's deadline, and stays well inside the
+/// supervisors' stop window, so the outcome records it waits for are not
+/// lost to their kill — the rest of shutdown needs the remainder.
+#[test]
+fn the_drain_bound_is_inside_the_supervisors_stop_window() {
+    let (settings, _) = settings_for(
+        MemoryFiles::holding(config(vec![])),
+        Arc::new(RecordingAudit::default()),
+    );
+    let bound = settings.drain_bound();
+    assert_eq!(bound, super::drain_bound(LOCK_WAIT));
+    assert!(bound < INSPECT_BOUNDS.deadline, "{bound:?}");
+    assert!(bound <= SUPERVISOR_STOP_WINDOW / 4, "{bound:?}");
+}
+
+/// A live set whose `problem` or `replace` panics: before the publish, or
+/// after it.
+struct PanickingLive {
+    live: crate::mcp_servers::infrastructure::LiveMcpServers,
+    before_publish: bool,
+}
+impl super::LiveServerSet for PanickingLive {
+    fn managed(&self) -> Option<ConfiguredMcpServer> {
+        self.live.managed()
+    }
+    fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {
+        assert!(!self.before_publish, "a fault before the publish");
+        self.live.problem(stored)
+    }
+    fn replace(&self, _: &[ConfiguredMcpServer]) -> Result<(), super::LiveSetKept> {
+        panic!("a fault after the publish")
+    }
+}
+
+/// An inspector that panics once asked to start a server.
+struct PanickingInspector;
+impl super::ServerInspector for PanickingInspector {
+    fn inspect(
+        &self,
+        _: &ConfiguredMcpServer,
+        _: super::InspectBounds,
+        _: super::InspectStop,
+    ) -> super::InspectFuture<'_> {
+        Box::pin(async { panic!("a fault once the server is asked to start") })
+    }
+}
+
+/// A task that panics answers by how far it got: after the publish — the
+/// file is new, its outcome unrecorded — `audit_unavailable` with
+/// `applied: true`; before it, `storage_unavailable`, nothing written. An
+/// inspection that panics once its server was asked to start is
+/// `applied: true` too. The admission it held is let go either way.
+#[tokio::test]
+async fn a_panic_after_the_publish_answers_applied_and_before_it_storage_unavailable() {
+    for before_publish in [false, true] {
+        let files = MemoryFiles::holding(config(vec![entry("a")]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = super::super::infrastructure::settings_test_support::settings_through(
+            files.clone(),
+            audit.clone(),
+            Arc::new(PanickingInspector),
+            |live| {
+                Arc::new(PanickingLive {
+                    live,
+                    before_publish,
+                })
+            },
+        );
+        let revision = settings.list().await.unwrap().revision;
+        let answered = settings.edit(initiator(), revision, save("b")).await;
+        if before_publish {
+            assert_eq!(answered, Err(McpServerSettingsError::StorageUnavailable));
+            assert_eq!(files.publishes.load(Ordering::SeqCst), 0);
+        } else {
+            assert_eq!(
+                answered,
+                Err(McpServerSettingsError::AuditUnavailable {
+                    applied: true,
+                    cause: None,
+                })
+            );
+            assert_eq!(stored(&files), ["a", "b"]);
+        }
+        // Only the requested record: the outcome was never written.
+        assert_eq!(audit.records().len(), 1);
+        assert!(
+            !files.held.load(Ordering::SeqCst),
+            "the lock was kept past the panic"
+        );
+        assert_eq!(
+            settings.inspect(initiator(), "a").await,
+            Err(McpServerSettingsError::AuditUnavailable {
+                applied: true,
+                cause: None,
+            })
+        );
+        // Nothing still counted as running.
+        assert_eq!(settings.shutdown().await, Ok(()));
+    }
 }
 
 /// Once shutdown has begun, a save, a remove or an inspection is not
@@ -1337,9 +1449,23 @@ async fn an_inspection_is_not_started_unaudited_and_keeps_both_causes() {
     );
     assert_eq!(
         outcome(&audit),
-        McpServerOutcome::Failed {
+        McpServerOutcome::InspectFailed {
             reason: "timed_out",
-            before: None,
+            started: true,
+        }
+    );
+    // Not started: said so, as `started: false`.
+    audit.records.lock().unwrap().clear();
+    *inspector.answer.lock().unwrap() = Err(InspectFailure::Stopping);
+    assert_eq!(
+        settings.inspect(initiator(), "a").await,
+        Err(McpServerSettingsError::Inspect(InspectFailure::Stopping))
+    );
+    assert_eq!(
+        outcome(&audit),
+        McpServerOutcome::InspectFailed {
+            reason: "stopping",
+            started: false,
         }
     );
     audit.fail_outcome.store(true, Ordering::SeqCst);
