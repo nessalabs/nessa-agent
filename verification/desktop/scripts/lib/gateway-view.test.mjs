@@ -222,6 +222,22 @@ describe("lastTurn", () => {
       )
   })
 
+  it("a thought part is left out, as the window does not draw it", () => {
+    assert.deepEqual(
+      said([
+        { kind: "thought", text: "**Planning** `x`" },
+        { kind: "text", text: "Wab" },
+        { kind: "thought", text: "more" },
+        { kind: "text", text: "c12" },
+      ])(),
+      { user: "say it", reply: "Wabc12" },
+    )
+    assert.throws(
+      said([{ kind: "thought", text: "only a thought" }]),
+      (error) => error instanceof CannotRun && /empty/.test(error.message),
+    )
+  })
+
   it("text the window draws otherwise — code, strong, anything not plain — could not run", () => {
     for (const text of ["`Wabc12`", "**Wabc12**", "Wabc12 *", "Wabc12 <b>"])
       assert.throws(

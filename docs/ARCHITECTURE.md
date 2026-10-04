@@ -902,7 +902,7 @@ the native host; the desktop window connects under the same credential and
 client id (`nessa-panel`), served once the gateway is ready (#419). The
 gateway cannot tell the two windows apart: each authenticates as client
 `nessa-panel` and is answered as principal `surface:nessa-panel`, which
-`gateway-window.mjs`'s handshake checks (W4, W4′) assert of every handshake the
+`gateway-window.mjs`'s handshake checks (W4′) assert of every handshake the
 window makes, and `session.authenticate` has no field for the surface kind the
 client is given (`SessionAuthenticateParams`, generated in
 `packages/nessa-client/src/generated/product.ts`; #447). The SDK supports injected credential storage and a Node file

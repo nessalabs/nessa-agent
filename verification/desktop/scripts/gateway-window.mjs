@@ -26,8 +26,9 @@
  *
  * Every step runs on one page per engine and layout, in order; a step that
  * fails, or could not run, stops those after it on that page, which are
- * reported as not run, and a page that does not open reports each of its
- * steps as not run. The next layout and engine still run.
+ * reported as not run, and a page that does not open — whether it could not
+ * run or failed — is reported so, with each of its steps as not run. The next
+ * layout and engine still run.
  */
 import { randomUUID } from "node:crypto"
 
@@ -67,7 +68,7 @@ Options:
 Steps, per engine and layout, in order on one page (--only <names> to pick):
   handshake  on the window's own socket, to the host's endpoint, it
           authenticated as client nessa-panel and the gateway answered ok with
-          principal surface:nessa-panel: the panel's credential (W4)
+          principal surface:nessa-panel: the panel's credential (W4′)
   lists   connected over the host's endpoint and the panel's credential, the
           window lists the gateway's conversation by its title: no failure
           status, no sample (W1)
@@ -242,7 +243,7 @@ const shown = (handshakes) =>
   handshakes.map(({ socket, client, answer }) => ({ socket, client, answer }))
 
 /**
- * Failures for the window's handshakes `seen` (W4, W4′): at least one, and
+ * Failures for the window's handshakes `seen` (W4′): at least one, and
  * each on a socket to the host's endpoint — not the dev server's `/browser`
  * proxy to the same gateway — authenticated as client nessa-panel and
  * answered ok with principal surface:nessa-panel.
@@ -375,7 +376,8 @@ await main(
               context.on("page", (page) => watchHandshakes(page, handshakes)),
           })
         } catch (error) {
-          if (!(error instanceof CannotRun)) throw error
+          // Could not run, or failed: reported either way, and the next
+          // layout and engine still run.
           rep.add(resultOfThrown({ name: "open", engine, layout }, error))
           for (const name of only)
             rep.add({
@@ -397,7 +399,7 @@ await main(
                 engine,
                 layout,
                 cannotRun: true,
-                error: `not run: ${stopped} did not hold`,
+                error: `not run: ${stopped}`,
               })
               continue
             }
@@ -423,7 +425,8 @@ await main(
                 ...(result.cannotRun ? [] : opened.errors.splice(0)),
               ],
             })
-            if (!entry.ok) stopped = name
+            if (!entry.ok)
+              stopped = `${name} ${entry.cannotRun ? "could not run" : "did not hold"}`
           }
           // Every handshake the window made, its reconnects' too, not only
           // the first the handshake step saw (W4′).

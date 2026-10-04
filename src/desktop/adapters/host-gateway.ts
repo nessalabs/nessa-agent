@@ -10,7 +10,7 @@
  * cannot tell this window from the panel: both authenticate as client
  * `nessa-panel` and are answered as principal `surface:nessa-panel`, which
  * `verification/desktop/scripts/gateway-window.mjs` asserts of every handshake
- * this window makes (W4, W4′), and `session.authenticate` has no field for the
+ * this window makes (W4′), and `session.authenticate` has no field for the
  * surface kind the client is given (`surfaceKind: "desktop"`;
  * `SessionAuthenticateParams`, #447). This module never holds the
  * token: it hands the client the credential source, which the client asks at

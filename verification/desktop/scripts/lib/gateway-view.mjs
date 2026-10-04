@@ -105,19 +105,19 @@ const plain = /^[\p{L}\p{N}\s.,:;!?'’"()-]*$/u
  * the check reads the page's — when its reply is text-only: every part a text
  * part (no tool, no local notice), and both texts plain. Only then does the
  * window draw each as its text alone, the reply's parts one after another
- * (`transcriptFrom` in `gateway-views.ts`, `message.tsx`, `RichText`). Any
- * other turn, and an empty reply or none, is "could not run": the check
- * cannot say what the window should draw for it.
+ * (`transcriptFrom` in `gateway-views.ts`, `message.tsx`, `RichText`). A
+ * thought part is left out, as `transcriptFrom` leaves it out: the window
+ * does not draw it. Any other turn, and an empty reply or none, is "could not
+ * run": the check cannot say what the window should draw for it.
  */
 export function lastTurn(view) {
   const turn = view.messages.at(-1)
   if (!turn) throw new CannotRun("the conversation holds no turn")
   const fold = (text) => text.replace(/\s+/g, " ").trim()
-  const others = turn.parts
-    .filter((part) => part.kind !== "text")
-    .map((part) => part.kind)
+  const drawn = turn.parts.filter((part) => part.kind !== "thought")
+  const others = drawn.filter((part) => part.kind !== "text").map((part) => part.kind)
   const user = fold(turn.userText)
-  const reply = fold(turn.parts.map((part) => part.text ?? "").join(""))
+  const reply = fold(drawn.map((part) => part.text ?? "").join(""))
   if (others.length > 0)
     throw new CannotRun(`the reply is not text-only: it has ${others.join(", ")} parts`)
   if (reply === "") throw new CannotRun("the reply is empty")

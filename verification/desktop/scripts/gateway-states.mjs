@@ -17,19 +17,21 @@
  * error expected.
  *
  * The poller's wait it checks against is the gateway source's own
- * (`defaultGatewayTiming`), read in the page from the dev server's module; a
- * production build has none to read, so each scenario there is "could not
- * run" — the script needs --mode dev (the default).
+ * (`defaultGatewayTiming`), and the gap one connect can leave between its
+ * asks comes from the client's own retry policy (`resolveConnectRetry`), each
+ * read in the page from the dev server's module; a production build has none
+ * to read, so each scenario there is "could not run" — the script needs
+ * --mode dev (the default).
  *
  * What it does not show: a gateway that answers — that is
  * `gateway-window.mjs`'s, against a real one.
  */
 import { openPage, withEngines } from "./lib/browser.mjs"
-import { attempt } from "./lib/cli.mjs"
+import { attempt, CannotRun } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css, modules } from "./lib/selectors.mjs"
-import { inside, modelValue } from "./lib/workspace.mjs"
+import { inside, modelRule, modelValue } from "./lib/workspace.mjs"
 
 const fakeGateway = "ws://127.0.0.1:7499"
 // Nothing listens here and nothing routes it: the connection is refused.
@@ -41,10 +43,19 @@ const retryAskMs = 1_000
 // An endpoint ask at most this old is fresh enough to click after
 // (T0, comment 5976195060).
 const freshAskMs = 1_000
-// The click waits until the host has gone unasked this long, so the connect
-// that asked has ended (one connect can ask several times, and a click while
-// it runs would join it, S6) and Try Again starts its own.
-const settledMs = 400
+
+/**
+ * Each of `numbers` is a positive finite number, or the check could not run
+ * (T6, comment 5976651213): a number renamed or gone in `source` would make
+ * NaN bounds, which pass every comparison they are in by failing it.
+ */
+function positive(source, numbers) {
+  for (const [name, value] of Object.entries(numbers))
+    if (!(typeof value === "number" && Number.isFinite(value) && value > 0))
+      throw new CannotRun(
+        `${source}'s ${name} is ${String(value)}, not a positive finite number`,
+      )
+}
 
 /**
  * The poller's numbers, from the gateway source's own `defaultGatewayTiming`
@@ -61,6 +72,7 @@ const settledMs = 400
  *   then, as the ask after it is a whole wait later still.
  */
 function cadenceOf({ pollMs, reconnectRounds }) {
+  positive("defaultGatewayTiming", { pollMs, reconnectRounds })
   const pollerWaitMs = pollMs * reconnectRounds
   return {
     pollMs,
@@ -69,6 +81,37 @@ function cadenceOf({ pollMs, reconnectRounds }) {
     quietMs: pollerWaitMs - pollMs,
     recoveredMs: pollerWaitMs + 3 * pollMs,
   }
+}
+
+/**
+ * `settleMs`, how long the host goes unasked before the click (T0′, comment
+ * 5976651213): the longest gap one connect can leave between its asks, so
+ * the connect that asked has ended and Try Again starts its own rather than
+ * joining it (S6).
+ *
+ * The window's connect is `connectDevSession` as `hostGateway` composes it,
+ * which passes the client no `config`; so `establishManagedSession` retries
+ * with `new NessaClientConfig().retry`, which is `resolveConnectRetry()` with
+ * no options — `policy` here, read from the client's source. After a failed
+ * attempt `index` (from 0) that is not the last (`index + 1 < maxAttempts`),
+ * `retryProductConnection` waits at most the ceiling `min(maxDelayMs,
+ * initialDelayMs × 2^min(index, 31))`: jitter only shortens it, and a refused
+ * socket carries no `retryAfterMs`. The ceiling never shrinks as `index`
+ * grows, so the largest is the last retry's, `index = maxAttempts − 2`; with
+ * no retries there is none. A quarter of `pollMs` more is for an attempt's
+ * own time, a refused socket's.
+ */
+function settleOf(policy, pollMs) {
+  const { maxAttempts, initialDelayMs, maxDelayMs } = policy ?? {}
+  positive("resolveConnectRetry()", { maxAttempts, initialDelayMs, maxDelayMs })
+  positive("defaultGatewayTiming", { pollMs })
+  const backoffMs =
+    maxAttempts < 2
+      ? 0
+      : Math.min(maxDelayMs, initialDelayMs * 2 ** Math.min(maxAttempts - 2, 31))
+  const settleMs = backoffMs + pollMs / 4
+  positive("the settle", { settleMs })
+  return { maxAttempts, initialDelayMs, maxDelayMs, backoffMs, pollMs, settleMs }
 }
 
 const scenarios = [
@@ -247,9 +290,14 @@ It reads the poller's wait from the gateway source in the page, so it needs
               await modelValue(page, modules.gatewaySource, "defaultGatewayTiming"),
             )
             const { pollerWaitMs, quietMs, recoveredMs } = timing
+            const settle = settleOf(
+              await modelRule(page, modules.connectRetry, "resolveConnectRetry"),
+              timing.pollMs,
+            )
+            const { settleMs } = settle
             const first = await measure(page)
             const failures = check(scenario, first)
-            if (!first.button) return { failures, measured: { timing, first } }
+            if (!first.button) return { failures, measured: { timing, settle, first } }
             // The poller waits out a failed connect (S10): for `quietMs` after
             // the last ask — a round short of the poller's wait — nothing asks
             // the host.
@@ -299,10 +347,10 @@ It reads the poller's wait from the gateway source in the page, so it needs
               },
               [css.workspaceEmpty, css.workspaceEmptyRetry],
             )
-            // T0: the click placed early in a fresh poller wait — after the
+            // T0′: the click placed early in a fresh poller wait — after the
             // last endpoint ask if it is at most `freshAskMs` old, else after
-            // the next one, once the asks have settled — so T3's bound is
-            // far off.
+            // the next one — once the connect that asked has ended, so T3's
+            // bound is far off and Try Again's connect is its own.
             const last = await page.evaluate(() => ({
               count: window.__fakeHostAskTimes.length,
               age: performance.now() - window.__fakeHostAskTimes.at(-1),
@@ -324,15 +372,38 @@ It reads the poller's wait from the gateway source in the page, so it needs
                   `the window did not ask the host again within ${recoveredMs}ms, unprompted`,
                 )
             }
-            await page.waitForFunction(
-              // With no ask at all there is nothing to settle: T4 fails it.
-              (quiet) =>
-                window.__fakeHostAskTimes.length === 0 ||
-                performance.now() - window.__fakeHostAskTimes.at(-1) >= quiet,
-              settledMs,
-              { polling: "raf", timeout: recoveredMs },
-            )
-            await page.click(css.workspaceEmptyRetry)
+            // The page clicks in the frame that sees the host unasked for
+            // `settleMs`: no step of the script's sits between the two.
+            // `click()` dispatches the click a pointer's would — bubbling to
+            // React's root listener, which runs Try Again's `onClick` — and
+            // the capture listener above times it.
+            const clicked = await page
+              .waitForFunction(
+                ([quiet, retry]) => {
+                  if (window.__retryClickSent) return true
+                  const times = window.__fakeHostAskTimes
+                  // With no ask at all there is nothing to settle: T4 fails it.
+                  if (times.length > 0 && performance.now() - times.at(-1) < quiet)
+                    return false
+                  const button = document.querySelector(retry)
+                  if (!button) return false
+                  window.__retryClickSent = true
+                  button.click()
+                  return true
+                },
+                [settleMs, css.workspaceEmptyRetry],
+                { polling: "raf", timeout: recoveredMs },
+              )
+              .then(
+                () => true,
+                () => false,
+              )
+            if (!clicked) {
+              failures.push(
+                `Try Again was not clicked: within ${recoveredMs}ms the host was never unasked for ${settleMs}ms with Try Again drawn`,
+              )
+              return { failures, measured: { timing, settle, first, quiet, recovered } }
+            }
             const read = await page
               .waitForFunction(() => window.__statusLeft, null, { timeout: 5_000 })
               .then(
@@ -377,6 +448,16 @@ It reads the poller's wait from the gateway source in the page, so it needs
             // How far T3's bound is from where the click landed.
             if (retryTiming && retryTiming.sinceLastAsk !== null)
               retryTiming.margin = pollerWaitMs - (retryTiming.sinceLastAsk + retryAskMs)
+            // T5: a click too soon after an ask may have joined the connect
+            // that asked; whatever came after it is not Try Again's own.
+            if (
+              retryTiming &&
+              retryTiming.sinceLastAsk !== null &&
+              retryTiming.sinceLastAsk < settleMs
+            )
+              failures.push(
+                `Try Again was clicked ${Math.round(retryTiming.sinceLastAsk)}ms after the last ask, under the ${settleMs}ms settle: the click may have joined a connect in flight`,
+              )
             if (!retry) failures.push("the click on Try Again was never seen")
             else if (retry.lastBefore === null)
               failures.push("no failed connect came before Try Again for it to beat")
@@ -402,7 +483,15 @@ It reads the poller's wait from the gateway source in the page, so it needs
             )
             return {
               failures,
-              measured: { timing, first, again, quiet, recovered, retry: retryTiming },
+              measured: {
+                timing,
+                settle,
+                first,
+                again,
+                quiet,
+                recovered,
+                retry: retryTiming,
+              },
             }
           } finally {
             await opened.close()

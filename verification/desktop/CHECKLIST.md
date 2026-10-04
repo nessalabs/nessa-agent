@@ -592,9 +592,16 @@ says why where the conversations would be.
   and connects at once though the poller waits (its host ask comes within a
   second of the click, and early enough in the poller's wait that no poll
   could have made it), and says the same while nothing changed. The click is
-  placed just after a host ask — at once if the last came at most a second
-  before, else right after the next — so it lands early in the poller's wait
-  (T0, #419 comment 5976195060). While signed out, and while the gateway is
+  placed early in the poller's wait, after the connect that asked has ended:
+  after a host ask at most a second old, or else the next one, the page itself
+  clicks Try Again in the same step that sees the host gone unasked for
+  `settle`, with no step of the script's between. `settle` is the longest gap
+  one connect can leave between its asks — the largest backoff ceiling of the
+  client's retry policy, the one `connectDevSession` connects with, read from
+  the client's source in the page — plus a quarter of `pollMs`. A click less
+  than `settle` after the last ask fails, as it may have joined a connect in
+  flight; timing numbers that are missing or not positive could not run
+  (T0′, T5, T6, #419 comment 5976651213). While signed out, and while the gateway is
   not ready, the window does not ask the host at all for a round short of the
   poller's wait after its last ask, then asks exactly once by three rounds
   after it: after a failed connect it waits out several poll rounds rather

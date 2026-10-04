@@ -1,6 +1,7 @@
 /**
  * The page under test: an explicit --url, the Vite dev server (reused when
- * it already answers on 127.0.0.1:1438, started and warmed otherwise), or a
+ * it already answers on 127.0.0.1:1438, started otherwise, and warmed either
+ * way), or a
  * production build previewed on a free port. The performance budget is
  * stated for a production build, so perf numbers from dev are indicative
  * only.
@@ -164,6 +165,9 @@ export async function target(options) {
   if (options.mode === "dev") {
     if (await answers(devUrl)) {
       log(`using the running dev server at ${devUrl}`)
+      // Warmed as one this call starts is: a server nobody has loaded a page
+      // from yet is as cold, and on a warm one this is quick.
+      await warm(devUrl)
       return { url: devUrl, mode: "dev", close: async () => {} }
     }
     log("starting the dev server (pnpm desktop:dev)…")

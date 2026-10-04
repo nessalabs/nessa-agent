@@ -46,7 +46,7 @@ verification/
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
         cli.mjs             options, stderr diagnostics, JSON result, exit status
-        server.mjs          reuse/start the dev server (warmed before the first page), or build + preview production
+        server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors
         workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         safe-area.mjs       the per-frame safe-area sampler
