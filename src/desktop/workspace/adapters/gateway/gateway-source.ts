@@ -25,10 +25,14 @@
  *   is not running — so this source keeps nothing per connection.
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
- *   it is, for `failureReason` to log.
+ *   it is, for `failureReason` to log. A connection that could not be made
+ *   is `signed-out` or `unavailable` by why (`connectFailure`, #419).
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed),
- *   and on the first list that answers after a poll failed.
+ *   and on the first list that answers after a poll or an index read failed.
+ * - **A failed connect is waited out.** For `timing.reconnectRounds` poll
+ *   rounds after it, neither the poller nor an MCP App connects again; a
+ *   person's call connects at once (S10–S16 on #419).
  * - **What the gateway does not keep**: pins and "always" answers are
  *   refused as `not-supported`, and so is a message asking a conversation
  *   for another model than the one the gateway says it runs (before a read
@@ -72,6 +76,7 @@ import {
   type ConversationSummary,
   type ConversationView,
 } from "@nessa/client"
+import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
@@ -111,11 +116,44 @@ export interface GatewayClock {
   after(ms: number, run: () => void): () => void
 }
 
+/**
+ * Who asks for the gateway's client, which decides whether it may connect
+ * when none is held (`client`): a person, the poller's list, an MCP App, or
+ * a read that uses only what is held — the poller's reads, and the read that
+ * follows an answer.
+ */
+type Caller = "person" | "poller" | "app" | "held"
+
+/**
+ * What each caller may do when no client is held and none is connecting:
+ * connect `always`, `unless-waiting` out a failed connect, or `never`; and
+ * whether its refusal while waiting counts the wait down a round. Total, so a
+ * caller added later does not compile until its rule is chosen (gate 11).
+ */
+const callerRules: Record<
+  Caller,
+  {
+    readonly connects: "always" | "unless-waiting" | "never"
+    readonly countsDown: boolean
+  }
+> = {
+  person: { connects: "always", countsDown: false },
+  poller: { connects: "unless-waiting", countsDown: true },
+  app: { connects: "unless-waiting", countsDown: false },
+  held: { connects: "never", countsDown: false },
+}
+
 export interface GatewayTiming {
   /** How long any call may take before it settles as `unavailable`. */
   readonly callMs: number
   /** How long the poller rests between rounds. */
   readonly pollMs: number
+  /**
+   * How many poll rounds pass after a failed connect before the poller, or
+   * an MCP App, connects again (S10, #419). Rounds, not a time: the clock
+   * cannot move them.
+   */
+  readonly reconnectRounds: number
 }
 
 /**
@@ -123,14 +161,20 @@ export interface GatewayTiming {
  * call of several requests (a send is `create` then `send`) shares it, and
  * one still waiting on the client when it runs out settles `unavailable`.
  */
-export const defaultGatewayTiming: GatewayTiming = { callMs: 35_000, pollMs: 1_000 }
+export const defaultGatewayTiming: GatewayTiming = {
+  callMs: 35_000,
+  pollMs: 1_000,
+  reconnectRounds: 5,
+}
 
 export interface GatewaySource<
   C extends GatewayClient = GatewayClient,
 > extends WorkspaceSource {
   /**
    * The client this source holds, or one connecting, within the call budget:
-   * rejects `unavailable` once disposed or when none connects in time.
+   * rejects `unavailable` once disposed, when none connects in time, or
+   * while the source waits out a failed connect (S14); and `signed-out` when
+   * the connect it made or joined is refused that way.
    */
   connected(): Promise<C>
   /**
@@ -220,7 +264,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
-  // Polls failed since the last resync: the next list that answers says resync.
+  // Polls or index reads failed since the last resync: the next list that
+  // answers says resync. An index read the window did not get is a gap too:
+  // a poll that answers after it, the gateway having come up between them,
+  // would otherwise leave the window on its failure (S9, #419).
   let gap = false
   const resync = () => {
     gap = false
@@ -263,6 +310,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
+  // After a connect that failed — refused, or out of time (S17) — nothing
+  // in the background connects again for `reconnectRounds` poll rounds (S10,
+  // S14): each connect asks the host for the gateway and its credential,
+  // and the gateway to authenticate, so a window that cannot connect must
+  // not ask every round. A person's call connects at once, and if it fails
+  // the wait starts again (S12); a connect that succeeds ends it. The next
+  // connect after the gateway comes back is so at most `reconnectRounds + 1`
+  // rounds away (S16). Who may connect, and the wait's counting, are
+  // `client`'s alone to decide.
+  let roundsToWait = 0
+  const connectFailed = () => {
+    roundsToWait = timing.reconnectRounds
+  }
   /** Takes a client that connected as the current one. */
   const adopt = (connected: C) => {
     const off = connected.onConnectionStateChange((state) => {
@@ -276,26 +336,50 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       }
     })
     current = { client: connected, off }
+    roundsToWait = 0
     // A connection after another is a reconnect: what it missed is read again.
     if (connectedBefore) resync()
     connectedBefore = true
   }
   /**
-   * The current client, or one connecting for every caller at once. An
-   * attempt has the call budget too: one that outlasts it is given up — the
-   * next call tries again — and a client it brings late is closed unused.
+   * The current client, or one connecting for every caller at once — and,
+   * when there is neither, whether to connect, by who is asking: the one
+   * place that is decided (#419).
+   *
+   * - `person`: a foreground call — the index (Try Again, or the store's
+   *   own re-read on a resync), opening a session, a message, an answer and
+   *   the read of its review, an archive — connects at once.
+   * - `poller`: the poller's list connects unless the source is waiting out
+   *   a failed connect; each list refused while it waits counts the wait
+   *   down a round (S10).
+   * - `app`: an MCP App connects unless the source is waiting, and its
+   *   refusals count nothing (S14).
+   * - `held`: the poller's reads, and the read that follows an answer, use
+   *   the client held and never connect in its place (S15, W3′).
+   *
+   * Any of them joins a connect already on its way (S6, S18). An attempt has
+   * the call budget too: one that outlasts it is given up — and counts as a
+   * failed connect (S17) — and a client it brings late is closed unused.
    */
-  const client = (): Promise<C> => {
+  const client = (who: Caller): Promise<C> => {
     if (disposed) return Promise.reject(new WorkspaceSourceError("unavailable"))
     if (current) return Promise.resolve(current.client)
     if (connecting) return connecting
+    const rule = callerRules[who]
+    if (rule.connects === "never")
+      return Promise.reject(new WorkspaceSourceError("unavailable"))
+    if (rule.connects === "unless-waiting" && roundsToWait > 0) {
+      if (rule.countsDown) roundsToWait -= 1
+      return Promise.reject(new WorkspaceSourceError("unavailable"))
+    }
     const attempt = new Promise<C>((resolve, reject) => {
       let over = false
-      const giveUp = () => {
+      const giveUp = (reason: WorkspaceFailureReason = "unavailable") => {
         over = true
-        reject(new WorkspaceSourceError("unavailable"))
+        connectFailed()
+        reject(new WorkspaceSourceError(reason))
       }
-      const cancel = clock.after(timing.callMs, giveUp)
+      const cancel = clock.after(timing.callMs, () => giveUp())
       options.connect().then(
         (connected) => {
           cancel()
@@ -311,9 +395,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         (error: unknown) => {
           cancel()
           if (over) return
+          // Disposed meanwhile: the source answers nothing but `unavailable`,
+          // and has nothing left to say about why (S13).
+          if (disposed) return giveUp()
           // Not reaching the gateway is an answer the window can show; why is logged.
           console.warn("Could not connect to the gateway", error)
-          giveUp()
+          giveUp(connectFailure(error))
         },
       )
     })
@@ -336,7 +423,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     live: () => boolean,
     request: (connected: C) => Promise<T>,
   ): Promise<T> => {
-    const connected = await client()
+    const connected = await client("person")
     if (!live()) throw new WorkspaceSourceError("unavailable")
     return request(connected)
   }
@@ -413,10 +500,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * while its list was on its way — asks nothing more, and applies nothing
    * (R10).
    */
-  const list = (caller: () => boolean = always): Promise<void> => {
+  const list = (who: Caller, caller: () => boolean = always): Promise<void> => {
     const { turn, settled } = inTurn(listing, async () => {
       if (!caller()) throw new WorkspaceSourceError("unavailable")
-      const result = await within(async () => (await client()).conversation.list())
+      const result = await within(async () => (await client(who)).conversation.list())
       if (!caller()) throw new WorkspaceSourceError("unavailable")
       applyList(result)
     })
@@ -484,6 +571,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    */
   const read = (
     sessionId: string,
+    who: Caller,
     caller: () => boolean = always,
   ): Promise<Transcript> => {
     const { turn, settled } = inTurn(
@@ -500,7 +588,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           let deleted = false
           try {
             view = await within(async () =>
-              (await client()).conversation.read(sessionId).catch((error: unknown) => {
+              (await client(who)).conversation.read(sessionId).catch((error: unknown) => {
                 deleted = deletedConversation(error)
                 throw error
               }),
@@ -554,14 +642,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const round = async () => {
     polling = true
     try {
-      await list()
+      // While the source waits out a failed connect, the list is refused
+      // without asking anything, and the round ends (S10, `client`).
+      await list("poller")
       if (gap) resync()
       for (const sessionId of [...watched]) {
         if (disposed || listeners.size === 0) break
         // One taken out since the round began is refused by `read` itself (R8, S9).
         if (!stale(sessionId)) continue
         try {
-          await read(sessionId)
+          // On the list's client only: a client closed meanwhile refuses the
+          // rest of the round, which the next round's list reads again (S15).
+          await read(sessionId, "held")
         } catch (error) {
           // A conversation the gateway no longer holds, or will not read for
           // this window, is not watched — Try Again watches it again; any
@@ -596,7 +688,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   ) => {
     const review = reviewOf(approvalId)
     if (!review) throw new WorkspaceSourceError("not-waiting")
-    await read(sessionId, live)
+    await read(sessionId, "person", live)
     const permission = reads
       .get(sessionId)
       ?.view.permissions.find(
@@ -624,10 +716,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       )
       // Taken: the call resolves now, and the conversation after the answer
       // follows as an update (`ports.ts`). Read once more for it, not awaited,
-      // so a slow read cannot report a taken answer failed; if it fails, the
-      // answer still stands, and the next list resyncs (W3b, W3c) — unless
-      // the session is gone, which is no gap (S5).
-      read(sessionId).catch((error: unknown) => {
+      // so a slow read cannot report a taken answer failed; if it fails — or
+      // the client has closed, which it does not connect again for (W3′) —
+      // the answer still stands, and the next list resyncs (W3b, W3c) —
+      // unless the session is gone, which is no gap (S5).
+      read(sessionId, "held").catch((error: unknown) => {
         if (!gone(error)) gap = true
       })
     })
@@ -635,7 +728,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   return {
     index: () =>
       within(async (live) => {
-        await list(live)
+        await list("person", live).catch((error: unknown) => {
+          gap = true
+          throw error
+        })
+        // The index is the resync: what any gap missed is read now (S20).
+        gap = false
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
           channels: [gatewayChannel],
@@ -650,7 +748,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // gone: one taken out is refused and not followed (R3, R8).
         if (!takenOut(sessionId)) watched.add(sessionId)
         try {
-          return await read(sessionId, live)
+          return await read(sessionId, "person", live)
         } catch (error) {
           if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
           throw error
@@ -739,7 +837,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       }),
     // The gateway keeps no unread mark: every summary is read already.
     markRead: () => within(() => Promise.resolve()),
-    connected: () => within(() => client()),
+    // An app calls on its own schedule, not a person's: in the background (S14).
+    connected: () => within(() => client("app")),
     appCall(conversationId, call) {
       appCalls.set(conversationId, (appCalls.get(conversationId) ?? 0) + 1)
       // However it settles — answered, refused, or not sent at all — it is no longer asked.
@@ -784,6 +883,17 @@ function deletedConversation(error: unknown): boolean {
         ? conversationErrorCode(error.code)
         : undefined
   return code === ConversationErrorCode.ConversationDeleted
+}
+
+/**
+ * Why no client connected, by the error's type: `signed-out` when the
+ * gateway refused the credential (`isSignedOut`, the session's rule), so the
+ * request was not sent; `unavailable` for everything else — no credential
+ * to present, no answer, a gateway that is not running, or a host refusal,
+ * which crosses IPC as a sentence that cannot be told apart by type.
+ */
+function connectFailure(error: unknown): WorkspaceFailureReason {
+  return isSignedOut(error) ? "signed-out" : "unavailable"
 }
 
 /** Whether a failure is a refusal that asking again changes nothing of (`reasonFor`). */

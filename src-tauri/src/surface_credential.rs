@@ -1,6 +1,7 @@
-//! Native storage for bundled chat and setup surfaces. Renderer input never selects a file.
+//! Native storage for the panel's surface credential, which the panel, setup and
+//! the desktop window read. Renderer input never selects a file.
 use crate::composition::HostDependencies;
-use crate::gateway::{application::Gateway, infrastructure::bundled_window};
+use crate::gateway::{application::Gateway, infrastructure::GatewayReader};
 use std::{io::Read, path::PathBuf, sync::Arc};
 use tauri::State;
 
@@ -197,10 +198,13 @@ impl SurfaceCredentials for SurfaceCredential {
 /// The order a credential load goes in, with its two outside things supplied.
 ///
 /// Split from [`load_surface_credential`] so the rules survive without a window
-/// server: only the bundled panel and setup may ask; a packaged build waits for the
-/// gateway to reconcile before handing anything over, and a build without one
+/// server: only the panel, setup and the desktop window may ask
+/// ([`GatewayReader`]); in a packaged build the panel and setup wait for the
+/// gateway to reconcile before anything is handed over, and the desktop window
+/// is served only once it has, without reconciling (`GatewayReader::ready`,
+/// held by the desktop-window tests below); a build without a gateway
 /// does not wait at all; and the refusal for the wrong window happens before
-/// either of those, so a stray webview cannot make the app register a service.
+/// any of those, so a stray webview cannot make the app register a service.
 async fn load_for(
     label: &str,
     gateway: Option<&Gateway>,
@@ -209,12 +213,9 @@ async fn load_for(
     stage: &str,
     url: &str,
 ) -> Result<String, String> {
-    let surface = bundled_window(label)?;
+    let reader = GatewayReader::of_window(label)?;
     if let Some(gateway) = gateway {
-        gateway
-            .wait_ready(surface)
-            .await
-            .map_err(|error| error.to_string())?;
+        reader.ready(gateway).await?;
     }
     let stage_for_endpoint = stage.to_owned();
     let requested_url = url.to_owned();
@@ -254,22 +255,24 @@ pub async fn load_surface_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_window::DESKTOP_WINDOW;
     use crate::gateway::application::{
-        testing::system_login_shell, GatewayError, GatewayHost, GatewayReconciliationAttempt,
-        GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-        GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-        ReconciliationHistoryFact,
+        testing::{reconciled_registration, recording_gateway, recording_gateway_held},
+        GatewayError,
     };
-    use crate::gateway::domain::value_objects::{
-        AuditDeliveryReceipt, BundledSurface, LifecycleObservation, ReconciliationInitiator,
-        ReconciliationTarget, SearchPath,
-    };
+    use crate::gateway::domain::value_objects::{BundledSurface, ReconciliationInitiator};
     use crate::panel;
     use nessa_gateway_endpoint::{
         application::EndpointDiscovery,
         domain::{EndpointIdentity, GatewayEndpoint},
     };
-    use std::{fs, io::Write, path::Path, sync::Arc, sync::Mutex};
+    use std::{
+        fs,
+        io::Write,
+        sync::{mpsc::channel, Arc, Mutex},
+        thread,
+        time::Duration,
+    };
 
     struct FixedEndpoint(Option<GatewayEndpoint>);
 
@@ -334,94 +337,6 @@ mod tests {
         }
     }
 
-    /// A background service host that registers, or refuses to, without launchd.
-    struct FakeHost {
-        registration: Result<ReconciledGateway, GatewayError>,
-        registrations: Mutex<u32>,
-        initiators: Mutex<Vec<ReconciliationInitiator>>,
-    }
-
-    impl GatewayHost for FakeHost {
-        fn register(
-            &self,
-            _: &Path,
-            _: &str,
-            _: Option<&SearchPath>,
-            attempt: &GatewayReconciliationAttempt,
-            progress: &dyn GatewayReconciliationProgress,
-        ) -> Result<ReconciledGateway, GatewayError> {
-            *self.registrations.lock().unwrap() += 1;
-            self.initiators
-                .lock()
-                .unwrap()
-                .push(attempt.origin().evidence().initiator());
-            let target = match &self.registration {
-                Ok(gateway) => gateway.audit_identity()?.target().clone(),
-                Err(_) => ReconciliationTarget::new(
-                    "com.nessa.gateway".into(),
-                    "a".repeat(64),
-                    "b".repeat(64),
-                )
-                .expect("target"),
-            };
-            let intent =
-                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent");
-            progress.intent_admitted(intent)?;
-            if self.registration.is_ok() {
-                for fact in [
-                    ReconciliationHistoryFact::ServiceDefinitionPublished,
-                    ReconciliationHistoryFact::ServiceDefinitionDurable,
-                    ReconciliationHistoryFact::BootstrapCommandRequested,
-                    ReconciliationHistoryFact::BootstrapCommandCompleted,
-                    ReconciliationHistoryFact::BootstrapCommandSucceeded,
-                ] {
-                    progress.history_observed(fact);
-                }
-            }
-            self.registration.clone()
-        }
-
-        fn stop_agents(
-            &self,
-            _: &GatewayStopSession,
-            _: &dyn GatewayReconciliationJournalSession,
-            _: &AuditDeliveryReceipt,
-        ) -> Result<LifecycleObservation, GatewayError> {
-            Err(GatewayError::Stop("unused test stop".into()))
-        }
-    }
-
-    fn gateway(registration: Result<ReconciledGateway, GatewayError>) -> (Gateway, Arc<FakeHost>) {
-        let host = Arc::new(FakeHost {
-            registration,
-            registrations: Mutex::new(0),
-            initiators: Mutex::new(Vec::new()),
-        });
-        (
-            Gateway::bootstrap(
-                host.clone(),
-                system_login_shell(),
-                crate::gateway::application::testing::discard_startup_events(),
-                crate::gateway::application::testing::sequential_reconciliation_ids(),
-                crate::gateway::application::testing::discard_reconciliation_audit(),
-                "/runtime".into(),
-                "ci".into(),
-            ),
-            host,
-        )
-    }
-
-    fn reconciled() -> ReconciledGateway {
-        ReconciledGateway::new(
-            "com.nessa.gateway".into(),
-            "a".repeat(64),
-            "550e8400-e29b-41d4-a716-446655440000".into(),
-            "b".repeat(64),
-            42,
-            7420,
-        )
-    }
-
     fn load(
         label: &str,
         gateway: Option<&Gateway>,
@@ -442,7 +357,7 @@ mod tests {
     #[test]
     fn the_bundled_panel_waits_for_the_gateway_and_gets_its_token() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = gateway(Ok(reconciled()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
 
         assert_eq!(
             load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap(),
@@ -455,7 +370,7 @@ mod tests {
     #[test]
     fn the_bundled_setup_waits_for_the_gateway_and_gets_its_token() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = gateway(Ok(reconciled()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
         assert_eq!(
             load(panel::SETUP_WINDOW, Some(&gateway), &credential).unwrap(),
             "fixture-only"
@@ -467,6 +382,119 @@ mod tests {
             vec![ReconciliationInitiator::BundledSurface(
                 BundledSurface::Setup
             )]
+        );
+    }
+
+    /// The desktop window reads a gateway that startup brought up, under the
+    /// panel's credential: once it is ready, the token is read and nothing is
+    /// registered or reconciled on the window's behalf (H1′, #419).
+    #[test]
+    fn the_desktop_window_reads_a_ready_gateway_without_reconciling() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
+        load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap();
+        let registered = *host.registrations.lock().unwrap();
+        let initiators = host.initiators.lock().unwrap().len();
+
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), registered);
+        assert_eq!(host.initiators.lock().unwrap().len(), initiators);
+        assert_eq!(credential.reads(), 2);
+    }
+
+    /// Before the gateway is ready — never started, or failed — the desktop
+    /// window is refused, and its asking starts nothing: no registration, no
+    /// reconciliation, no token read (H2′).
+    #[test]
+    fn the_desktop_window_is_refused_until_the_gateway_is_ready_and_starts_nothing() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
+        for _ in 0..3 {
+            assert_eq!(
+                load(DESKTOP_WINDOW, Some(&gateway), &credential).err(),
+                Some("The local server isn't ready yet".to_string())
+            );
+        }
+        assert_eq!(*host.registrations.lock().unwrap(), 0);
+        assert!(host.initiators.lock().unwrap().is_empty());
+        assert_eq!(credential.reads(), 0);
+
+        let (failed, host) =
+            recording_gateway(Err(GatewayError::Registration("not installed".into())));
+        let _ = load(panel::MAIN_WINDOW, Some(&failed), &credential);
+        let registered = *host.registrations.lock().unwrap();
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&failed), &credential).err(),
+            Some("The local server isn't ready yet".to_string())
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), registered);
+        assert_eq!(credential.reads(), 0);
+    }
+
+    /// The host's own launch startup is in flight: the desktop window is
+    /// refused, starts no second reconciliation and reads nothing; once that
+    /// startup is ready the window is served, the panel never having asked
+    /// (H2″, H9).
+    #[test]
+    fn the_desktop_window_waits_out_the_hosts_own_startup_without_joining_it() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host, entered, release) =
+            recording_gateway_held(Ok(reconciled_registration()));
+        // What the window was told while startup ran. The window's asks run on
+        // a thread of their own with a deadline, and the registration is
+        // released whatever they did, so a window that joined the
+        // reconciliation fails here rather than waiting on it forever.
+        let (while_starting, registered, read) = thread::scope(|scope| {
+            let starting = scope.spawn(|| tauri::async_runtime::block_on(gateway.start()));
+            entered.recv().unwrap();
+            let (told_tx, told_rx) = channel();
+            let (window_gateway, window_credential) = (&gateway, &credential);
+            let asking = scope.spawn(move || {
+                let told: Vec<_> = (0..3)
+                    .map(|_| load(DESKTOP_WINDOW, Some(window_gateway), window_credential))
+                    .collect();
+                told_tx.send(told).unwrap();
+            });
+            let told = told_rx.recv_timeout(Duration::from_secs(5));
+            let registered = *host.registrations.lock().unwrap();
+            let read = credential.reads();
+            release.send(()).unwrap();
+            asking.join().unwrap();
+            starting.join().unwrap().unwrap();
+            (told, registered, read)
+        });
+        let while_starting =
+            while_starting.expect("the window's asks waited on the host's startup");
+        for told in while_starting {
+            assert_eq!(
+                told.err(),
+                Some("The local server isn't ready yet".to_string())
+            );
+        }
+        assert_eq!(registered, 1);
+        assert_eq!(read, 0);
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(
+            *host.initiators.lock().unwrap(),
+            vec![ReconciliationInitiator::DesktopHost]
+        );
+    }
+
+    /// A build without a managed gateway does not wait for one, for the
+    /// desktop window either (H6).
+    #[test]
+    fn the_desktop_window_in_a_build_without_a_gateway_does_not_wait() {
+        let credential = FakeCredentials::holding("fixture-only");
+        assert_eq!(
+            load(DESKTOP_WINDOW, None, &credential).unwrap(),
+            "fixture-only"
         );
     }
 
@@ -506,11 +534,11 @@ mod tests {
     #[test]
     fn another_window_is_refused_before_the_gateway_is_asked_for_anything() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host) = gateway(Ok(reconciled()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
 
         assert_eq!(
             load("untrusted", Some(&gateway), &credential).err(),
-            Some("Only a bundled Nessa surface can access the gateway".to_string())
+            Some("Only Nessa's own windows can read the gateway".to_string())
         );
         assert_eq!(*host.registrations.lock().unwrap(), 0);
         assert_eq!(credential.reads(), 0);
@@ -522,7 +550,8 @@ mod tests {
     #[test]
     fn a_gateway_that_will_not_reconcile_stops_the_load() {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, _host) = gateway(Err(GatewayError::Registration("not installed".into())));
+        let (gateway, _host) =
+            recording_gateway(Err(GatewayError::Registration("not installed".into())));
 
         assert_eq!(
             load(panel::MAIN_WINDOW, Some(&gateway), &credential).err(),

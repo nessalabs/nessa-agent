@@ -28,16 +28,10 @@
  * leaves nothing waiting.
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync } from "node:fs"
-import { setTimeout as sleep } from "node:timers/promises"
+import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
-import {
-  SERVER,
-  agentCommand,
-  serverScript,
-  startLocalGateway,
-} from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
@@ -50,9 +44,9 @@ import {
   setupOutcome,
   stillPending,
 } from "./lib/gateway-view.mjs"
+import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { css, names } from "./lib/selectors.mjs"
-import { freePort, startDevServer } from "./lib/server.mjs"
 import { paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
 /** The server's app tool, and the tools its app calls (`server.mjs`, `APP_CALLS`). */
@@ -107,104 +101,34 @@ the gateway shows its review first.`,
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
 async function startStack(options) {
-  const agent = options.agent
-  if (!["claude", "codex"].includes(agent))
-    throw new CannotRun(`--agent ${agent}: claude or codex`)
-  const command = agentCommand(agent)
-  const timings = {}
-  let started = Date.now()
-  const gateway = await startLocalGateway({
-    agent,
-    port: await freePort(),
-    instance: "mcp-apps-gateway",
-    agentArgv: command.argv,
-    model: command.model,
-    path: command.path,
-    mcpServer: { command: process.execPath, args: [serverScript] },
-  }).catch((error) => {
-    // What it said as it failed, on stderr; the result keeps one line.
-    if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
-    throw new CannotRun(`the gateway did not start: ${error.message.split("\n")[0]}`)
-  })
-  timings.gatewayMs = Date.now() - started
-  let dev = null
-  let client = null
-  const close = async () => {
-    client?.close()
-    await dev?.close()
-    if (!(await gateway.stop()))
-      log(`the gateway (pid ${gateway.server.pid}) did not exit`)
-  }
+  const stack = await startGatewayStack(options, "mcp-apps-gateway")
   try {
-    started = Date.now()
-    dev = await startDevServer(options, {
-      NESSA_STAGE: "ci",
-      VITE_NESSA_STAGE: "ci",
-      NESSA_BROWSER_GATEWAY_URL: gateway.url,
-    })
-    timings.devServerMs = Date.now() - started
-    // `@nessa/client` is TypeScript in this checkout.
-    const { register } = await import("tsx/esm/api")
-    register()
-    const { NessaClient } = await import("@nessa/client")
-    client = await NessaClient.connect({
-      stage: "ci",
-      url: gateway.url.replace(/^http/, "ws"),
-      role: "surface",
-      surface: { kind: "panel", instance: "mcp-apps-gateway" },
-      client: { id: "mcp-apps-gateway", version: "0.1.0", platform: "node" },
-      profile: "product",
-      auth: { credential: readFileSync(gateway.token, "utf8").trim() },
-    })
-    started = Date.now()
+    const started = Date.now()
     const conversationId = randomUUID()
-    const turn = await agentTurn(client, conversationId, agent)
-    timings.agentTurnMs = Date.now() - started
-    const { conversations } = await client.conversation.list({})
+    const turn = await appToolTurn(stack.client, conversationId, options.agent)
+    stack.timings.agentTurnMs = Date.now() - started
+    const { conversations } = await stack.client.conversation.list({})
     const title = conversations.find(
       (each) => each.conversationId === conversationId,
     )?.title
     if (!title) throw new CannotRun("the conversation has no title to find it by")
     log(
-      `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${timings.agentTurnMs} ms`,
+      `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${stack.timings.agentTurnMs} ms`,
     )
-    return {
-      url: dev.url,
-      mode: "dev",
-      close,
-      client,
-      conversationId,
-      title,
-      timings,
-      token: () => readFileSync(gateway.token, "utf8").trim(),
-    }
+    return { ...stack, conversationId, title }
   } catch (error) {
-    await close()
+    await stack.close()
     throw error
   }
 }
 
 /**
  * Asks `agent` to call the app tool once, allows that call alone, and waits
- * for the turn to end. A gateway with no sign-in for the agent refuses the
- * conversation, and an agent that calls the app tool more than once leaves
- * the steps nothing unambiguous to read: both are "could not run".
+ * for the turn to end (`agentTurn`). A gateway with no sign-in for the agent
+ * refuses the conversation, and an agent that calls the app tool more than
+ * once leaves the steps nothing unambiguous to read: both are "could not run".
  */
-async function agentTurn(client, conversationId, agent) {
-  try {
-    await client.conversation.create({ conversationId, agent })
-    await client.conversation.send(
-      conversationId,
-      // Worded as live-check.mjs's prompt, which each agent follows.
-      `Use the tools of the "${SERVER}" MCP server. Call ${APP_TOOL} (no arguments) ` +
-        "exactly once, and wait for its result. Do not use any other tool. " +
-        "When it has returned, reply with DONE.",
-    )
-  } catch (error) {
-    throw new CannotRun(
-      `the gateway refused the ${agent} conversation (is ${agent} signed in on this machine?): ${error.message}`,
-    )
-  }
+async function appToolTurn(client, conversationId, agent) {
   const once = (calls) =>
     new CannotRun(
       `${agent} called ${APP_TOOL} more than once (${calls}); the check admits exactly one call`,
@@ -212,64 +136,59 @@ async function agentTurn(client, conversationId, agent) {
   // The one call of the app tool allowed, and the permissions answered for it.
   let admitted = null
   const answered = new Set()
-  for (let i = 0; i < 300; i += 1) {
-    await sleep(1000)
-    const view = await client.conversation.read(conversationId)
-    // Only the app tool is allowed, and only one call of it; anything else
-    // stays unanswered.
-    for (;;) {
-      const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)
-      if (extra) throw once(`${admitted}, ${extra}`)
-      if (!allow) break
-      admitted = allow.call
-      answered.add(permissionKey(allow.permission))
-      await client.conversation.answer(
-        conversationId,
-        allow.permission.executionId,
-        allow.permission.permissionId,
-        allow.option.id,
-      )
-    }
-    const last = view.messages.at(-1)
-    if (last && !["running", "queued"].includes(last.status)) {
-      const outcome = setupOutcome(view, SERVER, APP_TOOL)
-      if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
-      const tool = outcome.call
-      if (outcome.kind !== "ready")
-        throw new CannotRun(
-          `${agent}'s turn ended ${last.status}${last.error ? ` (${last.error.code ?? last.error})` : ""}; ` +
-            `${APP_TOOL}: ${tool ? `${tool.status}, resourceUri ${tool.mcp.resourceUri ?? "none"}` : "not called"}; ` +
-            `the view's tools: ${JSON.stringify(view.tools.map(({ title, status, mcp }) => ({ title, status, mcp })))}; ` +
-            `its reply: ${JSON.stringify(
-              last.parts
-                .filter((part) => part.kind === "text")
-                .map((part) => part.text)
-                .join("")
-                .slice(0, 400),
-            )}`,
-        )
-      return { view, tool }
-    }
-  }
-  throw new CannotRun(`${agent}'s turn did not end within 300 s`)
+  const { view, turn: last } = await agentTurn(
+    client,
+    conversationId,
+    // Worded as live-check.mjs's prompt, which each agent follows.
+    `Use the tools of the "${SERVER}" MCP server. Call ${APP_TOOL} (no arguments) ` +
+      "exactly once, and wait for its result. Do not use any other tool. " +
+      "When it has returned, reply with DONE.",
+    {
+      agent,
+      create: true,
+      seconds: 300,
+      // Only the app tool is allowed, and only one call of it; anything else
+      // stays unanswered.
+      onView: async (view) => {
+        for (;;) {
+          const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)
+          if (extra) throw once(`${admitted}, ${extra}`)
+          if (!allow) break
+          admitted = allow.call
+          answered.add(permissionKey(allow.permission))
+          await client.conversation.answer(
+            conversationId,
+            allow.permission.executionId,
+            allow.permission.permissionId,
+            allow.option.id,
+          )
+        }
+      },
+    },
+  )
+  const outcome = setupOutcome(view, SERVER, APP_TOOL)
+  if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
+  const tool = outcome.call
+  if (outcome.kind !== "ready")
+    throw new CannotRun(
+      `${agent}'s turn ended ${last.status}${last.error ? ` (${last.error.code ?? last.error})` : ""}; ` +
+        `${APP_TOOL}: ${tool ? `${tool.status}, resourceUri ${tool.mcp.resourceUri ?? "none"}` : "not called"}; ` +
+        `the view's tools: ${JSON.stringify(view.tools.map(({ title, status, mcp }) => ({ title, status, mcp })))}; ` +
+        `its reply: ${JSON.stringify(
+          last.parts
+            .filter((part) => part.kind === "text")
+            .map((part) => part.text)
+            .join("")
+            .slice(0, 400),
+        )}`,
+    )
+  return { view, tool }
 }
 
 /** The app's pending reviews in the conversation, as the gateway's view says. */
 async function appReviews(client, conversationId) {
   const view = await client.conversation.read(conversationId)
   return view.permissions.filter((each) => each.origin.kind === "app")
-}
-
-/** Waits up to `ms` for `check()` to be truthy, and says what it last was. */
-async function waitFor(check, ms) {
-  const end = Date.now() + ms
-  let value
-  do {
-    value = await check()
-    if (value) return value
-    await sleep(250)
-  } while (Date.now() < end)
-  return value
 }
 
 /** What an output of the review app says, once it says anything but `pending`. */

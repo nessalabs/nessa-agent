@@ -1,5 +1,5 @@
 import { isRetryableConnectionError, NessaConnectionClosedError } from "@nessa/client"
-import { SessionHealthError, type EstablishedDevSession } from "../client/dev-session"
+import { attemptFailure, type EstablishedDevSession } from "../client/dev-session"
 import type { createSessionHandle } from "../client/handle"
 
 /** Keeps the application connected after the client's finite retry window ends.
@@ -42,7 +42,7 @@ export function superviseSession({
     session.set(null)
     current?.close()
     current = undefined
-    const cause = error instanceof SessionHealthError ? error.cause : error
+    const cause = attemptFailure(error)
     if (isRetryableConnectionError(cause)) {
       pending()
       const delay = Math.max(

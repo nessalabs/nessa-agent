@@ -1,6 +1,6 @@
 use crate::{
     composition::HostDependencies,
-    gateway::{application::Gateway, infrastructure::bundled_window},
+    gateway::{application::Gateway, infrastructure::GatewayReader},
     gateway_endpoint::application::GatewayEndpointAccess,
 };
 use std::sync::Arc;
@@ -12,12 +12,9 @@ async fn load_for(
     endpoint: Arc<GatewayEndpointAccess>,
     stage: &str,
 ) -> Result<Option<String>, String> {
-    let surface = bundled_window(label)?;
+    let reader = GatewayReader::of_window(label)?;
     if let Some(gateway) = gateway {
-        gateway
-            .wait_ready(surface)
-            .await
-            .map_err(|error| error.to_string())?;
+        reader.ready(gateway).await?;
     }
     let stage = stage.to_owned();
     tauri::async_runtime::spawn_blocking(move || endpoint.resolve(&stage))
@@ -39,6 +36,8 @@ pub async fn load_gateway_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_window::DESKTOP_WINDOW;
+    use crate::gateway::application::testing::{reconciled_registration, recording_gateway};
     use crate::panel;
     use nessa_gateway_endpoint::application::EndpointDiscovery;
     use nessa_gateway_endpoint::domain::{EndpointIdentity, GatewayEndpoint};
@@ -85,5 +84,46 @@ mod tests {
             );
             assert_eq!(discovery.calls.load(Ordering::SeqCst), 1);
         }
+    }
+
+    /// The desktop window finds a gateway startup brought up, once it is
+    /// ready, and its asking starts nothing (H4′, #419).
+    #[test]
+    fn the_desktop_window_discovers_a_ready_gateway_and_starts_none() {
+        let discovery = Arc::new(Discovery {
+            calls: AtomicUsize::new(0),
+        });
+        let endpoint = Arc::new(GatewayEndpointAccess::new("ci".into(), discovery.clone()));
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
+
+        let refused = tauri::async_runtime::block_on(load_for(
+            DESKTOP_WINDOW,
+            Some(&gateway),
+            endpoint.clone(),
+            "ci",
+        ));
+        assert_eq!(refused, Err("The local server isn't ready yet".to_string()));
+        assert_eq!(discovery.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(*host.registrations.lock().unwrap(), 0);
+
+        tauri::async_runtime::block_on(load_for(
+            panel::MAIN_WINDOW,
+            Some(&gateway),
+            endpoint.clone(),
+            "ci",
+        ))
+        .unwrap();
+        let registered = *host.registrations.lock().unwrap();
+        assert_eq!(
+            tauri::async_runtime::block_on(load_for(
+                DESKTOP_WINDOW,
+                Some(&gateway),
+                endpoint,
+                "ci"
+            ))
+            .unwrap(),
+            Some("ws://127.0.0.1:9137".into())
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), registered);
     }
 }
