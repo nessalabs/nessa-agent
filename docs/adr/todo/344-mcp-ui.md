@@ -190,16 +190,23 @@ app widgets alike.
 - The gateway gains the connection to each server for each harness session —
   the harness's MCP traffic now passes through it — and two app methods, with
   policy and audit; what that connection means is designed in
-  [mcp-connections](../../design/mcp-connections.md) (#346): a harness's
-  context fingerprint covers its stand-in, whose arguments carry a digest of
-  the configured server, so it still changes exactly when the server does; a
-  gateway restart ends every session, so a restored conversation's handles
-  are gone and the server says so; a server that exits ends its stand-in, as
-  when the harness owned it; and which conversation a stand-in belongs to is
-  carried to the gateway by a token issued for each open, in the stand-in's
-  environment (#348), before any app method exists. The SDK and
-  protocol carry tool identity and `_meta`, which also helps any tool view in
-  the transcript.
+  [mcp-connections](../../design/mcp-connections.md) (#346): a stand-in's
+  arguments carry a digest of the configured server, which the relay compares;
+  a gateway restart ends every session, so a restored
+  conversation's handles are gone and the server says so; a server that exits
+  ends its stand-in, as when the harness owned it; and which conversation a
+  stand-in belongs to is carried to the gateway by a token issued for each
+  open, in the stand-in's environment (#348), before any app method exists.
+  The SDK and protocol carry tool identity and `_meta`, which also helps any
+  tool view in the transcript.
+- **Amended (#391): the MCP server list is not part of a conversation's
+  restoration identity.** It is attached to each open, like the stand-in
+  token, and selects no provider context, so the SDK's fingerprint no longer
+  hashes it. This replaces "the fingerprint still changes exactly when the
+  server does", which the record first chose. The consequences — the one-time
+  strand of conversations saved before the release, what still strands one,
+  and what `configuration-changed` is for — are in
+  [MCP servers and the restoration identity](../../design/mcp-connections.md#mcp-servers-and-the-restoration-identity).
 - A view like experiments becomes a package with its own release, testable in a
   fake host, and portable.
 - An extension cannot reach into the core: whatever it needs from the

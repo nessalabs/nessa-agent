@@ -710,7 +710,8 @@ deadline clock, and how one request ends), and an app's calls are
 entry; its worker attaches the grant's forwarded results to the completed
 calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
-transcript's `widget` part.
+transcript's `widget` part. The MCP server list is not part of the
+restoration fingerprint (`acp/sessions/identity.rs`, ADR 344).
 
 `scripts/mcp-test-server/` is developer tooling, not a Nessa tool: a
 dependency-free stdio MCP server whose tools return structured results, resource

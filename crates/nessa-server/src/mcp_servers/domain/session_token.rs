@@ -4,8 +4,9 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 /// The environment variable a stand-in finds its session's token in. It is
-/// set only in the stand-in's own environment, never in its arguments, so it
-/// stays out of a harness's context fingerprint.
+/// set only in the stand-in's own environment, never in its arguments, which
+/// any process list shows (`docs/design/mcp-connections.md`, "MCP servers and
+/// the restoration identity").
 pub const SESSION_VARIABLE: &str = "NESSA_MCP_SESSION";
 
 /// A token as said: 32 random bytes, lowercase hex.

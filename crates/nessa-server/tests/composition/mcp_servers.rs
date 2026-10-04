@@ -53,8 +53,11 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
             ]
         );
     }
-    // The same configuration is the same stand-in, run after run; another is
-    // another, so a harness's context fingerprint sees the change.
+    // The same configuration is the same stand-in; another is another. The
+    // relay compares the digest, so a stand-in whose server's configuration
+    // changed is refused `configuration-changed` — a guard for settings that
+    // apply live (#480; `docs/design/mcp-connections.md`, "MCP servers and the
+    // restoration identity").
     assert_eq!(stand_ins(&configured, gateway, socket).unwrap(), handed);
     let changed = vec![server("mcptest", &["/other.mjs"]), configured[1].clone()];
     assert_ne!(

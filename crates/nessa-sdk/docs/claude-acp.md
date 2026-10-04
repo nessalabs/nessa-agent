@@ -343,10 +343,11 @@ child after clearing inherited variables, and their keys must be disjoint. The
 adapter does not discover or extract credentials. Never place credentials in
 arguments or the context environment.
 
-Restoration identity is a SHA-256 fingerprint of the executable, ordered arguments,
-context environment, workspace, tool policy, model limits, and composed system
-prompt; model identity is recorded separately. Credential values are excluded and
-never stored in session snapshots. Credential rotation assumes the same intended
+Restoration identity is a SHA-256 fingerprint of the context-selecting launch
+inputs, listed on `fingerprint` in
+[`acp/sessions/identity.rs`](../src/infrastructure/acp/sessions/identity.rs);
+model identity is recorded separately. Credential values are never stored in
+session snapshots. Credential rotation assumes the same intended
 provider account and context. Hosts switching accounts must keep the account or
 profile namespace in noncredential context configuration; excluding secrets does
 not verify account identity. Context changes reject old snapshots before launching

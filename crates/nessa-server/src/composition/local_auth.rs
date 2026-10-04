@@ -609,12 +609,9 @@ async fn conversations(
     );
     for agent in built.providers.values_mut() {
         // The provider's own credential-free identity, rather than a
-        // hand-picked list of fields: it already covers the executable, its
-        // arguments, the environment, the workspace, and every MCP server
-        // binary the child will start, and it is computed from raw OS bytes
-        // rather than a lossy path conversion. Anything that changes which
-        // files are executed changes it, which is what a first-execution
-        // scan is paid for.
+        // hand-picked list of fields, computed from raw OS bytes rather than
+        // a lossy path conversion; what it makes a warm-up cover is stated on
+        // `RuntimeFingerprint`.
         let identity = agent.provider.identity();
         let runtime =
             RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())

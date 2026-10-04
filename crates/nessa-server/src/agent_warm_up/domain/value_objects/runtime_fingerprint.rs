@@ -4,16 +4,32 @@ use std::fmt;
 ///
 /// Two launches share a fingerprint when they would run the same provider, the
 /// same model, and the same configuration. The configuration part is the
-/// provider's own credential-free identity — for the ACP provider that covers
-/// the executable, its arguments, the environment it is given, the workspace,
-/// whether tools are enabled, every MCP server binary it will start, the token
-/// limits, the permission policy and the system prompt — so anything that
-/// changes which files are executed changes this value.
+/// provider's own credential-free identity; for the ACP providers that is the
+/// SDK's restoration fingerprint, whose inputs are listed on `fingerprint` in
+/// the SDK's `acp/sessions/identity.rs`. This is the one statement of what a
+/// warm-up covers; the gateway's composition links here.
 ///
-/// That matters because a first-execution scan is paid per file. An install or
-/// an update stages the runtime under a new directory and replaces the MCP
-/// binaries beside it, and every one of those is inside the provider's
-/// configuration identity.
+/// A warm-up exists for the agent runtime's first-execution scan, which is
+/// paid per file. An install, or an update that changes the staged runtime
+/// tree, stages the runtime under a new directory named by that tree's content
+/// fingerprint, and the agent runtime's executable and entry are launched from
+/// it, so their paths, and with them this value, change with every such
+/// update, which in practice is every release.
+///
+/// Because the configuration part is the SDK's restoration fingerprint, the
+/// release that dropped the MCP servers from that fingerprint (#391) re-runs
+/// the warm-up once; that is one background launch, and harmless. What else
+/// that release changed is in `docs/design/mcp-connections.md`, "MCP servers
+/// and the restoration identity".
+///
+/// A warm-up opens a real session, so it may also launch the MCP servers
+/// configured at that time. The server list is not among the inputs, though,
+/// so changing it does not re-warm: a server added later pays its first
+/// launch, and any first-run scan it needs, when a conversation first uses
+/// it. The bundled `nessa` server is covered only because it sits in the same
+/// versioned directory as the agent runtime, whose paths are hashed: an update
+/// that moves that directory moves the runtime, and the re-warm that follows
+/// may launch the new `nessa` with it.
 ///
 /// The model is part of it too, although changing a model scans nothing: a
 /// warm-up also proves the configuration establishes a session, and that is
