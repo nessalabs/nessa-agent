@@ -28,8 +28,8 @@ use super::super::session_key::conversation_session;
 use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::super::SubmittedMessage;
 use super::{
-    ConversationCaller, ConversationError, ConversationService, LiveConversation, SubmissionMode,
-    SubmitFailure, Writer,
+    ConversationCaller, ConversationError, ConversationService, LiveConversation, Reach,
+    SubmissionMode, SubmitFailure, Writer,
 };
 use crate::conversation::application::error_code;
 use crate::conversation::domain::ConversationId;
@@ -37,7 +37,6 @@ use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
 };
-use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -681,61 +680,57 @@ impl ConversationService {
             execution_id: execution_id.clone(),
             code: error_code(error),
         };
-        match submitted {
+        let failure = match submitted {
             Ok(_) => {
                 step.record(sent(None), None).await?;
-                Ok(execution_id)
+                return Ok(execution_id);
             }
-            Err(SubmitFailure::NotAsked(ConversationError::TurnRunning)) => Err(step
-                .refuse_as(McpAppCode::TurnRunning, ConversationError::TurnRunning)
-                .await),
-            // Released, ended, deleted, reopened, or the gateway stopping or
-            // retiring, before the agent was asked to take it: by that other
-            // command, so the system's; nothing was sent (row M10).
-            Err(SubmitFailure::NotAsked(
-                ConversationError::McpApp(McpAppError::Cancelled)
-                | ConversationError::Deleted
-                | ConversationError::Unavailable,
-            )) => Err(step.refuse_by_system(McpAppError::Cancelled).await),
-            // Refused, or failed, before the agent was asked: nothing reached
-            // it, and the answer says why (row M13).
-            Err(SubmitFailure::NotAsked(error)) => {
-                Err(step.ended(not_sent(&error), None, error).await)
+            Err(failure) => failure,
+        };
+        match failure {
+            SubmitFailure::NotAsked(ConversationError::TurnRunning) => {
+                return Err(step
+                    .refuse_as(McpAppCode::TurnRunning, ConversationError::TurnRunning)
+                    .await)
             }
-            Err(SubmitFailure::TaskFailed { asked: false }) => {
-                let error = ConversationError::Unavailable;
-                Err(step.ended(not_sent(&error), None, error).await)
-            }
+            // Released, ended, deleted, reopened, or the gateway retiring,
+            // before the agent was asked to take it: by that other command,
+            // so the system's; nothing was sent (row M10). An opening that
+            // failed is not one of these: it is the conversation's refusal
+            // (M13), whatever it answers.
+            SubmitFailure::Retired
+            | SubmitFailure::NotAsked(
+                ConversationError::McpApp(McpAppError::Cancelled) | ConversationError::Deleted,
+            ) => return Err(step.refuse_by_system(McpAppError::Cancelled).await),
+            _ => {}
+        }
+        // A task that failed is nobody's command: the system's.
+        let by =
+            matches!(failure, SubmitFailure::TaskFailed { .. }).then_some(McpAppInitiator::System);
+        let reach = failure.reach();
+        let error = failure.into_error();
+        match reach {
+            // Refused, or failed, before the agent was asked, or refused by
+            // it: nothing reached it, and the answer says why (row M13).
+            Reach::NotTaken => Err(step.ended(not_sent(&error), by, error).await),
             // Whether the agent has it is not known: it could not say, or the
             // submission's own task failed once it was asked. Said so, not
             // guessed (row M15).
-            Err(SubmitFailure::Asked(
-                error @ ConversationError::Agent(AgentError::SubmissionUnresolved),
-            )) => Err(step.ended(unresolved(&error), None, error).await),
-            Err(SubmitFailure::TaskFailed { asked: true }) => {
-                let error = ConversationError::Unavailable;
-                Err(step.ended(unresolved(&error), None, error).await)
-            }
+            Reach::Unknown => Err(step.ended(unresolved(&error), by, error).await),
             // The agent has it; what failed is its evidence, which the record
             // and the answer say — unless its own record cannot be written
             // either, when the answer is that, and the evidence's failure is
             // kept in the log rather than lost (row M14).
-            Err(SubmitFailure::Asked(error @ ConversationError::AdmissionEvidence { .. })) => {
-                match step.record(sent(Some(error_code(&error))), None).await {
-                    Ok(()) => Err(error),
-                    Err(audit) => {
-                        tracing::error!(
-                            ?error,
-                            "an app's message was taken without its evidence, and its own record could not be written"
-                        );
-                        Err(audit)
-                    }
+            Reach::Taken => match step.record(sent(Some(error_code(&error))), by).await {
+                Ok(()) => Err(error),
+                Err(audit) => {
+                    tracing::error!(
+                        ?error,
+                        "an app's message was taken without its evidence, and its own record could not be written"
+                    );
+                    Err(audit)
                 }
-            }
-            // The agent refused it (row M13).
-            Err(SubmitFailure::Asked(error)) => {
-                Err(step.ended(not_sent(&error), None, error).await)
-            }
+            },
         }
     }
 

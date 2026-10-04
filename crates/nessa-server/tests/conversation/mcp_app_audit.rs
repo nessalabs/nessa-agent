@@ -334,6 +334,7 @@ async fn each_context_drop_keeps_its_cause_and_each_message_outcome_its_code() {
         (ContextDrop::Released, "released"),
         (ContextDrop::ConversationEnded, "conversation_ended"),
         (ContextDrop::NotHeld, "not_held"),
+        (ContextDrop::NotSent, "not_sent"),
     ] {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("mcp-apps");

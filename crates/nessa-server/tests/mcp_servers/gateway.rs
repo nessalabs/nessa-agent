@@ -507,6 +507,36 @@ mod mcp_app_lane {
             )]
         );
 
+        // A part at the schema's bound exactly, counted in bytes — two to a
+        // character here — is applied; one byte past it is refused at the
+        // wire, with nothing recorded.
+        let at_bound = |request: &str, text: String| {
+            let mut part = context(request);
+            part["text"] = json!(text);
+            part.as_object_mut().unwrap().remove("structuredContentJson");
+            part
+        };
+        let records = fixture.audit.phases().len();
+        let over = format!("{}x", "é".repeat(MAX_MCP_CONTEXT_BYTES / 2));
+        assert_eq!(over.len(), MAX_MCP_CONTEXT_BYTES + 1);
+        send_command(&peer, "over", "mcp.updateModelContext", at_bound("over", over));
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "over");
+        assert_eq!(refused["error"]["code"], "invalid_request");
+        assert_eq!(fixture.audit.phases().len(), records);
+        let exact = "é".repeat(MAX_MCP_CONTEXT_BYTES / 2);
+        assert_eq!(exact.len(), MAX_MCP_CONTEXT_BYTES);
+        send_command(&peer, "exact", "mcp.updateModelContext", at_bound("exact", exact));
+        let applied = response(&mut peer).await;
+        assert_eq!(applied["id"], "exact", "{applied}");
+        assert_eq!(applied["payload"], json!({"requestId": "exact", "applied": true}));
+        assert_eq!(
+            fixture.audit.phases()[records..],
+            [crate::conversation::application::McpAppAuditPhase::ContextHeld {
+                bytes: MAX_MCP_CONTEXT_BYTES
+            }]
+        );
+
         // The context now has room, and is applied.
         send_command(&peer, "ctx2", "mcp.updateModelContext", context("ctx2"));
         let applied = response(&mut peer).await;

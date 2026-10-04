@@ -45,11 +45,12 @@ use uuid::Uuid;
 pub(crate) const SERVER: &str = "charts";
 
 /// Session storage that saves nothing while `refusing` is set, as a disk that
-/// went away would, panics on a save while `panicking` is, and behaves
-/// otherwise.
+/// went away would, panics on a save while `panicking` is, panics on an
+/// opening while `opening_panics` is, and behaves otherwise.
 struct Refusing {
     refusing: Arc<AtomicBool>,
     panicking: Arc<AtomicBool>,
+    opening_panics: Arc<AtomicBool>,
     inner: Arc<InMemoryStorage>,
 }
 impl SessionStorage for Refusing {
@@ -57,6 +58,10 @@ impl SessionStorage for Refusing {
         self.inner.read_committed(id)
     }
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        assert!(
+            !self.opening_panics.load(Ordering::SeqCst),
+            "the session's storage fell over opening"
+        );
         let refusing = self.refusing.clone();
         let panicking = self.panicking.clone();
         let inner = self.inner.clone();
@@ -359,6 +364,9 @@ pub(crate) struct Fixture {
     /// own admission task fails, and it cannot say what became of the
     /// message (`submission_unresolved`).
     pub(crate) storage_panics: Arc<AtomicBool>,
+    /// While set, opening the agent's session storage panics: an opening of
+    /// the conversation fails, and holds what it may have launched.
+    pub(crate) storage_open_panics: Arc<AtomicBool>,
     /// The conversations' list entries.
     pub(crate) summaries: Arc<MemorySummaries>,
     /// The tool call whose UI the app is.
@@ -381,6 +389,7 @@ impl Fixture {
         let provider = Arc::new(ProviderFactory::default());
         let storage_refuses = Arc::new(AtomicBool::new(false));
         let storage_panics = Arc::new(AtomicBool::new(false));
+        let storage_open_panics = Arc::new(AtomicBool::new(false));
         let summaries = Arc::new(MemorySummaries::default());
         provider
             .execution_updates
@@ -421,6 +430,7 @@ impl Fixture {
                 storage: Arc::new(Refusing {
                     refusing: storage_refuses.clone(),
                     panicking: storage_panics.clone(),
+                    opening_panics: storage_open_panics.clone(),
                     inner: Arc::new(InMemoryStorage::new()),
                 }),
                 metadata: repository.clone(),
@@ -507,6 +517,7 @@ impl Fixture {
             execution_audit,
             storage_refuses,
             storage_panics,
+            storage_open_panics,
             summaries,
         }
     }

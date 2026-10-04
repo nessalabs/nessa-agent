@@ -214,6 +214,10 @@ pub enum ContextDrop {
     /// Its mount was released, or its opening ended, after the update was
     /// recorded and before it was held: it never was.
     NotHeld,
+    /// A message admitted while the conversation was idle took it, and was
+    /// then refused, or failed before the agent was asked: it went nowhere.
+    /// The app may give it again.
+    NotSent,
 }
 
 /// One step of an app call's life. Each is recorded before the step's

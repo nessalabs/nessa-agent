@@ -699,18 +699,45 @@ async fn c8_one_context_update_of_a_conversation_runs_at_a_time_across_mounts_an
 }
 
 #[test]
-fn c9_let_go_drops_exactly_the_updates_carried_and_a_newer_one_stays() {
+fn c9_a_take_empties_the_mounts_frees_their_room_and_leaves_a_release_or_an_end_nothing() {
     let reviews = reviews();
-    give(&reviews, "i1", Some(context("u1", "one")));
-    give(&reviews, "i2", Some(context("u2", "two")));
-    let read = reviews.held();
-    // Replaced after the message read it, before it was admitted.
-    give(&reviews, "i1", Some(context("u3", "newer")));
-    reviews.let_go(&read);
+    for n in 0..MAX_HELD_CONTEXTS {
+        give(
+            &reviews,
+            &format!("i{n}"),
+            Some(context(&format!("u{n}"), &format!("c{n}"))),
+        );
+    }
+    assert_eq!(
+        reviews.room(EPOCH, &app("other"), true),
+        Err(ContextRefusal::Full)
+    );
+    // Every one, in the order given, with the update that gave it.
+    let taken = reviews.take_held();
+    assert_eq!(
+        taken
+            .contexts
+            .iter()
+            .map(|context| context.text().unwrap())
+            .collect::<Vec<_>>(),
+        ["c0", "c1", "c2", "c3"]
+    );
+    assert_eq!(calls(taken.updates), ["u0", "u1", "u2", "u3"]);
+    // Gone from the mounts at once: their room is free, and a release or an
+    // end has nothing of them to drop.
+    assert!(held(&reviews).is_empty());
+    assert_eq!(reviews.room(EPOCH, &app("other"), true), Ok(()));
+    assert!(reviews
+        .release_app(&app("i0"), &releaser(), || {})
+        .is_empty());
+    // A mount's newer update is held anew; a second take takes only it.
+    give(&reviews, "i1", Some(context("u5", "newer")));
     assert_eq!(held(&reviews), ["newer"]);
-    // Letting go of what is no longer held changes nothing.
-    reviews.let_go(&read);
-    assert_eq!(held(&reviews), ["newer"]);
+    assert_eq!(calls(reviews.take_held().updates), ["u5"]);
+    assert!(reviews.take_held().contexts.is_empty());
+    give(&reviews, "i2", Some(context("u6", "held")));
+    let _taken = reviews.take_held();
+    assert!(reviews.end(EPOCH, &releaser(), || {}).is_empty());
 }
 
 #[test]

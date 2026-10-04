@@ -331,6 +331,7 @@ fn context_drop(cause: ContextDrop) -> &'static str {
         ContextDrop::Released => "released",
         ContextDrop::ConversationEnded => "conversation_ended",
         ContextDrop::NotHeld => "not_held",
+        ContextDrop::NotSent => "not_sent",
     }
 }
 

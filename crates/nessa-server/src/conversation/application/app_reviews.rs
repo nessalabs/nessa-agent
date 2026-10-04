@@ -11,11 +11,12 @@
 //! expired, or withdrawn.
 //!
 //! Under the same lock (#390): the context each mount last gave the model,
-//! held until a message admitted while the conversation is idle carries it.
-//! A release, an opening's end, a new opening and a delete drop them unsent,
-//! and answer the record of each update dropped, for the caller to record the
-//! drop against; the conversation's one update lock orders the updates
-//! themselves. And the app messages in flight, by the turn each becomes, so
+//! held until a message admitted while the conversation is idle takes it.
+//! Taken, it leaves the mount at once, and belongs to that message. A
+//! release, an opening's end, a new opening and a delete drop only what is
+//! still held, unsent, and answer the record of each update dropped, for the
+//! caller to record the drop against; the conversation's one update lock
+//! orders the updates themselves. And the app messages in flight, by the turn each becomes, so
 //! one request is asked about once at a time (`docs/design/mcp-app-calls.md`,
 //! "An app in its conversation: the gateway").
 use super::mcp_apps::{McpAppAuditRecord, McpAppInitiator, McpAppRef, McpAppWithdrawal};
@@ -328,6 +329,7 @@ impl AppReviews {
     }
 
     /// The contexts held now, in the order they were given.
+    #[cfg(test)]
     pub fn held(&self) -> Vec<AppModelContext> {
         self.state
             .lock()
@@ -338,19 +340,18 @@ impl AppReviews {
             .collect()
     }
 
-    /// A turn carrying `carried` was admitted: let go of exactly those, by
-    /// their update's identity. A newer update a mount gave since they were
-    /// read is another identity, and stays held.
-    pub fn let_go(&self, carried: &[AppModelContext]) {
-        self.state
-            .lock()
-            .expect("app reviews")
-            .contexts
-            .retain(|held| {
-                !carried
-                    .iter()
-                    .any(|context| context.update_id() == held.context.update_id())
-            });
+    /// Take every context held, in the order they were given, for a message
+    /// admitted while the conversation is idle: they leave their mounts now,
+    /// and free their room. Nothing is ever put back. A release or an end
+    /// from now on finds them gone, and a mount's newer update is held anew.
+    #[must_use]
+    pub fn take_held(&self) -> Taken {
+        let taken = std::mem::take(&mut self.state.lock().expect("app reviews").contexts);
+        let (contexts, updates) = taken
+            .into_iter()
+            .map(|held| (held.context, held.update))
+            .unzip();
+        Taken { contexts, updates }
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -556,6 +557,15 @@ impl AppReviews {
         withdraw_ended(ended, by);
         dropped
     }
+}
+
+/// The contexts a message took ([`AppReviews::take_held`]), and the records
+/// of the updates that gave them: what a drop of them, should the message go
+/// nowhere, is recorded against.
+#[derive(Debug, Default)]
+pub struct Taken {
+    pub contexts: Vec<AppModelContext>,
+    pub updates: Vec<McpAppAuditRecord>,
 }
 
 /// An update on record whose context was not held: its mount was released,
