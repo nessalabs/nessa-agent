@@ -1,3 +1,6 @@
+//! The client socket under the native TLS connection: every physical read and
+//! write asks the one absolute deadline and the cancellation first, and the
+//! first refusal is kept as the connection's typed cause.
 use crate::app::ports::Clock;
 use crate::read_only_sync::application::{Cancellation, GatewayError, GatewayStream};
 use std::cell::Cell;
@@ -11,7 +14,6 @@ pub(super) struct DeadlineStream {
     clock: Arc<dyn Clock>,
     cancellation: Arc<dyn Cancellation>,
     deadline: u64,
-    upgrade_remaining: Option<usize>,
     failure: Rc<Cell<Option<GatewayError>>>,
 }
 impl DeadlineStream {
@@ -20,14 +22,12 @@ impl DeadlineStream {
         clock: Arc<dyn Clock>,
         cancellation: Arc<dyn Cancellation>,
         deadline: u64,
-        upgrade_bytes: usize,
     ) -> Self {
         Self {
             stream,
             clock,
             cancellation,
             deadline,
-            upgrade_remaining: Some(upgrade_bytes),
             failure: Rc::new(Cell::new(None)),
         }
     }
@@ -44,9 +44,6 @@ impl DeadlineStream {
     }
     pub(super) fn begin_operation(&mut self, deadline: u64) {
         self.deadline = deadline;
-    }
-    pub(super) fn finish_upgrade(&mut self) {
-        self.upgrade_remaining = None;
     }
     pub(super) fn take_failure(&mut self) -> Option<GatewayError> {
         self.failure.take()
@@ -75,18 +72,10 @@ impl Read for DeadlineStream {
             return Ok(0);
         }
         let timeout = self.remaining().map_err(|error| self.refused(error))?;
-        let count = match self.upgrade_remaining {
-            Some(0) => return Err(self.refused(GatewayError::UpgradeTooLarge)),
-            Some(remaining) => bytes.len().min(remaining),
-            None => bytes.len(),
-        };
         let result = self.stream.read_timeout(timeout);
         self.physical(result)?;
-        let result = self.stream.read(&mut bytes[..count]);
+        let result = self.stream.read(bytes);
         let read = self.physical(result)?;
-        if let Some(remaining) = self.upgrade_remaining.as_mut() {
-            *remaining -= read;
-        }
         self.remaining().map_err(|error| self.refused(error))?;
         Ok(read)
     }

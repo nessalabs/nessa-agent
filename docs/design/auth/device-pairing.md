@@ -2019,6 +2019,113 @@ physical exclusion, not an enrollment state.
 | D6 | Shutdown reconciliation cannot complete | `NativeShutdownFailure::Cleanup`; the record keeps `cleanupPending` and its first cause. A faulted listener (drain unknown) returns its `ListenerFault` without reconciling | `shutdown_settles_ended_enrollments_after_the_drains`; `faulted_listener_join_reports_the_fault_without_reconciling` |
 | E1 | Composed `nessa server`: owner creates, device enrolls, owner approves, device status, revoke | Device status Active with credential, receiver and epoch; client holds the credential; the gateway's registry authenticates the device key as that credential scoped to `conversation.read` and its receiver is active; after `credential.revoke` the device reads Terminal, authentication refuses and the receiver is fenced | `mounted_gateway_issues_a_device_credential_and_revokes_it` |
 
-Not in this slice: protected product reads over the native channel with this
-credential and two-device convergence (slice 3); section 9's general product
-request drain; periodic maintenance (M1–M12).
+Not in this slice: section 9's general product request drain; periodic
+maintenance (M1–M12). Protected reads with this credential and two-device
+convergence are [slice 3](#protected-reads-over-the-native-channel-slice-3).
+
+## Protected reads over the native channel (slice 3)
+
+### What this slice is
+
+A paired device reads its conversations over the same native TLS listener it
+enrolled on, authenticated by the key the gateway pinned at enrollment and the
+credential identifier slice 2b delivered. No bearer secret is involved. The
+read-only example client (`examples/read_only_sync.rs`) uses this channel and
+nothing else for its online commands, and it purges a receiver's cached data
+only after the gateway's pinned enrollment status says Terminal.
+
+### Decision: one authorization owner
+
+| Option | Who authorizes each read | New surface | Verdict |
+| --- | --- | --- | --- |
+| A. The native listener accepts a first envelope `openProduct`, then hands the same TLS connection to the product session loop (`serve_session`): challenge, `session.authenticate` with the credential id as evidence checked by `registry.device_verifier(transport.device_proof())` through `AuthenticateSession`, ready, then the existing `run_authenticated` loop and its passive-read admission | The product socket and `AdmitPassiveRead`, exactly as for the browser | One request variant; one length-prefixed framing owner shared with enrollment; one verifier seam (`SessionProof`) | **Chosen** |
+| B. The `/session` WebSocket accepts device keys | Same owner, but the HTTP listener has no TLS and no raw-key client proof; browsers cannot present RFC 7250 keys | TLS termination on the browser listener, a second handshake profile | Rejected: a key credential cannot be proved there |
+| C. A separate native read route with its own dispatcher calling the record and catalogue sources | A second admission loop, deadline owner and refusal mapping beside the product socket | A whole dispatcher | Rejected: two owners of one decision (gate 13) |
+
+A is the smallest surface with one owner. The verifier is the only thing that
+differs between the browser and the native connection, so it is the only thing
+injected: `SessionProof<S>` lets a transport say how credential evidence
+presented on it is checked. The bearer WebSocket keeps `state.verifier`; the
+native connection asks `DeviceCredentials` (the registry's device verifier)
+with its own TLS proof. Every read after that is admitted by the existing
+owners: current session and grant, receiver binding, owner, epoch.
+
+```text
+native listener --> connection (TLS, first envelope)
+   Hello/Status   --> enrollment (unchanged)
+   openProduct    --> paired key? --> product pool permit (connection permit returned)
+                  --> ProtectedConnection (async framed TLS)
+                  --> product::native (SessionProof = device verifier)
+                  --> product socket serve_session --> run_authenticated
+                  --> AdmitPassiveRead --> record/catalogue sources
+client: load_credential --> pinned status (enrollment) --> Active{receiver, epoch}
+        --> pinned TLS + openProduct --> challenge/authenticate(credential id)/ready
+        --> existing passive reads with receiver + epoch
+```
+
+Arrows are calls and handoffs in order.
+
+### Framing
+
+After `openProduct` both sides send length-prefixed UTF-8 product frames: a
+four-byte big-endian length and one product JSON message. The gateway refuses
+an incoming announced length above `MAX_PAYLOAD_BYTES` (65536) before reading
+or allocating the body; the client refuses one above
+`MAX_RECORD_RESPONSE_BYTES` (131072). Both bounds are the existing published
+constants. The same frame reader (`frames.rs`) frames enrollment
+envelopes at 4096. There is no WebSocket close frame: the gateway closes the
+TLS connection after its last attempted write, and the client reports an
+untyped close (`Closed(None)`). A close carries no authority meaning; only the
+pinned enrollment status does.
+
+### Ordering table
+
+| Row | Event or ordering | Result | Test |
+| --- | --- | --- | --- |
+| PR1 | First envelope is `openProduct` on a TLS connection whose key holds a device credential | The connection moves to the product session pool (row PR10), returns its connection permit, and becomes a product session: challenge, authentication, ready. Enrollment Hello/Status are unchanged | `protected_session_reads_with_the_issued_credential` |
+| PR2 | `openProduct` after Hello | Not a first envelope: refused as Phase and answered `Refused`, as any out-of-order request | `open_product_is_only_a_first_envelope_and_needs_sessions` |
+| PR3 | Credential id of the TLS-proved key's Active credential | Ready; each passive read admitted by `AdmitPassiveRead` with the issued receiver and current epoch; a write method is `forbidden` | `protected_session_reads_with_the_issued_credential` |
+| PR4 | Another device's credential id on this key; the owner's bearer secret; an unknown id | `unauthorized` before ready, then close; no read is possible | `protected_session_refuses_another_devices_credential` |
+| PR5 | Credential revoked before a new connection | `openProduct` is refused (row PR15) before a product permit; a session that reached authentication first is refused `unauthorized`. The client reads the `Refused` reply answering `openProduct` as the typed `ProductRefused` (only that opening frame goes through the enrollment reply decoder; a later one is `Protocol`), and either refusal asks pinned status again, which reads Terminal | `protected_session_refuses_after_revocation`; `open_product_refusal_is_typed_and_other_frames_stay_protocol`; harness `b.revoked_reads_terminal_and_purges` |
+| PR6 | Credential revoked while a session is open | The next read's fresh admission refuses (`unauthorized`), or the periodic current-state check has closed the session; no further page is served | `protected_session_refuses_after_revocation` |
+| PR7 | Request names another receiver or a stale epoch | `wrong_receiver` / `stale_epoch` from admission, before the source; the exact scope still reads | `protected_session_refuses_scope_substitution`; harness `probe.*` |
+| PR8 | An authentication frame carrying another connection's nonce | `unauthorized`: the nonce is per connection. Replayed TLS records cannot complete a new handshake | `protected_session_refuses_replayed_authentication` |
+| PR9 | Announced length above the inbound bound; a frame cut short by a close | Gateway: the session ends before the body is read, with no reply, and the next connection is served. Client: `ResponseTooLarge` before the body, or an untyped close; no page is applied | `frame_reader_refuses_oversize_before_body_and_keeps_partial_progress`; `protected_session_ends_on_truncated_and_oversized_frames`; client `bounded_event_and_frame_refusals_preserve_actual_typed_cause`, `truncated_frame_is_an_untyped_close` |
+| PR10 | Eight product sessions held; a ninth `openProduct`; enrollment or pinned status meanwhile | Product sessions have a pool of their own (eight). Admission to it happens in the connection worker, under the lock shutdown closes it with, and the connection permit then returns. The ninth `openProduct` is answered `Refused`; enrollment and pinned status, which a purge depends on, keep their eight connection permits. There is no idle bound on an authenticated session: the product session settings have no idle timeout to reuse, so a paired device can still hold all eight product permits | `protected_sessions_have_their_own_pool_and_are_woken_by_shutdown` |
+| PR11 | Gateway stop while protected sessions are idle, authenticated or not | The wake endpoint wakes the session's reading task at once (it registered with the endpoint), and the TLS stream refuses every further read and write. The session ends, drains, every permit returns, and the listener's stop completes well inside the handshake deadline | `protected_sessions_have_their_own_pool_and_are_woken_by_shutdown` |
+| PR12 | Client stops reading; or reads normally while the gateway's send waits on a full socket | A non-reading client: the product writer's existing write and record-send deadlines end the session. A reading client: only the writing task writes to the socket, so the reading task never takes its write wakeup; TLS output produced while reading waits for the next write. The parked send completes when the socket drains | existing writer deadline tests; `reading_never_takes_the_writers_wakeup` |
+| PR13 | No product sessions composed | `openProduct` answered `Refused` | `open_product_is_only_a_first_envelope_and_needs_sessions` |
+| PR14 | The gateway presents a key other than the pinned one | TLS refuses before `openProduct` or any credential is sent: `NativeHandshake` | `another_gateway_key_is_refused_before_any_product_frame` |
+| PR15 | `openProduct` from a key that holds no active device credential: never paired, or revoked | Answered `Refused` before a product permit is taken, so unpaired peers cannot hold the pool. The check asks the registry's one device binding rule (`DeviceCredentialVerifier::holds_credential`, the rule `verify` applies to a named credential); the session still runs full authentication. A registry that cannot be read refuses too, still before a permit | `unregistered_and_revoked_keys_take_no_product_permit`; `an_unreadable_registry_refuses_product_admission`; `protected_session_refuses_after_revocation` |
+| PR16 | TLS raises a fatal alert while a session reads (a record that fails authentication) | The read ends with an error and the session ends; the alert TLS queued is sent by the connection's one bounded nonblocking flush when it is dropped, before the socket closes, rather than a bare close | `a_fatal_alert_is_sent_before_the_close` |
+| PC1 | Client start: no issued credential (nothing, or only a pending record) | Refused before any connection or cache open (`notPaired`) | `online_unusable_enrollment_does_not_open_cache` |
+| PC2 | Pinned status reads Active | Its receiver and epoch are the read parameters; the credential id is the evidence | composition `online_*` tests; harness |
+| PC3 | Pinned status reads Terminal (authenticated by the pin) | The enrollment client ends the device's record (Auth `end_enrollment`). The record store it was given, `PurgeBeforeEnd`, first deletes the receiver's cached rows from the profile's own cache (online commands take no cache argument, so no other cache can be purged in its place) with a purge receipt (receiver, cause Terminal enrollment status, initiator gateway status, rows deleted, observed time) in one transaction, and only then lets the record go. The receipt fences the receiver: later record or catalogue applies refuse `Fenced`. The next command is `notPaired` | `purge_precedes_record_removal`; `online_terminal_status_purges_with_one_receipt`; harness |
+| PC4 | Status fails (IO, `Refused`, TLS/pin failure, timeout) or reads a pre-Active phase; the purge itself fails; or a pending record is ended by an authenticated Unclaimed status | No purge and no read. A failed purge keeps the enrollment record, so the next authenticated Terminal status purges again. Ending a pending record purges nothing: only ending an issued credential record purges, since the gateway never reports Unclaimed for a claimed attempt. Every command output reports any purge that ran | `a_failed_purge_keeps_the_enrollment_record`; `only_ending_an_issued_credential_purges`; `online_unusable_enrollment_does_not_open_cache`; `online_revocation_after_admission_preserves_confirmed_page` |
+| PC5 | A read is refused for authority (`unauthorized`, `forbidden`, `wrong_receiver`, `stale_epoch`, an authentication refusal, or `openProduct` answered `Refused`, whose redacted reply does not tell a revoked key from a full pool: the status read does) | The client asks pinned status once more; only Terminal purges; Active reports its current epoch for the next command; a refused status (the receiver no longer holds the pairing) purges nothing; no automatic reset or retry | `only_authority_refusals_ask_status_again`; `online_revocation_after_admission_preserves_confirmed_page` |
+| PC7 | A cache made before purge receipts existed is opened | Refused at open with `outdatedSchema`, nothing changed; development caches are not migrated (no schema version moves): delete it and sync again | `a_cache_without_purge_receipts_is_refused_at_open` |
+| PC8 | The code is typed at a terminal | `pair` reads one line (to its line ending, the byte bound or end of input), so it does not wait for end of input | `code_is_read_from_one_line` |
+| PC6 | Two devices paired to one owner, separate client stores | Separate credentials and receivers; both converge on the gateway's turns; revoking one purges it and leaves the other's reads admitted | harness `protected_sync_bench` (`n*.initial.*`, `n*.after_new_turn.*`, `n*.a.keeps_converging`) |
+
+Purge is the one consequential client transition here, so its evidence is
+kept with it: receipt and deletion share the transaction (audit gate), and the
+record that would let a later status purge again is removed only after that
+transaction commits. The purge receipt is the fence; there is no separate flag.
+The receipt does not repeat why the enrollment ended; the gateway's record
+keeps that, and the command's output reports the status it read.
+
+### Limits
+
+- A gateway-initiated close carries no typed reason on this profile (gate 16):
+  the client's next decision comes from pinned status, never from a close.
+- Only passive reads are exercised by the example; the product loop answers
+  every other method on this channel as it does for any credential, and the
+  device credential holds only `conversation.read`.
+- Resource acceptance (row P32 and the protected allocation inventory above)
+  is not claimed: one protected connection retains its TLS state, one parse
+  buffer of at most 65536 bytes and one pending output frame of at most
+  131072 bytes plus TLS overhead, on one of the eight permits.
+- Two-device convergence against a real `nessa server` is shown by the
+  `examples/protected_sync_bench.rs` harness, which is not run in CI; CI covers
+  the same flow through the composition tests' gateway process and real
+  client subprocesses, and the listener tests above.

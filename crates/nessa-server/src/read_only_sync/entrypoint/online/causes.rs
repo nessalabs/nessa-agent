@@ -21,12 +21,12 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
         GatewayError::Closed(reason) => ("closed", reason.map(|value| value.as_str())),
         GatewayError::Protocol => ("protocol", None),
         GatewayError::Correlation => ("correlation", None),
-        GatewayError::UpgradeTooLarge => ("upgradeTooLarge", None),
+        GatewayError::NativeHandshake => ("nativeHandshake", None),
         GatewayError::ResponseTooLarge => ("responseTooLarge", None),
         GatewayError::RequestTooLarge => ("requestTooLarge", None),
         GatewayError::EventCapacity => ("eventCapacity", None),
-        GatewayError::ControlCapacity => ("controlCapacity", None),
         GatewayError::InvalidCredential => ("invalidCredential", None),
+        GatewayError::ProductRefused => ("productRefused", None),
         GatewayError::Authentication(reason) => ("authentication", Some(reason.as_str())),
         GatewayError::ScopeChanged => ("scopeChanged", None),
         GatewayError::Busy => ("busy", None),
@@ -62,6 +62,7 @@ pub(crate) fn cache_failure(error: &CacheError) -> Value {
         CacheError::Uncertain => "uncertain",
         CacheError::Quota => "quota",
         CacheError::Corrupt => "corrupt",
+        CacheError::OutdatedSchema => "outdatedSchema",
         CacheError::CatalogueProgress(cause) => {
             return json!({"code":"catalogueProgress", "cause":catalogue_progress_failure(cause)})
         }

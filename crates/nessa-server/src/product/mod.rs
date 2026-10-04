@@ -11,6 +11,11 @@
 //! response <- writer <- passive_read writer <- record_read codec <- page
 //! ```
 //! Arrows show calls and returned data, not shared ownership of the source.
+//!
+//! `native` serves the same session over a protected native connection
+//! (`device_pairing`'s `openProduct`): only the credential verifier differs,
+//! through `socket::SessionProof`.
+//!
 //! `change_watch` owns original watch permits and first task faults; normal host
 //! cleanup in composition consumes its close/drain through ProductRouteState.
 
@@ -30,7 +35,10 @@ pub use wire::{SessionAuthenticateParams, SessionChallenge, SessionReady};
 
 mod conversation;
 mod mcp_apps;
+mod native;
 mod pairing;
+
+pub use native::{DeviceCredentials, NativeSessions};
 
 mod agent_install;
 

@@ -115,6 +115,9 @@ pub(super) fn exact_progress(
     connection: &Connection,
     scope: &Scope,
 ) -> Result<Option<CatalogueProgress>, CacheError> {
+    if rows::purged(connection, scope.receiver())? {
+        return Err(CacheError::Fenced);
+    }
     let saved = progress(connection, scope)?;
     if let Some(saved) = &saved {
         if saved.scope != *scope {

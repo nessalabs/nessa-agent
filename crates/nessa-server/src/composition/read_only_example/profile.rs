@@ -1,13 +1,15 @@
-//! Private command configuration names existing publications and credential files.
-use nessa_gateway_endpoint::{
-    application::DiscoverGatewayEndpoint, domain::GatewayEndpoint,
-    infrastructure::FileEndpointDiscovery,
-};
+//! Private command configuration: where this device keeps its enrollment
+//! state, the one cache that holds its data, and the gateway's native address.
+//! No secret is in it; the device key and issued credential live in the
+//! private state directory it names. Online commands take no cache argument:
+//! the profile's cache is the only one a Terminal status can purge, so no
+//! other cache can be left holding a revoked device's data (design row PC3).
+use nessa_auth::adapters::pairing::FilePairingState;
 use nessa_local_storage::OpenMode;
-use nessa_sync::replication::domain::Id;
 use serde::Deserialize;
 use std::{
     io::Read,
+    net::SocketAddr,
     path::{Path, PathBuf},
 };
 
@@ -18,28 +20,26 @@ pub(super) enum ProfileError {
     Unavailable,
     TooLarge,
     Invalid,
-    EndpointUnavailable,
-    CredentialUnavailable,
-    CredentialTooLarge,
-    CredentialEncoding,
+    PrivateStateUnavailable,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProfileDocument {
-    receiver: String,
-    access_epoch: u64,
-    credential_file: PathBuf,
-    endpoint_root: PathBuf,
-    endpoint_directory: PathBuf,
+    state_root: PathBuf,
+    state_directory: PathBuf,
+    cache: PathBuf,
+    gateway_address: SocketAddr,
 }
 
 pub(super) struct Profile {
-    pub(super) receiver: Id,
-    pub(super) access_epoch: u64,
-    credential_file: PathBuf,
-    endpoint_root: PathBuf,
-    endpoint_directory: PathBuf,
+    /// The gateway's native listener: a numeric address, never looked up.
+    pub(super) gateway: SocketAddr,
+    /// This device's private cache: the one its reads fill and its purge
+    /// empties.
+    pub(super) cache: PathBuf,
+    state_root: PathBuf,
+    state_directory: PathBuf,
 }
 
 impl Profile {
@@ -47,40 +47,37 @@ impl Profile {
         let bytes = read_private(path, MAX_PROFILE_BYTES)?;
         let document: ProfileDocument =
             serde_json::from_slice(&bytes).map_err(|_| ProfileError::Invalid)?;
-        if !document.credential_file.is_absolute() || !document.endpoint_root.is_absolute() {
+        if !document.state_root.is_absolute()
+            || document.state_directory.is_absolute()
+            || !document.cache.is_absolute()
+        {
             return Err(ProfileError::Invalid);
         }
         Ok(Self {
-            receiver: Id::new(document.receiver).map_err(|_| ProfileError::Invalid)?,
-            access_epoch: document.access_epoch,
-            credential_file: document.credential_file,
-            endpoint_root: document.endpoint_root,
-            endpoint_directory: document.endpoint_directory,
+            gateway: document.gateway_address,
+            cache: document.cache,
+            state_root: document.state_root,
+            state_directory: document.state_directory,
         })
     }
 
-    pub(super) fn endpoint(&self) -> Result<GatewayEndpoint, ProfileError> {
-        DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(
-            self.endpoint_root.clone(),
-            self.endpoint_directory.clone(),
-        ))
-        .execute()
-        .map_err(|_| ProfileError::EndpointUnavailable)?
-        .ok_or(ProfileError::EndpointUnavailable)
-    }
-
-    /// The caller supplies the generated wire character ceiling; the session
-    /// and authentication owners still decide the borrowed text's validity.
-    pub(super) fn credential(&self, max_characters: usize) -> Result<String, ProfileError> {
-        let bytes = max_characters
-            .checked_mul(4)
-            .ok_or(ProfileError::CredentialTooLarge)?;
-        let value = read_private(&self.credential_file, bytes).map_err(|error| match error {
-            ProfileError::TooLarge => ProfileError::CredentialTooLarge,
-            _ => ProfileError::CredentialUnavailable,
-        })?;
-        let value = String::from_utf8(value).map_err(|_| ProfileError::CredentialEncoding)?;
-        Ok(value.trim().to_owned())
+    /// Open this device's private enrollment state, creating its directory
+    /// beneath the root the first time. The state owner refuses unsafe
+    /// existing storage and a second opener.
+    pub(super) fn private_state(&self) -> Result<FilePairingState, ProfileError> {
+        // The private-state owner wants a trusted absolute root; on Unix that
+        // is the canonical spelling, as gateway composition opens its own.
+        #[cfg(unix)]
+        let root = self
+            .state_root
+            .canonicalize()
+            .map_err(|_| ProfileError::PrivateStateUnavailable)?;
+        #[cfg(not(unix))]
+        let root = self.state_root.clone();
+        nessa_local_storage::create_directory_beneath(&root, &self.state_directory)
+            .map_err(|_| ProfileError::PrivateStateUnavailable)?;
+        FilePairingState::open(&root, &self.state_directory)
+            .map_err(|_| ProfileError::PrivateStateUnavailable)
     }
 }
 
