@@ -335,7 +335,8 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
 /**
  * Signs the page's origin in with the gateway's owner token, then opens the
  * conversation. With the page, returns `reviewsBefore`: the app's reviews
- * pending before this page mounted the app.
+ * pending before this page loaded the window, which may mount the app before
+ * the conversation is clicked (#485).
  */
 async function openConversation(browser, stack, layout) {
   const opened = await openPage(browser, { url: stack.url, layout })
@@ -358,6 +359,13 @@ async function openConversation(browser, stack, layout) {
     await opened.close()
     throw new CannotRun(`the gateway refused the page's sign-in (${status})`)
   }
+  // The app's reviews pending before this page loads the window: whatever a
+  // previous engine's page left, not yet withdrawn, is not this page's (R4).
+  // Taken before the navigation, not before the click: on load the window
+  // opens the newest session of its first channel by itself
+  // (`usecases/updates.ts`), which can be this conversation, so the app can
+  // mount, and its first call open a review, before the click (#485, B1).
+  const reviewsBefore = await pendingReviews(stack)
   await page.goto(`${stack.url}?gateway`, { waitUntil: "domcontentloaded" })
   await need(page, css.anyReady, "the desktop window", 30_000)
   // What the sample page said as it was left (its own sign-in check, cut
@@ -370,9 +378,7 @@ async function openConversation(browser, stack, layout) {
     await opened.close()
     throw new CannotRun(`no session row "${stack.title}" in the window`)
   }
-  // The app's reviews pending before this page mounts it: whatever a
-  // previous engine's page left, not yet withdrawn, is not this page's.
-  const reviewsBefore = await pendingReviews(stack)
+  // Opens the conversation, which the window may have opened already.
   await row.click()
   // The conversation's transcript, which the app's card is drawn in.
   await need(page, css.appView, "the app's view in the conversation", 30_000)
