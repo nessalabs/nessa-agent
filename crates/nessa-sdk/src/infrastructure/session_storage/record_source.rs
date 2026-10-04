@@ -3077,6 +3077,12 @@ mod tests {
                         physical_record_schema(),
                         id("epoch"),
                     );
+                    // Keep draining the authority's stdout for its whole life.
+                    // Dropping the reader closes the pipe, and the child's test
+                    // harness then dies on EPIPE the first time it prints, such as
+                    // its "running for over 60 seconds" notice. That turned a
+                    // slow run into a lost server instead of a slow pass.
+                    std::thread::spawn(move || std::io::copy(&mut output, &mut std::io::sink()));
                     return Self {
                         _child: child,
                         address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port.parse().unwrap()),
