@@ -423,7 +423,7 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   and that includes every update that changes the staged runtime tree, which
   in practice is every release. The desktop stages the runtime under a
   directory named by the prepared tree's content fingerprint
-  ([`pruning.rs`](../../src-tauri/src/gateway/infrastructure/macos/pruning.rs))
+  ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
   and launches the agent runtime's executable and entry from it (`configure`
   in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
   so the executable path and the first argument move with every such update.

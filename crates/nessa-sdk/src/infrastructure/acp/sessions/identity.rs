@@ -23,8 +23,7 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 
 /// The restoration fingerprint: what a saved conversation's context must
 /// match to be restored. This function is the complete list of its inputs;
-/// each `AcpConfig` field's documentation states its own membership and links
-/// here.
+/// the `AcpConfig` field docs that state their membership link here.
 ///
 /// Hashed: the executable's path, the ordered arguments, the context
 /// environment, the workspace, whether tools are enabled, the token limits,
