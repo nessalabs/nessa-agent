@@ -1,7 +1,9 @@
 //! The tokens the gateway issues to open conversations' harnesses: one for
 //! each provider open of an SDK session (a conversation's), revoked when that
 //! provider session ends. A stand-in's hello names one, and the session it
-//! opens is that conversation's.
+//! opens is that conversation's. The grant handed to the binding is the
+//! owner's own (`McpOwner::stand_in_grant`), so it also carries the results
+//! that open's stand-ins forward (#435).
 use crate::mcp_servers::domain::{session_token, TokenDigest, SESSION_VARIABLE};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::acp::sessions::{StandInGrant, StandInGrants};
@@ -81,12 +83,14 @@ impl StandInGrants for ConversationGrants {
             .lock()
             .expect("grants")
             .insert(digest, owner.clone());
-        StandInGrant::new(
+        // The owner's own grant: it carries what this open's stand-ins
+        // forward, for the binding to attach to the calls they answer.
+        owner.stand_in_grant(
             vec![(SESSION_VARIABLE.to_owned(), token)],
             Box::new(Revoke {
                 grants: self.inner.clone(),
                 digest,
-                owner,
+                owner: owner.clone(),
             }),
         )
     }

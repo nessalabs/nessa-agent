@@ -1,3 +1,6 @@
+use super::change_watch::{
+    ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
+};
 #[cfg(test)]
 use super::generated::wire_shape_product_session_ready;
 use super::generated::{
@@ -70,10 +73,11 @@ where
         nonce: nonce.clone(),
         expires_at: challenge_expires_at,
     };
-    let challenge = match EventFrame::push("session.challenge", &challenge, 1, 0) {
-        Ok(frame) => OutgoingMessage::Event(frame),
-        Err(_) => return,
-    };
+    let challenge =
+        match EventFrame::push("session.challenge", &challenge, CHALLENGE_EVENT_SEQUENCE, 0) {
+            Ok(frame) => OutgoingMessage::Event(frame),
+            Err(_) => return,
+        };
     let authenticated = timeout_at(deadline, async {
         send(state.settings.write_timeout(), &mut socket, challenge)
             .await
@@ -314,6 +318,12 @@ struct QueuedResponse {
 enum WireResponse {
     Ordinary(Box<OutgoingMessage>),
     Record { text: String },
+    Watch(Box<QueuedWatch>),
+}
+
+struct QueuedWatch {
+    message: Box<OutgoingMessage>,
+    acknowledgement: WatchAcknowledgement,
 }
 
 impl WireResponse {
@@ -369,6 +379,7 @@ enum WriterResponse {
     Record(Box<QueuedRecordResponse>),
     Queued(Box<QueuedResponse>),
     Refusal(Box<OutgoingMessage>),
+    Watch(Box<WatchFrame>),
 }
 
 async fn write_authenticated<S>(
@@ -378,6 +389,7 @@ async fn write_authenticated<S>(
     mut ordinary: Receiver<QueuedResponse>,
     mut records: Receiver<QueuedRecordResponse>,
     write_timeout: Duration,
+    watches: Arc<WatchDeliveries>,
 ) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin,
 {
@@ -386,7 +398,7 @@ async fn write_authenticated<S>(
     // docs/design/authorized-record-reads.md, R62.
     let mut pending_record: Option<QueuedRecordResponse> = None;
     loop {
-        let deadline = queued_record_deadline(&pending_record);
+        let deadline = retained_delivery_deadline(&pending_record, &watches);
         let next = tokio::select! {
             biased;
             () = wait_for_record_deadline(deadline), if deadline.is_some() => break,
@@ -402,6 +414,11 @@ async fn write_authenticated<S>(
             Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
             () = std::future::ready(()), if pending_record.is_some() =>
                 Some(Ok(WriterResponse::Record(Box::new(pending_record.take().expect("pending record selected"))))),
+            // A notice leaves WatchDeliveries only when this arm is chosen, so an
+            // unwatch that retires it before then also removes it (row U3).
+            Some(frame) = async { watches.take() }, if !watches.is_closed() =>
+                Some(Ok(WriterResponse::Watch(Box::new(frame)))),
+            () = watches.changed(), if !watches.is_closed() => continue,
             else => None,
         };
         let writing = async {
@@ -419,6 +436,23 @@ async fn write_authenticated<S>(
                     } = *response;
                     send_queued(write_timeout, &mut sink, message).await.is_ok()
                 }
+                Some(Ok(WriterResponse::Watch(frame))) => {
+                    let WatchFrame {
+                        id,
+                        message,
+                        deadline,
+                        terminal,
+                        _owner: _original_owner,
+                    } = *frame;
+                    let result =
+                        within_deadline(deadline, send(write_timeout, &mut sink, message)).await;
+                    if matches!(result, Some(Ok(()))) {
+                        watches.sent(&id, terminal);
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Some(Ok(WriterResponse::Refusal(message))) => {
                     send(write_timeout, &mut sink, *message).await.is_ok()
                 }
@@ -431,7 +465,7 @@ async fn write_authenticated<S>(
         };
         tokio::pin!(writing);
         loop {
-            let deadline = queued_record_deadline(&pending_record);
+            let deadline = retained_delivery_deadline(&pending_record, &watches);
             tokio::select! {
                 biased;
                 // Abandon this sink; a second frame must not follow a cancelled
@@ -439,6 +473,7 @@ async fn write_authenticated<S>(
                 () = wait_for_record_deadline(deadline), if deadline.is_some() => return,
                 Some(response) = records.recv(), if pending_record.is_none() =>
                     pending_record = Some(response),
+                () = watches.changed(), if !watches.is_closed() => {},
                 succeeded = &mut writing => {
                     if !succeeded { return; }
                     break;
@@ -446,6 +481,21 @@ async fn write_authenticated<S>(
             }
         }
     }
+}
+
+/// The socket's event sequence: `session.challenge` is its first event, and
+/// every event after authentication (watch notices, from `WatchDeliveries`)
+/// continues from here, so one socket never repeats a sequence number.
+pub(super) const CHALLENGE_EVENT_SEQUENCE: u64 = 1;
+
+fn retained_delivery_deadline(
+    record: &Option<QueuedRecordResponse>,
+    watches: &WatchDeliveries,
+) -> Option<Instant> {
+    [queued_record_deadline(record), watches.deadline()]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 fn queued_record_deadline(response: &Option<QueuedRecordResponse>) -> Option<Instant> {
@@ -483,12 +533,15 @@ enum AuthenticatedInput {
 }
 
 type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Send + 'a>>;
+type RefreshCheck<'a> =
+    Pin<Box<dyn Future<Output = Result<AuthenticatedSession, AccessError>> + Send + 'a>>;
 
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
     let (sink, mut incoming) = socket.split();
+    let mut watches = ConnectionWatches::new(&state);
     let (control_send, control_receive) = mpsc::channel(4);
     let (refusal_send, refusal_receive) = mpsc::channel(1);
     // Room for every ordinary slot's response and every app call's, which
@@ -502,6 +555,7 @@ where
         ordinary_receive,
         record_receive,
         state.settings.write_timeout(),
+        watches.deliveries.clone(),
     ));
     let control_slots = Arc::new(Semaphore::new(4));
     let ordinary_slots = Arc::new(Semaphore::new(16));
@@ -532,16 +586,29 @@ where
     // sink does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
-    let mut refresh: Option<AuthorityCheck<'_>> = None;
+    let mut refresh: Option<RefreshCheck<'_>> = None;
     let mut input_check: Option<AuthorityCheck<'_>> = None;
     let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
+        watches.collect_retired();
         // Authority checks suspend only their own admission. Request completion,
         // delivery teardown and expiry retain independently polled owners (R60).
         let admitted = tokio::select! {
             _ = &mut writer => {
                 writer_finished = true;
                 break;
+            }
+            _ = state.change_watches.closed() => {
+                let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable));
+                break;
+            }
+            outcome = watches.next(&state, &session), if watches.has_pending() => {
+                match outcome {
+                    WatchOutcome::Reply(reply) => { if ordinary_send.try_send(queued_watch(*reply)).is_err() { break; } }
+                    WatchOutcome::Close(reason) => { let _ = control_send.try_send(ControlOutput::Close(reason)); break; }
+                    WatchOutcome::Progress => {},
+                }
+                None
             }
             Some(result) = requests.next(), if !requests.is_empty() => {
                 let Ok((message, class, slot, record_work)) = result else { break };
@@ -558,16 +625,22 @@ where
                 let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired));
                 break;
             }
-            error = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
+            current = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
                 refresh = None;
-                if let Some(error) = error {
-                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
-                    break;
+                match current {
+                    // The one identity check per tick also confirms each live
+                    // watch's session; the watches then re-ask only their
+                    // passive-read admission (row A3).
+                    Ok(current) => watches.recheck(&state, &current),
+                    Err(error) => {
+                        let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                        break;
+                    }
                 }
                 None
             }
             _ = current_state.tick(), if refresh.is_none() => {
-                refresh = Some(Box::pin(current_session_error(&state, &session)));
+                refresh = Some(Box::pin(current_session(&state, &session)));
                 None
             }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
@@ -645,6 +718,20 @@ where
             continue;
         };
         let slot = Arc::new(slot);
+        if ConnectionWatches::method(&frame.method) {
+            if let Some(reply) = watches.begin(
+                &state,
+                &session,
+                frame,
+                slot,
+                received_at + RECORD_SEND_TIMEOUT,
+            ) {
+                if ordinary_send.try_send(queued_watch(reply)).is_err() {
+                    break;
+                }
+            }
+            continue;
+        }
         // An app call's capacity across sockets is the conversation
         // service's, held by the call's own task until it ends: a permit held
         // here would be let go when the socket went, while the call ran on.
@@ -718,6 +805,7 @@ where
     for call in app_calls {
         call.abort();
     }
+    drop(watches);
     drop(control_send);
     drop(refusal_send);
     drop(ordinary_send);
@@ -725,6 +813,25 @@ where
     if !writer_finished {
         let _ = writer.await;
     }
+}
+
+fn queued_watch(reply: WatchReply) -> QueuedResponse {
+    let message = match reply.acknowledgement {
+        Some(acknowledgement) => WireResponse::Watch(Box::new(QueuedWatch {
+            message: Box::new(reply.message),
+            acknowledgement,
+        })),
+        None => WireResponse::ordinary(reply.message),
+    };
+    QueuedResponse {
+        message,
+        _slot: reply.slot,
+        _record_work: None,
+    }
+}
+
+pub(super) fn valid_product_request(frame: &RequestFrame) -> bool {
+    frame.kind == "req" && !frame.id.is_empty() && frame.id.len() <= 256
 }
 
 async fn dispatch_passive_read(
@@ -740,7 +847,7 @@ async fn dispatch_passive_read(
             Ok(current) => current,
             Err(error) => return (passive_access_failure(&frame.id, error), None),
         };
-        if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
+        if !valid_product_request(&frame) {
             return (
                 WireResponse::ordinary(failure(&frame.id, "invalid_request")),
                 None,
@@ -792,7 +899,7 @@ async fn dispatch(
         Ok(current) => current,
         Err(_) => return failure(&frame.id, "unauthorized"),
     };
-    if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
+    if !valid_product_request(&frame) {
         return failure(&frame.id, "invalid_request");
     }
     if frame.method == PRODUCT_HANDSHAKE_METHOD {
@@ -1239,6 +1346,34 @@ async fn ensure_browser_session_present(
     Ok(())
 }
 
+// Watches retain this whole adapter await in their original owner task. No
+// timeout here may detach an internal authority worker from that owner.
+pub(super) async fn watch_identity(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<AuthenticatedSession, AccessError> {
+    current_identity_inner(state, session)
+        .await
+        .map(|(current, _)| current)
+}
+
+pub(super) async fn watch_browser_present(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(), AccessError> {
+    ensure_browser_session_present(state, session).await
+}
+
+/// The connection's current session, or why it is no longer current.
+async fn current_session(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<AuthenticatedSession, AccessError> {
+    current_identity(state, session)
+        .await
+        .map(|(current, _)| current)
+}
+
 async fn current_session_error(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1294,6 +1429,34 @@ async fn send_queued<S: Sink<Message> + Unpin>(
 ) -> Result<(), ()> {
     match message {
         WireResponse::Ordinary(message) => send(write_timeout, socket, *message).await,
+        WireResponse::Watch(response) => {
+            let QueuedWatch {
+                message,
+                acknowledgement,
+            } = *response;
+            let WatchAcknowledgement {
+                deadline,
+                completed,
+                owner: _original_owner,
+            } = acknowledgement;
+            // A reply the writer reaches after its deadline is replaced by a
+            // typed close, never a silent end (row B6). Expiry during the
+            // write abandons the socket like any cancelled write.
+            if Instant::now() >= deadline {
+                close_session(
+                    write_timeout,
+                    socket,
+                    SessionCloseReason::TemporaryUnavailable,
+                )
+                .await;
+                return Err(());
+            }
+            within_deadline(deadline, send(write_timeout, socket, *message))
+                .await
+                .ok_or(())??;
+            let _ = completed.send(());
+            Ok(())
+        }
         WireResponse::Record { text } => {
             if text.len() > MAX_RECORD_RESPONSE_BYTES {
                 return Err(());
@@ -1322,7 +1485,8 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         .ok_or(())?
 }
 
-fn close_reason(error: AccessError) -> SessionCloseReason {
+/// The one mapping from an access error to how a live connection closes.
+pub(super) fn close_reason(error: AccessError) -> SessionCloseReason {
     match error {
         AccessError::CredentialRevoked => SessionCloseReason::CredentialRevoked,
         AccessError::CredentialExpired => SessionCloseReason::CredentialExpired,
@@ -1354,6 +1518,9 @@ async fn close_session<S: Sink<Message> + Unpin>(
     }));
     let _ = timeout(write_timeout, socket.send(close)).await;
 }
+
+#[cfg(test)]
+pub(crate) use tests::watches::HostWatchFixture;
 
 #[cfg(test)]
 mod tests {
@@ -1447,6 +1614,9 @@ mod tests {
     mod writer {
         include!("../../tests/product/socket/writer.rs");
     }
+    pub(super) mod watches {
+        include!("../../tests/product/socket/watches.rs");
+    }
     mod browser_sessions {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1472,7 +1642,7 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(advertised, runtime);
         for method in PRODUCT_READY_METHODS {
-            if *method == "auth.session" {
+            if *method == "auth.session" || ConnectionWatches::method(method) {
                 continue;
             }
             assert!(
@@ -2636,6 +2806,7 @@ mod tests {
             ))
             .await
             .unwrap();
+        let deliveries = Arc::new(WatchDeliveries::new());
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
@@ -2643,6 +2814,7 @@ mod tests {
             ordinary,
             records,
             Duration::from_secs(1),
+            deliveries.clone(),
         ));
         peer.writing.recv().await.unwrap();
         assert_eq!(slots.available_permits(), 2, "in-flight send owns its slot");
@@ -2668,6 +2840,8 @@ mod tests {
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], expected);
         }
+        // Close the same delivery interest as the production connection owner.
+        deliveries.close();
         drop(controls_send);
         drop(ordinary_send);
         drop(refusals_send);
@@ -2718,6 +2892,7 @@ mod tests {
         let (record_send, records) = mpsc::channel(1);
         let slots = Arc::new(Semaphore::new(2));
         let record_capacity = Arc::new(Semaphore::new(1));
+        let deliveries = Arc::new(WatchDeliveries::new());
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
@@ -2725,6 +2900,7 @@ mod tests {
             ordinary,
             records,
             Duration::from_secs(1),
+            deliveries.clone(),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
@@ -2760,6 +2936,8 @@ mod tests {
         };
         let value: Value = serde_json::from_str(&second).unwrap();
         assert_eq!(value["id"], "control");
+        // Close the same delivery interest as the production connection owner.
+        deliveries.close();
         drop(control_send);
         drop(refusal_send);
         drop(ordinary_send);
@@ -2863,6 +3041,7 @@ mod tests {
             ordinary,
             records,
             Duration::from_secs(5),
+            Arc::new(WatchDeliveries::new()),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {

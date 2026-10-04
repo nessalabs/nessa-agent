@@ -411,10 +411,12 @@ fn receiver_child() {
             Err(error) => panic!("discovery refused: {error:?}"),
         }
     };
-    if mode == "lost-page" {
-        assert!(
-            preparing > 0,
-            "cold large history must report preparing before a head"
+    if mode == "lost-page" || mode == "resume" {
+        // Steps per admitted read (S1): this cold multi-frame history fits in
+        // one read's steps, after the first gateway start and after restart.
+        assert_eq!(
+            preparing, 0,
+            "a cold history within one read's steps answers on the first request"
         );
     }
     let mut db = Connection::open(std::env::var("NESSA_296_RECEIVER_DB").unwrap()).unwrap();

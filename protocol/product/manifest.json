@@ -40,10 +40,15 @@
     "pairing.status": "PairingInvitationParams",
     "pairing.approve": "PairingApproveParams",
     "pairing.deny": "PairingInvitationParams",
-    "pairing.cancel": "PairingInvitationParams"
+    "pairing.cancel": "PairingInvitationParams",
+    "conversation.watchRecords": "ConversationWatchRecordsParams",
+    "conversation.watchCatalogue": "ConversationWatchCatalogueParams",
+    "conversation.unwatch": "ConversationUnwatchParams"
   },
   "events": {
-    "session.challenge": "SessionChallenge"
+    "session.challenge": "SessionChallenge",
+    "conversation.changed": "ConversationChanged",
+    "conversation.watchEnded": "ConversationWatchEnded"
   },
   "handshakeMethod": "session.authenticate"
 }
