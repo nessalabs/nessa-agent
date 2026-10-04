@@ -309,12 +309,17 @@ impl ProcessScope {
 
         let mut gone = self.wait_scope(grace).await;
         if !gone {
-            self.forced = true;
-            signal_group(self.group, false)?;
+            // Forced only if a signal reached the group; a group that already
+            // left on EOF exited by itself.
+            if signal_group(self.group, false)? == SignalDelivery::Delivered {
+                self.forced = true;
+            }
             gone = self.wait_scope(kill_timeout).await;
         }
         if !gone {
-            signal_group(self.group, true)?;
+            if signal_group(self.group, true)? == SignalDelivery::Delivered {
+                self.forced = true;
+            }
             gone = self.wait_scope(kill_timeout).await;
         }
         if let Some(mut stderr) = self.stderr.take() {
@@ -377,8 +382,19 @@ impl Drop for ProcessScope {
         }
     }
 }
+/// Whether a group signal reached the group. Neither answer says the scope is
+/// gone; `wait_scope` alone decides that, and only on `ESRCH`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignalDelivery {
+    Delivered,
+    /// Only unix can be refused without failing: the non-unix `signal_group`
+    /// has no group signal and returns `Err(CleanupUncertain)` at once, the
+    /// same verdict `wait_scope` would reach after its budget.
+    #[cfg(unix)]
+    NotDelivered,
+}
 #[cfg(unix)]
-fn signal_group(group: u32, force: bool) -> Result<(), AgentError> {
+fn signal_group(group: u32, force: bool) -> Result<SignalDelivery, AgentError> {
     // The group ID is assigned by the OS to this child's new process group.
     let result = unsafe {
         libc::kill(
@@ -386,10 +402,27 @@ fn signal_group(group: u32, force: bool) -> Result<(), AgentError> {
             if force { libc::SIGKILL } else { libc::SIGTERM },
         )
     };
-    if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(AgentError::CleanupUncertain)
+    if result == 0 {
+        return Ok(SignalDelivery::Delivered);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        // The group is gone; `wait_scope` will see the same.
+        Some(libc::ESRCH) => Ok(SignalDelivery::NotDelivered),
+        // macOS: EPERM also means every member is exiting or exited-but-unreaped,
+        // which is our group when the adapter quits on stdin EOF just before this
+        // signal; `wait_scope` then reaps it and sees ESRCH. Linux and macOS:
+        // EPERM can be a real refusal (a member we may not signal). Then
+        // `wait_scope` never sees ESRCH, its probe refuses too, and cleanup ends
+        // in CleanupUncertain after the kill budget instead of at once: the
+        // same result, later. Held by `infrastructure::process::tests::
+        // signalling_an_exited_unreaped_group_is_not_a_cleanup_failure` (bites on
+        // macOS) and `a_group_that_refuses_signals_is_never_confirmed_gone`.
+        Some(libc::EPERM) => {
+            tracing::debug!(group, force, %error, "process group signal refused; wait_scope decides");
+            Ok(SignalDelivery::NotDelivered)
+        }
+        _ => Err(AgentError::CleanupUncertain),
     }
 }
 #[cfg(unix)]
@@ -404,7 +437,7 @@ fn group_exists(group: u32) -> Result<bool, AgentError> {
     }
 }
 #[cfg(not(unix))]
-fn signal_group(_: u32, _: bool) -> Result<(), AgentError> {
+fn signal_group(_: u32, _: bool) -> Result<SignalDelivery, AgentError> {
     Err(AgentError::CleanupUncertain)
 }
 #[cfg(not(unix))]
