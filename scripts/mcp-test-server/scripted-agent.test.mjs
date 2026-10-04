@@ -317,11 +317,12 @@ function lingering(
   // `deafAfterInitialize`: it stops reading its input once it has answered
   // initialize, but keeps running; `ignoresTerm`: SIGTERM does not stop it,
   // and writes `termed` beside the pid file; `heir`: it starts a process of
-  // its own that holds its stdout open, ignores SIGTERM, and writes its pid
-  // to `heir` beside the pid file.
+  // its own that holds its stdout open, ignores SIGTERM, writes its pid to
+  // `heir` beside the pid file, and ends by itself after 30 s, so one whose
+  // pid was never read cannot outlive the suite.
   const termedFile = join(dirname(pidFile), "termed")
   const heirFile = join(dirname(pidFile), "heir")
-  const heirScript = `require("node:fs").writeFileSync(${JSON.stringify(heirFile)}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)`
+  const heirScript = `require("node:fs").writeFileSync(${JSON.stringify(heirFile)}, String(process.pid)); process.on("SIGTERM", () => {}); setTimeout(() => {}, 30000)`
   const script = `if (${heir}) require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(heirScript)}], { stdio: ["ignore", "inherit", "inherit"] })
 if (${ignoresTerm}) process.on("SIGTERM", () => require("node:fs").writeFileSync(${JSON.stringify(termedFile)}, ""))
 require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
@@ -631,6 +632,7 @@ test("a stand-in whose own process holds its output open does not keep the agent
   assert.ok(opened.result.sessionId)
   const end = Date.now() + 5000
   while (stubborn.heirPid() === null && Date.now() < end) await sleep(50)
+  assert.notEqual(stubborn.heirPid(), null, "the heir never started")
   agent.child.stdin.end()
   // The stand-in is reaped once killed, though its pipe stays open in the heir.
   assert.equal(await exited(agent.child, STOP_GRACE_MS + 3000), true)

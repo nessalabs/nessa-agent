@@ -84,6 +84,9 @@ async function stop() {
   stopping = true
   await Promise.all(
     [...standIns].map(async ([child, ended]) => {
+      // A failed spawn has no pid until its `error`, and a kill before then
+      // would signal the agent's process group. A stop never comes first: it
+      // begins on an input or output event, later than that `error`'s tick.
       child.kill("SIGTERM")
       const timer = setTimeout(() => child.kill("SIGKILL"), STOP_GRACE_MS)
       await ended
