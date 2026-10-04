@@ -419,12 +419,14 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              // A step that could not run keeps none: they go to "console".
+              // A step that could not run keeps none of the page's lines,
+              // errors or harmless: both go to the late "console" result,
+              // which reports the two together.
               failures: [
                 ...(result.failures ?? []),
                 ...(result.cannotRun ? [] : opened.errors.splice(0)),
               ],
-              harmless: opened.harmless.splice(0),
+              harmless: result.cannotRun ? [] : opened.harmless.splice(0),
             })
             if (!entry.ok)
               stopped = `${name} ${entry.cannotRun ? "could not run" : "did not hold"}`

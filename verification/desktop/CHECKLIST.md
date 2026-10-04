@@ -695,9 +695,11 @@ says why where the conversations would be.
   not a list of URLs: `net::ERR_ABORTED` exactly, on the page's own origin,
   after a 2xx response, is labelled harmless, "aborted after a <status>
   response" (`lib/browser.mjs`, `recordFailedRequest`, rows F1′ and F2–F4),
-  and kept on each result's JSON as `harmless` by `mcp-apps-gateway.mjs` and
-  `gateway-window.mjs`. With no response, a status outside 2xx, another
-  origin, another error, or a page with no origin, it stays a failure. The
+  and kept in the JSON as `harmless` by `smoke.mjs`, `mcp-apps-gateway.mjs`
+  and `gateway-window.mjs`; the other scripts that open a page do not keep
+  their harmless lines yet (#494). With no response, a status outside 2xx,
+  another origin, another error, or a page with no origin, it stays a
+  failure. The
   rule knows only that a response arrived: whether its bytes were right is
   each check's own assertions' to judge (`renders` in `mcp-apps-gateway.mjs`
   for `/mcp-resources`; the conversation loading at all for

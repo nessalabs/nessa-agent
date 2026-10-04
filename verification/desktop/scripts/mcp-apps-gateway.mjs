@@ -133,7 +133,6 @@ async function startStack(options) {
     const title = conversations.find(
       (each) => each.conversationId === conversationId,
     )?.title
-    if (!title) throw new CannotRun("the conversation has no title to find it by")
     log(
       `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${stack.timings.agentTurnMs} ms`,
     )
@@ -352,17 +351,31 @@ async function openConversation(browser, stack, layout) {
       reviewsBefore = await signIn(context, stack)
     },
   })
-  const conversationOpen = await windowOpened(opened.page, stack, reviewsBefore)
-  await settled(opened.page)
-  return { ...opened, reviewsBefore, conversationOpen }
+  try {
+    const conversationOpen = await windowOpened(opened.page, stack, reviewsBefore)
+    await settled(opened.page)
+    return { ...opened, reviewsBefore, conversationOpen }
+  } catch (error) {
+    // No step will report the page's lines, so the error carries them, and
+    // the page is closed rather than left open until the browser closes.
+    const lines = [
+      ...opened.errors.splice(0),
+      ...opened.harmless.splice(0).map((line) => `harmless: ${line}`),
+    ]
+    await opened.close().catch(() => {})
+    if (lines.length > 0) error.message += `\n  the page's lines: ${lines.join("; ")}`
+    throw error
+  }
 }
 
 /**
  * Signs `context` in from a page of its own on the sample page, which it
- * closes: the window's page then reports only its own lines, and none is
- * dropped (#485, amendment 2). Returns the app's reviews pending
- * then: whatever a previous engine's page left, not yet withdrawn, is not
- * this page's (R4). Read before the window loads: it opens the conversation
+ * closes: the window's page then records only its own lines. This script
+ * reports them on each step's result, errors as failures and the rest as
+ * `harmless`, and in the error when opening the conversation throws; lines
+ * that arrive after the last step are not reported yet (#494). Returns the
+ * app's reviews pending then: whatever a previous engine's page left, not
+ * yet withdrawn, is not this page's (R4). Read before the window loads: it opens the conversation
  * on load, so the app can mount, and its first call open a review, at any
  * point after (#485).
  */
