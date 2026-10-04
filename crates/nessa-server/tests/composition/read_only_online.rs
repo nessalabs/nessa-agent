@@ -37,15 +37,11 @@ fn online_process_restarts_reuse_actual_binding() {
     let gateway = Gateway::start(&root);
     let setup: Setup =
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
-    let profile = root.join("profile.json").to_string_lossy().into_owned();
     let cache_root = directory.path().join("cache");
     nessa_local_storage::create_directory(&cache_root).unwrap();
-    let cache = cache_root
-        .join("cache.sqlite3")
-        .to_string_lossy()
-        .into_owned();
+    let profile = profile_for(&root, &cache_root.join("cache.sqlite3"));
     let args = |name: &str, target: Option<&str>, pages: Option<&str>| {
-        let mut args = vec![name.into(), cache.clone(), profile.clone()];
+        let mut args = vec![name.into(), profile.clone()];
         if let Some(target) = target {
             args.push(target.into());
         }
@@ -125,7 +121,6 @@ fn online_profile_refusal_precedes_network_and_cache() {
     let (ok, report) = command(
         vec![
             "check-records".into(),
-            cache.to_string_lossy().into_owned(),
             directory
                 .path()
                 .join("missing.json")
@@ -143,8 +138,7 @@ fn online_profile_refusal_precedes_network_and_cache() {
 fn record_command(root: &Path, cache: &Path, setup: &Setup, pages: &str) -> Vec<String> {
     vec![
         "sync-records".into(),
-        cache.to_string_lossy().into_owned(),
-        root.join("profile.json").to_string_lossy().into_owned(),
+        profile_for(root, cache),
         setup.conversation.clone(),
         pages.into(),
     ]
@@ -393,15 +387,15 @@ fn online_unusable_enrollment_does_not_open_cache() {
             "io",
         ),
     ] {
+        let cache = private.join(format!("absent-{index}.sqlite3"));
         let mut profile = original.clone();
         profile[field] = value;
+        profile["cache"] = json!(cache);
         let path = root.join(format!("wrong-{index}.json"));
         private_write(&path, &serde_json::to_vec(&profile).unwrap());
-        let cache = private.join(format!("absent-{index}.sqlite3"));
         let (ok, report) = command(
             vec![
                 "check-records".into(),
-                cache.to_string_lossy().into_owned(),
                 path.to_string_lossy().into_owned(),
                 setup.conversation.clone(),
             ],
@@ -437,8 +431,7 @@ fn online_terminal_status_purges_with_one_receipt() {
     assert_eq!(synced.unwrap()["enrollment"]["phase"], "active");
     let catalogue = vec![
         "sync-catalogue".into(),
-        cache.to_string_lossy().into_owned(),
-        root.join("profile.json").to_string_lossy().into_owned(),
+        profile_for(&root, &cache),
         "10".into(),
     ];
     let (ok, report) = command(catalogue.clone(), false);
@@ -545,13 +538,9 @@ fn online_saved_projection_handles_competing_owner() {
         let private = directory.path().join(mode);
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("cache.sqlite3");
+        let profile = profile_for(&root, &path);
         let args = |command: &str, pages: Option<&str>| {
-            let mut args = vec![
-                command.into(),
-                path.to_string_lossy().into_owned(),
-                root.join("profile.json").to_string_lossy().into_owned(),
-                setup.conversation.clone(),
-            ];
+            let mut args = vec![command.into(), profile.clone(), setup.conversation.clone()];
             if let Some(pages) = pages {
                 args.push(pages.into());
             }
@@ -760,11 +749,7 @@ fn default_passive_budget(mode: &str) -> (bool, Value, Duration) {
     let (ok, value) = command(
         vec![
             "sync-records".into(),
-            cache_root
-                .join("cache.sqlite3")
-                .to_string_lossy()
-                .into_owned(),
-            root.join("profile.json").to_string_lossy().into_owned(),
+            profile_for(&root, &cache_root.join("cache.sqlite3")),
             setup.conversation,
             "1".into(),
         ],

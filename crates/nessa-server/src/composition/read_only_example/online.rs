@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use std::cell::RefCell;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -58,25 +58,27 @@ struct Paired {
     identity: NativeIdentity,
     pin: [u8; 44],
     credential: String,
+    /// The profile's cache: where this run reads to, and what a purge empties.
+    cache: PathBuf,
 }
 
-/// `pair PROFILE` and `status CACHE PROFILE`.
+/// `pair PROFILE` and `status PROFILE`.
 pub(super) fn execute_device(
     command: &Command,
     policy: CachePolicy,
     input: &mut dyn Read,
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
-    let (profile_path, cache) = match command {
-        Command::Pair { profile } => (profile, None),
-        Command::Status { cache, profile } => (profile, Some(cache)),
+    let (profile_path, pairing) = match command {
+        Command::Pair { profile } => (profile, true),
+        Command::Status { profile } => (profile, false),
         _ => return Err(CommandError::Arguments),
     };
-    let operation = if cache.is_none() { "pair" } else { "status" };
-    if let Some(cache) = cache {
+    let operation = if pairing { "pair" } else { "status" };
+    if !pairing {
         // A device with an issued credential reads status through the purge;
         // one still pending has no receiver, and so no cached data.
-        match open_paired(profile_path, cache, policy) {
+        match open_paired(profile_path, policy) {
             Ok(paired) => {
                 return match paired.device.status() {
                     Ok(status) => online::write(
@@ -106,7 +108,7 @@ pub(super) fn execute_device(
         Ok(device) => device,
         Err(error) => return configuration_failure(operation, profile_code(error), output),
     };
-    let result = if cache.is_none() {
+    let result = if pairing {
         let Some(code) = device::read_code(input) else {
             return configuration_failure(operation, "invalidCode", output);
         };
@@ -134,20 +136,19 @@ pub(super) fn execute(
     policy: CachePolicy,
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
-    let (cache_path, profile_path) = match command {
-        Command::Records { cache, profile, .. } | Command::Catalogue { cache, profile, .. } => {
-            (cache, profile)
-        }
+    let profile_path = match command {
+        Command::Records { profile, .. } | Command::Catalogue { profile, .. } => profile,
         _ => return Err(CommandError::Arguments),
     };
     let operation = match command {
         Command::Records { .. } => "records",
         _ => "catalogue",
     };
-    let paired = match open_paired(profile_path, cache_path, policy) {
+    let paired = match open_paired(profile_path, policy) {
         Ok(paired) => paired,
         Err(error) => return configuration_failure(operation, error.code(), output),
     };
+    let cache_path = paired.cache.as_path();
     // Row PC2–PC4: a fresh pinned status decides before any read.
     let status = match paired.device.status() {
         Ok(status) => status,
@@ -163,7 +164,7 @@ pub(super) fn execute(
     let Some(decision) = pinned(&status) else {
         return refused(
             operation,
-            json!({"enrollment":enrollment,"enrollmentFailure":{"code":"wire"}}),
+            json!({"enrollment":enrollment,"enrollmentFailure":{"code":"wire"},"purge":purge_json(paired.store.purge())}),
             output,
         );
     };
@@ -182,7 +183,14 @@ pub(super) fn execute(
             );
         }
         PinnedStatus::NotActive => {
-            return refused(operation, json!({"enrollment":enrollment}), output);
+            // A purge here would mean a credential record was ended without a
+            // Terminal status; it is reported, never hidden.
+            let purge = purge_json(paired.store.purge());
+            return refused(
+                operation,
+                json!({"enrollment":enrollment,"purge":purge}),
+                output,
+            );
         }
     };
     let connection = match Session::connect(
@@ -248,7 +256,7 @@ impl OpenError {
     }
 }
 
-fn open_paired(path: &Path, cache: &Path, policy: CachePolicy) -> Result<Paired, OpenError> {
+fn open_paired(path: &Path, policy: CachePolicy) -> Result<Paired, OpenError> {
     let profile = Profile::load(path).map_err(OpenError::Profile)?;
     let state = Arc::new(profile.private_state().map_err(OpenError::Profile)?);
     // Row PC1: nothing is read, dialled or opened without an issued credential.
@@ -260,7 +268,7 @@ fn open_paired(path: &Path, cache: &Path, policy: CachePolicy) -> Result<Paired,
     let receiver = Id::new(saved.receiver().as_str()).map_err(|_| OpenError::PrivateState)?;
     let (key, pin, _) = saved.into_enrollment().into_parts();
     let identity = NativeIdentity::restore(key).map_err(|_| OpenError::PrivateState)?;
-    let cache = cache.to_path_buf();
+    let cache = profile.cache.clone();
     let store = Arc::new(PurgeBeforeEnd::new(
         state,
         receiver,
@@ -276,6 +284,7 @@ fn open_paired(path: &Path, cache: &Path, policy: CachePolicy) -> Result<Paired,
         identity,
         pin,
         credential,
+        cache: profile.cache,
     })
 }
 

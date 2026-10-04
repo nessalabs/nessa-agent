@@ -28,6 +28,16 @@ pub(super) struct Setup {
     pub(super) conversation: String,
     pub(super) empty: String,
 }
+/// A profile for this gateway's paired device whose cache is `cache`: the
+/// fixture's own profile with that one field, in a new private file.
+pub(super) fn profile_for(root: &Path, cache: &Path) -> String {
+    let mut profile: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    profile["cache"] = serde_json::json!(cache);
+    let path = root.join(format!("profile-{}.json", uuid()));
+    private_write(&path, &serde_json::to_vec(&profile).unwrap());
+    path.to_string_lossy().into_owned()
+}
 pub(super) fn uuid() -> String {
     Uuid::new_v4().to_string()
 }

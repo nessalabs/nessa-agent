@@ -19,7 +19,7 @@ fn write(path: &Path, bytes: &[u8]) {
 
 fn document(root: &Path) -> Vec<u8> {
     serde_json::to_vec(&json!({"stateRoot": root, "stateDirectory": "device",
-        "gatewayAddress": "127.0.0.1:47650"}))
+        "cache": root.join("cache.sqlite3"), "gatewayAddress": "127.0.0.1:47650"}))
     .unwrap()
 }
 
@@ -35,6 +35,7 @@ fn private_profile_admission_is_bounded_and_explicit() {
     write(&path, &exact);
     let profile = Profile::load(&path).unwrap();
     assert_eq!(profile.gateway, "127.0.0.1:47650".parse().unwrap());
+    assert_eq!(profile.cache, root.path().join("cache.sqlite3"));
     let oversized = root.path().join("oversized.json");
     exact.push(b' ');
     write(&oversized, &exact);
@@ -57,6 +58,10 @@ fn private_profile_admission_is_bounded_and_explicit() {
         text.replace(
             &serde_json::to_string(root.path()).unwrap(),
             "\"relative-root\"",
+        ),
+        text.replace(
+            &serde_json::to_string(&root.path().join("cache.sqlite3")).unwrap(),
+            "\"relative.sqlite3\"",
         ),
         // The bearer profile is not a current shape.
         serde_json::to_string(&json!({"receiver":"r","accessEpoch":1,

@@ -49,14 +49,18 @@ pub trait ProtectedSessions: Send + Sync {
 /// sink of outgoing ones. Incoming frames above [`MAX_PROTECTED_REQUEST_BYTES`]
 /// end the stream before their body is read; outgoing frames above
 /// [`MAX_PROTECTED_RESPONSE_BYTES`] are refused. Once its connection owner
-/// wakes it for shutdown, the TLS stream refuses every further read and write
-/// (`DeadlineStream`). The session loop polls this stream at least once per
-/// current-state interval and its writer has write deadlines, so a woken
-/// session ends without a timer of its own
-/// (`protected_sessions_share_permits_and_are_woken_by_shutdown`).
-pub struct ProtectedConnection {
+/// wakes it for shutdown, the reading task is woken at once and the TLS stream
+/// refuses every further read and write (`DeadlineStream`), before or after
+/// authentication (`protected_sessions_have_their_own_pool_and_are_woken_by_shutdown`).
+///
+/// The writing task alone writes to the socket. Ciphertext TLS produces while
+/// reading (an alert, a key-update reply) waits in the buffer for the next
+/// write, because a socket keeps one waker per direction and a reader that
+/// polled the write side would take the writer's
+/// (`reading_never_takes_the_writers_wakeup`).
+pub struct ProtectedConnection<S = TcpStream> {
     transport: NativeTransport<DeadlineStream>,
-    socket: TcpStream,
+    socket: S,
     frames: FrameReader,
 }
 impl ProtectedConnection {
@@ -73,6 +77,18 @@ impl ProtectedConnection {
             socket,
             frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
         })
+    }
+}
+impl<S: AsyncRead + AsyncWrite + Unpin> ProtectedConnection<S> {
+    /// A connection over `socket` after a TLS handshake whose socket was
+    /// taken; the test double for the socket's single-waker behaviour.
+    #[cfg(test)]
+    pub(super) fn over(transport: NativeTransport<DeadlineStream>, socket: S) -> Self {
+        Self {
+            transport,
+            socket,
+            frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
+        }
     }
     /// The device key this connection's TLS handshake proved. Possession
     /// evidence only; the credential it may use is the registry's decision.
@@ -99,6 +115,10 @@ impl ProtectedConnection {
         }
     }
     fn poll_frame(&mut self, context: &mut Context<'_>) -> Poll<Option<IoResult<Vec<u8>>>> {
+        // A shutdown wakes this task at once, and its next read is refused.
+        if self.transport.stream_mut().wake_reader(context.waker()) {
+            return Poll::Ready(Some(Err(Error::from(ErrorKind::ConnectionAborted))));
+        }
         for _ in 0..READS_PER_POLL {
             // Plaintext TLS already holds comes first.
             loop {
@@ -117,10 +137,6 @@ impl ProtectedConnection {
                     Err(error) if error.kind() == ErrorKind::Interrupted => {}
                     Err(error) => return Poll::Ready(Some(Err(error))),
                 }
-            }
-            // Reading may have produced TLS output (an alert, a key update).
-            if let Poll::Ready(Err(error)) = self.poll_send(context) {
-                return Poll::Ready(Some(Err(error)));
             }
             let mut bytes = [0; SOCKET_READ_BYTES];
             let mut buffer = ReadBuf::new(&mut bytes);
@@ -144,13 +160,13 @@ impl ProtectedConnection {
         Poll::Pending
     }
 }
-impl Stream for ProtectedConnection {
+impl<S: AsyncRead + AsyncWrite + Unpin> Stream for ProtectedConnection<S> {
     type Item = IoResult<Vec<u8>>;
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.get_mut().poll_frame(context)
     }
 }
-impl Sink<Vec<u8>> for ProtectedConnection {
+impl<S: AsyncRead + AsyncWrite + Unpin> Sink<Vec<u8>> for ProtectedConnection<S> {
     type Error = Error;
     /// Ready once the previous frame's ciphertext has reached the socket, so at
     /// most one outgoing frame is buffered.
@@ -183,3 +199,7 @@ impl Sink<Vec<u8>> for ProtectedConnection {
 fn too_large() -> Error {
     Error::new(ErrorKind::InvalidData, "native frame exceeds its bound")
 }
+
+#[cfg(test)]
+#[path = "../../../tests/device_pairing/infrastructure/protected_waker.rs"]
+mod tests;

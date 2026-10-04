@@ -6,8 +6,8 @@ Owner: #261. This transport section composes with the separately owned cache des
 
 | Row | Input/order | Owner / required outcome |
 |---|---|---|
-| T1 | Connect/upgrade/challenge/auth/ready | Same absolute deadline; generated challenge/auth/ready and shared envelope decoder; no passive request before ready |
-| T2 | Fragmented/trickled HTTP or WS bytes; partial send; ping/event flood | DeadlineStream recomputes at each syscall; HTTP-byte/frame/message/write-buffer/event/control caps; typed bounded refusal |
+| T1 | Connect/pinned TLS/`openProduct`/challenge/auth/ready | Same absolute deadline; generated challenge/auth/ready and shared envelope decoder; no passive request before ready |
+| T2 | Fragmented/trickled TLS bytes; partial send; event flood; an announced frame above the response bound | DeadlineStream recomputes at each syscall; TLS handshake byte budget, frame/event caps; the frame reader refuses an oversized announced length before reading it; typed bounded refusal |
 | T3 | Duplicate keys at any depth, contradictory ok/payload/error, malformed frame kind, unknown envelope keys | protocol frame owner + existing unique_value; ResFrame schema publishes ok/payload/error presence, protocol generator derives the shared TS/Rust runtime table; present null success accepted before method-specific decoding |
 | T4 | Mismatched RPC ID or unexpected response while one is pending | Typed correlation failure and discard connection; do not wait past it or attribute it to current RPC |
 | T5 | Exact successful head | Existing selector/stream/schema owners + trusted ready origin/identity; actual scope/H, no raw physical-tail fallback |
@@ -40,7 +40,7 @@ Owner: #261. This transport section composes with the separately owned cache des
 Use actual separate Rust client/gateway processes for normal challenge/read,
 Preparing/retry progress, cached restart/reconnect, credential-only-read refusing
 write/manage, wrong owner/receiver/epoch, loss and both restarts. Use controlled
-peer-only fixtures for malformed envelope/fragmentation/HTTP-byte/control-flood
+peer-only fixtures (a native TLS peer) for malformed envelope/fragmentation/oversized-frame/event-flood
 branches; these are supplemental, not production acceptance replacements.
 Instrument actual gateway read admission to show fresh head calls before each
 core authorization boundary, including catalogue pre-commit refusal and record
@@ -99,11 +99,10 @@ substituted for that call.
 The scalar compiler handles only the schema subset used by handshake and generic
 envelopes and refuses unsupported keywords during generation. Wire cardinality
 and scalar checks do not grant permission. JSON acquisition is separately bounded
-by the websocket message ceiling; JSON and DTO conversion can retain temporary
-copies. HTTP acquisition counts all bytes physically returned before upgrade
-completion, including any websocket prefix returned in the same read. Engine
-buffer capacity, allocator overhead, OS scheduling and disk work are not reported
-as exact owned-payload bytes.
+by the protected frame ceiling (the generated response bound); JSON and DTO
+conversion can retain temporary copies. The TLS handshake is bounded by Auth's
+handshake byte budget. TLS buffer capacity, allocator overhead, OS scheduling
+and disk work are not reported as exact owned-payload bytes.
 
 ## Admitted wire schema grammar
 
@@ -218,11 +217,13 @@ already exist.
 
 ### Explicit online commands
 
-The same example also accepts `sync-records CACHE PROFILE CONVERSATION PAGES`,
-`check-records CACHE PROFILE CONVERSATION` (zero pages), and
-`sync-catalogue CACHE PROFILE PAGES`, with `pair PROFILE` (the code on standard
-input) and `status CACHE PROFILE` for the device's enrollment. Online arguments
-name the private profile and target, never a guessed source origin or
+The same example also accepts `sync-records PROFILE CONVERSATION PAGES`,
+`check-records PROFILE CONVERSATION` (zero pages), and
+`sync-catalogue PROFILE PAGES`, with `pair PROFILE` (the code read as one line
+from standard input) and `status PROFILE` for the device's enrollment. Online
+commands take no cache argument: the profile names the device's one cache, so a
+Terminal status can only purge the cache that holds that device's data. Online
+arguments name the private profile and target, never a guessed source origin or
 incarnation. Composition loads the device's issued credential, reads the
 gateway's pinned enrollment status, and only for Active opens the protected
 native session ([device pairing slice 3](auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3))
@@ -266,8 +267,8 @@ it returns. A later invocation asks the core to begin or resume again.
 | D8 | Explicit reset command supplies operation/caller, exact old/new six-part scopes and expected generation | Consume the existing attributed cache reset; output its original receipt with before/after meaning, cause, initiator and timestamp. Exact retries reuse caller-supplied operation identity; output failure does not retry or fabricate rollback | `reset_command_outputs_original_receipt_after_reopen` |
 
 The online command profile names the device's private enrollment state (an
-absolute root and a relative directory) and the gateway's numeric native
-address. It holds no secret, receiver, epoch or source scope: the device key,
+absolute root and a relative directory), its one cache (absolute), and the
+gateway's numeric native address. It holds no secret, receiver, epoch or source scope: the device key,
 gateway pin, credential id and receiver live in the private state, and the
 epoch is read fresh from the pinned status each command. Composition reads a
 private profile of at most 16 KiB and opens the private state through its
@@ -275,7 +276,7 @@ owner, which refuses unsafe storage and a second opener.
 
 | Row | Profile ordering | Result | Required evidence |
 | --- | --- | --- | --- |
-| D9 | Private profile is absent, malformed, oversized, has duplicate/unknown fields, a hostname, a relative root or an absolute state directory | Refuse before opening private state or any connection; decode only a bounded private file | `private_profile_admission_is_bounded_and_explicit` |
+| D9 | Private profile is absent, malformed, oversized, has duplicate/unknown fields, a hostname, a relative root or cache, or an absolute state directory | Refuse before opening private state or any connection; decode only a bounded private file | `private_profile_admission_is_bounded_and_explicit` |
 | D10 | The private state is first used, or already held by another command | Created beneath the root on first use; a second opener is refused while the first holds it | `profile_opens_one_private_state_owner` |
 
 Connection-check results belong to the current command. No durable last-contact

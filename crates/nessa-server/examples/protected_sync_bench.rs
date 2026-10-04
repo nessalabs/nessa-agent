@@ -209,11 +209,8 @@ fn run(arguments: &Arguments, size: usize, probes: bool, checks: &mut Checks) ->
     );
     let paired_a = a.pair(&gateway);
     checks.check(format!("n{size}.a.paired"), paired_a.is_some(), Value::Null);
-    let baseline = a.timed(&relay, &["status", &a.cache_arg(), &a.profile_arg()]);
-    let catalogue_a = a.timed(
-        &relay,
-        &["sync-catalogue", &a.cache_arg(), &a.profile_arg(), PAGES],
-    );
+    let baseline = a.timed(&relay, &["status", &a.profile_arg()]);
+    let catalogue_a = a.timed(&relay, &["sync-catalogue", &a.profile_arg(), PAGES]);
     let (initial_a, preparing_a, ready_a) = a.synced(&relay, &conversation);
     checks.check(
         format!("n{size}.a.initial_sync_complete"),
@@ -222,10 +219,7 @@ fn run(arguments: &Arguments, size: usize, probes: bool, checks: &mut Checks) ->
     );
     let paired_b = b.pair(&gateway);
     checks.check(format!("n{size}.b.paired"), paired_b.is_some(), Value::Null);
-    let catalogue_b = b.timed(
-        &relay,
-        &["sync-catalogue", &b.cache_arg(), &b.profile_arg(), PAGES],
-    );
+    let catalogue_b = b.timed(&relay, &["sync-catalogue", &b.profile_arg(), PAGES]);
     let (initial_b, preparing_b, ready_b) = b.synced(&relay, &conversation);
     checks.check(
         format!("n{size}.b.initial_sync_complete"),
@@ -281,13 +275,7 @@ fn run(arguments: &Arguments, size: usize, probes: bool, checks: &mut Checks) ->
     );
     let revoked = b.timed(
         &relay,
-        &[
-            "sync-records",
-            &b.cache_arg(),
-            &b.profile_arg(),
-            &conversation,
-            PAGES,
-        ],
+        &["sync-records", &b.profile_arg(), &conversation, PAGES],
     );
     checks.check(
         format!("n{size}.b.revoked_reads_terminal_and_purges"),
@@ -303,13 +291,7 @@ fn run(arguments: &Arguments, size: usize, probes: bool, checks: &mut Checks) ->
         purged_rows == 0,
         json!({"rows": purged_rows}),
     );
-    let after_revoke = b.run(&[
-        "sync-records",
-        &b.cache_arg(),
-        &b.profile_arg(),
-        &conversation,
-        PAGES,
-    ]);
+    let after_revoke = b.run(&["sync-records", &b.profile_arg(), &conversation, PAGES]);
     checks.check(
         format!("n{size}.b.no_longer_paired"),
         !after_revoke.ok && after_revoke.value["configurationFailure"] == "notPaired",
@@ -725,9 +707,10 @@ impl Device {
         let mut file =
             nessa_local_storage::open(&profile, nessa_local_storage::OpenMode::CreateNew).unwrap();
         file.write_all(
-            json!({"stateRoot": root, "stateDirectory": "state", "gatewayAddress": gateway.to_string()})
-                .to_string()
-                .as_bytes(),
+            json!({"stateRoot": root, "stateDirectory": "state",
+                "cache": root.join("cache.sqlite3"), "gatewayAddress": gateway.to_string()})
+            .to_string()
+            .as_bytes(),
         )
         .unwrap();
         Self {
@@ -779,7 +762,7 @@ impl Device {
             tracing::error!(%approved, "approval did not activate");
             return None;
         }
-        let active = self.run(&["status", &self.cache_arg(), &self.profile_arg()]);
+        let active = self.run(&["status", &self.profile_arg()]);
         let enrollment = &active.value["enrollment"];
         if enrollment["phase"] != "active" {
             return None;
@@ -828,13 +811,7 @@ impl Device {
             attempts += 1;
             let ran = self.timed(
                 relay,
-                &[
-                    "sync-records",
-                    &self.cache_arg(),
-                    &self.profile_arg(),
-                    conversation,
-                    PAGES,
-                ],
+                &["sync-records", &self.profile_arg(), conversation, PAGES],
             );
             let preparing = ran.value["transportFailure"]["productCode"] == "source_preparing";
             if !preparing || started.elapsed() > WAIT {
@@ -873,7 +850,7 @@ impl Device {
         let credential = saved.credential().as_str().to_owned();
         let pin = *saved.gateway_pin();
         drop(state);
-        let status = self.run(&["status", &self.cache_arg(), &self.profile_arg()]);
+        let status = self.run(&["status", &self.profile_arg()]);
         let epoch = status.value["enrollment"]["accessEpoch"]
             .as_str()
             .and_then(|epoch| epoch.parse().ok())

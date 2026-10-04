@@ -343,6 +343,7 @@ async fn gateway_child() {
             private_write(
                 &root.join("profile.json"),
                 &serde_json::to_vec(&json!({"stateRoot":root,"stateDirectory":"device",
+                    "cache":root.join("device-cache.sqlite3"),
                     "gatewayAddress":native.to_string()}))
                 .unwrap(),
             );

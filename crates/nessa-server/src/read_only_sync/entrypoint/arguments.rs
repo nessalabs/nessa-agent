@@ -6,7 +6,7 @@ use nessa_sync::replication::domain::{Id, Scope};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 
-pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status CACHE PROFILE\nread_only_sync sync-records CACHE PROFILE CONVERSATION PAGES\nread_only_sync check-records CACHE PROFILE CONVERSATION\nread_only_sync sync-catalogue CACHE PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
 
 pub(crate) enum Command {
     Local(LocalCommand),
@@ -15,19 +15,17 @@ pub(crate) enum Command {
         profile: PathBuf,
     },
     /// Read this device's enrollment status over the pinned gateway key; a
-    /// Terminal status purges the cache before the record goes.
+    /// Terminal status purges the profile's cache before the record goes.
     Status {
-        cache: PathBuf,
         profile: PathBuf,
     },
+    /// Online commands read into the cache their profile names.
     Records {
-        cache: PathBuf,
         profile: PathBuf,
         conversation: ConversationId,
         pages: usize,
     },
     Catalogue {
-        cache: PathBuf,
         profile: PathBuf,
         pages: usize,
     },
@@ -75,33 +73,29 @@ pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
                 profile: profile.into(),
             })
         }
-        [name, cache, profile] if name == "status" => {
+        [name, profile] if name == "status" => {
             return Ok(Command::Status {
-                cache: cache.into(),
                 profile: profile.into(),
             })
         }
-        [name, cache, profile, conversation, pages] if name == "sync-records" => {
+        [name, profile, conversation, pages] if name == "sync-records" => {
             return Ok(Command::Records {
-                cache: cache.into(),
                 profile: profile.into(),
                 conversation: ConversationId::new(conversation)
                     .map_err(|_| CommandError::Identity)?,
                 pages: page_count(pages)?,
             })
         }
-        [name, cache, profile, conversation] if name == "check-records" => {
+        [name, profile, conversation] if name == "check-records" => {
             return Ok(Command::Records {
-                cache: cache.into(),
                 profile: profile.into(),
                 conversation: ConversationId::new(conversation)
                     .map_err(|_| CommandError::Identity)?,
                 pages: 0,
             })
         }
-        [name, cache, profile, pages] if name == "sync-catalogue" => {
+        [name, profile, pages] if name == "sync-catalogue" => {
             return Ok(Command::Catalogue {
-                cache: cache.into(),
                 profile: profile.into(),
                 pages: page_count(pages)?,
             })

@@ -14,15 +14,30 @@ impl Effects {
         std::mem::take(&mut self.0.lock().unwrap())
     }
 }
-struct Store(Arc<Effects>);
+/// A record store holding either an issued credential or only a pending
+/// enrollment.
+struct Store(Arc<Effects>, bool);
+fn enrollment() -> PendingEnrollment {
+    PendingEnrollment::new(
+        PrivateKeyMaterial::new(zeroize::Zeroizing::new([7; 32])),
+        [9; 44],
+        intent(),
+    )
+}
 impl ClientPendingStore for Store {
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         self.0.push("load_pending");
-        Ok(None)
+        Ok((!self.1).then(enrollment))
     }
     fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
         self.0.push("load_credential");
-        Ok(None)
+        Ok(self.1.then(|| {
+            DeviceCredential::new(
+                enrollment(),
+                CredentialId::new("device-credential").unwrap(),
+                ResourceId::new("saved-receiver").unwrap(),
+            )
+        }))
     }
     fn save_credential(
         &self,
@@ -75,9 +90,16 @@ fn intent() -> PublicIntent {
     .unwrap()
 }
 fn store(effects: &Arc<Effects>, open: Result<Option<CacheError>, CacheError>) -> PurgeBeforeEnd {
+    holding(effects, open, true)
+}
+fn holding(
+    effects: &Arc<Effects>,
+    open: Result<Option<CacheError>, CacheError>,
+    issued: bool,
+) -> PurgeBeforeEnd {
     let purging = effects.clone();
     PurgeBeforeEnd::new(
-        Arc::new(Store(effects.clone())),
+        Arc::new(Store(effects.clone(), issued)),
         Id::new("saved-receiver").unwrap(),
         Box::new(move || {
             purging.push("open");
@@ -99,7 +121,10 @@ fn purge_precedes_record_removal() {
     purging.load_credential().unwrap();
     assert_eq!(effects.taken(), ["load_pending", "load_credential"]);
     purging.end_enrollment(intent()).unwrap();
-    assert_eq!(effects.taken(), ["open", "purge", "end_enrollment"]);
+    assert_eq!(
+        effects.taken(),
+        ["load_credential", "open", "purge", "end_enrollment"]
+    );
     let receipt = purging.purge().unwrap().unwrap();
     assert_eq!(receipt.receiver.as_str(), "saved-receiver");
 }
@@ -118,6 +143,7 @@ fn a_failed_purge_keeps_the_enrollment_record() {
             purging.end_enrollment(intent()),
             Err(PrivateStateError::Unavailable)
         );
+        let expected: Vec<_> = std::iter::once("load_credential").chain(expected).collect();
         assert_eq!(effects.taken(), expected, "no record removal");
         let cause = match open {
             Err(error) | Ok(Some(error)) => error,
@@ -125,6 +151,17 @@ fn a_failed_purge_keeps_the_enrollment_record() {
         };
         assert_eq!(purging.purge(), Some(Err(cause)));
     }
+}
+
+/// Review F3: ending a pending enrollment (an authenticated Unclaimed status)
+/// removes it without opening or purging any cache.
+#[test]
+fn only_ending_an_issued_credential_purges() {
+    let effects = Arc::new(Effects::default());
+    let pending = holding(&effects, Ok(None), false);
+    pending.end_enrollment(intent()).unwrap();
+    assert_eq!(effects.taken(), ["load_credential", "end_enrollment"]);
+    assert!(pending.purge().is_none());
 }
 
 /// Row PC5: authority refusals ask status again; transport, timing, source and

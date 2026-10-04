@@ -395,7 +395,9 @@ native listen address. Public tests are under
 `tests/device_pairing/infrastructure/activation.rs` and the composed process in
 `tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
 `tests/native_enrollment.rs`, which also registers the protected sessions in
-`tests/device_pairing/infrastructure/protected.rs`; codec tests are `tests/device_pairing/wire.rs`, the
+`tests/device_pairing/infrastructure/protected.rs`; the protected connection's
+write-wakeup unit test is `tests/device_pairing/infrastructure/protected_waker.rs`;
+codec tests are `tests/device_pairing/wire.rs`, the
 frame reader's unit tests are `tests/device_pairing/infrastructure/frames.rs`, the
 socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`
 and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
@@ -1506,7 +1508,8 @@ process, restart, output loss and authority-order evidence lives under
 `tests/composition/read_only_online.rs`, with canonical gateway provisioning and
 client/encoder support in its `read_only_online/fixtures/` children. Pure parser
 and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`,
-and the status decision's under `tests/read_only_sync/application/`.
+the status decision's under `tests/read_only_sync/application/`, and the
+code-line reader's in `tests/composition/read_only_device.rs`.
 `examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
 against a real `nessa server` and real client processes and reports timings and
 bytes on the wire as JSON.

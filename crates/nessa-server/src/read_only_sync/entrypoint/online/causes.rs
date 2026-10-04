@@ -61,6 +61,7 @@ pub(crate) fn cache_failure(error: &CacheError) -> Value {
         CacheError::Uncertain => "uncertain",
         CacheError::Quota => "quota",
         CacheError::Corrupt => "corrupt",
+        CacheError::OutdatedSchema => "outdatedSchema",
         CacheError::CatalogueProgress(cause) => {
             return json!({"code":"catalogueProgress", "cause":catalogue_progress_failure(cause)})
         }

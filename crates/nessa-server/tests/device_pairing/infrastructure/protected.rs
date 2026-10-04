@@ -547,10 +547,13 @@ async fn open_product_is_only_a_first_envelope_and_needs_sessions() {
     fixture.gateway.shutdown().await;
 }
 
-/// Rows PR10, PR11: protected sessions hold the listener's eight permits, so a
-/// ninth connection is refused; shutdown wakes idle sessions and drains.
+/// Rows PR10, PR11 and review F6b/F6c: product sessions have a pool of their
+/// own, so eight held sessions refuse a ninth `openProduct` with `Refused` yet
+/// leave enrollment and pinned status served; a stop wakes every held
+/// session at once, an unauthenticated one included, well inside the
+/// handshake deadline.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn protected_sessions_share_permits_and_are_woken_by_shutdown() {
+async fn protected_sessions_have_their_own_pool_and_are_woken_by_shutdown() {
     let fixture = Fixture::new().await;
     let (address, stop, listener, connections) =
         fixture.listener_serving(Some(sessions(&fixture))).await;
@@ -558,7 +561,7 @@ async fn protected_sessions_share_permits_and_are_woken_by_shutdown() {
     let credential = device.credential.clone();
     let saved = device.store.clone();
     let (held, ninth) = blocking(move || {
-        let held = (0..8)
+        let mut held = (0..7)
             .map(|_| {
                 let mut probe = Probe::open(address, &saved);
                 let nonce = probe.nonce.clone();
@@ -566,26 +569,57 @@ async fn protected_sessions_share_permits_and_are_woken_by_shutdown() {
                 probe
             })
             .collect::<Vec<_>>();
+        // The eighth holds its permit before authenticating.
+        held.push(Probe::open(address, &saved));
         let (key, pin) = device_key(&saved);
         let identity = NativeIdentity::restore(key).unwrap();
         let socket = TcpStream::connect(address).unwrap();
         socket.set_read_timeout(Some(WAIT)).unwrap();
-        let ninth = NativeTransport::connect(socket, &identity, GatewayTrust::Pinned(pin)).is_err();
+        let transport =
+            NativeTransport::connect(socket, &identity, GatewayTrust::Pinned(pin)).unwrap();
+        let mut channel = EnrollmentChannel::new(transport);
+        channel
+            .send_envelope(&encode_request(&NativePairingRequest::OpenProduct).unwrap())
+            .unwrap();
+        let ninth = decode_reply(&channel.receive_envelope().unwrap()).unwrap();
         (held, ninth)
     })
     .await;
-    assert!(ninth, "the ninth connection gets no TLS session");
+    assert!(
+        matches!(ninth, NativePairingReply::Refused),
+        "a full product pool refuses the ninth session: {ninth:?}"
+    );
+    // Pinned status, which a purge depends on, is still served.
+    let client =
+        NativeEnrollmentClient::new(device.store.clone(), RuntimeDependencies::default().clock);
+    let status = tokio::time::timeout(
+        WAIT,
+        client.status(TcpStream::connect(address).unwrap(), None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        matches!(status, NativePairingStatus::Active { .. }),
+        "{status:?}"
+    );
+    client.shutdown().await;
+    let stopped = std::time::Instant::now();
     stop.send(()).unwrap();
-    // The listener's stop wakes the held sessions and collects them; a wake
-    // that did not end them would leave this waiting.
     tokio::time::timeout(WAIT, listener)
         .await
         .expect("stop wakes and collects every held protected session")
         .unwrap()
         .unwrap();
+    assert!(
+        stopped.elapsed() < std::time::Duration::from_secs(5),
+        "woken at once, not at the 10 s handshake deadline: {:?}",
+        stopped.elapsed()
+    );
     tokio::time::timeout(WAIT, connections.shutdown())
         .await
-        .expect("shutdown wakes idle protected sessions and drains them");
+        .expect("every permit, connection and product, is back");
+    assert_eq!(connections.product_wake_report().unwrap().iter().count(), 8);
     let closed = blocking(move || held.into_iter().all(|mut probe| probe.value().is_none())).await;
     assert!(closed, "every held session was closed by the wake");
     fixture.gateway.shutdown().await;

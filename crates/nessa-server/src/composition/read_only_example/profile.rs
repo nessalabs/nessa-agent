@@ -1,6 +1,9 @@
 //! Private command configuration: where this device keeps its enrollment
-//! state, and the gateway's native address. No secret is in it; the device key
-//! and issued credential live in the private state directory it names.
+//! state, the one cache that holds its data, and the gateway's native address.
+//! No secret is in it; the device key and issued credential live in the
+//! private state directory it names. Online commands take no cache argument:
+//! the profile's cache is the only one a Terminal status can purge, so no
+//! other cache can be left holding a revoked device's data (design row PC3).
 use nessa_auth::adapters::pairing::FilePairingState;
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
@@ -25,12 +28,16 @@ pub(super) enum ProfileError {
 struct ProfileDocument {
     state_root: PathBuf,
     state_directory: PathBuf,
+    cache: PathBuf,
     gateway_address: SocketAddr,
 }
 
 pub(super) struct Profile {
     /// The gateway's native listener: a numeric address, never looked up.
     pub(super) gateway: SocketAddr,
+    /// This device's private cache: the one its reads fill and its purge
+    /// empties.
+    pub(super) cache: PathBuf,
     state_root: PathBuf,
     state_directory: PathBuf,
 }
@@ -40,11 +47,15 @@ impl Profile {
         let bytes = read_private(path, MAX_PROFILE_BYTES)?;
         let document: ProfileDocument =
             serde_json::from_slice(&bytes).map_err(|_| ProfileError::Invalid)?;
-        if !document.state_root.is_absolute() || document.state_directory.is_absolute() {
+        if !document.state_root.is_absolute()
+            || document.state_directory.is_absolute()
+            || !document.cache.is_absolute()
+        {
             return Err(ProfileError::Invalid);
         }
         Ok(Self {
             gateway: document.gateway_address,
+            cache: document.cache,
             state_root: document.state_root,
             state_directory: document.state_directory,
         })

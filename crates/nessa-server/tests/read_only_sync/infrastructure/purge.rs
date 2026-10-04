@@ -119,3 +119,23 @@ async fn purge_is_atomic_audited_and_fences_the_receiver() {
     // Another receiver still reads and writes.
     assert!(late.observe_head(&other_scope(), 0).is_ok());
 }
+
+/// Review F4: a cache made before purge receipts existed is refused at open
+/// with its own typed cause, and nothing in it is changed.
+#[test]
+fn a_cache_without_purge_receipts_is_refused_at_open() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "cache.sqlite3");
+    let cache = cache(&path);
+    cache
+        .connection
+        .execute("DROP TABLE cache_purges", [])
+        .unwrap();
+    drop(cache);
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(
+        ReadOnlyCache::open(&path, policy(), std::sync::Arc::new(FixedClock)).err(),
+        Some(crate::read_only_sync::application::CacheError::OutdatedSchema)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}

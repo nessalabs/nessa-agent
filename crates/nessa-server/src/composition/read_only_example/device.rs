@@ -29,8 +29,8 @@ use std::{
 
 /// How long a TCP connect to the gateway may take.
 const CONNECT: Duration = Duration::from_secs(5);
-/// Bytes read from standard input for a code: `XXXX-XXXX`, a line ending, and
-/// one more to tell an overlong line apart.
+/// Longest code line read from standard input: `XXXX-XXXX`, a line ending,
+/// and one more byte to tell an overlong line apart.
 const CODE_INPUT_BYTES: usize = 12;
 
 /// One enrollment client over this device's private state.
@@ -83,25 +83,34 @@ fn connect(address: SocketAddr) -> Result<TcpStream, NativeClientError> {
         .map_err(|error| NativeClientError::Io(error.kind()))
 }
 
-/// Read one code line from `input`, bounded; the copy is overwritten after
-/// parsing. A trailing line ending is framing, not part of the code.
+/// Read one code line from `input`: up to a line ending, end of input or the
+/// byte bound, whichever comes first, so a terminal need not close its input.
+/// The copy is overwritten after parsing. The line ending is framing, not
+/// part of the code (`code_is_read_from_one_line`).
 pub(super) fn read_code(input: &mut dyn Read) -> Option<ManualCode> {
-    let mut bytes = Vec::with_capacity(CODE_INPUT_BYTES);
-    let read = input
-        .take(CODE_INPUT_BYTES as u64)
-        .read_to_end(&mut bytes)
-        .is_ok();
-    let mut line = bytes.as_slice();
-    for ending in [&b"\r\n"[..], &b"\n"[..]] {
-        if let Some(stripped) = line.strip_suffix(ending) {
-            line = stripped;
-            break;
+    let mut line = Vec::with_capacity(CODE_INPUT_BYTES);
+    let mut byte = [0; 1];
+    while line.len() < CODE_INPUT_BYTES {
+        match input.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) => line.push(byte[0]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => {
+                line.fill(0);
+                return None;
+            }
         }
     }
-    let code = read.then(|| ManualCode::parse(line).ok()).flatten();
-    bytes.fill(0);
+    let text = line.strip_suffix(b"\r").unwrap_or(&line);
+    let code = ManualCode::parse(text).ok();
+    line.fill(0);
     code
 }
+
+#[cfg(test)]
+#[path = "../../../tests/composition/read_only_device.rs"]
+mod tests;
 
 /// What the application decides from; `None` for an Active status whose
 /// receiver is not a valid sync identity.

@@ -7,8 +7,8 @@
 //!               --> anything else, or no answer --> keep the cache, no read
 //! ```
 //! Arrows are decisions and calls. Only a Terminal status read over the
-//! strictly pinned gateway key ends the device's enrollment record, and the
-//! enrollment client does that itself. `PurgeBeforeEnd` is the record store it
+//! strictly pinned gateway key ends the device's issued credential record, and
+//! the enrollment client does that itself. `PurgeBeforeEnd` is the record store it
 //! is given: it purges the receiver's cached rows, with their receipt, before
 //! the record may go, so a device never forgets a receiver whose data it still
 //! holds. A refusal, a timeout, a closed connection or an unreadable status
@@ -103,9 +103,16 @@ impl ClientPendingStore for PurgeBeforeEnd {
     ) -> Result<(), PrivateStateError> {
         self.store.save_credential(credential, receiver, expected)
     }
-    /// Purge, then remove the record. A purge that fails keeps the record, so
-    /// the next authenticated Terminal status purges again.
+    /// The client ends a record on an authenticated Terminal status, and ends
+    /// a pending one on an authenticated Unclaimed status. Only an issued
+    /// credential can have cached data, and the gateway never reports
+    /// Unclaimed for an attempt that was claimed, so only ending a credential
+    /// record purges (`only_ending_an_issued_credential_purges`). A purge that
+    /// fails keeps the record, so the next Terminal status purges again.
     fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        if self.store.load_credential()?.is_none() {
+            return self.store.end_enrollment(expected);
+        }
         let purged = (self.open)().and_then(|mut cache| cache.purge_receiver(&self.receiver));
         let refused = purged.is_err();
         *self.purged.lock().unwrap_or_else(PoisonError::into_inner) = Some(purged);
