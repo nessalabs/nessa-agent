@@ -8,7 +8,8 @@
 //!
 //! [`unique_envelope`] is the narrower rule for a frame that has already been
 //! rejected and only has to be attributed to a request: it judges the envelope's
-//! own names and carries what is nested without choosing from it.
+//! own names and carries what is nested without choosing from it. A string that
+//! is not Unicode does not hide those names.
 
 use serde::{
     de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor},
@@ -39,94 +40,318 @@ pub fn unique_value(text: &str) -> Result<Value, serde_json::Error> {
 /// a frame that names `id` or `method` twice cannot, and is rejected here rather
 /// than having the server pick one. Nested values are decoded as they arrive and
 /// counted against the same budget; nothing is selected from them.
+///
+/// A string serde_json cannot turn into Unicode — a lone UTF-16 surrogate — is
+/// not text. The walk leaves JSON null in its place and continues, so an `id`
+/// that itself is Unicode can still be read. Callers read `type` and `id` only
+/// when they are strings; that null is not the sender's value.
 pub fn unique_envelope(text: &str) -> Result<Value, serde_json::Error> {
-    let mut decoder = serde_json::Deserializer::from_str(text);
-    let mut budget = JsonBudget {
-        remaining: MAX_JSON_ITEMS,
+    let mut parser = EnvelopeParser {
+        text,
+        index: 0,
+        budget: JsonBudget {
+            remaining: MAX_JSON_ITEMS,
+        },
     };
-    let value = EnvelopeValue(&mut budget).deserialize(&mut decoder)?;
-    decoder.end()?;
+    parser.skip_ws();
+    parser.budget.take()?;
+    let depth = deeper(0)?;
+    parser.expect(b'{')?;
+    let value = Value::Object(parser.object_body(depth, true)?);
+    parser.skip_ws();
+    if parser.index != parser.text.len() {
+        return Err(syntax("trailing data"));
+    }
     Ok(value)
 }
 
-struct EnvelopeValue<'a>(&'a mut JsonBudget);
-impl<'de> DeserializeSeed<'de> for EnvelopeValue<'_> {
-    type Value = Value;
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-        self.0.take()?;
-        deserializer.deserialize_any(EnvelopeVisitor(self.0))
-    }
+fn syntax(message: &str) -> serde_json::Error {
+    Error::custom(message)
 }
-struct EnvelopeVisitor<'a>(&'a mut JsonBudget);
-// Only `visit_map` is implemented: an envelope that is not an object is not a
-// request and has no `id` to answer to, so it is refused here.
-impl<'de> Visitor<'de> for EnvelopeVisitor<'_> {
-    type Value = Value;
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a frame envelope with unique key names")
+
+// serde_json's default recursion limit fails the 128th container. Pinned by
+// `envelope_container_depth_matches_serde_json`.
+const MAX_CONTAINERS: usize = 127;
+
+fn deeper(depth: usize) -> Result<usize, serde_json::Error> {
+    if depth >= MAX_CONTAINERS {
+        return Err(syntax("recursion limit exceeded"));
     }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-        let mut values = Map::new();
-        while let Some(key) = map.next_key_seed(ObjectKey(self.0))? {
-            if values.contains_key(&key) {
-                return Err(A::Error::custom("duplicate frame envelope key"));
+    Ok(depth + 1)
+}
+
+struct EnvelopeParser<'a> {
+    text: &'a str,
+    index: usize,
+    budget: JsonBudget,
+}
+
+impl<'a> EnvelopeParser<'a> {
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.index += 1;
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.text.as_bytes().get(self.index).copied()
+    }
+
+    fn pop_byte(&mut self) -> Result<u8, serde_json::Error> {
+        match self.peek() {
+            Some(byte) => {
+                self.index += 1;
+                Ok(byte)
             }
-            // Nested values are carried, never chosen from — so a repeated name
+            None => Err(syntax("unexpected end of JSON")),
+        }
+    }
+
+    fn expect(&mut self, byte: u8) -> Result<(), serde_json::Error> {
+        if self.pop_byte()? != byte {
+            return Err(syntax("unexpected JSON byte"));
+        }
+        Ok(())
+    }
+
+    fn object_body(
+        &mut self,
+        depth: usize,
+        envelope: bool,
+    ) -> Result<Map<String, Value>, serde_json::Error> {
+        let mut values = Map::new();
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.index += 1;
+            return Ok(values);
+        }
+        loop {
+            self.skip_ws();
+            self.budget.take()?;
+            let key = self.parse_string()?;
+            self.skip_ws();
+            self.expect(b':')?;
+            if envelope {
+                if let Some(name) = &key {
+                    if values.contains_key(name) {
+                        return Err(syntax("duplicate frame envelope key"));
+                    }
+                }
+            }
+            // Nested values are carried, never chosen from — a repeated name
             // below the envelope is kept rather than refused. They are counted
             // like any other item; charging one for a whole subtree would let
             // the correlation path allocate what the strict path refuses.
-            values.insert(key, map.next_value_seed(NestedValue(self.0))?);
+            let value = self.parse_value(depth)?;
+            if let Some(key) = key {
+                values.insert(key, value);
+            }
+            self.skip_ws();
+            match self.pop_byte()? {
+                b',' => continue,
+                b'}' => return Ok(values),
+                _ => return Err(syntax("expected ',' or '}'")),
+            }
         }
-        Ok(Value::Object(values))
     }
-}
-struct NestedValue<'a>(&'a mut JsonBudget);
-impl<'de> DeserializeSeed<'de> for NestedValue<'_> {
-    type Value = Value;
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-        self.0.take()?;
-        deserializer.deserialize_any(NestedVisitor(self.0))
+
+    fn parse_value(&mut self, depth: usize) -> Result<Value, serde_json::Error> {
+        self.budget.take()?;
+        self.skip_ws();
+        match self.peek() {
+            Some(b'{') => {
+                let depth = deeper(depth)?;
+                self.expect(b'{')?;
+                Ok(Value::Object(self.object_body(depth, false)?))
+            }
+            Some(b'[') => {
+                let depth = deeper(depth)?;
+                self.expect(b'[')?;
+                Ok(Value::Array(self.array_body(depth)?))
+            }
+            Some(b'"') => Ok(match self.parse_string()? {
+                Some(text) => Value::String(text),
+                // Not the sender's text. A request id that lands here is not a
+                // string, so correlation does not answer it.
+                None => Value::Null,
+            }),
+            Some(b't') => self.literal(b"true", Value::Bool(true)),
+            Some(b'f') => self.literal(b"false", Value::Bool(false)),
+            Some(b'n') => self.literal(b"null", Value::Null),
+            Some(b'-' | b'0'..=b'9') => self.parse_number(),
+            _ => Err(syntax("invalid JSON value")),
+        }
     }
-}
-struct NestedVisitor<'a>(&'a mut JsonBudget);
-impl<'de> Visitor<'de> for NestedVisitor<'_> {
-    type Value = Value;
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("bounded JSON")
-    }
-    fn visit_bool<E: Error>(self, value: bool) -> Result<Value, E> {
-        Ok(Value::Bool(value))
-    }
-    fn visit_i64<E: Error>(self, value: i64) -> Result<Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-    fn visit_u64<E: Error>(self, value: u64) -> Result<Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-    fn visit_f64<E: Error>(self, value: f64) -> Result<Value, E> {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .ok_or_else(|| E::custom("invalid JSON number"))
-    }
-    fn visit_str<E: Error>(self, value: &str) -> Result<Value, E> {
-        Ok(Value::String(value.into()))
-    }
-    fn visit_unit<E: Error>(self) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+
+    fn array_body(&mut self, depth: usize) -> Result<Vec<Value>, serde_json::Error> {
         let mut values = Vec::new();
-        while let Some(value) = seq.next_element_seed(NestedValue(self.0))? {
-            values.push(value);
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.index += 1;
+            return Ok(values);
         }
-        Ok(Value::Array(values))
+        loop {
+            values.push(self.parse_value(depth)?);
+            self.skip_ws();
+            match self.pop_byte()? {
+                b',' => continue,
+                b']' => return Ok(values),
+                _ => return Err(syntax("expected ',' or ']'")),
+            }
+        }
     }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-        let mut values = Map::new();
-        while let Some(key) = map.next_key_seed(ObjectKey(self.0))? {
-            values.insert(key, map.next_value_seed(NestedValue(self.0))?);
+
+    fn literal(&mut self, bytes: &[u8], value: Value) -> Result<Value, serde_json::Error> {
+        if !self.text.as_bytes()[self.index..].starts_with(bytes) {
+            return Err(syntax("invalid literal"));
         }
-        Ok(Value::Object(values))
+        self.index += bytes.len();
+        Ok(value)
+    }
+
+    fn parse_number(&mut self) -> Result<Value, serde_json::Error> {
+        let start = self.index;
+        if self.peek() == Some(b'-') {
+            self.index += 1;
+        }
+        match self.peek() {
+            Some(b'0') => self.index += 1,
+            Some(b'1'..=b'9') => {
+                self.index += 1;
+                while matches!(self.peek(), Some(b'0'..=b'9')) {
+                    self.index += 1;
+                }
+            }
+            _ => return Err(syntax("invalid number")),
+        }
+        if self.peek() == Some(b'.') {
+            self.index += 1;
+            let fraction = self.index;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.index += 1;
+            }
+            if self.index == fraction {
+                return Err(syntax("invalid number"));
+            }
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.index += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.index += 1;
+            }
+            let exponent = self.index;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.index += 1;
+            }
+            if self.index == exponent {
+                return Err(syntax("invalid number"));
+            }
+        }
+        serde_json::from_str(&self.text[start..self.index]).map_err(|_| syntax("invalid number"))
+    }
+
+    /// `Some` is a Unicode string. `None` is a structurally valid string that is
+    /// not Unicode (a lone surrogate); the caller keeps walking.
+    fn parse_string(&mut self) -> Result<Option<String>, serde_json::Error> {
+        self.expect(b'"')?;
+        let mut out = String::new();
+        let mut unicode = true;
+        loop {
+            match self.peek() {
+                None => return Err(syntax("unterminated string")),
+                Some(b'"') => {
+                    self.index += 1;
+                    break;
+                }
+                Some(b'\\') => {
+                    self.index += 1;
+                    if !self.escape(unicode.then_some(&mut out))? {
+                        unicode = false;
+                        out.clear();
+                    }
+                }
+                Some(0x00..=0x1F) => return Err(syntax("control character in string")),
+                Some(_) => {
+                    let ch = self.pop_char()?;
+                    if unicode {
+                        out.push(ch);
+                    }
+                }
+            }
+        }
+        Ok(unicode.then_some(out))
+    }
+
+    fn pop_char(&mut self) -> Result<char, serde_json::Error> {
+        let ch = self.text[self.index..]
+            .chars()
+            .next()
+            .ok_or_else(|| syntax("unexpected end of JSON"))?;
+        self.index += ch.len_utf8();
+        Ok(ch)
+    }
+
+    /// `out` is `None` once the string is already not Unicode, so the rest is
+    /// only scanned. Returns whether this escape is a Unicode scalar. A lone
+    /// surrogate returns false and leaves the next byte of the string in place:
+    /// serde_json stops at that byte, and stopping here would hide a later `id`.
+    fn escape(&mut self, mut out: Option<&mut String>) -> Result<bool, serde_json::Error> {
+        let simple = match self.pop_byte()? {
+            b'"' => '"',
+            b'\\' => '\\',
+            b'/' => '/',
+            b'b' => '\u{0008}',
+            b'f' => '\u{000c}',
+            b'n' => '\n',
+            b'r' => '\r',
+            b't' => '\t',
+            b'u' => return self.unicode_escape(out),
+            _ => return Err(syntax("invalid escape")),
+        };
+        if let Some(out) = out.as_mut() {
+            out.push(simple);
+        }
+        Ok(true)
+    }
+
+    fn unicode_escape(&mut self, mut out: Option<&mut String>) -> Result<bool, serde_json::Error> {
+        let unit = self.hex4()?;
+        if (0xDC00..=0xDFFF).contains(&unit) {
+            return Ok(false);
+        }
+        if !(0xD800..=0xDBFF).contains(&unit) {
+            if let Some(out) = out.as_mut() {
+                out.push(char::from_u32(u32::from(unit)).ok_or_else(|| syntax("invalid unicode"))?);
+            }
+            return Ok(true);
+        }
+        if self.peek() != Some(b'\\') || self.text.as_bytes().get(self.index + 1) != Some(&b'u') {
+            return Ok(false);
+        }
+        self.index += 2;
+        let low = self.hex4()?;
+        if !(0xDC00..=0xDFFF).contains(&low) {
+            return Ok(false);
+        }
+        if let Some(out) = out.as_mut() {
+            let scalar = 0x1_0000 + ((u32::from(unit - 0xD800) << 10) | u32::from(low - 0xDC00));
+            out.push(char::from_u32(scalar).ok_or_else(|| syntax("invalid unicode"))?);
+        }
+        Ok(true)
+    }
+
+    fn hex4(&mut self) -> Result<u16, serde_json::Error> {
+        let mut unit = 0u16;
+        for _ in 0..4 {
+            let digit = match self.pop_byte()? {
+                byte @ b'0'..=b'9' => byte - b'0',
+                byte @ b'a'..=b'f' => byte - b'a' + 10,
+                byte @ b'A'..=b'F' => byte - b'A' + 10,
+                _ => return Err(syntax("invalid hex escape")),
+            };
+            unit = (unit << 4) | u16::from(digit);
+        }
+        Ok(unit)
     }
 }
 
@@ -289,6 +514,95 @@ mod tests {
         );
         assert!(unique_envelope(&nested).is_err());
         assert!(unique_value(&nested).is_err());
+    }
+
+    #[test]
+    fn a_decodable_envelope_matches_serde_json() {
+        for text in [
+            r#"{"type":"req","id":"x","method":"m","params":{"scope":["a","b"],"nested":{"x":1,"y":null}},"flag":true,"n":null,"count":10,"list":[1,"a",false]}"#,
+            r#"{"type":"req","id":"x","method":"m","params":{"p":1,"p":2,"e":"\ud83d\ude00","slash":"\/"},"n":-0,"exp":1e2}"#,
+            r#"{"id":"x","method":"m","params":{}}"#,
+            r#"{}"#,
+            r#"{"a":"\u0000\n\t\/"}"#,
+        ] {
+            assert_eq!(
+                unique_envelope(text).unwrap(),
+                serde_json::from_str::<Value>(text).unwrap(),
+                "{text}"
+            );
+        }
+        for text in [
+            r#"{"a":01}"#,
+            r#"{"a":1.}"#,
+            r#"{"a":-}"#,
+            r#"{"a":1e}"#,
+            r#"{"a":+1}"#,
+            r#"{"a":"unterminated}"#,
+            "{\"a\":\"\n\"}",
+        ] {
+            assert_eq!(
+                unique_envelope(text).is_err(),
+                serde_json::from_str::<Value>(text).is_err(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undecodable_string_does_not_hide_a_readable_request_id() {
+        // Both serde_json failures: a lone leading surrogate (`\ud800`,
+        // unexpected end of the pair) and a lone trailing one (`\udfff`).
+        for text in [
+            r#"{"type":"req","id":"request-9","method":"mcp.callTool","params":{"argumentsJson":"\ud800"}}"#,
+            r#"{"type":"req","method":"server.health","params":{"note":"\ud800"},"id":"request-9"}"#,
+            r#"{"params":{"note":"\udfff"},"id":"request-9","method":"conversation.send","type":"req"}"#,
+            r#"{"type":"req","id":"request-9","method":"mcp.readResource","params":{"uri":"\uD800\uD800"}}"#,
+            r#"{"type":"req","\ud800":1,"id":"request-9","method":"m","params":{}}"#,
+            r#"{"type":"req","method":"\ud800","id":"request-9","params":{}}"#,
+        ] {
+            let value = unique_envelope(text).unwrap_or_else(|error| panic!("{text}: {error}"));
+            assert_eq!(value["id"], "request-9", "{text}");
+            assert_eq!(value["type"], "req", "{text}");
+            assert!(unique_value(text).is_err(), "strict decode accepted {text}");
+        }
+        // The id itself is not Unicode: there is no request id to answer.
+        let bare =
+            unique_envelope(r#"{"type":"req","id":"\ud800","method":"m","params":{}}"#).unwrap();
+        assert!(bare.get("id").and_then(Value::as_str).is_none());
+        // A repeated id is still not one request, including when spelled as an escape.
+        for text in [
+            r#"{"type":"req","id":"a","id":"b","method":"m","params":{"a":"\ud800"}}"#,
+            r#"{"id":"\ud800","id":"real"}"#,
+            r#"{"id":"real","id":"\ud800"}"#,
+            r#"{"id":"a","\u0069\u0064":"b"}"#,
+            r#"{"\u0069\u0064":"b","id":"a"}"#,
+        ] {
+            assert!(unique_envelope(text).is_err(), "accepted {text}");
+        }
+    }
+
+    #[test]
+    fn envelope_container_depth_matches_serde_json() {
+        for depth in [126, 127, 128, 129] {
+            let mut nested = "0".to_string();
+            for _ in 0..depth {
+                nested = format!("[{nested}]");
+            }
+            let frame = format!(r#"{{"id":{nested}}}"#);
+            assert_eq!(
+                unique_envelope(&frame).is_ok(),
+                serde_json::from_str::<Value>(&frame).is_ok(),
+                "depth {depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_envelope_decode_rejects_a_non_object_and_trailing_input() {
+        assert!(unique_envelope("null").is_err());
+        assert!(unique_envelope("[1]").is_err());
+        assert!(unique_envelope("{").is_err());
+        assert!(unique_envelope(r#"{"id":"x"} {"id":"y"}"#).is_err());
     }
 
     #[test]

@@ -1239,10 +1239,11 @@ fn action_for_method(method: &str) -> Option<&'static str> {
 }
 
 // Which request to blame for a frame that did not decode. A nested duplicate
-// still leaves one unambiguous `id`, so that frame is answered; a frame that
-// named `id` twice has no single request to answer, and the server does not pick
-// one. That frame gets no reply, as any other uncorrelatable text does, and the
-// client's own request timeout settles it.
+// still leaves one unambiguous `id`, and so does a nested string that is not
+// Unicode: that frame is answered `invalid_request`. A frame that named `id`
+// twice, or whose `id` is not itself a string, has no single request to answer,
+// and the server does not pick one. That frame gets no reply, as any other
+// uncorrelatable text does, and the client's own request timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
     let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
@@ -2765,6 +2766,46 @@ mod tests {
         assert_eq!(response.id, "request-7");
         assert_eq!(response.error.unwrap().code, "invalid_request");
         assert!(correlatable_invalid_request("not json").is_none());
+    }
+
+    #[test]
+    fn a_nested_lone_surrogate_is_answered_invalid_request() {
+        for (method, id_first) in [
+            ("mcp.callTool", true),
+            ("mcp.callTool", false),
+            ("server.health", true),
+            ("server.health", false),
+        ] {
+            let params = r#"{"nested":"\ud800"}"#;
+            let text = if id_first {
+                format!(
+                    r#"{{"type":"req","id":"request-9","method":"{method}","params":{params}}}"#
+                )
+            } else {
+                format!(
+                    r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+                )
+            };
+            assert!(
+                RequestFrame::decode(&text).is_err(),
+                "{method} decoded; the refusal path was not reached"
+            );
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} id_first={id_first} got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"\ud800","method":"server.health","params":{}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"a","id":"b","method":"mcp.callTool","params":{"nested":"\ud800"}}"#
+        )
+        .is_none());
     }
 
     #[tokio::test]

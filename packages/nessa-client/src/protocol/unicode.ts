@@ -2,9 +2,10 @@
 const unpairedSurrogate = /\p{Surrogate}/u
 
 /**
- * Whether `text` is Unicode: no surrogate without its partner. The gateway's
- * JSON decoder cannot read one, so a frame holding one is never answered
- * (#403). The one statement of it, for every string this client checks.
+ * Whether `text` is Unicode: no surrogate without its partner. The gateway
+ * answers `invalid_request` for a frame that carries one when the request id
+ * itself can still be read (#403). The one statement of it, for every string
+ * this client checks before it sends.
  */
 export function wellFormedText(text: string): boolean {
   return !unpairedSurrogate.test(text)

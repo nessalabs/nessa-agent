@@ -38,7 +38,15 @@ or schema version bump is needed merely to change this repository's current cont
 | `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
-its request. Mutations separately carry a stable `requestId` for explicit retries.
+its request. A request the gateway cannot decode is still answered when that
+`id` is one string:
+
+| What the frame holds | What the gateway does |
+| --- | --- |
+| One `id`, `type` is `req`, and the frame does not decode — a string that is not Unicode included | `invalid_request` on that `id` |
+| `id` named twice, `id` not a string, or `type` not `req` | no reply; the caller's own timeout settles it |
+
+Mutations separately carry a stable `requestId` for explicit retries.
 Credential and session `expiresAt` may be null; issuance defaults to no expiry.
 Authentication challenges advertise a Unix-second deadline rounded up from
 millisecond wall time. A single monotonic timeout covers challenge delivery and
