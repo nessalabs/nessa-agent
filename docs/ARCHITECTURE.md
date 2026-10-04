@@ -813,8 +813,10 @@ request passes current credential, receiver-binding and conversation-owner
 admission before the server checks the exact SDK stream identity. A tracked
 source thread reads one bounded head or page without opening an Agent or writer
 lease. The socket reserves one record response per connection and four across
-the gateway, retaining global capacity through source completion and physical
-delivery. Product JSON/base64 responses have a separate 128 KiB ceiling; other
+the gateway. Physical source work retains capacity until joined; response
+delivery releases its ownership before sending, after encoding and size checks
+([R61 and R64](design/authorized-record-reads.md)).
+Product JSON/base64 responses have a separate 128 KiB ceiling; other
 responses retain their existing limit. Receiver download and semantic-apply
 checkpoints belong to the receiving process, not this gateway.
 
