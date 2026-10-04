@@ -386,10 +386,15 @@ fn signal_group(group: u32, force: bool) -> Result<(), AgentError> {
             if force { libc::SIGKILL } else { libc::SIGTERM },
         )
     };
-    if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(AgentError::CleanupUncertain)
+    // ESRCH: the group is gone. EPERM: macOS refuses to signal a group whose
+    // members are all exiting or exited-but-unreaped, which is what our group is
+    // when the adapter quits on stdin EOF just before this signal. Neither is a
+    // verdict; `wait_scope` owns whether the scope is gone. Held by
+    // `infrastructure::process::tests::signalling_an_exited_unreaped_group_is_not_a_cleanup_failure`.
+    match std::io::Error::last_os_error().raw_os_error() {
+        _ if result == 0 => Ok(()),
+        Some(libc::ESRCH | libc::EPERM) => Ok(()),
+        _ => Err(AgentError::CleanupUncertain),
     }
 }
 #[cfg(unix)]

@@ -209,3 +209,26 @@ async fn dropping_an_unconfirmed_process_retains_its_private_directory() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[tokio::test]
+async fn signalling_an_exited_unreaped_group_is_not_a_cleanup_failure() {
+    let mut scope = ProcessScope::spawn(exiting_command()).unwrap();
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // WNOWAIT observes the exit and leaves the leader unreaped: the state the
+    // group is in when the adapter quits on stdin EOF just before the signal.
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            scope.group as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(waited, 0);
+    assert_eq!(signal_group(scope.group, false), Ok(()));
+    assert_eq!(signal_group(scope.group, true), Ok(()));
+    assert_eq!(
+        scope.cleanup(Duration::ZERO, Duration::from_secs(2)).await,
+        Ok(CloseOutcome { forced: false })
+    );
+}
