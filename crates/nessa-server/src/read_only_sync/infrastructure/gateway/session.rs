@@ -350,13 +350,18 @@ impl Session {
     pub(crate) fn finish(&mut self) -> Result<GatewayOutcome, GatewayError> {
         self.active.take().ok_or(GatewayError::Busy)
     }
+    /// Fail the current operation with its first cause. The connection is
+    /// closed unless `error` is a typed refusal the gateway answered on an
+    /// intact connection that a later operation may ask again (row W17).
     pub(crate) fn fail(&mut self, error: GatewayError) -> GatewayError {
         let retained = self
             .active
             .as_mut()
             .map(|active| *active.failure.get_or_insert(error))
             .unwrap_or(error);
-        self.socket.take();
+        if !keeps_connection(error) {
+            self.socket.take();
+        }
         retained
     }
     pub(super) fn rpc<T: Serialize>(
@@ -442,6 +447,12 @@ impl Session {
         let response = read_response(socket, &id, &mut self.events)?;
         response_payload(response, kind)
     }
+}
+/// `source_preparing` is a complete, correlated answer: the gateway keeps its
+/// preparation progress for the same read, so the connection stays usable for
+/// the next operation. Every other failure leaves the stream's state unknown.
+fn keeps_connection(error: GatewayError) -> bool {
+    error == GatewayError::Record(RecordReadErrorCode::SourcePreparing)
 }
 fn shape_decode<T: DeserializeOwned>(
     value: Value,
