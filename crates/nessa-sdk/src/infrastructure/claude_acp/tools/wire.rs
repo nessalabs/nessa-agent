@@ -3,7 +3,7 @@ use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::{McpTool, ToolCallUpdate};
 use crate::infrastructure::acp::fields::identifier;
 use crate::infrastructure::acp::tools::wire::{path, tool_call as acp_tool_call};
-use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::json_rpc::{json_fits, protocol};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -124,15 +124,53 @@ pub(in crate::infrastructure::claude_acp) const MCP_SEPARATOR: &str = "__";
 /// person watching should see it happen. Refusing the frame outright hid the
 /// tool *and* ended the turn; keeping the observation lets the tool row appear
 /// and leaves the refusal where it can be answered — the permission request.
+///
+/// A reviewable call also keeps the latest object `rawInput`. Claude's
+/// permission `toolCall` is an ACP tool-call update, so the name and the query
+/// may already have arrived on an earlier frame and be absent from the request
+/// that asks for the review. Forgetting that input declined the review as
+/// unreadable and, because the sparse request also omitted the name, unnamed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::infrastructure::claude_acp) enum ObservedTool {
     /// A name this binding will put to a host, retained for the review.
-    Reviewable(String),
+    Reviewable {
+        name: String,
+        /// Latest object input that fit the retention budget. `None` leaves a
+        /// previously retained input in place when this frame carried none.
+        arguments_json: Option<Box<str>>,
+    },
     /// A name it will not. The name is deliberately not retained: an unbounded
     /// one would be retained here for the rest of the execution, and the frame
     /// that asks for the review carries the name again for the record.
     Declined,
 }
+
+impl ObservedTool {
+    fn arguments_json(&self) -> Option<&str> {
+        match self {
+            Self::Reviewable { arguments_json, .. } => arguments_json.as_deref(),
+            Self::Declined => None,
+        }
+    }
+
+    /// Whether these two observations are the same tool, ignoring input.
+    ///
+    /// A query update replaces `rawInput` without becoming a different tool.
+    /// Comparing the whole value would treat that replacement as an identity
+    /// change and end the turn on the update that made the review readable.
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Declined, Self::Declined) => true,
+            (Self::Reviewable { name: left, .. }, Self::Reviewable { name: right, .. }) => {
+                left == right
+            }
+            _ => false,
+        }
+    }
+}
+
+/// How much original tool input one execution may retain for later reviews.
+const MAX_RETAINED_INPUT_BYTES: usize = 1024 * 1024;
 
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
@@ -142,10 +180,8 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
     // Validate the complete representation before retaining provider name state.
     let mut update = acp_tool_call(value)?;
     let id = identifier(value, "toolCallId")?.to_owned();
-    if let Some(name) = value
-        .pointer("/_meta/claudeCode/toolName")
-        .and_then(Value::as_str)
-    {
+    let arguments = retain_arguments(names, &id, object_arguments(value));
+    if let Some(name) = frame_tool_name(value)? {
         // Names are bounded before retention; together with 256-byte IDs and
         // 4,096 entries, this bounds the map's string payload independently of
         // incoming frame size. Which names are admitted at all is
@@ -154,11 +190,23 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
             if let Some(tool) = mcp_tool(name, mcp_prefixes) {
                 update = update.with_mcp_tool(tool);
             }
-            ObservedTool::Reviewable(name.to_owned())
+            let arguments_json = arguments.or_else(|| {
+                names
+                    .get(&id)
+                    .and_then(ObservedTool::arguments_json)
+                    .map(Box::from)
+            });
+            ObservedTool::Reviewable {
+                name: name.to_owned(),
+                arguments_json,
+            }
         } else {
             ObservedTool::Declined
         };
-        if names.get(&id).is_some_and(|old| *old != observed) {
+        if names
+            .get(&id)
+            .is_some_and(|old| !old.same_identity(&observed))
+        {
             return Err(protocol("tool identity changed"));
         }
         if names.len() >= 4096 && !names.contains_key(&id) {
@@ -173,9 +221,133 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
             }
             return Err(protocol("tool count limit exceeded"));
         }
-        names.insert(id.clone(), observed);
+        names.insert(id, observed);
+    } else if let (Some(arguments), Some(slot)) = (
+        arguments,
+        names.get_mut(&id).and_then(|tool| match tool {
+            ObservedTool::Reviewable { arguments_json, .. } => Some(arguments_json),
+            ObservedTool::Declined => None,
+        }),
+    ) {
+        // A query update may restate only the input. The name already observed
+        // for this call stays, and the review can still read the query.
+        *slot = Some(arguments);
     }
     Ok(update)
+}
+
+/// The tool name this frame declares, from Claude's metadata or ACP `name`.
+///
+/// Either place is the provider's own name. A frame that carries both and
+/// disagrees with itself is not one tool. A missing name is absence, not an
+/// error: permission requests and later updates are allowed to omit it.
+fn frame_tool_name(value: &Value) -> Result<Option<&str>, AgentError> {
+    let meta = match value.pointer("/_meta/claudeCode/toolName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) => Some(name.as_str()),
+        Some(_) => return Err(protocol("invalid tool name")),
+    };
+    let declared = match value.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) => Some(name.as_str()),
+        Some(_) => return Err(protocol("invalid tool name")),
+    };
+    match (meta, declared) {
+        (Some(meta), Some(declared)) if meta != declared => Err(protocol("tool identity changed")),
+        (Some(name), _) | (None, Some(name)) => Ok(Some(name)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Object `rawInput` on this frame, when it carries one worth remembering.
+fn object_arguments(value: &Value) -> Option<&Value> {
+    value.get("rawInput").filter(|input| input.is_object())
+}
+
+/// Encode `incoming` when it fits the execution's retained-input budget.
+///
+/// `None` means this frame had no object input, or the object does not fit
+/// beside what is already retained for other calls. The caller keeps the
+/// previous input in that second case rather than failing the tool row: a
+/// query that is too large to cache can still be reviewed from the permission
+/// frame that carries it.
+fn retain_arguments(
+    names: &HashMap<String, ObservedTool>,
+    id: &str,
+    incoming: Option<&Value>,
+) -> Option<Box<str>> {
+    let incoming = incoming?;
+    let previous = names
+        .get(id)
+        .and_then(ObservedTool::arguments_json)
+        .map(str::len)
+        .unwrap_or(0);
+    let used = names
+        .values()
+        .map(|tool| tool.arguments_json().map(str::len).unwrap_or(0))
+        .sum::<usize>();
+    let used_without = used.saturating_sub(previous);
+    if !json_fits(
+        incoming,
+        MAX_RETAINED_INPUT_BYTES.saturating_sub(used_without),
+    ) {
+        return None;
+    }
+    serde_json::to_string(incoming)
+        .ok()
+        .map(String::into_boxed_str)
+}
+
+/// What a permission request is asking to be allowed.
+///
+/// The request's `toolCall` is an update of a call this binding has already
+/// observed. Its name is that observation. A request that names a different
+/// tool, or that names a call never observed, is not a review. Its arguments
+/// are the request's object `rawInput` when present, and otherwise the object
+/// input already observed for the same call. A request that still has no object
+/// input cannot be described to a host.
+pub(in crate::infrastructure::claude_acp) fn permission_input(
+    request: &Value,
+    names: &HashMap<String, ObservedTool>,
+    mcp_prefixes: &[String],
+) -> Result<ToolReviewInput, AgentError> {
+    let tool = request
+        .get("toolCall")
+        .ok_or_else(|| protocol("missing permission tool"))?;
+    let id = identifier(tool, "toolCallId")?;
+    let name = match names.get(id) {
+        Some(ObservedTool::Reviewable { name, .. }) => name.clone(),
+        // Observed, and refused. Answering the review is the caller's, and it
+        // is an answer about this tool rather than about the execution.
+        Some(ObservedTool::Declined) => {
+            return Err(AgentError::Unsupported(
+                "tool is outside the configured tool profile".into(),
+            ))
+        }
+        None => return Err(protocol("permission has no observed tool")),
+    };
+    if let Some(claimed) = frame_tool_name(tool)? {
+        if claimed != name {
+            return Err(protocol("tool identity changed"));
+        }
+    }
+    if !enabled_name(&name, mcp_prefixes) {
+        return Err(AgentError::Unsupported(
+            "tool is outside the configured tool profile".into(),
+        ));
+    }
+    let arguments = match tool.get("rawInput") {
+        Some(value) if value.is_object() => value.clone(),
+        None | Some(Value::Null) => serde_json::from_str(
+            names
+                .get(id)
+                .and_then(ObservedTool::arguments_json)
+                .ok_or_else(|| protocol("missing tool input"))?,
+        )
+        .map_err(|_| protocol("invalid retained tool input"))?,
+        _ => return Err(protocol("permission for an invalid or disabled tool")),
+    };
+    tool_input(&name, &arguments, mcp_prefixes)
 }
 #[allow(dead_code)] // These structs validate the pinned harness schemas; preserve original arguments below.
 pub(in crate::infrastructure::claude_acp) fn tool_input(

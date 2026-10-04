@@ -13,7 +13,7 @@ fn tool_call(
 /// The name this binding retained for `id`, or `None` where it retained none.
 fn reviewable(names: &HashMap<String, ObservedTool>, id: &str) -> Option<String> {
     match names.get(id) {
-        Some(ObservedTool::Reviewable(name)) => Some(name.clone()),
+        Some(ObservedTool::Reviewable { name, .. }) => Some(name.clone()),
         _ => None,
     }
 }
@@ -199,7 +199,7 @@ fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
 /// Name bytes this binding retained for one observed call.
 fn observed_bytes(observed: &ObservedTool) -> usize {
     match observed {
-        ObservedTool::Reviewable(name) => name.len(),
+        ObservedTool::Reviewable { name, .. } => name.len(),
         ObservedTool::Declined => 0,
     }
 }
@@ -592,4 +592,123 @@ fn recorded_claude_mcp_calls_name_their_server_and_keep_their_text() {
         last["mcp__mcptest__always_fails"].status(),
         &Some(ToolStatus::Failed)
     );
+}
+
+fn permission(
+    names: &HashMap<String, ObservedTool>,
+    tool: Value,
+) -> Result<ToolReviewInput, AgentError> {
+    super::permission_input(&json!({"toolCall": tool}), names, &[])
+}
+
+/// Claude ACP 0.76.0 announces WebSearch, then a query update, then a permission
+/// whose `toolCall` is only an update. The query stays reviewable when that
+/// update omits both the name and `rawInput`.
+#[test]
+fn websearch_review_keeps_the_query_when_the_permission_update_omits_it() {
+    let mut names = HashMap::new();
+    let query = json!({"query": "Rust programming language official website"});
+    tool_call(
+        &json!({"toolCallId":"search-1","title":"Web search","kind":"fetch","status":"pending",
+            "_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    tool_call(
+        &json!({"toolCallId":"search-1","title":"Search \"Rust programming language official website\"",
+            "kind":"fetch","rawInput":query,"_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    let review = permission(&names, json!({"toolCallId":"search-1","status":"pending"})).unwrap();
+    assert_eq!(review.name, "WebSearch");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        query
+    );
+}
+
+/// The same review when the permission frame itself carries `name` and the query,
+/// which is the shape captured from the pinned harness after the announcement.
+#[test]
+fn websearch_review_reads_a_self_contained_permission_request() {
+    let mut names = HashMap::new();
+    let query = json!({"query": "Rust programming language official website"});
+    tool_call(
+        &json!({"toolCallId":"search-1","kind":"fetch","status":"pending",
+            "_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    let review = permission(
+        &names,
+        json!({"toolCallId":"search-1","name":"WebSearch","kind":"fetch","status":"pending",
+            "title":"Search \"Rust programming language official website\"","rawInput":query}),
+    )
+    .unwrap();
+    assert_eq!(review.name, "WebSearch");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        query
+    );
+}
+
+#[test]
+fn an_unobserved_permission_stays_unreadable_even_when_it_names_a_tool() {
+    assert!(permission(
+        &HashMap::new(),
+        json!({"toolCallId":"never-observed","name":"WebSearch",
+            "rawInput":{"query":"Rust programming language official website"}})
+    )
+    .is_err());
+}
+
+/// ACP `name` is enough to remember the call when Claude metadata is absent.
+#[test]
+fn websearch_name_on_the_tool_call_is_retained_for_a_later_sparse_review() {
+    let mut names = HashMap::new();
+    let query = json!({"query": "Rust programming language official website"});
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":query}),
+        &mut names,
+    )
+    .unwrap();
+    let review = permission(&names, json!({"toolCallId":"search-1"})).unwrap();
+    assert_eq!(review.name, "WebSearch");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        query
+    );
+}
+
+#[test]
+fn a_sparse_websearch_permission_without_an_observed_query_stays_unreadable() {
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(permission(&names, json!({"toolCallId":"search-1"})).is_err());
+    assert!(permission(
+        &names,
+        json!({"toolCallId":"search-1","rawInput":"not an object"})
+    )
+    .is_err());
+}
+
+#[test]
+fn a_permission_name_that_disagrees_with_the_observed_call_is_rejected() {
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+            "rawInput":{"query":"Rust programming language official website"}}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(permission(
+        &names,
+        json!({"toolCallId":"search-1","name":"WebFetch","rawInput":{"url":"https://example.com"}})
+    )
+    .is_err());
 }
