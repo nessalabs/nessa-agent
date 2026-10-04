@@ -3,8 +3,7 @@
 //! catalogue is read from.
 
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sync::replication::catalogue::CatalogueSourceError;
-use nessa_sync::replication::domain::{Id, Scope};
+use nessa_sync::replication::domain::Id;
 use sha2::{Digest, Sha256};
 
 const SCHEMA: &str = "nessa.conversation-catalogue.v1";
@@ -25,23 +24,6 @@ pub fn conversation_catalogue_stream(organization: &OrganizationId, principal: &
     hash.update(organization);
     hash.update(owner);
     Id::new(format!("conversation-owner:{:x}", hash.finalize())).expect("digest fits sync ID")
-}
-
-/// Check that `scope` names the conversation catalogue schema and this
-/// owner's stream: the construction relationship, without I/O. The gateway's
-/// catalogue source and a device reading what the gateway answered both ask
-/// this one function.
-pub fn check_catalogue_scope_identity(
-    organization_id: &OrganizationId,
-    principal_id: &PrincipalId,
-    scope: &Scope,
-) -> Result<(), CatalogueSourceError> {
-    if scope.schema() != &conversation_catalogue_schema()
-        || scope.stream() != &conversation_catalogue_stream(organization_id, principal_id)
-    {
-        return Err(CatalogueSourceError::IdentityChanged);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

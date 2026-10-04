@@ -19,6 +19,9 @@ here only when both ends use it; one used by only one end belongs to that end.
 `pairing::socket` is the one deliberate exception: blocking std socket
 mechanics both ends need, which a copy at each end would let drift. `tokio` is
 taken with `rt` only, for the shared worker-fault mapping.
+`PACKAGE_DENYLISTS` in `scripts/architecture/rust-dependency-graphs.mjs` refuses
+a server framework, HTTP client, async TLS stack or WebSocket library anywhere
+in this crate's graph (`node scripts/check-runtime-dependencies.mjs`).
 
 **Generated code.** `protocol/generated_*.rs` are written by
 `scripts/generate-protocol-types.mjs`; `product/generated.rs` and
@@ -49,7 +52,7 @@ layer may import `nessa_protocol::product_contract::…` but not
 | `src/clock.rs` | The monotonic clock port the socket's deadlines read. |
 | `src/agents/` | `AgentId`, the agent names a conversation uses. |
 | `src/conversation/domain/` | Conversation identity, model and approval choice, the summary a list shows, and catalogue identity. |
-| `src/conversation/view.rs`, `src/conversation/projection.rs` | The `conversation.read` shape and the one bounded projection of committed records into it, with its `McpToolUis` port (`tool_uis.rs`) and session key (`session_key.rs`). |
+| `src/conversation/view.rs`, `src/conversation/projection.rs` | The `conversation.read` shape and the one bounded projection of committed records into it, with its `McpToolUis` port (`tool_uis.rs`), asked by conversation; which SDK session that is stays the gateway's rule. |
 | `src/conversation/catalogue_metadata.rs`, `src/conversation/catalogue_payload.rs` | A catalogue entry's metadata and its one stored representation. |
-| `src/conversation/read_scope.rs` | The read scope a passive read is admitted for, the checks of a source scope against it, and the refusal's wire code. |
+| `src/conversation/read_scope.rs` | The read scope a passive read is admitted for, the checks of a source scope against it (catalogue scope identity included), and the refusal's wire code. Which access errors become which refusal is the gateway's (`access_refusal`). |
 | `tests/` | Unit tests, mirroring `src/` and included with `#[path]`. |

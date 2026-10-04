@@ -16,7 +16,6 @@
 //!   offline `show` both read through `projection`, so the two cannot differ.
 //! - `catalogue_metadata` and `catalogue_payload`: a catalogue entry's
 //!   metadata and its one stored representation, encoded and decoded together.
-//! - `session_key`: which SDK session a conversation runs in, the one rule.
 //! - `read_scope`: the scope a passive read is admitted for, and the checks
 //!   both ends make of a source scope against it.
 //!
@@ -27,6 +26,5 @@ pub mod catalogue_payload;
 pub mod domain;
 pub mod projection;
 pub mod read_scope;
-pub mod session_key;
 pub mod tool_uis;
 pub mod view;

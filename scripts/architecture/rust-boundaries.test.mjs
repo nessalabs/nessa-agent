@@ -22,6 +22,19 @@ test("domain rejects outward imports, grouped effects and runtime dependencies",
   }
 })
 
+test("domain may use the sync engine's domain values and nothing else of it", () => {
+  assert.deepEqual(
+    rustBoundaryViolations("src/domain/value.rs", "use nessa_sync::replication::domain::{Id, Scope};"),
+    [],
+  )
+  for (const source of [
+    "use nessa_sync::replication::catalogue::CatalogueSourceError;",
+    "use nessa_sync::{replication::domain::Id, transport::Client};",
+  ]) {
+    assert.ok(rustBoundaryViolations("src/domain/value.rs", source).length, source)
+  }
+})
+
 test("application may coordinate async ports but may not construct adapters", () => {
   assert.deepEqual(
     rustBoundaryViolations(

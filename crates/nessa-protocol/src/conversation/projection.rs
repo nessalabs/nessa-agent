@@ -1,5 +1,4 @@
 use super::domain::ConversationId;
-use super::session_key::conversation_session;
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
@@ -970,16 +969,13 @@ impl Projection {
         // these URIs: a list read after the call still reaches the window.
         let mut drawn = Sha256::new();
         let mut any = false;
-        // The conversation's own SDK session (`conversation_session`).
-        let session = ConversationId::new(&view.conversation_id)
-            .ok()
-            .map(|id| conversation_session(&id));
+        let conversation = ConversationId::new(&view.conversation_id).ok();
         for tool in &mut view.tools {
             let Some(mcp) = &mut tool.mcp else { continue };
             mcp.resource_uri = McpTool::new(mcp.server.as_str(), mcp.tool.as_str())
                 .ok()
-                .zip(session.as_ref())
-                .and_then(|(call, session)| self.tool_uis.resource_uri(session, &call))
+                .zip(conversation.as_ref())
+                .and_then(|(call, conversation)| self.tool_uis.resource_uri(conversation, &call))
                 .map(|uri| uri.as_str().to_owned());
             if let Some(uri) = &mcp.resource_uri {
                 any = true;
@@ -1126,3 +1122,11 @@ fn offered(view: &ConversationView, execution: &str) -> bool {
             message.status == ConversationMessageStatus::Running
         })
 }
+
+#[cfg(test)]
+#[path = "../../tests/conversation/projection.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/conversation/tool_parts.rs"]
+mod tool_part_tests;

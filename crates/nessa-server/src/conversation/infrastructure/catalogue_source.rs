@@ -10,9 +10,9 @@ use crate::conversation::application::{
 use nessa_protocol::conversation::catalogue_metadata::CatalogueMetadata;
 use nessa_protocol::conversation::catalogue_payload;
 use nessa_protocol::conversation::domain::{
-    check_catalogue_scope_identity, conversation_catalogue_schema, conversation_catalogue_stream,
-    ConversationId,
+    conversation_catalogue_schema, conversation_catalogue_stream, ConversationId,
 };
+use nessa_protocol::conversation::read_scope::check_catalogue_scope_identity;
 use nessa_sync::replication::catalogue::{
     validate_catalogue_pass, validate_manifest_request, CataloguePass, CatalogueSource,
     CatalogueSourceError, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,

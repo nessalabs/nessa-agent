@@ -3,7 +3,11 @@
 use super::ConversationRepository;
 use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::{
-    application::{authorization::AuthorizeAction, ports::Decision, session::AuthenticatedSession},
+    application::{
+        authorization::AuthorizeAction,
+        ports::{AccessError, Decision},
+        session::AuthenticatedSession,
+    },
     domain::{Action, CredentialId, Resource},
 };
 use nessa_protocol::conversation::domain::ConversationId;
@@ -126,7 +130,7 @@ impl AdmitPassiveRead<'_> {
         {
             Ok(Decision::Allow) => {}
             Ok(Decision::Deny) => return Err(ReadRefusal::Forbidden),
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(access_refusal(error)),
         }
         let binding = self
             .receivers
@@ -151,5 +155,21 @@ impl AdmitPassiveRead<'_> {
             return Err(ReadRefusal::StaleEpoch);
         }
         Ok(binding)
+    }
+}
+
+/// The refusal a passive read answers with when access was not granted:
+/// the gateway's policy for which access errors a reader may act on.
+pub(crate) fn access_refusal(error: AccessError) -> ReadRefusal {
+    match error {
+        AccessError::Denied => ReadRefusal::Forbidden,
+        AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
+            ReadRefusal::Unverifiable
+        }
+        AccessError::InvalidCredential
+        | AccessError::CredentialRevoked
+        | AccessError::CredentialExpired
+        | AccessError::InactiveMembership
+        | AccessError::IdentityMismatch => ReadRefusal::Unauthorized,
     }
 }

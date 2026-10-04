@@ -1,5 +1,6 @@
 use crate::conversation::application::{
-    AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState,
+    access_refusal, AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError,
+    CatalogueWatchState,
 };
 use crate::product::socket::close_reason;
 use crate::product::state::ProductRouteState;
@@ -13,6 +14,7 @@ use nessa_protocol::product::generated::{
     product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
     MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
 };
+use nessa_protocol::product::passive_read::decode_epoch;
 use nessa_protocol::product_contract::generated::{
     ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
 };
@@ -100,8 +102,7 @@ impl WatchSelector {
                     .map_err(|_| invalid())?
                     .as_str()
                     .to_owned(),
-                epoch: nessa_protocol::product::passive_read::decode_epoch(&value.access_epoch)
-                    .map_err(|_| invalid())?,
+                epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
             })
         } else if method == product_method::CONVERSATION_WATCH_CATALOGUE {
             let value: ConversationWatchCatalogueParams =
@@ -111,8 +112,7 @@ impl WatchSelector {
                     .map_err(|_| invalid())?
                     .as_str()
                     .to_owned(),
-                epoch: nessa_protocol::product::passive_read::decode_epoch(&value.access_epoch)
-                    .map_err(|_| invalid())?,
+                epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
             })
         } else {
             Err(invalid())
@@ -314,7 +314,7 @@ impl WatchRefusal {
     /// The registration reply's code.
     pub fn code(self) -> ChangeWatchErrorCode {
         match self {
-            Self::Access(error) => admission_code(ReadRefusal::from(error)),
+            Self::Access(error) => admission_code(access_refusal(error)),
             Self::Read(refusal) => admission_code(refusal),
             Self::Unavailable => ChangeWatchErrorCode::TemporarilyUnavailable,
         }

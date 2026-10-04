@@ -6,10 +6,10 @@ use crate::read_only_sync::application::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::{
-    domain::{check_catalogue_scope_identity, ConversationId},
+    domain::ConversationId,
     read_scope::{
-        validate_catalogue_selector, validate_record_selector, CatalogueReadScope,
-        ReceiverReadScope,
+        check_catalogue_scope_identity, validate_catalogue_selector, validate_record_selector,
+        CatalogueReadScope, ReceiverReadScope,
     },
 };
 use nessa_protocol::product::generated::{
@@ -20,9 +20,7 @@ use nessa_protocol::product::generated::{
     ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationRecordsPageResult,
     ConversationWatchRecordsParams,
 };
-use nessa_protocol::product::{
-    catalogue_read as catalogue_wire, passive_read::ReadWireError, record_read as record_wire,
-};
+use nessa_protocol::product::{catalogue_read, passive_read::ReadWireError, record_read};
 use nessa_protocol::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
 use nessa_sdk::infrastructure::session_storage::physical_record_schema;
 use nessa_sync::replication::{
@@ -197,7 +195,7 @@ impl GatewaySource {
                     },
                     RpcKind::Record,
                 )?;
-                record_wire::decode_head(wire).map_err(wire_error)?
+                record_read::decode_head(wire).map_err(wire_error)?
             }
             Target::Catalogue => {
                 let wire: ConversationCatalogueHeadResult = self.rpc(
@@ -208,7 +206,7 @@ impl GatewaySource {
                     },
                     RpcKind::Catalogue,
                 )?;
-                catalogue_wire::decode_head(wire).map_err(wire_error)?
+                catalogue_read::decode_head(wire).map_err(wire_error)?
             }
         };
         self.check_scope(&scope)?;
@@ -282,8 +280,8 @@ impl RecordSource for GatewaySource {
     fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
         let result = (|| {
             self.check_scope(&request.scope)?;
-            let wire = record_wire::wire_request(request);
-            record_wire::decode_page_request(&wire).map_err(|_| GatewayError::InvalidRequest)?;
+            let wire = record_read::wire_request(request);
+            record_read::decode_page_request(&wire).map_err(|_| GatewayError::InvalidRequest)?;
             let wire: ConversationRecordsPageResult = self.rpc(
                 product_method::CONVERSATION_RECORDS_PAGE,
                 &ConversationRecordsPageParams {
@@ -296,7 +294,7 @@ impl RecordSource for GatewaySource {
                 },
                 RpcKind::Record,
             )?;
-            record_wire::decode_page_result(wire, request).map_err(wire_error)
+            record_read::decode_page_result(wire, request).map_err(wire_error)
         })();
         result.map_err(|error| record_error(self.fail(error)))
     }
@@ -323,13 +321,13 @@ impl CatalogueSource for GatewaySource {
                 &ConversationCatalogueManifestParams {
                     access_epoch: self.epoch.to_string(),
                     request: CatalogueManifestRequest {
-                        pass: catalogue_wire::wire_pass(&request.pass),
+                        pass: catalogue_read::wire_pass(&request.pass),
                         max_entries: request.max_entries as u64,
                     },
                 },
                 RpcKind::Catalogue,
             )?;
-            let page = catalogue_wire::decode_manifest_result(wire).map_err(wire_error)?;
+            let page = catalogue_read::decode_manifest_result(wire).map_err(wire_error)?;
             validate_manifest(request, &page, MAX_CATALOGUE_ENTRIES)
                 .map_err(|_| GatewayError::Protocol)?;
             self.descriptors = Some((request.pass.clone(), page.entries.clone()));
@@ -359,14 +357,14 @@ impl CatalogueSource for GatewaySource {
                 product_method::CONVERSATION_CATALOGUE_RESOLVE,
                 &ConversationCatalogueResolveParams {
                     access_epoch: self.epoch.to_string(),
-                    pass: catalogue_wire::wire_pass(pass),
-                    descriptor: catalogue_wire::wire_descriptor(descriptor),
+                    pass: catalogue_read::wire_pass(pass),
+                    descriptor: catalogue_read::wire_descriptor(descriptor),
                     max_payload_bytes: maximum as u64,
                 },
                 RpcKind::Catalogue,
             )?;
             let (actual_pass, actual_descriptor, entry) =
-                catalogue_wire::decode_resolved_result(wire, maximum).map_err(wire_error)?;
+                catalogue_read::decode_resolved_result(wire, maximum).map_err(wire_error)?;
             if actual_pass != *pass || actual_descriptor != *descriptor {
                 return Err(GatewayError::Correlation);
             }

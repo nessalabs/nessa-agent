@@ -3,12 +3,12 @@ use super::change_watch::{
 };
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
 use super::state::ProductRouteState;
-use super::wire::*;
+use super::wire::ready_frame;
 use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
-use crate::conversation::application::RecordReadLease;
+use crate::conversation::application::{access_refusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
 use axum::extract::ws::{CloseFrame, Message};
@@ -31,12 +31,13 @@ use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
 use nessa_auth::domain::{Action, AudienceId, CredentialId};
-use nessa_protocol::conversation::read_scope::ReadRefusal;
 #[cfg(test)]
 use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
-    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
-    PRODUCT_VERSION,
+    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
+    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination, MAX_RECORD_RESPONSE_BYTES,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
@@ -938,7 +939,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = RecordReadErrorCode::from(ReadRefusal::from(error));
+    let code = RecordReadErrorCode::from(access_refusal(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -1256,7 +1257,7 @@ fn session_ready(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     snapshot: &AccessSnapshot,
-) -> SessionReady {
+) -> ProductSessionReady {
     let grants = snapshot
         .credential
         .grants()

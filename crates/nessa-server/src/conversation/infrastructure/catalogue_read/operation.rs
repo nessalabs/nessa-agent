@@ -7,11 +7,11 @@ use crate::conversation::{
     },
     infrastructure::{CatalogueWorkerError, NessaCatalogueSource},
 };
-use nessa_protocol::conversation::domain::check_catalogue_scope_identity;
 #[cfg(test)]
 use nessa_protocol::conversation::domain::conversation_catalogue_schema;
 use nessa_protocol::conversation::read_scope::{
-    passive_read_selector, validate_catalogue_selector, CatalogueReadScope,
+    check_catalogue_scope_identity, passive_read_selector, validate_catalogue_selector,
+    CatalogueReadScope,
 };
 use nessa_sync::replication::{
     catalogue::{CatalogueSource, CatalogueSourceError},

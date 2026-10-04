@@ -9,9 +9,9 @@ use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::conversation::domain::{
-    check_catalogue_scope_identity, conversation_catalogue_schema, conversation_catalogue_stream,
-    ConversationId,
+    conversation_catalogue_schema, conversation_catalogue_stream, ConversationId,
 };
+use nessa_protocol::conversation::read_scope::check_catalogue_scope_identity;
 use nessa_protocol::pairing::{
     encode_frame,
     wire::{decode_request, encode_refused, NativePairingRequest},

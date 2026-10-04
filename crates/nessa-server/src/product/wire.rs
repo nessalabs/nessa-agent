@@ -1,12 +1,6 @@
 use nessa_auth::application::{dto::CredentialGrantDto, session::AuthenticatedSession};
 
-pub use nessa_protocol::product::generated::{
-    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
-    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult,
-    ProductSessionReady as SessionReady, SessionAuthenticateParams, SessionChallenge,
-};
-
-use nessa_protocol::product::generated::PRODUCT_VERSION;
+use nessa_protocol::product::generated::{ProductSessionReady, PRODUCT_VERSION};
 
 /// The ready frame for an authenticated session: what the gateway tells a
 /// client about who it is, what it may do, and until when.
@@ -15,9 +9,9 @@ pub(crate) fn ready_frame(
     session: &AuthenticatedSession,
     grants: Vec<CredentialGrantDto>,
     methods: Vec<String>,
-) -> SessionReady {
+) -> ProductSessionReady {
     let context = session.context();
-    SessionReady {
+    ProductSessionReady {
         version: PRODUCT_VERSION,
         gateway_id: gateway_id.to_owned(),
         principal_id: context.principal_id().as_str().to_owned(),

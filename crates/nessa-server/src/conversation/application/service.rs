@@ -1,3 +1,4 @@
+use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
@@ -23,7 +24,6 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
 };
-use nessa_protocol::conversation::session_key::conversation_session;
 use nessa_protocol::conversation::{
     projection::{bound_view, clipped, Projection, MAX_TEXT},
     tool_uis::{McpToolUis, NoMcpToolUis},

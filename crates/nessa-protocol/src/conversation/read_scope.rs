@@ -1,12 +1,10 @@
 //! The read scope a passive read is admitted for, and the rules that check a
 //! source scope against it. The gateway checks what it is asked against these;
 //! a device re-checks what the gateway answered against the same functions.
-use super::domain::{conversation_catalogue_stream, ConversationId};
+use super::domain::{conversation_catalogue_schema, conversation_catalogue_stream, ConversationId};
 use crate::product_contract::generated::RecordReadErrorCode;
-use nessa_auth::{
-    application::ports::AccessError,
-    domain::{OrganizationId, PrincipalId},
-};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_sync::replication::catalogue::CatalogueSourceError;
 use nessa_sync::replication::domain::{Id, Scope};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,22 +16,6 @@ pub enum ReadRefusal {
     WrongReceiver,
     StaleEpoch,
     Unverifiable,
-}
-
-impl From<AccessError> for ReadRefusal {
-    fn from(error: AccessError) -> Self {
-        match error {
-            AccessError::Denied => Self::Forbidden,
-            AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
-                Self::Unverifiable
-            }
-            AccessError::InvalidCredential
-            | AccessError::CredentialRevoked
-            | AccessError::CredentialExpired
-            | AccessError::InactiveMembership
-            | AccessError::IdentityMismatch => Self::Unauthorized,
-        }
-    }
 }
 
 /// Exact receiver and ownership portion of a source scope. The physical source
@@ -117,4 +99,21 @@ impl From<ReadRefusal> for RecordReadErrorCode {
             ReadRefusal::Unverifiable => Self::Unverifiable,
         }
     }
+}
+
+/// Check that `scope` names the conversation catalogue schema and this
+/// owner's stream: the construction relationship, without I/O. The gateway's
+/// catalogue source and a device reading what the gateway answered both ask
+/// this one function.
+pub fn check_catalogue_scope_identity(
+    organization_id: &OrganizationId,
+    principal_id: &PrincipalId,
+    scope: &Scope,
+) -> Result<(), CatalogueSourceError> {
+    if scope.schema() != &conversation_catalogue_schema()
+        || scope.stream() != &conversation_catalogue_stream(organization_id, principal_id)
+    {
+        return Err(CatalogueSourceError::IdentityChanged);
+    }
+    Ok(())
 }

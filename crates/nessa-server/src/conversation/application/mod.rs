@@ -97,6 +97,7 @@ mod provider_sessions;
 mod record_read;
 mod retries;
 mod service;
+mod session_key;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
@@ -113,6 +114,7 @@ pub use mcp_apps::{
     McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
     MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
+pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, ReceiverAuthority};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
@@ -139,6 +141,7 @@ pub use service::{
     QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, MAX_APP_CALLS,
     MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
+pub(crate) use session_key::conversation_session;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/application.rs"]
@@ -147,10 +150,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/projection.rs"]
 mod projection_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/conversation/tool_parts.rs"]
-mod tool_part_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/reorder.rs"]

@@ -229,7 +229,7 @@ fn text(value: &str) -> SubmittedMessage {
     }
 }
 fn session(id: &ConversationId) -> SessionId {
-    nessa_protocol::conversation::session_key::conversation_session(id)
+    crate::conversation::application::conversation_session(id)
 }
 /// A conversation with one completed turn: saved history and a summary.
 async fn talked_in(fixture: &Deleting) -> ConversationId {

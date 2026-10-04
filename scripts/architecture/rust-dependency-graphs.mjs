@@ -17,6 +17,29 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
   "nessa-mcp",
 ])
 
+/**
+ * Packages a selected crate must never reach, beyond the desktop framework.
+ *
+ * `nessa-protocol` is the contract both ends of a gateway connection share,
+ * admitted on "no process state and no runtime of its own"
+ * (crates/nessa-protocol/README.md, ADR 483). A server framework, an HTTP
+ * client, a database, or an async TLS stack in its graph means something only
+ * one end needs has been admitted. A database is not listed: `nessa-sdk`, which
+ * the conversation read model needs for its record types, already carries
+ * `rusqlite` for its own session storage.
+ */
+export const PACKAGE_DENYLISTS = Object.freeze({
+  "nessa-protocol": Object.freeze([
+    "axum",
+    "hyper",
+    "reqwest",
+    "tokio-rustls",
+    "tungstenite",
+    "tokio-tungstenite",
+    "tower",
+  ]),
+})
+
 function isTauriDesktopFramework(packageName) {
   return (
     packageName === "tauri" ||
@@ -65,6 +88,7 @@ function pathTo(parents, packageId) {
 export function rustDependencyGraphViolations(
   metadata,
   selectedPackageNames = PORTABLE_RUST_PACKAGES,
+  denylists = PACKAGE_DENYLISTS,
 ) {
   const packagesById = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]))
   const nodesById = new Map(metadata.resolve.nodes.map((node) => [node.id, node]))
@@ -82,6 +106,7 @@ export function rustDependencyGraphViolations(
     }
 
     const root = roots[0]
+    const denied = new Set(Object.hasOwn(denylists, selectedName) ? denylists[selectedName] : [])
     const parents = new Map([[root.id, undefined]])
     const queue = [root.id]
     for (let index = 0; index < queue.length; index += 1) {
@@ -104,6 +129,12 @@ export function rustDependencyGraphViolations(
         if (isTauriDesktopFramework(dependency.name)) {
           violations.push(
             `"${selectedName}" reaches desktop framework package "${dependency.name}" through ${pathLabel(packagesById, pathTo(parents, dependency.id))}`,
+          )
+          continue
+        }
+        if (denied.has(dependency.name)) {
+          violations.push(
+            `"${selectedName}" reaches denied package "${dependency.name}" through ${pathLabel(packagesById, pathTo(parents, dependency.id))}`,
           )
           continue
         }

@@ -42,7 +42,11 @@ against a composed gateway; nothing the gateway ships links it. The generators
 write into `nessa-protocol`. Its admission rule is no process state and no
 runtime of its own; `pairing::socket` is the one deliberate exception
 (blocking std socket mechanics both ends need), and `tokio` is taken with
-`rt` only, for the one shared worker-fault mapping.
+`rt` only, for the one shared worker-fault mapping. The rule is enforced by a
+package denylist in `scripts/architecture/rust-dependency-graphs.mjs`. Rules
+only the gateway applies stay with it even where the shared code asks them:
+which SDK session a conversation runs in, and which access errors a passive
+read refuses with.
 
 It lands in two pull requests: the first extracts `nessa-protocol` with
 `read_only_sync` still in `nessa-server`; the second moves the client.

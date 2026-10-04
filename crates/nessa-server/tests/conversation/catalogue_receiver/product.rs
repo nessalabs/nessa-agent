@@ -8,12 +8,12 @@ use nessa_protocol::conversation::read_scope::ReadRefusal;
 use crate::conversation::domain::{Conversation, ConversationDeletion};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary};
 use crate::conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource};
-use nessa_protocol::product::catalogue_read as catalogue_wire;
+use nessa_protocol::product::catalogue_read;
 use nessa_protocol::product::generated::{
     CatalogueDescriptor, ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
     ConversationCatalogueResolveResult,
 };
-use nessa_protocol::product::passive_read as shared_wire;
+use nessa_protocol::product::passive_read;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use conversation_support::{
@@ -556,7 +556,7 @@ impl ProductSource {
         assert_eq!(reply["ok"], true, "{reply}");
         let head: ConversationCatalogueHeadResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
-        source.scope = shared_wire::decode_scope(&head.scope).unwrap();
+        source.scope = passive_read::decode_scope(&head.scope).unwrap();
         assert_eq!(
             source.scope.receiver().as_str(),
             format!("{owner}-receiver")
@@ -613,7 +613,7 @@ impl ProductSource {
         max: usize,
     ) -> Result<ResolvedEntry, CatalogueSourceError> {
         validate_catalogue_pass(pass).map_err(|_| CatalogueSourceError::InvalidRequest)?;
-        let reply=self.call("conversation.catalogueResolve",json!({"pass":catalogue_wire::wire_pass(pass),"descriptor":catalogue_wire::wire_descriptor(descriptor),"maxPayloadBytes":max,"accessEpoch":self.access_epoch}));
+        let reply=self.call("conversation.catalogueResolve",json!({"pass":catalogue_read::wire_pass(pass),"descriptor":catalogue_read::wire_descriptor(descriptor),"maxPayloadBytes":max,"accessEpoch":self.access_epoch}));
         if reply["ok"] != true {
             return Err(CatalogueSourceError::Unavailable);
         }
@@ -621,13 +621,13 @@ impl ProductSource {
             serde_json::from_value(reply["payload"].clone()).unwrap();
         // The core return type omits wire-only echoes. This adapter owns their
         // correlation before discarding them; core validate_resolved owns values.
-        assert_eq!(catalogue_wire::decode_pass(&response.pass).unwrap(), *pass);
+        assert_eq!(catalogue_read::decode_pass(&response.pass).unwrap(), *pass);
         assert_eq!(
-            catalogue_wire::decode_descriptor(&response.descriptor).unwrap(),
+            catalogue_read::decode_descriptor(&response.descriptor).unwrap(),
             *descriptor
         );
         let mut value = ResolvedEntry {
-            manifest: catalogue_wire::decode_descriptor(&response.entry).unwrap(),
+            manifest: catalogue_read::decode_descriptor(&response.entry).unwrap(),
             payload: STANDARD.decode(response.payload).unwrap(),
         };
         if matches!(self.fault, Some(WireFault::OldValue)) {
@@ -647,8 +647,8 @@ impl CatalogueSource for ProductSource {
         }
         let result: ConversationCatalogueHeadResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
-        assert_eq!(shared_wire::decode_scope(&result.scope).unwrap(), *scope);
-        Ok(shared_wire::decimal_u64(&result.head).unwrap())
+        assert_eq!(passive_read::decode_scope(&result.scope).unwrap(), *scope);
+        Ok(passive_read::decimal_u64(&result.head).unwrap())
     }
     fn manifest(
         &mut self,
@@ -656,18 +656,18 @@ impl CatalogueSource for ProductSource {
     ) -> Result<ManifestPage, CatalogueSourceError> {
         validate_manifest_request(request, MAX_CATALOGUE_ENTRIES)
             .map_err(|_| CatalogueSourceError::InvalidRequest)?;
-        let reply=self.call("conversation.catalogueManifest",json!({"request":{"pass":catalogue_wire::wire_pass(&request.pass),"maxEntries":request.max_entries},"accessEpoch":self.access_epoch}));
+        let reply=self.call("conversation.catalogueManifest",json!({"request":{"pass":catalogue_read::wire_pass(&request.pass),"maxEntries":request.max_entries},"accessEpoch":self.access_epoch}));
         if reply["ok"] != true {
             return Err(CatalogueSourceError::Unavailable);
         }
         let result: ConversationCatalogueManifestResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
         let mut page = ManifestPage {
-            request: catalogue_wire::decode_manifest(&result.request).unwrap(),
+            request: catalogue_read::decode_manifest(&result.request).unwrap(),
             entries: result
                 .entries
                 .iter()
-                .map(|entry| catalogue_wire::decode_descriptor(entry).unwrap())
+                .map(|entry| catalogue_read::decode_descriptor(entry).unwrap())
                 .collect(),
             has_more: result.has_more,
         };
@@ -685,7 +685,7 @@ impl CatalogueSource for ProductSource {
                 let old = self
                     .read_resolved(&request.pass, descriptor, 65536)
                     .unwrap();
-                std::fs::write(self.cache_path.with_extension("delayed.json"),json!({"descriptor":catalogue_wire::wire_descriptor(&old.manifest),"payload":STANDARD.encode(old.payload)}).to_string()).unwrap();
+                std::fs::write(self.cache_path.with_extension("delayed.json"),json!({"descriptor":catalogue_read::wire_descriptor(&old.manifest),"payload":STANDARD.encode(old.payload)}).to_string()).unwrap();
                 self.event("delete", Some(descriptor.key.id.as_str()));
             }
             self.event("tick", None);
@@ -774,7 +774,7 @@ fn receiver_child() {
     if mode == "lost" {
         // Send the real request, wait through the gateway's source completion,
         // then drop the socket without reading or decoding its response.
-        source.socket.send(Message::Text(json!({"type":"req","id":"lost","method":"conversation.catalogueManifest","params":{"request":{"pass":catalogue_wire::wire_pass(&pass),"maxEntries":37},"accessEpoch":epoch}}).to_string().into())).unwrap();
+        source.socket.send(Message::Text(json!({"type":"req","id":"lost","method":"conversation.catalogueManifest","params":{"request":{"pass":catalogue_read::wire_pass(&pass),"maxEntries":37},"accessEpoch":epoch}}).to_string().into())).unwrap();
         source.event("wait-page", None);
         return;
     }
@@ -813,7 +813,7 @@ fn receiver_child() {
         let descriptor: CatalogueDescriptor =
             serde_json::from_value(value["descriptor"].clone()).unwrap();
         let old = ResolvedEntry {
-            manifest: catalogue_wire::decode_descriptor(&descriptor).unwrap(),
+            manifest: catalogue_read::decode_descriptor(&descriptor).unwrap(),
             payload: STANDARD.decode(value["payload"].as_str().unwrap()).unwrap(),
         };
         let current = cache
@@ -1053,7 +1053,7 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
         assert!(reply["payload"].is_null());
     }
     for field in ["origin", "stream", "schema"] {
-        let mut wire = serde_json::to_value(catalogue_wire::wire_pass(&pass)).unwrap();
+        let mut wire = serde_json::to_value(catalogue_read::wire_pass(&pass)).unwrap();
         wire["scope"][field] = json!("foreign");
         let reply = source.call(
             "conversation.catalogueManifest",
@@ -1090,7 +1090,7 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
             json!({"creation":(head+1).to_string(),"id":descriptor.key.id.as_str()}),
         ),
     ] {
-        let mut invalid = serde_json::to_value(catalogue_wire::wire_pass(&pass)).unwrap();
+        let mut invalid = serde_json::to_value(catalogue_read::wire_pass(&pass)).unwrap();
         invalid[field] = value;
         for (method, params) in [
             (
@@ -1099,7 +1099,7 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
             ),
             (
                 "conversation.catalogueResolve",
-                json!({"pass":invalid,"descriptor":catalogue_wire::wire_descriptor(&descriptor),"maxPayloadBytes":1,"accessEpoch":"7"}),
+                json!({"pass":invalid,"descriptor":catalogue_read::wire_descriptor(&descriptor),"maxPayloadBytes":1,"accessEpoch":"7"}),
             ),
         ] {
             let reply = source.call(method, params);
@@ -1108,7 +1108,7 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
         }
     }
     for count in [0, MAX_CATALOGUE_ENTRIES + 1] {
-        let reply = source.call("conversation.catalogueManifest", json!({"request":{"pass":catalogue_wire::wire_pass(&pass),"maxEntries":count},"accessEpoch":"7"}));
+        let reply = source.call("conversation.catalogueManifest", json!({"request":{"pass":catalogue_read::wire_pass(&pass),"maxEntries":count},"accessEpoch":"7"}));
         assert_eq!(reply["error"]["code"], "invalid_request", "{reply}");
     }
     gateway.command(json!({"action":"wrong-owner","owner":"alice"}));
@@ -1137,10 +1137,10 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
         })
         .unwrap();
     let descriptor = page.entries.first().unwrap();
-    let reply=source.call("conversation.catalogueResolve",json!({"pass":catalogue_wire::wire_pass(&pass),"descriptor":catalogue_wire::wire_descriptor(descriptor),"maxPayloadBytes":1,"accessEpoch":"7"}));
+    let reply=source.call("conversation.catalogueResolve",json!({"pass":catalogue_read::wire_pass(&pass),"descriptor":catalogue_read::wire_descriptor(descriptor),"maxPayloadBytes":1,"accessEpoch":"7"}));
     assert_eq!(reply["error"]["code"], "oversized_entry");
     assert!(reply["payload"].is_null());
-    let mut old = serde_json::to_value(catalogue_wire::wire_pass(&pass)).unwrap();
+    let mut old = serde_json::to_value(catalogue_read::wire_pass(&pass)).unwrap();
     old["scope"]["incarnation"] = json!("old");
     let reply = source.call(
         "conversation.catalogueManifest",
@@ -1161,7 +1161,7 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
     gateway.command(json!({"action":"corrupt","owner":"alice"}));
     let reply = source.call(
         "conversation.catalogueManifest",
-        json!({"request":{"pass":catalogue_wire::wire_pass(&pass),"maxEntries":37},"accessEpoch":"7"}),
+        json!({"request":{"pass":catalogue_read::wire_pass(&pass),"maxEntries":37},"accessEpoch":"7"}),
     );
     assert_eq!(reply["error"]["code"], "source_unavailable");
     assert!(reply["payload"].is_null());

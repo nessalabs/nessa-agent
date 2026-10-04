@@ -1,6 +1,7 @@
 //! SDK identity and physical reads on tracked threads after passive admission.
 
 use super::operation;
+use crate::conversation::application::conversation_session;
 use crate::conversation::application::{
     RecordReadError, RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
     RecordReadSource,
@@ -209,7 +210,7 @@ fn worker_error(error: ReadWorkerError) -> RecordReadError {
 }
 
 fn session_id(admitted: &ReceiverReadScope) -> Result<SessionId, RecordReadError> {
-    Ok(nessa_protocol::conversation::session_key::conversation_session(&admitted.conversation_id))
+    Ok(conversation_session(&admitted.conversation_id))
 }
 
 #[cfg(test)]
