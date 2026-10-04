@@ -28,7 +28,7 @@ use crate::{
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
-        LocalConversationStore, LocalReceiverAuthority,
+        LocalConversationStore,
     },
 };
 use crate::{
@@ -42,7 +42,9 @@ use crate::{
     conversation::application::{
         ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
     },
-    conversation::infrastructure::{NessaCatalogueReadSource, NessaRecordReadSource},
+    conversation::infrastructure::{
+        LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+    },
     core::RunError,
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
