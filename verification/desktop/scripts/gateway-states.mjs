@@ -32,7 +32,7 @@
  * `gateway-window.mjs`'s, against a real one.
  */
 import { openPage, withEngines } from "./lib/browser.mjs"
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import { attempt, CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css, modules } from "./lib/selectors.mjs"
@@ -69,12 +69,22 @@ function positive(source, numbers) {
  *   from the failure, which comes after its ask. So no poller ask comes
  *   sooner than this after the last one.
  * - `quietMs`, a round short of that wait: nothing asks the host within it.
+ *   It also bounds the pause (C5, #419 comment 5978179804): refusals come
+ *   at least `pollMs` apart, so under `quietMs` after the last ask at least
+ *   one refused round is still owed, and the poller still waits. Past it,
+ *   the wait may have run out, and a Try Again that connects only when the
+ *   poller would could pass. So `unaskedMs` and `pauseLeadMs` must fit under
+ *   it, or the check could not run (C5a), and the pause must come under it,
+ *   or it fails (C5b).
  * - `recoveredMs`, the wait and three rounds more: the poller's next connect
  *   is at most `reconnectRounds + 1` rounds after the failure (S16), and two
  *   rounds are left for the rounds' own time. It has asked exactly once by
  *   then, as the ask after it is a whole wait later still.
  * - `unaskedMs`, two rounds: how long the host goes unasked before the clock
- *   pauses (C1), so the last connect's attempts have ended. A connect still
+ *   pauses (C1), so the last connect's attempts have ended. That holds
+ *   while the client's largest retry backoff plus one attempt stays under
+ *   two rounds (`resolveConnectRetry`'s defaults, 500 ms today); if it
+ *   stops holding, the result is a spurious C2 failure, not a pass. A connect still
  *   in flight would stop on its paused backoff, and Try Again would join it
  *   (S6) and not ask: a correct product failing C2, not a broken one passing.
  * - `pauseLeadMs`, a tenth of a round: `pauseAt` takes a time no earlier
@@ -85,14 +95,23 @@ function positive(source, numbers) {
 function cadenceOf({ pollMs, reconnectRounds }) {
   positive("defaultGatewayTiming", { pollMs, reconnectRounds })
   const pollerWaitMs = pollMs * reconnectRounds
+  const quietMs = pollerWaitMs - pollMs
+  const unaskedMs = 2 * pollMs
+  const pauseLeadMs = pollMs / 10
+  // C5a: the quiet spell before the pause would use up the wait it is meant
+  // to land in.
+  if (quietMs <= unaskedMs + pauseLeadMs)
+    throw new CannotRun(
+      `the poller's quiet spell of ${quietMs}ms is not over the ${unaskedMs}ms unasked plus the ${pauseLeadMs}ms lead before the pause: the pause could not land while the poller still waits`,
+    )
   return {
     pollMs,
     reconnectRounds,
     pollerWaitMs,
-    quietMs: pollerWaitMs - pollMs,
+    quietMs,
     recoveredMs: pollerWaitMs + 3 * pollMs,
-    unaskedMs: 2 * pollMs,
-    pauseLeadMs: pollMs / 10,
+    unaskedMs,
+    pauseLeadMs,
   }
 }
 
@@ -257,19 +276,20 @@ It reads the poller's wait from the gateway source in the page, so it needs
     await withEngines(options, rep, async (engine, browser) => {
       for (const scenario of scenarios)
         await attempt(rep, { name: scenario.name, engine, width: 1440 }, async () => {
-          const opened = await openPage(browser, {
-            url: `${origin}/desktop.html`,
-            initScripts: [[gatewayHost, scenario]],
-            // Either answer: the status this check is for, or a listed
-            // session — the sample in disguise, which `check` fails.
-            readySelector: `${css.workspaceEmpty}, ${css.sessionRow}`,
-            beforeLoad: async (context) => {
-              // C0: the page's timers are the clock's, running in real time.
-              await context.clock.install()
-              await context.routeWebSocket(`${fakeGateway}/**`, refuseCredential)
-            },
-          })
+          let opened
           try {
+            opened = await openPage(browser, {
+              url: `${origin}/desktop.html`,
+              initScripts: [[gatewayHost, scenario]],
+              // Either answer: the status this check is for, or a listed
+              // session — the sample in disguise, which `check` fails.
+              readySelector: `${css.workspaceEmpty}, ${css.sessionRow}`,
+              beforeLoad: async (context) => {
+                // C0: the page's timers are the clock's, running in real time.
+                await context.clock.install()
+                await context.routeWebSocket(`${fakeGateway}/**`, refuseCredential)
+              },
+            })
             const { page, context } = opened
             const timing = cadenceOf(
               await modelValue(page, modules.gatewaySource, "defaultGatewayTiming"),
@@ -315,22 +335,25 @@ It reads the poller's wait from the gateway source in the page, so it needs
               }).observe(document.body, { childList: true, subtree: true })
             }, css.workspaceEmpty)
             // C1: once the host has gone unasked for `unaskedMs`, the clock
-            // pauses, and no timer fires until it resumes.
-            const quietAt = await page
-              .waitForFunction(
-                (unasked) => {
-                  const last = window.__fakeHostAskTimes.at(-1)
-                  if (last !== undefined && performance.now() - last < unasked)
-                    return false
-                  return Date.now()
-                },
-                unaskedMs,
-                { timeout: recoveredMs },
-              )
-              .then(
-                (handle) => handle.jsonValue(),
-                () => null,
-              )
+            // pauses, and no timer fires until it resumes. One evaluate waits
+            // for that and answers with the page's time, so only its answer
+            // comes between the quiet spell and `pauseAt`. It polls on the
+            // page's timers, the clock's, still running in real time.
+            const quietAt = await page.evaluate(
+              ([unasked, timeout]) =>
+                new Promise((resolve) => {
+                  const started = performance.now()
+                  const poll = () => {
+                    const last = window.__fakeHostAskTimes.at(-1)
+                    if (last === undefined || performance.now() - last >= unasked)
+                      resolve(Date.now())
+                    else if (performance.now() - started >= timeout) resolve(null)
+                    else setTimeout(poll, 10)
+                  }
+                  poll()
+                }),
+              [unaskedMs, recoveredMs],
+            )
             if (quietAt === null) {
               failures.push(
                 `the host was never unasked for ${unaskedMs}ms within ${recoveredMs}ms, so the clock was not paused for Try Again`,
@@ -345,13 +368,19 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 unaskedMs: times.length === 0 ? null : performance.now() - times.at(-1),
               }
             })
-            // C3, as T4: with no failed connect before it, there is nothing
-            // for Try Again to beat.
+            // C3: with no failed connect before it, there is nothing for Try
+            // Again to beat.
             if (atPause.asked === 0)
               failures.push("no failed connect came before Try Again for it to beat")
             else if (!(atPause.unaskedMs >= unaskedMs))
               failures.push(
                 `the host was asked ${Math.round(atPause.unaskedMs)}ms before the clock paused, under ${unaskedMs}ms: Try Again may join that connect`,
+              )
+            // C5b: under `quietMs`, a refused round is still owed, so the
+            // poller still waits when Try Again is clicked.
+            else if (!(atPause.unaskedMs < quietMs))
+              failures.push(
+                `the clock paused ${Math.round(atPause.unaskedMs)}ms after the last ask, not under ${quietMs}ms: the poller's wait may have ended, so Try Again's connect is not shown to beat it`,
               )
             // A real click, so Playwright's own checks (visible, stable, not
             // painted over) come first.
@@ -417,8 +446,13 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 tryAgain,
               },
             }
+          } catch (error) {
+            // The result keeps only the first line: a throw that is not
+            // "could not run" is a fault, and its stack goes to stderr.
+            if (!(error instanceof CannotRun)) log(error?.stack ?? String(error))
+            throw error
           } finally {
-            await opened.close()
+            await opened?.close()
           }
         })
     })

@@ -100,7 +100,9 @@ export async function openPage(browser, o) {
     await o.beforeLoad?.(context)
     page = await context.newPage()
   } catch (error) {
-    await context.close()
+    // The setup's error is the one reported: a close that fails too is
+    // swallowed, so it cannot take its place.
+    await context.close().catch(() => {})
     throw error
   }
   const errors = []
