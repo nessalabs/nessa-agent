@@ -424,6 +424,7 @@ await main(
                 ...(result.failures ?? []),
                 ...(result.cannotRun ? [] : opened.errors.splice(0)),
               ],
+              harmless: opened.harmless.splice(0),
             })
             if (!entry.ok)
               stopped = `${name} ${entry.cannotRun ? "could not run" : "did not hold"}`
@@ -442,8 +443,15 @@ await main(
           }
           // What the page said after the last step, before it closes.
           const late = opened.errors.splice(0)
-          if (late.length > 0)
-            rep.add({ name: "console", engine, layout, failures: late })
+          const lateHarmless = opened.harmless.splice(0)
+          if (late.length > 0 || lateHarmless.length > 0)
+            rep.add({
+              name: "console",
+              engine,
+              layout,
+              failures: late,
+              harmless: lateHarmless,
+            })
         } finally {
           await opened.close()
           log(`${engine} ${layout}: ${Date.now() - started} ms`)

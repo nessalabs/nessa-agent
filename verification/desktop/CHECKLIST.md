@@ -688,14 +688,20 @@ says why where the conversations would be.
   per layout as `console`.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`, `harmlessConsole`;
-  kept in the JSON as `harmless`). Chromium can report the window's own
-  `GET /mcp-resources`, which the client reads through a bounded reader, as
-  failed with `net::ERR_ABORTED` after a 200 (#485): that one failure, at
-  that URL exactly, is labelled harmless, "aborted after a 200; the bytes
-  are checked by renders" (`lib/browser.mjs`, `recordFailedRequest`, rows
-  F1–F5). With no response, another status, URL, query or error it stays a
-  failure. `mcp-apps-gateway.mjs`'s `renders` asserts the bytes arrived.
-  Vite's `[vite] connecting…` / HMR
+  kept in the JSON as `harmless`). Chromium reports a request as failed
+  with `net::ERR_ABORTED` when the page stops reading a body that did arrive:
+  the client's bounded read of `/mcp-resources`, or the 204 of the window's
+  sign-in check `/browser/check`, whose body is never read (#485). One rule,
+  not a list of URLs: `net::ERR_ABORTED` exactly, on the page's own origin,
+  after a 2xx response, is labelled harmless, "aborted after a <status>
+  response" (`lib/browser.mjs`, `recordFailedRequest`, rows F1′ and F2–F4),
+  and kept on each result's JSON as `harmless` by `mcp-apps-gateway.mjs` and
+  `gateway-window.mjs`. With no response, a status outside 2xx, another
+  origin, another error, or a page with no origin, it stays a failure. The
+  rule knows only that a response arrived: whether its bytes were right is
+  each check's own assertions' to judge (`renders` in `mcp-apps-gateway.mjs`
+  for `/mcp-resources`; the conversation loading at all for
+  `/browser/check`). Vite's `[vite] connecting…` / HMR
   messages are logs, not errors. A reload caused by another edit landing on
   the dev server mid-run is not a finding — re-run.
 

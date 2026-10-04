@@ -160,19 +160,18 @@ export async function openPage(browser, o) {
 }
 
 /**
- * Records a request the page reports failed (#485, rows F1–F5; tested in
- * `browser.test.mjs`): a line pushed to `harmless` or to `errors`, or
- * nothing for the fresh browser's `/favicon.ico`.
+ * Records a request the page reports failed (#485, rows F1′ and F2–F4;
+ * tested in `browser.test.mjs`): a line pushed to `harmless` or to
+ * `errors`, or nothing for the fresh browser's `/favicon.ico`.
  *
- * Harmless only when Chromium reports `net::ERR_ABORTED` for the window's own
- * `GET /mcp-resources` (that URL exactly: the client sends its ticket in a
- * header, `fetchMcpResource`) after a 200 arrived (F1). The client reads that
- * body through a reader bounded to its size + 1, and Chromium can report such
- * a request aborted after the whole body reached the page. This function
- * knows only that a 200 arrived: whether the bytes were the right ones is
- * `mcp-apps-gateway.mjs`'s `renders`, which asserts the app is live with the
- * server's document and result. With no response (F2), another status (F3),
- * another URL or error (F4), or a query or fragment (F5), it is an error.
+ * Harmless only when Chromium reports `net::ERR_ABORTED` for a request on the
+ * page's own origin after a 2xx response arrived (F1′). Chromium reports a
+ * request aborted when the page stops reading its body, through a bounded
+ * reader (`/mcp-resources`) or by never reading it (`/browser/check`'s 204),
+ * though the response arrived. This function knows only that it arrived:
+ * whether its bytes were right is for each check's own assertions. With no
+ * response (F2), a status outside 2xx (F3), or another origin, another error
+ * text, or a page with no origin (F4), it is an error.
  *
  * `existingResponse()` answers synchronously, so the line is recorded within
  * the event, before a step reads `errors`. Playwright creates a failed
@@ -189,18 +188,22 @@ export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
   if (/favicon\.ico/.test(url)) return
   const errorText = request.failure()?.errorText ?? ""
   const line = `requestfailed: ${url} ${errorText}`
-  // The window's own resource URL; none for a page with no origin to resolve it on.
-  const resource = URL.canParse("/mcp-resources", pageUrl)
-    ? new URL("/mcp-resources", pageUrl).href
-    : null
+  // An opaque origin (`about:blank`, `data:`) serialises as "null": no page's own.
+  const own = originOf(pageUrl)
+  const status = request.existingResponse()?.status()
   if (
     errorText === "net::ERR_ABORTED" &&
-    url === resource &&
-    request.existingResponse()?.status() === 200
+    own !== "null" &&
+    originOf(url) === own &&
+    status >= 200 &&
+    status <= 299
   )
-    harmless.push(`${line} (aborted after a 200; the bytes are checked by renders, #485)`)
+    harmless.push(`${line} (aborted after a ${status} response, #485)`)
   else errors.push(line)
 }
+
+/** `url`'s origin, or "null" when it has none to compare. */
+const originOf = (url) => (URL.canParse(url) ? new URL(url).origin : "null")
 
 /** Fails with a clear "could not run" when the page lacks what a script needs. */
 export async function need(page, selector, what, timeout = 5000) {
