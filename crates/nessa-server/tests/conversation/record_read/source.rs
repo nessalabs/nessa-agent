@@ -527,3 +527,179 @@ async fn cold_page_of_a_non_completion_target_refuses_in_one_read() {
     source.shutdown().await.unwrap();
     storage.shutdown().await.unwrap();
 }
+
+/// Hold the worker at its first step boundary until the read's stop condition
+/// holds, announcing when it gets there; later boundaries pass straight through.
+fn hold_first_boundary(boundaries: Arc<AtomicUsize>, reached: Arc<Notify>) -> BetweenSteps {
+    Arc::new(move |stopped: &dyn Fn() -> bool| {
+        if boundaries.fetch_add(1, Ordering::SeqCst) == 0 {
+            reached.notify_one();
+            let started = std::time::Instant::now();
+            while !stopped() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "the read was never told to stop"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    })
+}
+
+/// S5: a cold read whose budget passes stops at its next step boundary,
+/// answers `source_preparing` and gives its permit back for the next read;
+/// its progress is kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_past_its_work_budget_answers_preparing_and_releases_its_permit() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    let tail = small_saves(&root, &session, 100).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    let boundaries = Arc::new(AtomicUsize::new(0));
+    source.work_budget = Duration::ZERO;
+    source.between_steps = Some(hold_first_boundary(
+        boundaries.clone(),
+        Arc::new(Notify::new()),
+    ));
+    let capacity = Arc::new(Semaphore::new(1));
+    let result = source
+        .read(
+            admitted_reader(conversation_id.clone()),
+            RecordReadOperation::Head,
+            RecordReadLease::new(capacity.clone().try_acquire_owned().unwrap()),
+        )
+        .await;
+    assert!(matches!(result, Err(RecordReadError::SourcePreparing)));
+    assert_eq!(
+        boundaries.load(Ordering::SeqCst),
+        1,
+        "stopped after one step"
+    );
+    // The waiting read gets the permit, and finds the first read's progress.
+    let next = capacity.clone().try_acquire_owned().unwrap();
+    source.work_budget = operation::READ_WORK_BUDGET;
+    source.between_steps = None;
+    let response = source
+        .read(
+            admitted_reader(conversation_id),
+            RecordReadOperation::Head,
+            RecordReadLease::new(next),
+        )
+        .await
+        .unwrap();
+    let RecordReadValue::Head(head) = response.value else {
+        panic!("head expected")
+    };
+    assert_eq!(head.head, tail);
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+/// S6: dropping the waiter (as the product deadline does when it answers
+/// `read_timeout`) stops the worker at its next step boundary; the permit
+/// comes back after that step instead of after the remaining steps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_read_stops_at_the_next_step_and_releases_its_permit() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    small_saves(&root, &session, 100).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    // Only the dropped waiter may stop this read.
+    source.work_budget = Duration::from_secs(3600);
+    let boundaries = Arc::new(AtomicUsize::new(0));
+    let reached = Arc::new(Notify::new());
+    source.between_steps = Some(hold_first_boundary(boundaries.clone(), reached.clone()));
+    let source = Arc::new(source);
+    let capacity = Arc::new(Semaphore::new(1));
+    let waiting = {
+        let source = source.clone();
+        let lease = RecordReadLease::new(capacity.clone().try_acquire_owned().unwrap());
+        tokio::spawn(async move {
+            source
+                .read(
+                    admitted_reader(conversation_id),
+                    RecordReadOperation::Head,
+                    lease,
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), reached.notified())
+        .await
+        .unwrap();
+    waiting.abort();
+    assert!(matches!(waiting.await, Err(error) if error.is_cancelled()));
+    let permit = tokio::time::timeout(Duration::from_secs(10), capacity.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(permit);
+    assert_eq!(
+        boundaries.load(Ordering::SeqCst),
+        1,
+        "no step after the waiter left"
+    );
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+/// S7: shutdown during a multi-step read stops it at its next step boundary,
+/// so shutdown waits for one step and the source join, not the remaining steps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_stops_a_multi_step_read_at_the_next_step() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    small_saves(&root, &session, 100).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    source.work_budget = Duration::from_secs(3600);
+    let boundaries = Arc::new(AtomicUsize::new(0));
+    let reached = Arc::new(Notify::new());
+    source.between_steps = Some(hold_first_boundary(boundaries.clone(), reached.clone()));
+    let source = Arc::new(source);
+    let reading = {
+        let source = source.clone();
+        tokio::spawn(async move {
+            source
+                .read(
+                    admitted_reader(conversation_id),
+                    RecordReadOperation::Head,
+                    RecordReadLease::new(()),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), reached.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), source.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        reading.await.unwrap(),
+        Err(RecordReadError::SourcePreparing)
+    ));
+    assert_eq!(boundaries.load(Ordering::SeqCst), 1);
+    storage.shutdown().await.unwrap();
+}

@@ -11,16 +11,28 @@ use nessa_sdk::{
     infrastructure::session_storage::{RecordReadStatus, RecordStorage, RecordStreamIdentity},
 };
 use nessa_sync::replication::{application::SourceError, domain::Scope};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::runtime::Handle;
 
 /// SDK discovery calls one admitted read may make before it answers
-/// `source_preparing`. Each call is one bounded SDK step; this is the whole of
-/// the adapter's decision. Bounds and orderings: "Steps per admitted read" in
+/// `source_preparing`. Each call is one bounded SDK step. Bounds and
+/// orderings: "Steps per admitted read" in
 /// `docs/design/bounded-terminal-discovery.md`.
 pub(super) const DISCOVERY_STEPS_PER_READ: usize = 128;
+/// How long one admitted read keeps making discovery calls while it holds a
+/// global read permit and its socket's record slot (row S5).
+pub(super) const READ_WORK_BUDGET: Duration = Duration::from_millis(200);
 
-#[allow(clippy::too_many_arguments)]
+/// One physical operation and when its discovery calls must stop.
+pub(super) struct ReadWork {
+    pub(super) operation: RecordReadOperation,
+    /// Most SDK discovery calls this read makes.
+    pub(super) steps: usize,
+    /// Asked before every call after the first: true once the read's budget
+    /// has passed, its waiter is gone, or read worker shutdown has started.
+    pub(super) stopped: Box<dyn Fn() -> bool + Send>,
+}
+
 pub(super) fn execute(
     storage: Arc<RecordStorage>,
     runtime: Handle,
@@ -28,24 +40,27 @@ pub(super) fn execute(
     identity: RecordStreamIdentity,
     admitted: ReceiverReadScope,
     observed: Scope,
-    operation: RecordReadOperation,
-    steps: usize,
+    work: ReadWork,
 ) -> Result<RecordReadValue, RecordReadError> {
     let mut source = runtime
         .block_on(storage.record_source_expected(&session, &identity))
         .map_err(storage_error)?;
     exact_record_scope(&admitted, &source, &observed).map_err(RecordReadError::Admission)?;
+    let ReadWork {
+        operation,
+        steps,
+        stopped,
+    } = work;
     let value = match operation {
-        RecordReadOperation::Head => {
-            discover(steps, || source.bounded_head(&observed)).map(|head| {
+        RecordReadOperation::Head => discover(steps, &*stopped, || source.bounded_head(&observed))
+            .map(|head| {
                 RecordReadValue::Head(RecordHead {
                     scope: observed,
                     head,
                 })
-            })
-        }
+            }),
         RecordReadOperation::Page(page) => {
-            discover(steps, || source.bounded_page(&page)).map(RecordReadValue::Page)
+            discover(steps, &*stopped, || source.bounded_page(&page)).map(RecordReadValue::Page)
         }
     };
     // The final SDK source drop joins its internal worker
@@ -54,14 +69,19 @@ pub(super) fn execute(
     value
 }
 
-/// Ask the SDK again while it is still validating, up to `steps` calls. The
-/// SDK keeps every step's progress, so a later read resumes where this one
-/// stopped; the first refusal ends the read.
+/// Ask the SDK again while it is still validating, up to `steps` calls or until
+/// `stopped`. The first call is always made, so every read advances; the SDK
+/// keeps every step's progress, so a later read resumes where this one stopped.
+/// The first refusal ends the read.
 fn discover<T>(
     steps: usize,
+    stopped: &dyn Fn() -> bool,
     mut call: impl FnMut() -> Result<RecordReadStatus<T>, SourceError>,
 ) -> Result<T, RecordReadError> {
-    for _ in 0..steps {
+    for step in 0..steps {
+        if step > 0 && stopped() {
+            break;
+        }
         if let RecordReadStatus::Ready(value) = call().map_err(source_error)? {
             return Ok(value);
         }
