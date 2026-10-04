@@ -17,6 +17,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::AgentsListResult;
 use std::{
     sync::Arc,
@@ -81,7 +82,7 @@ pub struct ProductRouteState {
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
     pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
-    pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
+    pub(crate) uptime_clock: Arc<dyn UptimeClock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
 
@@ -126,7 +127,7 @@ pub struct ProductDependencies {
     /// Embedded policy engine constructed and validated once at startup.
     pub policy: Arc<dyn PolicyEvaluator>,
     /// Existing server clock used only to report health uptime.
-    pub uptime_clock: Arc<dyn crate::app::ports::Clock>,
+    pub uptime_clock: Arc<dyn UptimeClock>,
     /// Asks this host which agents could start here. Chosen in composition so
     /// no route handler constructs a machine probe of its own. How often it may
     /// be asked is this state's to decide, not composition's — see

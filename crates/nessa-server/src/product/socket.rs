@@ -1579,7 +1579,6 @@ mod tests {
     use super::*;
     use crate::agents::domain::AgentId;
     use crate::agents_test_support::StubAgentProbe;
-    use crate::app::ports::Clock as UptimeClock;
     use crate::browser_session::application::SessionStore;
     use crate::browser_session::domain::value_objects::{
         BrowserSessionOrigin, BrowserSessionState,
@@ -1608,6 +1607,7 @@ mod tests {
         AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
         MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
     };
+    use nessa_protocol::clock::Clock as UptimeClock;
     use nessa_protocol::product::generated::{
         ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,

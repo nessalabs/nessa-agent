@@ -1,11 +1,11 @@
 //! Public codec tests. Domain transitions prove representation, not enrollment effects.
-use crate::device_pairing::{
-    application::DevicePairingStatus,
-    infrastructure::wire::{
+use crate::pairing::{
+    wire::{
         decode_reply, decode_request, encode_challenge, encode_hello, encode_refused,
         encode_request, encode_status, NativePairingReply, NativePairingRequest,
         NativePairingStatus, NativeWireError, MAX_ENROLLMENT_ENVELOPE_BYTES,
     },
+    DevicePairingStatus,
 };
 use nessa_auth::{
     adapters::pairing::{

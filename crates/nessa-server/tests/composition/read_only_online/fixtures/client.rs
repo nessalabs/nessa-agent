@@ -2,13 +2,13 @@
 use super::super::super::super::profile::Profile;
 use super::CLIENT;
 use crate::composition::read_only_example;
-use crate::device_pairing::infrastructure::{
+use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
+use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_protocol::pairing::{
     encode_frame,
     wire::{encode_request as encode_envelope, NativePairingRequest},
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
-use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
-use nessa_auth::application::pairing::ClientPendingStore;
 use nessa_protocol::product::generated::{
     ProductClientMetadata, SessionAuthenticateParams, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };

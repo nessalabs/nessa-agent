@@ -1,10 +1,8 @@
 //! `DeadlineStream` against a recording socket double: reads are ticked and
 //! retried, sends are made once and a timed-out send is terminal.
-use super::{
-    wake::{WakeEndpoint, WakeEndpoints, WAKE_TICK},
-    DeadlineStream, NativeSocket, TLS_DEADLINE,
-};
-use crate::app::ports::Clock;
+use super::{DeadlineStream, NativeSocket, TLS_DEADLINE};
+use crate::clock::Clock;
+use crate::pairing::socket::{WakeEndpoint, WakeEndpoints, WAKE_TICK};
 use std::{
     collections::VecDeque,
     io::{Error, ErrorKind, Read, Result as IoResult, Write},

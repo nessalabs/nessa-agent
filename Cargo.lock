@@ -3155,9 +3155,12 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nessa-auth",
+ "nessa-local-storage",
  "nessa-sync",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -12,19 +12,19 @@
 //! response never counts them as unexpected events (committed change watches,
 //! rows W6, W10, W15).
 use super::deadline_stream::{io_cause, DeadlineStream};
-use crate::app::ports::Clock;
-use crate::device_pairing::infrastructure::{
+use crate::read_only_sync::application::{
+    watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
+    GatewayStream,
+};
+use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
+use nessa_protocol::clock::Clock;
+use nessa_protocol::pairing::{
     encode_frame,
     wire::{
         decode_reply, encode_request as encode_envelope, NativePairingReply, NativePairingRequest,
     },
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
-use crate::read_only_sync::application::{
-    watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
-    GatewayStream,
-};
-use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
     wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,

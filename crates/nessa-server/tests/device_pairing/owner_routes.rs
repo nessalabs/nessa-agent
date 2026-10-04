@@ -21,6 +21,7 @@ use nessa_auth::{
         AudienceId, OrganizationId, ResourceId,
     },
 };
+use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_server::{
     agents::{
         application::{AgentProbe, AgentProbeEvidence},
@@ -28,7 +29,7 @@ use nessa_server::{
     },
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
-        wire::NativePairingStatus, InvitationEntropy, NativeEnrollmentClient, PairingOwnerCommands,
+        InvitationEntropy, NativeEnrollmentClient, PairingOwnerCommands,
     },
     product::{ProductDependencies, ProductRouteState},
     server::entrypoint::http,

@@ -32,15 +32,14 @@ use crate::{
         application::{AgentCredentialSource, AgentProbe},
         infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
-    app::ports::Clock as ServerClock,
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
-    conversation::application::{
-        ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
-        WatchCatalogue, WatchRecords,
-    },
-    conversation::infrastructure::{
-        LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+    conversation::{
+        application::{
+            ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+            WatchCatalogue, WatchRecords,
+        },
+        infrastructure::{LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource},
     },
     core::RunError,
     env::Environment,
@@ -60,6 +59,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{

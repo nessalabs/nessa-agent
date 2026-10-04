@@ -18,15 +18,9 @@ use std::{
 };
 
 /// Bound shared by native connection admission and its wake report.
-pub(in crate::device_pairing::infrastructure) const NATIVE_CONNECTION_CAPACITY: usize = 8;
-/// Bound on protected product sessions, a pool of their own so sessions never
-/// take the permits enrollment and pinned status need (design row PR10).
-/// Equal to the connection bound, which also sizes the wake report.
-pub(in crate::device_pairing::infrastructure) const PRODUCT_SESSION_CAPACITY: usize =
-    NATIVE_CONNECTION_CAPACITY;
+pub const NATIVE_CONNECTION_CAPACITY: usize = 8;
 /// Longest a blocked socket wait lasts before it checks for a wake again.
-pub(in crate::device_pairing::infrastructure) const WAKE_TICK: Duration =
-    Duration::from_millis(100);
+pub const WAKE_TICK: Duration = Duration::from_millis(100);
 
 /// Why a blocked socket was woken.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,13 +68,14 @@ struct EndpointState {
     /// an idle protected session sees a shutdown at once.
     reader: Option<Waker>,
 }
-pub(in crate::device_pairing::infrastructure) struct WakeEndpoint {
+/// One socket's stop flag, registered for as long as its connection permit is held.
+pub struct WakeEndpoint {
     target: SocketAddr,
     state: Mutex<EndpointState>,
 }
 impl WakeEndpoint {
     /// `target` is the peer address of the connection's socket.
-    pub(in crate::device_pairing::infrastructure) fn new(target: SocketAddr) -> Arc<Self> {
+    pub fn new(target: SocketAddr) -> Arc<Self> {
         Arc::new(Self {
             target,
             state: Mutex::new(EndpointState {
@@ -90,7 +85,7 @@ impl WakeEndpoint {
         })
     }
     /// Whether the owner has woken this socket; its IO must stop.
-    pub(in crate::device_pairing::infrastructure) fn woken(&self) -> bool {
+    pub fn woken(&self) -> bool {
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -100,7 +95,7 @@ impl WakeEndpoint {
     /// Have `reader` woken when this endpoint is woken; `true` if it already
     /// was. Registering and checking happen under one lock, so a wake cannot
     /// fall between them.
-    pub(in crate::device_pairing::infrastructure) fn wake_reader(&self, reader: &Waker) -> bool {
+    pub fn wake_reader(&self, reader: &Waker) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.wake.is_some() {
             return true;
@@ -131,21 +126,24 @@ impl WakeEndpoint {
         outcome
     }
 }
-pub(in crate::device_pairing::infrastructure) struct WakeEndpoints {
+/// The endpoints an owner may wake: one per connection permit it holds.
+pub struct WakeEndpoints {
     active: Vec<Weak<WakeEndpoint>>,
     report: Option<NativeWakeReport>,
 }
+impl Default for WakeEndpoints {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl WakeEndpoints {
-    pub(in crate::device_pairing::infrastructure) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             active: Vec::with_capacity(NATIVE_CONNECTION_CAPACITY),
             report: None,
         }
     }
-    pub(in crate::device_pairing::infrastructure) fn register(
-        &mut self,
-        endpoint: &Arc<WakeEndpoint>,
-    ) {
+    pub fn register(&mut self, endpoint: &Arc<WakeEndpoint>) {
         self.active.retain(|endpoint| endpoint.strong_count() != 0);
         assert!(
             self.active.len() < NATIVE_CONNECTION_CAPACITY,
@@ -154,20 +152,17 @@ impl WakeEndpoints {
         self.active.push(Arc::downgrade(endpoint));
     }
     /// Stop sweeping `endpoint`: its connection moved to another owner.
-    pub(in crate::device_pairing::infrastructure) fn remove(
-        &mut self,
-        endpoint: &Arc<WakeEndpoint>,
-    ) {
+    pub fn remove(&mut self, endpoint: &Arc<WakeEndpoint>) {
         self.active
             .retain(|known| !std::ptr::eq(known.as_ptr(), Arc::as_ptr(endpoint)));
     }
-    pub(in crate::device_pairing::infrastructure) fn report(&self) -> Option<NativeWakeReport> {
+    pub fn report(&self) -> Option<NativeWakeReport> {
         self.report
     }
     /// Callers close their semaphore while holding the lock that guards this
     /// value, and admit only while holding it, so no socket is registered after
     /// the sweep. A second call returns the first report.
-    pub(in crate::device_pairing::infrastructure) fn close(&mut self) -> NativeWakeReport {
+    pub fn close(&mut self) -> NativeWakeReport {
         *self.report.get_or_insert_with(|| {
             let mut report = NativeWakeReport {
                 entries: [None; NATIVE_CONNECTION_CAPACITY],

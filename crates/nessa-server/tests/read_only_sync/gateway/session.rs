@@ -2,19 +2,19 @@
 //! the device key presented, `openProduct`, then product frames.
 use super::super::session::{DeviceEvidence, LocalConnector, RpcKind, Session};
 use super::super::sources::GatewayConnection;
-use crate::app::ports::Clock;
 use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
 use crate::conversation::infrastructure::{conversation_catalogue_schema, NessaCatalogueSource};
-use crate::device_pairing::infrastructure::{
-    encode_frame,
-    wire::{decode_request, encode_refused, NativePairingRequest},
-    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES,
-};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::clock::Clock;
+use nessa_protocol::pairing::{
+    encode_frame,
+    wire::{decode_request, encode_refused, NativePairingRequest},
+    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES,
+};
 use nessa_protocol::product::catalogue_read::wire_descriptor;
 use nessa_protocol::product::generated::{
     product_event, product_method, ProductSessionReady, SessionChallenge,

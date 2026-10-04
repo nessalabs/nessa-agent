@@ -3,7 +3,7 @@ use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport, OsEntropy},
     domain::pairing::AttemptId,
 };
-use nessa_server::device_pairing::infrastructure::{
+use nessa_protocol::pairing::{
     wire::{decode_request, encode_refused, encode_request, NativePairingRequest, NativeWireError},
     EnrollmentChannel, NativeFrameError,
 };

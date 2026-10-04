@@ -4,7 +4,7 @@
 //! `tests/device_pairing/wire.rs`; the codec establishes no key proof or current authority.
 #![deny(missing_docs)]
 mod dto;
-use crate::device_pairing::application::DevicePairingStatus;
+use super::status::DevicePairingStatus;
 use dto::{WireConsent, WirePublic, WireReply, WireRequest, WireStatus};
 use nessa_auth::domain::{
     pairing::{
@@ -349,5 +349,5 @@ impl Write for BoundedFrame {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/device_pairing/wire.rs"]
+#[path = "../../../tests/pairing/wire.rs"]
 mod tests;

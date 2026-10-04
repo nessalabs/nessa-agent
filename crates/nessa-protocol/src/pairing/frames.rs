@@ -92,5 +92,5 @@ pub fn encode_frame(limit: usize, body: &[u8]) -> Result<Vec<u8>, FrameTooLarge>
 }
 
 #[cfg(test)]
-#[path = "../../../tests/device_pairing/infrastructure/frames.rs"]
+#[path = "../../tests/pairing/frames.rs"]
 mod tests;
