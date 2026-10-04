@@ -27,8 +27,7 @@
 //!   ConversationSummaries  ─┼─▶ LocalConversationStore ─▶ metadata.sqlite3
 //!   ConversationListing    ─┤                              conversations ◀─ deletions
 //!   WatchCatalogue         ─┤
-//!   ConversationCatalogue  ─┤                                            ◀─ summaries
-//!   RetrofitConversations  ─┘
+//!   ConversationCatalogue  ─┘                                            ◀─ summaries
 //!                                                               catalogue_owners / identity
 //!                                                                        ◀─ mode requests
 //! ```
@@ -43,12 +42,6 @@
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
 //! by the conversation, the app's mount, the gateway's call id and the phase.
-//! The one-shot identity retrofit (temporary, ADR 344) has two of its own:
-//! `DurableIdentityRetrofitAudit`, the same immutable-file shape keyed by each
-//! fact's content (a run summary also by when it was observed), and
-//! `FileIdentityRetrofitMarker`, whose file says a run finished with nothing
-//! transient left. `LocalConversationStore` also lists every conversation for
-//! it (`RetrofitConversations`).
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 mod catalogue_changes;
@@ -84,11 +77,6 @@ pub use creation_audit::DurableConversationCreationAudit;
 mod mode_audit;
 pub use mode_audit::DurableConversationModeAudit;
 
-mod identity_retrofit_audit;
-mod identity_retrofit_marker;
-pub use identity_retrofit_audit::DurableIdentityRetrofitAudit;
-pub use identity_retrofit_marker::{FileIdentityRetrofitMarker, IDENTITY_RETROFIT_MARKER};
-
 mod mcp_app_audit;
 pub use mcp_app_audit::DurableMcpAppAudit;
 
@@ -105,10 +93,6 @@ pub use audit::DurableExecutionAudit;
 #[cfg(test)]
 #[path = "../../../tests/conversation/store.rs"]
 mod store_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/conversation/identity_retrofit_adapters.rs"]
-mod identity_retrofit_adapter_tests;
 
 #[cfg(test)]
 pub(crate) use record_read::TestReadGate;

@@ -355,7 +355,7 @@ own current lifecycle and API contracts.
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, the leased read-and-append of a moved restoration identity (`SavedProviderIdentity`) in `storage/provider_identity.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
 | `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
@@ -737,16 +737,7 @@ entry; its worker attaches the grant's forwarded results to the completed
 calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part. The MCP server list is not part of the
-restoration fingerprint (`acp/sessions/identity.rs`, ADR 344); the one-shot
-retrofit of conversations saved under the fingerprint that was is temporary:
-the old function in `acp/sessions/retrofit.rs`, each binding's
-`previous_identity`, and the gateway's runner in
-`conversation/application/identity_retrofit/` with its audit and marker in
-`conversation/infrastructure/identity_retrofit_{audit,marker}.rs`, called from
-`composition/local_auth.rs`. The durable fact it appends,
-`SessionChange::ProviderIdentity`, is permanent; the rest leaves in
-[#471](https://github.com/nessalabs/nessa-agent/issues/471)
-([state table](design/mcp-connections.md#mcp-servers-leave-the-restoration-identity-391)).
+restoration fingerprint (`acp/sessions/identity.rs`, ADR 344).
 
 `scripts/mcp-test-server/` is developer tooling, not a Nessa tool: a
 dependency-free stdio MCP server whose tools return structured results, resource

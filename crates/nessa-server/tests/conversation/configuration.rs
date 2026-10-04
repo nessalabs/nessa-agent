@@ -21,7 +21,7 @@ impl AgentCredentialSource for NoCredentials {
 }
 
 #[cfg(unix)]
-pub(in crate::composition) fn no_credentials() -> Arc<dyn AgentCredentialSource> {
+fn no_credentials() -> Arc<dyn AgentCredentialSource> {
     Arc::new(NoCredentials)
 }
 
@@ -310,11 +310,7 @@ fn catalog_entry(provider: &str, model: &str) -> serde_json::Value {
 /// catalog they are pointed at. `missing` names the agent whose command is not
 /// written to disk, which is what `build::provider` refuses on.
 #[cfg(unix)]
-pub(in crate::composition) fn two_agents(
-    root: &Path,
-    selected: &str,
-    missing: AgentId,
-) -> (AgentsConfig, std::path::PathBuf) {
+fn two_agents(root: &Path, selected: &str, missing: AgentId) -> (AgentsConfig, std::path::PathBuf) {
     let catalog = root.join("catalog.json");
     std::fs::write(
         &catalog,
@@ -423,35 +419,6 @@ fn every_configured_bundled_agent_that_can_be_built_is() {
     // where its current generation is resolved, not by this fixed build.
     assert!(built.erasers.handles(AgentId::Claude));
     assert!(!built.erasers.handles(AgentId::Opencode));
-}
-
-/// Every agent composition builds carries the identity its binding had under
-/// the fingerprint that still hashed MCP servers, for the one-shot retrofit
-/// (#391). With no MCP servers configured it still differs from the current
-/// one, because the earlier fingerprint hashed their count (state table R16),
-/// and it names the same provider and model.
-#[cfg(unix)]
-#[test]
-fn r16_with_no_mcp_servers_the_previous_identity_still_differs() {
-    let root = tempfile::tempdir().unwrap();
-    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Opencode);
-    assert!(config.mcp_servers.is_empty());
-    nessa_local_storage::create_directory(&conversations).unwrap();
-    let built = providers(
-        &config,
-        &conversations,
-        Arc::new(SystemClock),
-        Arc::new(NoImages),
-        no_credentials(),
-        &HashSet::new(),
-    )
-    .unwrap();
-    let claude = &built.providers[&AgentId::Claude];
-    let current = claude.provider.identity();
-    let previous = claude.previous_identity.clone().unwrap();
-    assert_ne!(previous, current);
-    assert_eq!(previous.name(), current.name());
-    assert_eq!(previous.model_id(), current.model_id());
 }
 
 /// Deleting Claude's own record of a session launches Claude with the
@@ -783,7 +750,7 @@ fn an_image_is_fitted_to_what_every_configured_agent_would_take() {
 /// which agents got built, and nothing here ever prompts, so a source that
 /// panics if read is the honest stand-in.
 #[cfg(unix)]
-pub(in crate::composition) struct NoImages;
+struct NoImages;
 #[cfg(unix)]
 impl nessa_sdk::application::agent_execution::providers::UserImageSource for NoImages {
     fn read(

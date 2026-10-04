@@ -11,9 +11,7 @@
 //! context: changing them leaves every saved conversation restorable
 //! (`adding_an_mcp_server_keeps_the_identity_and_restores`). The relay refuses
 //! a server whose configuration changed under an open conversation on its own
-//! (`configuration-changed`). The fingerprint this replaced, which did hash
-//! them, survives only in [`super::retrofit`] for the one-shot retrofit of
-//! conversations saved under it.
+//! (`configuration-changed`).
 //!
 //! [`ProviderIdentity`]: crate::application::agent_execution::providers::ProviderIdentity
 use super::AcpConfig;

@@ -8,9 +8,7 @@ use super::{
     SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
-    application::agent_execution::{
-        agents::AgentError, executions::ExecutionUpdate, providers::ProviderIdentity,
-    },
+    application::agent_execution::{agents::AgentError, executions::ExecutionUpdate},
     domain::agent_execution::{
         executions::{
             ExecutionId, ExecutionOutcome, InvocationHistory, InvocationObservation,
@@ -259,7 +257,6 @@ pub(super) enum ChangeUndo {
         Option<Result<ExecutionOutcome, AgentError>>,
     ),
     Context(ProviderContext),
-    Identity(ProviderIdentity),
 }
 
 impl continuation::Continuation {
@@ -645,20 +642,6 @@ impl continuation::Continuation {
                     after.clone(),
                 )));
             }
-            SessionChange::ProviderIdentity { before, after } => {
-                let snapshot = candidate
-                    .as_mut()
-                    .ok_or_else(|| corrupt("provider identity precedes session open"))?;
-                if &snapshot.provider != before || before == after {
-                    return Err(corrupt(
-                        "provider identity revision does not match prior value",
-                    ));
-                }
-                undo.push(ChangeUndo::Identity(std::mem::replace(
-                    &mut snapshot.provider,
-                    after.clone(),
-                )));
-            }
         }
 
         Ok(())
@@ -809,9 +792,6 @@ impl continuation::Continuation {
             }
             ChangeUndo::Context(context) => {
                 self.snapshot.as_mut().expect("open").provider_context = context
-            }
-            ChangeUndo::Identity(identity) => {
-                self.snapshot.as_mut().expect("open").provider = identity
             }
         }
     }

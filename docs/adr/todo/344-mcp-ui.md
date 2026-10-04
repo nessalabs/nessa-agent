@@ -209,25 +209,14 @@ app widgets alike.
   its provider session ends (close, delete, gateway stop), then resumes with
   the current set. This replaces "the fingerprint still changes exactly when
   the server does", which the record first chose.
-  - Changing the function changed every saved conversation's identity once,
-    since the old one also hashed the number of servers. A **one-shot
-    retrofit** at gateway start, before the conversation service exists,
-    moves each conversation whose saved identity is exactly the old
-    fingerprint over the current configuration, and leaves every other as it
-    was. Its state table and tests are in
-    [mcp-connections](../../design/mcp-connections.md#mcp-servers-leave-the-restoration-identity-391).
-  - The move is recorded by a new, permanent durable fact,
-    `SessionChange::ProviderIdentity { before, after }`: this conversation's
-    restoration identity moved from one to the other with no provider effect.
-    Folding it refuses unless `before` is the published identity and differs
-    from `after`. It is not a compatibility reader; appending is the only
-    honest way to change a replayed log.
-  - What is temporary is the old fingerprint function (kept only in the SDK's
-    `acp::sessions::retrofit`, read through each ACP binding's
-    `previous_identity`) and the gateway's retrofit runner with its audit and
-    marker. [#471](https://github.com/nessalabs/nessa-agent/issues/471)
-    deletes them together once installations have started on this version; until then no reader of saved history depends on
-    them.
+  - The release that ships this strands saved conversations once: their
+    saved fingerprint hashed the MCP servers, and with them the gateway
+    executable's path, so they answer `conversation_configuration_changed`
+    — exactly as every app update already does today, since each version runs
+    its gateway from a new directory. Nothing moves them, and no reader of the
+    earlier fingerprint is kept. After that release, neither an MCP server
+    change nor a move of the gateway's executable strands a saved conversation
+    ([mcp-connections](../../design/mcp-connections.md#mcp-servers-leave-the-restoration-identity-391)).
 - A view like experiments becomes a package with its own release, testable in a
   fake host, and portable.
 - An extension cannot reach into the core: whatever it needs from the
