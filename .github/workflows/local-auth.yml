@@ -175,6 +175,8 @@ jobs:
               'crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs',
               'crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs',
               'crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs',
+              'crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs',
+              'crates/nessa-sdk/src/infrastructure/mcp/servers.rs',
               'crates/nessa-protocol/src/product_contract/generated.rs',
           ]:
               destination = root / name
