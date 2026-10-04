@@ -687,25 +687,25 @@ says why where the conversations would be.
   runs. _Check:_ every script adds them to its failures; `smoke.mjs` reports them
   per layout as `console`.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
-  gets a 404 (matched by source URL in `lib/selectors.mjs`, `harmlessConsole`;
-  kept in the JSON as `harmless`). Chromium reports a request as failed
-  with `net::ERR_ABORTED` when the page stops reading a body that did arrive:
-  the client's bounded read of `/mcp-resources`, or the 204 of the window's
+  gets a 404 (matched by source URL in `lib/selectors.mjs`,
+  `harmlessConsole`). Chromium reports a request as failed with
+  `net::ERR_ABORTED` when the page stops reading a body that did arrive: the
+  client's bounded read of `/mcp-resources`, or the 204 of the window's
   sign-in check `/browser/check`, whose body is never read (#485). One rule,
   not a list of URLs: `net::ERR_ABORTED` exactly, on the page's own origin,
   after a 2xx response, is labelled harmless, "aborted after a <status>
-  response" (`lib/browser.mjs`, `recordFailedRequest`, rows F1′ and F2–F4),
-  and kept in the JSON as `harmless` by `smoke.mjs`, `mcp-apps-gateway.mjs`
-  and `gateway-window.mjs`; the other scripts that open a page do not keep
-  their harmless lines yet (#494). With no response, a status outside 2xx,
-  another origin, another error, or a page with no origin, it stays a
-  failure. The
-  rule knows only that a response arrived: whether its bytes were right is
-  each check's own assertions' to judge (`renders` in `mcp-apps-gateway.mjs`
-  for `/mcp-resources`; the conversation loading at all for
-  `/browser/check`). Vite's `[vite] connecting…` / HMR
-  messages are logs, not errors. A reload caused by another edit landing on
-  the dev server mid-run is not a finding — re-run.
+  response" (`lib/browser.mjs`, `recordFailedRequest`, rows F1′ and F2–F4).
+  With no response, a status outside 2xx, another origin, another error, or
+  a page with no origin, it stays a failure. The rule knows only that a
+  response arrived: whether its bytes were right is each check's own
+  assertions' to judge (`renders` in `mcp-apps-gateway.mjs` for
+  `/mcp-resources`; the conversation loading at all for `/browser/check`).
+  Harmless lines of either kind are kept in the JSON as `harmless` by
+  `smoke.mjs`, `mcp-apps-gateway.mjs` and `gateway-window.mjs`; the other
+  scripts that open a page do not keep them yet (#494). Vite's
+  `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
+  by another edit landing on the dev server mid-run is not a finding —
+  re-run.
 
 ## Committed transcript controls
 
