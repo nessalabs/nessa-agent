@@ -1,14 +1,16 @@
 /**
  * `McpAppServer` over a fake `client.mcpApps` that can give every answer the
- * gateway can: each test names its row of the state table on #384 (A1–A12,
- * R1–R5, M2), and the last group holds #349's L14 and L24 through the real
- * bridge over this adapter. The size and SHA-256 check is the client's own
+ * gateway can: each test names its row of the state table on #384 (A1–A14,
+ * D1, R1–R8, M2, M5–M5d), and the last group holds #349's L14 and L24, and
+ * #384's J1–J5, through the real bridge over this adapter. The size and
+ * SHA-256 check is the client's own
  * (`packages/nessa-client`, `mcp-apps-api.test.ts`); here a mismatch is what
  * the client throws for it, `integrity`.
  */
 import {
   ConversationErrorCode,
   MAX_MCP_ARGUMENTS_BYTES,
+  MAX_MCP_RESOURCE_BYTES,
   mcpAppDeadlines,
   mcpAppRequestProblem,
   NessaConversationControlError,
@@ -468,6 +470,100 @@ describe("resources/read and the ticket", () => {
       )
       expect(apps.fetchResource).not.toHaveBeenCalled()
     }
+  })
+
+  const notForApp: ServerAnswer = {
+    kind: "refused",
+    reason: "This app may not use that tool",
+  }
+  const tooLarge: ServerAnswer = {
+    kind: "refused",
+    reason: "The request is larger than the gateway accepts",
+  }
+  const invalid: ServerAnswer = {
+    kind: "refused",
+    reason: "The gateway refused the request as invalid",
+  }
+  const remote = { code: -32002, message: "Resource not found" }
+  it.each<[string, unknown, ServerAnswer, ServerAnswer]>([
+    [
+      ConversationErrorCode.McpToolNotForApp,
+      undefined,
+      notForApp,
+      { kind: "refused", reason: "This app may not read that resource" },
+    ],
+    [
+      ConversationErrorCode.ConversationNotFound,
+      undefined,
+      { kind: "server-gone" },
+      { kind: "server-gone" },
+    ],
+    [
+      ConversationErrorCode.ConversationDeleted,
+      undefined,
+      { kind: "server-gone" },
+      { kind: "server-gone" },
+    ],
+    [
+      ConversationErrorCode.ConversationClosed,
+      undefined,
+      { kind: "server-gone" },
+      { kind: "server-gone" },
+    ],
+    [
+      ConversationErrorCode.McpRemoteError,
+      remote,
+      { kind: "failed", error: remote },
+      { kind: "failed", error: remote },
+    ],
+    [ConversationErrorCode.McpRequestTooLarge, undefined, tooLarge, tooLarge],
+    [ConversationErrorCode.InvalidRequest, undefined, invalid, invalid],
+  ])(
+    "R5b: a read refused %s gets the outcome a call refused so gets, in a resource's words; nothing redeemed, nothing logged",
+    async (code, details, onCall, onRead) => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {})
+      const refused = () => Promise.reject(refusal(code, details))
+      const apps = fakeApps({ callTool: vi.fn(refused), readResource: vi.fn(refused) })
+      const server = gatewayAppServer(apps)
+      expect(await server.callTool(address, "t", {})).toEqual(onCall)
+      expect(await server.readResource(address, uri, live())).toEqual(onRead)
+      expect(apps.fetchResource).not.toHaveBeenCalled()
+      expect(error).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    "Resource ticket must be 43 base64url characters",
+    `Resource size must be 0-${MAX_MCP_RESOURCE_BYTES} bytes`,
+    "Resource sha256 must be 64 lowercase hexadecimal digits",
+  ])(
+    "R7: a redemption the client would not send (TypeError: %s) is a failure, logged as the host's fault",
+    async (message) => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {})
+      const thrown = new TypeError(message)
+      const apps = fakeApps({ fetchResource: vi.fn(() => Promise.reject(thrown)) })
+      expect(await gatewayAppServer(apps).readResource(address, uri, live())).toEqual({
+        kind: "failed",
+      })
+      expect(apps.fetchResource).toHaveBeenCalledTimes(1)
+      expect(error.mock.calls).toEqual([
+        ["An MCP App's resource was not fetched", thrown],
+      ])
+    },
+  )
+
+  it("R8: a redemption the client answers aborted while the mount is still live is a failure, and — the client's code trusted as given — not logged", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const mount = new AbortController()
+    const apps = fakeApps({
+      fetchResource: vi.fn(() => Promise.reject(new NessaMcpResourceError("aborted"))),
+    })
+    expect(await gatewayAppServer(apps).readResource(address, uri, mount.signal)).toEqual(
+      { kind: "failed" },
+    )
+    expect(mount.signal.aborted).toBe(false)
+    expect(apps.fetchResource).toHaveBeenCalledTimes(1)
+    expect(error).not.toHaveBeenCalled()
   })
 })
 
@@ -948,5 +1044,137 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     view.bridge.remove()
     await flush()
     expect(apps.releaseApp).toHaveBeenCalledTimes(1)
+  })
+
+  /** The app's `tools/call` with `id` 2, answered as `apps.callTool` next answers; what is posted. */
+  async function called(apps: ReturnType<typeof fakeApps>) {
+    const view = bridged(apps)
+    await live(view)
+    view.say({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "t" } })
+    await flush()
+    return view
+  }
+
+  it("J1: a call that fails with no code the gateway placed reaches the app as -32603, and is logged as a fault", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const lost = new NessaMcpAppError(
+      conversationId,
+      "r",
+      app,
+      new Error("socket closed"),
+    )
+    const apps = fakeApps()
+    apps.callTool.mockRejectedValueOnce(lost)
+    const view = await called(apps)
+    expect(view.posted).toEqual([
+      { jsonrpc: "2.0", id: 2, error: { code: -32603, message: "The request failed" } },
+    ])
+    expect(error.mock.calls).toEqual([["An MCP App call failed", lost]])
+    expect(view.bridge.view()).toMatchObject({ lifecycle: { kind: "live" } })
+  })
+
+  it("J2: the server's own JSON-RPC error reaches the app with its signed code and message as the server sent them", async () => {
+    const apps = fakeApps()
+    apps.callTool.mockRejectedValueOnce(
+      refusal(ConversationErrorCode.McpRemoteError, {
+        code: -32002,
+        message: "Resource not found",
+      }),
+    )
+    const view = await called(apps)
+    expect(view.posted).toEqual([
+      { jsonrpc: "2.0", id: 2, error: { code: -32002, message: "Resource not found" } },
+    ])
+  })
+
+  it("J3: a server session gone reaches the app as an error, and the view shows the server-gone notice", async () => {
+    const apps = fakeApps()
+    apps.callTool.mockRejectedValueOnce(
+      refusal(ConversationErrorCode.McpSessionUnavailable),
+    )
+    const view = bridged(apps)
+    await live(view)
+    expect(view.bridge.view().serverGone).toBeFalsy()
+    view.say({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "t" } })
+    await flush()
+    expect(view.posted).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: { code: -32000, message: "The app's server has stopped" },
+      },
+    ])
+    expect(view.bridge.view()).toMatchObject({
+      lifecycle: { kind: "live" },
+      serverGone: true,
+    })
+  })
+
+  it("J4: no room on the gateway's app lane reaches the app as refused, too many requests at once", async () => {
+    const apps = fakeApps()
+    apps.callTool.mockRejectedValueOnce(
+      refusal(ConversationErrorCode.TemporarilyUnavailable),
+    )
+    const view = await called(apps)
+    expect(view.posted).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: { code: -32000, message: "Too many requests at once" },
+      },
+    ])
+    expect(view.bridge.view().serverGone).toBeFalsy()
+  })
+
+  it("J5: the app's own resources/read after live gets the resource, never the ticket; a refused read gets -32000 with the gateway's words", async () => {
+    const apps = fakeApps()
+    const view = bridged(apps)
+    await live(view)
+    view.say({ jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri } })
+    await flush()
+    apps.readResource.mockRejectedValueOnce(
+      refusal(ConversationErrorCode.McpToolNotForApp),
+    )
+    view.say({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri } })
+    await flush()
+    // The first read (the mount's) and the app's own two, all as its own mount.
+    expect(apps.readResource.mock.calls).toEqual([
+      [conversationId, ownApp, "weather", uri],
+      [conversationId, ownApp, "weather", uri],
+      [conversationId, ownApp, "weather", uri],
+    ])
+    expect(apps.fetchResource).toHaveBeenCalledTimes(2)
+    expect(view.posted).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        result: {
+          contents: [
+            {
+              uri,
+              mimeType: described.mimeType,
+              text: page,
+              _meta: {
+                ui: {
+                  csp: {
+                    connectDomains: ["https://api.weather.example"],
+                    resourceDomains: [],
+                    frameDomains: [],
+                    baseUriDomains: [],
+                  },
+                  permissions: described.permissions,
+                },
+              },
+            },
+          ],
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: -32000, message: "This app may not read that resource" },
+      },
+    ])
+    expect(JSON.stringify(view.posted)).not.toContain(ticket)
   })
 })
