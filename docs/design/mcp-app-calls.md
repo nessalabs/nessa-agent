@@ -4,7 +4,9 @@ An MCP App ([ADR 344](../adr/todo/344-mcp-ui.md)) reaches its own server
 through the gateway: `mcp.callTool` and `mcp.readResource`, on the
 conversation's own session of that server
 ([one connection per harness session](mcp-connections.md)). Its host releases
-one mount of it with `mcp.releaseApp`. The wire contract is
+one mount of it with `mcp.releaseApp`. It may also speak in its
+conversation: write the person's next message and give the model context
+(#390, "An app in its conversation" below). The wire contract is
 [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls); this is what
 the gateway does with it (#348, part b).
 
@@ -218,6 +220,121 @@ gateway stops; nothing reports it.
 
 Anything still running after that is logged as such.
 
+## An app in its conversation (#390)
+
+An app may write the person's next message (MCP Apps' `ui/message`) and give
+the model context (`ui/update-model-context`). #390 lands in three pull
+requests: this SDK slice, then the gateway, protocol and client, then the
+desktop. This section is the SDK's part: the values, how they are saved and
+sent, and which apps a message may name. The gateway's tables join it with
+the second.
+
+**Decisions.**
+
+- **Who wrote it is part of the message.** `UserMessage` carries its
+  `MessageSender`: the person, or an app (`McpAppSource`: the execution and
+  tool call that drew it, and the MCP server and tool that call was to). A
+  message is the person's until said otherwise. The sender is part of the
+  message's equality, so a retry that changed it is another message, which
+  the session settles as a conflict.
+- **What an app gave the model goes with a message, not in it.**
+  `AppModelContext` is one app's context: its text, its structured content
+  (the JSON text of one object), or both, and the identity of the host's
+  update that gave it (`update_id`), so a host can join the turn that
+  carried a context to its own record of the update. Neither part is no
+  context (`Ok(None)`); an empty text is none. A message carries at most 4.
+- **Bounds.** A context: 8 KiB of text and structured JSON together
+  (`AppModelContext::MAX_BYTES`), so a turn carries at most 32 KiB of app
+  context (`UserMessage::MAX_APP_MODEL_CONTEXTS`). An app's tool call
+  identity and an update identity are bounded as an execution's is.
+- **How it reaches the agent.** Claude, Codex and OpenCode are all ACP
+  harnesses; each is given one leading `text` block: a fixed preamble, then
+  the contexts as one JSON array of `{server, tool, toolCallId, text?,
+  structuredContent?}` (`prompt_content.rs`). A text block is the one kind
+  every ACP agent takes, and JSON encoding means nothing an app writes can
+  end the block or pass for another app's entry. The structured content is
+  sent exactly as held: `AppModelContext` (`is_json`) is the one judge of
+  "one JSON object", and nothing parses it again. The block counts against
+  the frame like the rest of the prompt. Who wrote the message is not told
+  to the agent here; the message's text follows as the person's turn says it.
+- **Saved with the invocation.** `InputAccepted`'s metadata gains
+  `user_app` (`null` for the person) and `user_app_model_context` (empty
+  when none), both required. Each part is rebuilt through the domain on
+  read, so a value the domain refuses is `Corrupt`, not a message the agent
+  is handed.
+- **Records saved before this (#437).** Under One current contract no older
+  reader is kept: a session record without the two fields is `Corrupt` when
+  its own conversation is restored, and no other conversation is affected.
+  The version marker and a typed "another version" refusal for session
+  record streams (ADR 202 rule 1) are #437's, not this slice's.
+- **When a context is done with.** The SDK gives its caller one fact:
+  admission returns only once the turn's `InputAccepted` is saved. The rule
+  the coordinator settled on #390 is that a host lets a context go once the
+  turn carrying it is admitted and persisted; a turn that then fails loses
+  that context, and the app may send it again. The SDK keeps nothing about
+  contexts beyond the message that carried them.
+
+### The app a message names
+
+Every app a message names — its writer, and the giver of each context it
+carries — is an MCP tool call recorded earlier in the session: the tool call
+`tool_id` of an earlier turn `execution_id`, observed with an MCP identity
+whose server and tool are the app's. The SDK session owns the rule
+(`sessions::app_sources`). It is asked at admission, under the session's
+evidence lock, against the turns already saved (`begin_record`, which every
+immediate, queued and steered submission goes through); and of every
+restored snapshot (`validation::continuation`) and replayed record log
+(`InputAccepted` in `records`), against the turns before the message,
+through each earlier turn's index of its MCP tool calls. That index is
+built as its observations are validated and taken back with a unit that
+fails, so a long history is not scanned once per app. A turn's own tool
+calls come after its message, so an app of the message's own turn is this
+rule's case too. A per-record decode cannot see the history and does not
+ask it. Refused, it is the typed `AgentError::UnknownApp(UnknownApp)`, kept
+as itself in a saved error; on restoration, `StorageError::Corrupt`.
+
+| # | State | Event | Next | Effect |
+| --- | --- | --- | --- | --- |
+| A1 | an earlier turn's tool call observed as MCP `server/tool` | a message from that app, or carrying its context | admitted | as any message |
+| A2 | — | an app naming a turn the session has no record of | — | `UnknownApp(NoMcpToolCall)`; nothing saved, queued or sent, at every entry |
+| A3 | the turn recorded, no such tool call in it | as A2 | — | `UnknownApp(NoMcpToolCall)` |
+| A4 | the tool call recorded, with no MCP identity | as A2 | — | `UnknownApp(NoMcpToolCall)` |
+| A5 | the tool call recorded as MCP `server/tool` | an app naming another server, or another tool | — | `UnknownApp(DifferentMcpTool)` |
+| A6 | — | an app naming the message's own turn | — | `UnknownApp(NoMcpToolCall)` |
+| A7 | a recorded writer | one carried context's app not recorded | — | refused as A2–A5; not admitted |
+| A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded in an earlier one — none, another server or tool, its own, a later one's | — | `Corrupt`; not restored |
+| A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it, or recorded only by a unit that failed | — | `Corrupt` |
+| A10 | — | a person's message carrying no context | admitted | nothing looked up |
+
+Restoration checks the order of the turns, which is what a snapshot keeps:
+it cannot tell whether an earlier turn's tool call was observed before a
+later message was admitted when the two overlapped (a recorded limit).
+Admission checks that it was.
+
+### The values, saved and sent
+
+| # | Input | Outcome |
+| --- | --- | --- |
+| V1 | an app's tool call identity past `MAX_TOOL_ID_BYTES` | `ValueTooLong`; exactly at it, taken |
+| V2 | a context with neither part, or only an empty text | `Ok(None)`: no context |
+| V3 | structured content that is not the JSON text of one object | `InvalidStructuredContent` |
+| V4 | text and structured content together past `MAX_BYTES`, in UTF-8 bytes | `ValueTooLong`; exactly at it, taken |
+| V5 | a blank update identity, or one past `MAX_UPDATE_BYTES` | `EmptyValue` / `ValueTooLong` |
+| V6 | more than 4 contexts on one message | `TooManyValues` |
+| V7 | a message built without a sender | the person's; another sender, or other contexts, is another message |
+| P1 | a message from an app, carrying contexts, saved and read back | the same message |
+| P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
+| P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
+| P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
+| P5 | a record without `user_app` or `user_app_model_context` | `Corrupt`, for that conversation only; another opens |
+| P6 | an `UnknownApp` failure saved and read back | the same variant |
+| P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
+| B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
+| B2 | a message carrying none | no block: sent as before |
+| B3 | context text that would close the array or repeat the preamble | stays one string of its own entry |
+| B4 | structured content `is_json` takes that a parser might not (a number past a double, a lone surrogate escape, deep nesting) | sent as held |
+| B5 | a context past the frame with the message | `MessageTooLarge`; the count is at least the encoded size |
+
 ## Lanes
 
 App calls have 4 slots on each socket. A destructive call holds its slot while
@@ -246,3 +363,14 @@ Each row above has a test, named after it:
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `wire_errors.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
+- An app in its conversation, the SDK's rows: "The app a message names",
+  each row asked by admission, restoration and a replayed record log alike,
+  in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`,
+  admission against saved turns in `sessions/manager.rs`
+  (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`), and at
+  every entry in `agents/messages.rs`; V1–V7 in
+  `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P4
+  in `snapshot/semantic.rs`, P5 in
+  `crates/nessa-sdk/tests/infrastructure/session_storage/record.rs`, P6 in
+  `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
+  `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`.
