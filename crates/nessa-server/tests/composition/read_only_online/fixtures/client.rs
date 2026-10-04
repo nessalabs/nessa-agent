@@ -149,8 +149,10 @@ impl WireClient {
         let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
         #[cfg(unix)]
         let state_root = state_root.canonicalize().unwrap();
+        #[cfg(unix)]
+        let state_root = state_root.as_path();
         let saved = FilePairingState::open(
-            &state_root,
+            state_root,
             Path::new(profile["stateDirectory"].as_str().unwrap()),
         )
         .unwrap()
