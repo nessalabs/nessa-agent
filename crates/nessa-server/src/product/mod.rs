@@ -29,7 +29,7 @@ mod socket;
 mod state;
 pub(crate) mod wire;
 
-pub use socket::handle_socket;
+pub use socket::{handle_socket, WEBSOCKET_WRITE_BUFFER_BYTES};
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 pub use wire::{SessionAuthenticateParams, SessionChallenge, SessionReady};
 

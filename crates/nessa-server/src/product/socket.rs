@@ -1526,13 +1526,66 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
 ) -> Result<(), ()> {
     let QueuedRecordResponse {
         message,
-        _slot,
-        _record_work,
+        _slot: slot,
+        _record_work: record_work,
         deadline,
     } = response;
-    within_deadline(deadline, send_queued(write_timeout, socket, message))
+    // The response's slot and read lease are given back once its frame is in
+    // the sink and before the flush that lets the client see it, so a client
+    // that waits for each answer is never refused slot-busy for its next read
+    // (row R64). An encoding refusal gives them back at once.
+    let release = move || drop((slot, record_work));
+    let text = match message {
+        WireResponse::Ordinary(message) => {
+            let text = message.to_wire_text().map_err(|_| ())?;
+            if text.len() > MAX_PAYLOAD_BYTES as usize {
+                return Err(());
+            }
+            within_deadline(
+                deadline,
+                timeout(write_timeout, feed_release_flush(socket, text, release)),
+            )
+            .await
+            .ok_or(())?
+            .map_err(|_| ())??;
+            return Ok(());
+        }
+        WireResponse::Record { text } => text,
+        message @ WireResponse::Watch(_) => {
+            return within_deadline(deadline, send_queued(write_timeout, socket, message))
+                .await
+                .ok_or(())?;
+        }
+    };
+    if text.len() > MAX_RECORD_RESPONSE_BYTES {
+        return Err(());
+    }
+    within_deadline(deadline, feed_release_flush(socket, text, release))
         .await
         .ok_or(())?
+}
+
+/// The WebSocket write buffer each product socket upgrades with: room for the
+/// largest record frame and its header, so a fed record frame stays buffered
+/// until `feed_release_flush` flushes it.
+pub const WEBSOCKET_WRITE_BUFFER_BYTES: usize = MAX_RECORD_RESPONSE_BYTES + 64;
+
+/// Hand `text` to the sink, call `release`, then flush. Both sinks keep a
+/// fed frame in their own buffer until the flush (the native profile's
+/// protected transport, and the WebSocket's write buffer, sized in
+/// `server::entrypoint::http` to hold the largest record frame), so nothing
+/// `release` gives back is still held once the client can read the frame.
+async fn feed_release_flush<S: Sink<Message> + Unpin>(
+    socket: &mut S,
+    text: String,
+    release: impl FnOnce(),
+) -> Result<(), ()> {
+    socket
+        .feed(Message::Text(text.into()))
+        .await
+        .map_err(|_| ())?;
+    release();
+    socket.flush().await.map_err(|_| ())
 }
 
 /// The one mapping from an access error to how a live connection closes.
@@ -2974,8 +3027,10 @@ mod tests {
             })))
             .await
             .unwrap();
-        assert_eq!(slots.available_permits(), 0);
-        assert_eq!(record_capacity.available_permits(), 0);
+        // The record frame is in the sink and its flush is stalled: its
+        // capacity is already back (row R64); the control still holds its own.
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(record_capacity.available_permits(), 1);
         release.send(()).unwrap();
         let Message::Text(first) = peer.message().await else {
             panic!("record response expected")
@@ -3003,6 +3058,79 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// Row R64: a sink that, at the flush making a record frame visible,
+    /// notes whether the socket's record slot and the global read permit were
+    /// already free, as a client that waits for each answer needs them to be.
+    struct FlushObservesCapacity {
+        slots: Arc<Semaphore>,
+        reads: Arc<Semaphore>,
+        fed: bool,
+        free_at_flush: Vec<(usize, usize)>,
+    }
+    impl Sink<Message> for FlushObservesCapacity {
+        type Error = Error;
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn start_send(self: Pin<&mut Self>, _: Message) -> Result<(), Error> {
+            self.get_mut().fed = true;
+            Ok(())
+        }
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            let this = self.get_mut();
+            if std::mem::take(&mut this.fed) {
+                let free = (
+                    this.slots.available_permits(),
+                    this.reads.available_permits(),
+                );
+                this.free_at_flush.push(free);
+            }
+            Poll::Ready(Ok(()))
+        }
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn record_capacity_is_free_before_its_frame_is_flushed() {
+        let slots = Arc::new(Semaphore::new(1));
+        let reads = Arc::new(Semaphore::new(4));
+        let mut socket = FlushObservesCapacity {
+            slots: slots.clone(),
+            reads: reads.clone(),
+            fed: false,
+            free_at_flush: vec![],
+        };
+        for message in [
+            WireResponse::record("{}".into()),
+            WireResponse::ordinary(failure("read", "source_preparing")),
+        ] {
+            let slot = Arc::new(slots.clone().try_acquire_owned().unwrap());
+            let permit = reads.clone().try_acquire_owned().unwrap();
+            let response = QueuedRecordResponse::owned(
+                message,
+                Some(slot.clone()),
+                Some(RecordReadLease::new((permit, slot))),
+            );
+            assert!(
+                send_record_queued(Duration::from_secs(1), &mut socket, response)
+                    .await
+                    .is_ok()
+            );
+        }
+        assert_eq!(socket.free_at_flush, [(1, 4), (1, 4)]);
     }
 
     #[tokio::test]
@@ -3110,7 +3238,9 @@ mod tests {
             })))
             .await
             .unwrap();
-        assert_eq!(slots.available_permits(), 0);
+        // Only the queued control's slot is held while the fed record's flush
+        // is stalled (row R64).
+        assert_eq!(slots.available_permits(), 1);
         tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
         timeout(Duration::from_secs(1), writer)
             .await
