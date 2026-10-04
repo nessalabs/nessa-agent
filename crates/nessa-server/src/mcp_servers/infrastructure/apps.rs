@@ -76,6 +76,7 @@ pub(crate) fn failure(error: McpError) -> McpAppFailure {
         | McpError::Closed
         | McpError::Stopped
         | McpError::Start(_)
+        | McpError::ConfigurationChanged
         | McpError::InvalidConfiguration(_) => McpAppFailure::SessionEnded,
     }
 }

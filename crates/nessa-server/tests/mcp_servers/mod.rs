@@ -415,6 +415,50 @@ async fn a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone() {
     assert_eq!(unsafe { libc::kill(replaced, 0) }, 0);
 }
 
+/// #391 decision 1: a stand-in admitted against one configuration is never
+/// served by another under the same name. A replacement landing between its
+/// hello's admission and its opening refuses the opening as the admission
+/// would refuse it now: `configuration-changed` for an edit, `unknown-server`
+/// for a removal.
+#[tokio::test]
+async fn a_replacement_between_admission_and_opening_refuses_the_opening() {
+    let server = fixture();
+    let (side, mcp, grants) = relay_for(vec![server.clone()]);
+    let (_grant, token) = granted(&grants, "conversation");
+    let hello = Hello {
+        server: server.name.clone(),
+        configuration: digest(&server),
+        session: token.clone(),
+    };
+    let launch = |server: &StdioMcpServer| McpServerLaunch {
+        server: server.clone(),
+        working_directory: std::env::temp_dir(),
+        environment: BTreeMap::new(),
+    };
+    let edited = StdioMcpServer {
+        args: [vec!["-u".to_owned()], server.args.clone()].concat(),
+        ..server.clone()
+    };
+    let admitted = side.admitted(&hello).unwrap();
+    mcp.replace(vec![launch(&edited)]).unwrap();
+    let owner = grants.owner(&token).unwrap();
+    assert!(matches!(
+        side.open_admitted(&admitted, owner.clone()).await,
+        Err((StandInRefusal::ConfigurationChanged, _))
+    ));
+    let admitted = side
+        .admitted(&Hello {
+            configuration: digest(&edited),
+            ..hello
+        })
+        .unwrap();
+    mcp.replace(Vec::new()).unwrap();
+    assert!(matches!(
+        side.open_admitted(&admitted, owner).await,
+        Err((StandInRefusal::UnknownServer, _))
+    ));
+}
+
 /// Through the relay with `token`, list and call `where`: the server's pid.
 /// The stand-in is left running, its harness's ends held open.
 async fn through(side: &Arc<Relay>, server: &StdioMcpServer, token: &str) -> libc::pid_t {

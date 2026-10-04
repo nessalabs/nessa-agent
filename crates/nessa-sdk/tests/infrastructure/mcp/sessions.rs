@@ -5,7 +5,7 @@ use super::fixture::{launch, Behaviour, FixtureLauncher, CHART};
 use super::{servers, session, Harness};
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::UiResourceUri;
-use crate::infrastructure::acp::sessions::{McpServerProblem, MAX_MCP_SERVERS};
+use crate::infrastructure::acp::sessions::{McpServerProblem, StdioMcpServer, MAX_MCP_SERVERS};
 use crate::infrastructure::clock::manual::ManualClock;
 use crate::infrastructure::mcp::{
     McpError, McpServerLaunch, McpServers, INITIALIZE_TIMEOUT, MCP_SESSION_VARIABLE,
@@ -685,4 +685,47 @@ async fn a_list_that_falls_behind_the_change_notices_is_read_again() {
     server.send(json!({ "jsonrpc": "2.0", "id": first, "result": { "tools": [] } }));
     // Having fallen behind, it lists again.
     server.arrived("tools/list", 2).await;
+}
+
+/// #391 decision 1: an opening admitted against one configuration is served
+/// by that configuration or refused. A set replaced between the admission and
+/// the opening refuses it `ConfigurationChanged` — or `NotConfigured` once the
+/// name is gone — and launches nothing; the configuration as it is now opens.
+#[tokio::test]
+async fn an_opening_admitted_on_a_replaced_configuration_is_refused() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let admitted = launch("fixture").server;
+    let edited = McpServerLaunch {
+        server: StdioMcpServer {
+            args: vec!["--edited".into()],
+            ..admitted.clone()
+        },
+        ..launch("fixture")
+    };
+    servers.replace(vec![edited.clone()]).unwrap();
+    assert!(matches!(
+        servers.open_as(&admitted, super::owner()).await,
+        Err(McpError::ConfigurationChanged)
+    ));
+    assert_eq!(launcher.launches(), 0);
+    servers
+        .open_as(&edited.server, super::owner())
+        .await
+        .unwrap();
+    assert_eq!(launcher.launches(), 1);
+    servers.replace(Vec::new()).unwrap();
+    assert!(matches!(
+        servers.open_as(&edited.server, super::owner()).await,
+        Err(McpError::NotConfigured)
+    ));
+}
+
+/// #391 decision 3: a launch's `Debug` names its environment's variables and
+/// never prints a value.
+#[test]
+fn a_launch_prints_its_environment_names_never_its_values() {
+    let launch = with_environment("s", &[("API_TOKEN", b"secret-value")]);
+    let printed = format!("{launch:?}");
+    assert!(printed.contains("API_TOKEN"), "{printed}");
+    assert!(!printed.contains("secret-value"), "{printed}");
 }

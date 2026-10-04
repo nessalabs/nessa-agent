@@ -5,7 +5,7 @@
 //! upstream session and no two harness sessions share one.
 //!
 //! ```text
-//! McpServers ──open(server, McpOwner)──▶ McpSession: server process ─ Connection
+//! McpServers ──open(server, McpOwner) / open_as(admitted, McpOwner)──▶ McpSession: server process ─ Connection
 //!     ├── configured / replace (the live set, read at each opening)
 //!     │                                    ├── list_tools / read_ui_resource
 //!     │                                    └── serve(harness pipes) ──▶ stand_in

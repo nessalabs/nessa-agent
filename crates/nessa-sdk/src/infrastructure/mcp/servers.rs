@@ -41,7 +41,11 @@ pub const MAX_TOOLS: usize = 1024;
 pub const MCP_SESSION_VARIABLE: &str = "NESSA_MCP_SESSION";
 
 /// One configured stdio server and what it is started with.
-#[derive(Clone, Debug)]
+///
+/// Its `Debug` names the environment's variables and never prints their
+/// values, which may be credentials
+/// (`a_launch_prints_its_environment_names_never_its_values`).
+#[derive(Clone)]
 pub struct McpServerLaunch {
     /// The trusted configuration: name, absolute executable, arguments.
     pub server: StdioMcpServer,
@@ -49,6 +53,15 @@ pub struct McpServerLaunch {
     pub working_directory: PathBuf,
     /// The server's whole environment; nothing is inherited.
     pub environment: BTreeMap<OsString, OsString>,
+}
+impl std::fmt::Debug for McpServerLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerLaunch")
+            .field("server", &self.server)
+            .field("working_directory", &self.working_directory)
+            .field("environment", &self.environment.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 impl McpServerLaunch {
     /// Why this server cannot be started as configured, or `None` when it
@@ -377,9 +390,42 @@ impl McpServers {
     /// grant is revoked — before it launches anything, or while it opens. The
     /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
-        let inner = &self.inner;
         let launches = self.launches();
         let launch = launches.get(server).ok_or(McpError::NotConfigured)?;
+        self.open_launch(launch, owner).await
+    }
+
+    /// Open a session, as [`Self::open`] does, on the server named
+    /// `admitted.name` only while it is still configured exactly as
+    /// `admitted`: what a host admitted a stand-in against is what serves it,
+    /// even when the set is replaced between the admission and the opening.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::ConfigurationChanged`] when the server under that name is
+    /// configured differently now, and every error of [`Self::open`].
+    pub async fn open_as(
+        &self,
+        admitted: &StdioMcpServer,
+        owner: McpOwner,
+    ) -> Result<McpSession, McpError> {
+        let launches = self.launches();
+        let launch = launches
+            .get(&admitted.name)
+            .ok_or(McpError::NotConfigured)?;
+        if launch.server != *admitted {
+            return Err(McpError::ConfigurationChanged);
+        }
+        self.open_launch(launch, owner).await
+    }
+
+    async fn open_launch(
+        &self,
+        launch: &McpServerLaunch,
+        owner: McpOwner,
+    ) -> Result<McpSession, McpError> {
+        let inner = &self.inner;
+        let server = launch.server.name.as_str();
         if *inner.stopping.borrow() {
             return Err(McpError::Stopped);
         }
