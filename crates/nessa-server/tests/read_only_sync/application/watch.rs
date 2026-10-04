@@ -14,6 +14,8 @@ struct Script {
     register: Option<Result<Registered, GatewayError>>,
     waits: VecDeque<Result<Wait, GatewayError>>,
     passes: VecDeque<PassResult>,
+    /// The next pass cannot begin, with this cause.
+    unbegun: Option<GatewayError>,
     calls: Vec<Call>,
 }
 impl Script {
@@ -28,6 +30,7 @@ impl Script {
             })),
             waits: waits.into_iter().collect(),
             passes: passes.into_iter().collect(),
+            unbegun: None,
             calls: vec![],
         }
     }
@@ -42,17 +45,20 @@ impl WatchSession for Script {
         self.calls.push(Call::Wait);
         self.waits.pop_front().expect("scripted wait")
     }
-    fn pass(&mut self) -> WatchPass<usize> {
+    fn pass(&mut self) -> Result<WatchPass<usize>, GatewayError> {
         self.calls.push(Call::Pass);
+        if let Some(cause) = self.unbegun.take() {
+            return Err(cause);
+        }
         let count = self
             .calls
             .iter()
             .filter(|call| **call == Call::Pass)
             .count();
-        WatchPass {
+        Ok(WatchPass {
             report: count,
             result: self.passes.pop_front().expect("scripted pass"),
-        }
+        })
     }
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -252,6 +258,23 @@ fn transport_or_cache_failure_ends_the_watch() {
     );
     let mut script = Script::new([PassResult::Complete], [Err(GatewayError::Correlation)]);
     assert_eq!(run(&mut script, 5).0.reason, EndReason::Unavailable);
+}
+
+/// Row W9: a pass that cannot begin has no report, so it writes no pass
+/// line; the run ends on its cause.
+#[test]
+fn pass_that_cannot_begin_ends_without_a_pass_line() {
+    let mut script = Script::new([], []);
+    script.unbegun = Some(GatewayError::Busy);
+    let (end, lines) = run(&mut script, 5);
+    assert_eq!(
+        end,
+        End {
+            reason: EndReason::Unavailable,
+            cause: Some(GatewayError::Busy)
+        }
+    );
+    assert_eq!(lines, [Line::Registered("watch-1".into())]);
 }
 
 /// Row W10: the watch's end, kept during a pass, stops the run at the next

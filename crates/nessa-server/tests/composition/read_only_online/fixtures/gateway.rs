@@ -68,7 +68,23 @@ struct GatedRead {
     initiator: PrincipalId,
     mode: String,
     pages: AtomicUsize,
-    heads: AtomicUsize,
+    heads: Arc<HeadHold>,
+}
+/// Live mode's held head read: the head reads counted so far, the one
+/// `hold` named (zero for none), and the `release` that lets it answer.
+#[derive(Default)]
+struct HeadHold {
+    count: AtomicUsize,
+    held: AtomicUsize,
+    release: tokio::sync::Notify,
+}
+impl HeadHold {
+    /// Hold the second head read from now: a `watch`'s discovery reads the
+    /// first, its recheck pass the second.
+    fn hold_recheck(&self) {
+        let next = self.count.load(Ordering::SeqCst) + 2;
+        self.held.store(next, Ordering::SeqCst);
+    }
 }
 impl RecordReadSource for GatedRead {
     fn read<'a>(
@@ -79,14 +95,17 @@ impl RecordReadSource for GatedRead {
     ) -> RecordReadFuture<'a, RecordReadResponse> {
         let page = matches!(&operation, RecordReadOperation::Page(_));
         Box::pin(async move {
-            let head = (!page).then(|| self.heads.fetch_add(1, Ordering::SeqCst) + 1);
+            let head = (!page).then(|| self.heads.count.fetch_add(1, Ordering::SeqCst) + 1);
             // Source latency exercises the real socket phase owner (B1), not a
             // fabricated timeout reply. Successful reads still use SDK storage.
             match (self.mode.as_str(), head) {
                 ("delayed-head", Some(1)) => tokio::time::sleep(Duration::from_secs(6)).await,
-                // The first watch's recheck pass: a commit sent meanwhile
-                // races it deterministically (committed change watches L9).
-                ("live", Some(2)) => tokio::time::sleep(Duration::from_secs(2)).await,
+                // The recheck pass `hold` named answers only after `release`,
+                // so a commit acknowledged in between lands while it reads
+                // the head (committed change watches L9).
+                ("live", Some(count)) if count == self.heads.held.load(Ordering::SeqCst) => {
+                    self.heads.release.notified().await
+                }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
                 ("cumulative-head", Some(count)) if count > 1 => {
                     tokio::time::sleep(Duration::from_secs(3)).await
@@ -263,6 +282,7 @@ async fn gateway_child() {
     let mode = std::env::var("NESSA_ONLINE_GATE").unwrap_or_default();
     // Gated reads need the receiver, known after the first start pairs.
     let receiver_slot = Arc::new(OnceLock::new());
+    let heads = Arc::new(HeadHold::default());
     let state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
         OrganizationId::new(organization.clone()).unwrap(),
@@ -291,7 +311,7 @@ async fn gateway_child() {
         initiator: PrincipalId::new(owner.clone()).unwrap(),
         mode: mode.clone(),
         pages: AtomicUsize::new(0),
-        heads: AtomicUsize::new(0),
+        heads: heads.clone(),
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
@@ -443,6 +463,7 @@ async fn gateway_child() {
                 setup.second_receiver.clone().unwrap(),
             ],
             PrincipalId::new(setup.owner.clone()).unwrap(),
+            heads,
         ));
     }
     println!("ONLINE_READY");
@@ -455,13 +476,15 @@ async fn gateway_child() {
 /// is durable: `commit` appends one provider-context save to the conversation
 /// through this process's own storage owner, so its committed-change watch
 /// publishes; `revoke` removes the first device's receiver binding, as an
-/// owner would, and `revoke b` the second device's.
+/// owner would, and `revoke b` the second device's. `hold` makes the next
+/// `watch`'s recheck pass wait at its head read until `release`.
 async fn live_control(
     storage: Arc<RecordStorage>,
     conversation: SessionId,
     receivers: Arc<LocalReceiverAuthority>,
     [receiver, second]: [String; 2],
     owner: PrincipalId,
+    heads: Arc<HeadHold>,
 ) {
     let mut lines = BufReader::new(stdin()).lines();
     let mut commits = 0_u64;
@@ -499,6 +522,8 @@ async fn live_control(
                     .await
                     .unwrap();
             }
+            "hold" => heads.hold_recheck(),
+            "release" => heads.release.notify_one(),
             other => panic!("unknown live control {other}"),
         }
         println!("DONE {line}");

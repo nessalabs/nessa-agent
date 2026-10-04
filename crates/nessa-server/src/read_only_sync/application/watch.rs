@@ -66,7 +66,9 @@ pub(crate) trait WatchSession {
     fn register(&mut self) -> Result<Registered, GatewayError>;
     /// Under the ordinary operation deadline; `TimedOut` means nothing came.
     fn wait(&mut self) -> Result<Wait, GatewayError>;
-    fn pass(&mut self) -> WatchPass<Self::Report>;
+    /// `Err` when the pass could not begin: nothing was read or saved, so it
+    /// has no report.
+    fn pass(&mut self) -> Result<WatchPass<Self::Report>, GatewayError>;
 }
 
 /// The standard output could not take a line.
@@ -125,7 +127,10 @@ pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
     let mut trigger = Trigger::Recheck;
     let mut passes = 0_usize;
     loop {
-        let pass = session.pass();
+        let pass = match session.pass() {
+            Ok(pass) => pass,
+            Err(cause) => return Ok(failed(cause)),
+        };
         events.pass(trigger, &pass.report)?;
         passes += 1;
         match pass.result {

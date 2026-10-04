@@ -107,6 +107,12 @@ impl WatchChild {
             .recv_timeout(Duration::from_secs(30))
             .expect("watch line within 30 s")
     }
+    /// Every line it writes until it exits, and whether it succeeded.
+    pub(crate) fn finish(mut self) -> (Vec<Value>, bool) {
+        let succeeded = self.child.wait().unwrap().success();
+        let lines = self.lines.iter().map(|(line, _)| line).collect();
+        (lines, succeeded)
+    }
     /// Whether the command exited successfully, once it has ended.
     pub(crate) fn succeeded(mut self) -> bool {
         self.child.wait().unwrap().success()

@@ -14,7 +14,7 @@ use nessa_sync::replication::catalogue::{CatalogueError, CatalogueProgress};
 use serde_json::{json, Value};
 use std::io::Write;
 mod causes;
-pub(crate) use causes::{cache_failure, gateway_failure};
+pub(crate) use causes::{cache_failure, gateway_failure, watch_ended};
 use causes::{catalogue_failure, core_failure};
 
 /// `device` carries the enrollment evidence the run was admitted under, and

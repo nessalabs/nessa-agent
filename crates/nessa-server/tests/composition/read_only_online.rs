@@ -995,6 +995,48 @@ fn percentile(sorted: &[f64], percent: usize) -> f64 {
     sorted[rank - 1]
 }
 
+/// Row W16: `watch`'s discovery and cache-open refusals come before
+/// `registered` and are the objects `sync-records` writes for them: one line,
+/// no `kind`, no `ended`; exit 1.
+#[test]
+fn online_watch_precondition_refusals_use_the_records_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _gateway = Gateway::start(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let cache = setup_cache(directory.path());
+    let profile = profile_for(&root, &cache);
+    let run = |command_name: &str, conversation: &str| {
+        let mut args = vec![
+            command_name.to_owned(),
+            profile.clone(),
+            conversation.to_owned(),
+            "100".to_owned(),
+        ];
+        if command_name == "watch" {
+            args.push("2".into());
+        }
+        let (lines, ok) = WatchChild::spawn(args).finish();
+        assert!(!ok, "{lines:?}");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        lines.into_iter().next().unwrap()
+    };
+    // Discovery: a conversation this receiver cannot read. Nothing is cached.
+    let unknown = uuid();
+    let refused = run("watch", &unknown);
+    assert_eq!(refused["discoveryFailure"], true, "{refused}");
+    assert!(refused.get("kind").is_none(), "{refused}");
+    assert!(!cache.exists());
+    assert_eq!(refused, run("sync-records", &unknown));
+    // The cache cannot be opened.
+    private_write(&cache, b"not a database");
+    let refused = run("watch", &setup.conversation);
+    assert!(refused["cacheRefusal"]["code"].is_string(), "{refused}");
+    assert!(refused.get("kind").is_none(), "{refused}");
+    assert_eq!(refused, run("sync-records", &setup.conversation));
+}
+
 /// Committed change watches rows L8–L10 and W2–W13, with the example
 /// client's own `watch` command on two paired devices in separate processes
 /// against one gateway that is never restarted.
@@ -1040,12 +1082,14 @@ fn online_two_devices_follow_live_hints_and_converge() {
     };
 
     // Steps 2–3 (W2, W4, W6, L9): A registers; a commit lands while its
-    // recheck pass is reading the head (the fixture holds that read 2 s).
-    // The recheck already holds it, and its hint, read during that pass,
-    // causes exactly one more pass.
+    // recheck pass is reading the head (the fixture holds that read until
+    // the commit is acknowledged). The recheck already holds it, and its
+    // hint, read during that pass, causes exactly one more pass.
+    gateway.act("hold");
     let mut a = watch(&profile_a, "2");
     let watch_a = watch_registered(&mut a);
     gateway.act("commit");
+    gateway.act("release");
     watch_pass(&mut a, "recheck", 2);
     watch_hint(&mut a, &watch_a, true);
     watch_pass(&mut a, "hint", 2);
@@ -1110,8 +1154,8 @@ fn online_two_devices_follow_live_hints_and_converge() {
     assert_eq!(view_a, show(&fresh, &setup.receiver));
 
     // Step 8 (W11, A2): revoking B's receiver closes B's connection with no
-    // hint and refuses its next command; A goes on.
-    let mut a = watch(&profile_a, "5");
+    // hint and refuses its next command; A goes on to its pass budget.
+    let mut a = watch(&profile_a, "2");
     let mut b = watch(&profile_b, "5");
     let watch_a = watch_registered(&mut a);
     watch_registered(&mut b);
@@ -1121,6 +1165,7 @@ fn online_two_devices_follow_live_hints_and_converge() {
     gateway.act("commit");
     watch_hint(&mut a, &watch_a, false);
     watch_pass(&mut a, "hint", 15);
+    assert!(watch_end(a, "passesExhausted"));
     assert!(!watch_end(b, "connectionClosed"));
     let (ok, denied) = command(
         vec![
@@ -1137,11 +1182,15 @@ fn online_two_devices_follow_live_hints_and_converge() {
     assert_eq!(denied["enrollmentFailure"]["code"], "refused", "{denied}");
     assert_eq!(show(&cache_b, &receiver_b), view_b);
 
-    // Step 9 (W1, W11, L7): the gateway goes away. A's watch ends on the
-    // close; the next commands fail explicitly before connecting; A's saved
-    // view stays readable.
+    // Step 9 (W1, W11, L7): the gateway goes away while A waits for a hint,
+    // with nothing run between its recheck and the close. A's watch ends on
+    // the close; the next commands fail explicitly before connecting; A's
+    // saved view stays readable.
     let view_a = show(&cache_a, &setup.receiver);
     assert_eq!(view_a["facts"], "15", "{view_a}");
+    let mut a = watch(&profile_a, "5");
+    watch_registered(&mut a);
+    watch_pass(&mut a, "recheck", 15);
     drop(gateway);
     assert!(!watch_end(a, "connectionClosed"));
     for args in [

@@ -431,7 +431,7 @@ impl Run<'_> {
             output,
         )
     }
-    /// Rows W1–W15: discovery and the cache as for `sync-records`, then the
+    /// Rows W1–W16: discovery and the cache as for `sync-records`, then the
     /// bounded watch loop on this one connection.
     fn watch(
         self,
@@ -541,7 +541,7 @@ impl WatchSession for ConnectionWatch<'_> {
     fn wait(&mut self) -> Result<Wait, GatewayError> {
         self.run.connection.wait_hint()
     }
-    fn pass(&mut self) -> WatchPass<Value> {
+    fn pass(&mut self) -> Result<WatchPass<Value>, GatewayError> {
         let attempt = self.run.connection.run(|| {
             run_records(
                 &self.scope,
@@ -552,17 +552,7 @@ impl WatchSession for ConnectionWatch<'_> {
                 self.pages,
                 &SystemClock,
             )
-        });
-        let attempt = match attempt {
-            Ok(attempt) => attempt,
-            // The operation could not begin: nothing was read or saved.
-            Err(error) => {
-                return WatchPass {
-                    report: json!({"operation":"records","successful":false,"connectionCheck":"performed","transportFailure":online::gateway_failure(error)}),
-                    result: PassResult::Failed(Some(error)),
-                }
-            }
-        };
+        })?;
         let refusal = self.cache.take_refusal();
         let saved = self.cache.retained_transcript_state(
             self.scope.receiver(),
@@ -575,7 +565,7 @@ impl WatchSession for ConnectionWatch<'_> {
             Some(Ok(run)) if run.complete => PassResult::Complete,
             _ => PassResult::Incomplete,
         };
-        WatchPass { report, result }
+        Ok(WatchPass { report, result })
     }
 }
 

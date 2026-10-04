@@ -1,7 +1,8 @@
 //! `watch` lines on stdout, one JSON object per line in arrival order:
 //! `registered`, `pass` (its `report` is the `sync-records` object), `hint`,
-//! and a final `ended` (committed change watches, rows W2–W15).
-use super::online::{gateway_failure, write};
+//! and a final `ended` (committed change watches, rows W2–W15). Refusals
+//! before registration are not watch lines (rows W1, W16).
+use super::online::{gateway_failure, watch_ended, write};
 use super::CommandError;
 use crate::read_only_sync::application::watch::{
     End, EndReason, OutputLost, Registered, Trigger, WatchEvents,
@@ -37,10 +38,7 @@ impl<'a> WatchLines<'a> {
             EndReason::Unauthorized => ("unauthorized", None),
             EndReason::Unavailable => ("unavailable", None),
             EndReason::PassFailed => ("passFailed", None),
-            EndReason::WatchEnded(reason) => (
-                "watchEnded",
-                Some(json!({"code":"watchEnded","productCode":reason})),
-            ),
+            EndReason::WatchEnded(reason) => ("watchEnded", Some(watch_ended(reason))),
             EndReason::ConnectionClosed => ("connectionClosed", None),
         };
         let cause = cause.or_else(|| end.cause.map(gateway_failure));
