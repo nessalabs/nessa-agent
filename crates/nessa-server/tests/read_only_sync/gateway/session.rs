@@ -10,22 +10,22 @@ use crate::device_pairing::infrastructure::{
     wire::{decode_request, encode_refused, NativePairingRequest},
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES,
 };
-use crate::product::catalogue_read::wire::wire_descriptor;
-use crate::product::generated::{
-    product_event, product_method, ProductSessionReady, SessionChallenge,
-    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
-    PRODUCT_VERSION,
-};
-use crate::product::passive_read::wire::wire_scope;
-use crate::product_contract::generated::{
-    CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
-};
-use crate::protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::product::catalogue_read::wire_descriptor;
+use nessa_protocol::product::generated::{
+    product_event, product_method, ProductSessionReady, SessionChallenge,
+    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
+    PRODUCT_VERSION,
+};
+use nessa_protocol::product::passive_read::wire_scope;
+use nessa_protocol::product_contract::generated::{
+    CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
+};
+use nessa_protocol::protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame};
 use nessa_sync::replication::application::{Access, ScopeAuthorizer};
 use nessa_sync::replication::catalogue::{
     CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry, ManifestRequest,

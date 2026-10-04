@@ -2,14 +2,6 @@
 #[path = "read_only_online/fixtures.rs"]
 mod fixtures;
 use crate::composition::{local_auth::SystemClock, read_only_example};
-use crate::product::generated::{
-    product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
-    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
-    ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
-    MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
-    MAX_RECORD_PAGE_RECORDS,
-};
-use crate::product::record_read::wire as record_wire;
 use crate::read_only_sync::{
     application::{reset::CacheResets, CachePolicy},
     domain::CacheReset,
@@ -17,6 +9,14 @@ use crate::read_only_sync::{
 };
 use fixtures::*;
 use nessa_local_database::rusqlite::Connection;
+use nessa_protocol::product::generated::{
+    product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
+    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
+    ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
+    MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+    MAX_RECORD_PAGE_RECORDS,
+};
+use nessa_protocol::product::record_read as record_wire;
 use nessa_sync::replication::{
     application::ReplicaStore,
     catalogue::{

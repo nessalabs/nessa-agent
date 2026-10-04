@@ -1,18 +1,6 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
-    generated::{
-        ApprovalMode as WireApprovalMode, ConversationAnswerParams,
-        ConversationAnswerQuestionParams, ConversationArchiveParams, ConversationCancelParams,
-        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
-        ConversationDeleteParams, ConversationErrorCode, ConversationListParams,
-        ConversationListResult, ConversationMutationResult,
-        ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
-        ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
-        ConversationSendParams, ConversationSetApprovalModeParams,
-        ConversationSetApprovalModeResult, ConversationSummary,
-        ConversationView as WireConversationView,
-    },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
@@ -27,9 +15,20 @@ use crate::{
         },
         domain::{ConversationApprovalMode, ConversationId},
     },
-    protocol::{OutgoingMessage, RequestFrame},
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
+    ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
+    ConversationCreateParams, ConversationCreateResult, ConversationDeleteParams,
+    ConversationErrorCode, ConversationListParams, ConversationListResult,
+    ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
+    ConversationPermissionSelectionState, ConversationReadParams, ConversationRemoveParams,
+    ConversationReorderParams, ConversationSendParams, ConversationSetApprovalModeParams,
+    ConversationSetApprovalModeResult, ConversationSummary,
+    ConversationView as WireConversationView,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
     permissions::PermissionSelectionState,

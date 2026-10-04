@@ -1,6 +1,5 @@
 //! Private core facades share the admitted session and retain one typed outcome.
 use super::session::{RpcKind, Session};
-use crate::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
 use crate::{
     conversation::{
         application::{
@@ -10,25 +9,24 @@ use crate::{
         domain::ConversationId,
         infrastructure::NessaCatalogueSource,
     },
-    product::{
-        catalogue_read::wire as catalogue_wire,
-        generated::{
-            product_method, CatalogueManifestRequest, ConversationCatalogueHeadParams,
-            ConversationCatalogueHeadResult, ConversationCatalogueManifestParams,
-            ConversationCatalogueManifestResult, ConversationCatalogueResolveParams,
-            ConversationCatalogueResolveResult, ConversationRecordsHeadParams,
-            ConversationRecordsHeadResult, ConversationRecordsPageParams,
-            ConversationRecordsPageResult, ConversationWatchRecordsParams,
-        },
-        passive_read::wire::ReadWireError,
-        record_read::wire as record_wire,
-    },
     read_only_sync::application::{
         watch::{Registered, Wait},
         GatewayAttempt, GatewayError, GatewayOutcome,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::product::generated::{
+    product_method, CatalogueManifestRequest, ConversationCatalogueHeadParams,
+    ConversationCatalogueHeadResult, ConversationCatalogueManifestParams,
+    ConversationCatalogueManifestResult, ConversationCatalogueResolveParams,
+    ConversationCatalogueResolveResult, ConversationRecordsHeadParams,
+    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationRecordsPageResult,
+    ConversationWatchRecordsParams,
+};
+use nessa_protocol::product::{
+    catalogue_read as catalogue_wire, passive_read::ReadWireError, record_read as record_wire,
+};
+use nessa_protocol::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
 use nessa_sdk::infrastructure::session_storage::physical_record_schema;
 use nessa_sync::replication::{
     application::{Access, RecordSource, ScopeAuthorizer, SourceError},

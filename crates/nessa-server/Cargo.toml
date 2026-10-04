@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "0.22"
+nessa-protocol = { path = "../nessa-protocol" }
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }

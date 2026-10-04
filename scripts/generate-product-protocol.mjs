@@ -114,7 +114,7 @@ const sdkSource = readFileSync(
   "utf8",
 )
 const ordinaryWire = readFileSync(
-  resolve(root, "crates/nessa-server/src/protocol/encode.rs"),
+  resolve(root, "crates/nessa-protocol/src/protocol/encode.rs"),
   "utf8",
 )
 const maxOrdinaryResponseBytes = Number(
@@ -580,8 +580,8 @@ const outputs = [
   ],
   ...(schemaOutput === undefined ? [] : [["protocol/product/v1.json", schemaOutput]]),
   ["packages/nessa-client/src/generated/product.ts", ts],
-  ["crates/nessa-server/src/product/generated.rs", formatted.stdout],
-  ["crates/nessa-server/src/product_contract/generated.rs", formattedContract.stdout],
+  ["crates/nessa-protocol/src/product/generated.rs", formatted.stdout],
+  ["crates/nessa-protocol/src/product_contract/generated.rs", formattedContract.stdout],
 ]
 for (const [path, contents] of outputs) {
   const target = resolve(root, path)

@@ -13,12 +13,12 @@ use crate::conversation::domain::{
     ConversationModelId, ConversationSummary,
 };
 use crate::conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource};
-use crate::product::catalogue_read::wire as catalogue_wire;
-use crate::product::generated::{
+use nessa_protocol::product::catalogue_read as catalogue_wire;
+use nessa_protocol::product::generated::{
     CatalogueDescriptor, ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
     ConversationCatalogueResolveResult,
 };
-use crate::product::passive_read::wire as shared_wire;
+use nessa_protocol::product::passive_read as shared_wire;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use conversation_support::{

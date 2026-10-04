@@ -116,12 +116,12 @@ const generatedFiles = [
     label: "generated method/event catalog (TS)",
   },
   {
-    path: join(root, "crates/nessa-server/src/protocol/generated_catalog.rs"),
+    path: join(root, "crates/nessa-protocol/src/protocol/generated_catalog.rs"),
     envKey: "NESSA_PROTOCOL_CATALOG_RS_OUT",
     label: "generated method/event catalog (Rust)",
   },
   {
-    path: join(root, "crates/nessa-server/src/protocol/generated_types.rs"),
+    path: join(root, "crates/nessa-protocol/src/protocol/generated_types.rs"),
     envKey: "NESSA_PROTOCOL_TYPES_RS_OUT",
     label: "generated payload types (Rust)",
   },

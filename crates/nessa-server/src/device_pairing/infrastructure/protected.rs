@@ -13,13 +13,13 @@
 //! product session's authentication and admission (design rows PR1, PR3).
 use super::connection::DeadlineStream;
 use super::frames::{encode_frame, FrameReader};
-use crate::product::generated::MAX_RECORD_RESPONSE_BYTES;
-use crate::protocol::MAX_PAYLOAD_BYTES;
 use futures_util::{task::noop_waker_ref, Sink, Stream};
 use nessa_auth::{
     adapters::pairing::NativeTransport,
     application::{pairing::DeviceConnectionProof, ports::AccessError},
 };
+use nessa_protocol::product::generated::MAX_RECORD_RESPONSE_BYTES;
+use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result as IoResult, Write},

@@ -178,7 +178,7 @@ pub enum SurfaceKind {
     #[serde(rename = "cli")]
     Cli,
 }
-pub(crate) fn wire_shape_gateway_error(value: &Value) -> bool {
+pub fn wire_shape_gateway_error(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("code").is_some_and(|field| {
             let _ = field;
@@ -194,7 +194,7 @@ pub(crate) fn wire_shape_gateway_error(value: &Value) -> bool {
             .all(|key| ["code", "message", "details"].contains(&key.as_str()))
     })
 }
-pub(crate) fn wire_shape_res_frame(value: &Value) -> bool {
+pub fn wire_shape_res_frame(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("type").is_some_and(|field| {
             let _ = field;
@@ -216,7 +216,7 @@ pub(crate) fn wire_shape_res_frame(value: &Value) -> bool {
             .all(|key| ["type", "id", "ok", "payload", "error"].contains(&key.as_str()))
     })
 }
-pub(crate) fn wire_shape_event_frame(value: &Value) -> bool {
+pub fn wire_shape_event_frame(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("type").is_some_and(|field| {
             let _ = field;

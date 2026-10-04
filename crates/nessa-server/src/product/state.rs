@@ -1,4 +1,3 @@
-use super::generated::AgentsListResult;
 use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
@@ -18,6 +17,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_protocol::product::generated::AgentsListResult;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -165,8 +165,8 @@ impl ProductRouteState {
             controls: Arc::new(Semaphore::new(32)),
             record_reads: Arc::new(Semaphore::new(4)),
             change_watches: Arc::new(WatchOwners::new(
-                super::generated::MAX_GLOBAL_CHANGE_WATCHES,
-                super::generated::MAX_PRINCIPAL_CHANGE_WATCHES,
+                nessa_protocol::product::generated::MAX_GLOBAL_CHANGE_WATCHES,
+                nessa_protocol::product::generated::MAX_PRINCIPAL_CHANGE_WATCHES,
             )),
             record_watches: None,
             catalogue_watches: None,

@@ -14,7 +14,7 @@ use super::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
 };
-use crate::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
+use nessa_protocol::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},

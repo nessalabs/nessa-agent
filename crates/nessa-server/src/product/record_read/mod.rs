@@ -1,5 +1,5 @@
-//! Authorized record routing and bounded wire representation.
+//! Authorized record routing. The bounded wire representation is
+//! `nessa_protocol::product::record_read`.
 //! Dispatch and socket admission share the exhaustive read-refusal wire conversion.
 mod dispatch;
-pub(crate) mod wire;
 pub(super) use dispatch::dispatch;

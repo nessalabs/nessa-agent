@@ -1,18 +1,18 @@
+use super::passive_read::{
+    decimal_u64, decode_payload, decode_scope, encode_response, wire_scope, ReadEncodeError,
+    ReadWireError,
+};
 use crate::product::generated::{
     ConversationRecordsHeadResult, ConversationRecordsPageResult, RecordPageRequest,
     RecordWireRecord, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
     MAX_RECORD_PAGE_RECORDS,
-};
-use crate::product::passive_read::wire::{
-    decimal_u64, decode_payload, decode_scope, encode_response, wire_scope, ReadEncodeError,
-    ReadWireError,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_sync::replication::domain::{
     validate_page, validate_page_request, Checkpoint, Id, Limits, Page, PageRequest, Record, Scope,
 };
 
-pub(crate) fn decode_page_request(wire: &RecordPageRequest) -> Result<PageRequest, ReadWireError> {
+pub fn decode_page_request(wire: &RecordPageRequest) -> Result<PageRequest, ReadWireError> {
     let max_records =
         usize::try_from(wire.max_records).map_err(|_| ReadWireError::InvalidRequest)?;
     let max_payload_bytes =
@@ -39,11 +39,7 @@ pub(crate) fn decode_page_request(wire: &RecordPageRequest) -> Result<PageReques
     Ok(request)
 }
 
-pub(crate) fn encode_head(
-    request_id: &str,
-    scope: &Scope,
-    head: u64,
-) -> Result<String, ReadEncodeError> {
+pub fn encode_head(request_id: &str, scope: &Scope, head: u64) -> Result<String, ReadEncodeError> {
     encode_response(
         request_id,
         &ConversationRecordsHeadResult {
@@ -53,7 +49,7 @@ pub(crate) fn encode_head(
     )
 }
 
-pub(crate) fn wire_request(request: &PageRequest) -> RecordPageRequest {
+pub fn wire_request(request: &PageRequest) -> RecordPageRequest {
     RecordPageRequest {
         scope: wire_scope(&request.scope),
         after: request.after.to_string(),
@@ -66,7 +62,7 @@ pub(crate) fn wire_request(request: &PageRequest) -> RecordPageRequest {
 
 /// Validate a source page through sync-engine before flattening its shared
 /// scope into the product envelope, then encode under the response ceiling.
-pub(crate) fn encode_page(
+pub fn encode_page(
     request_id: &str,
     request: &PageRequest,
     page: Page,
@@ -103,12 +99,10 @@ pub(crate) fn encode_page(
 }
 
 /// Convert a response while preserving every echoed request field for core validation.
-pub(crate) fn decode_head(
-    wire: ConversationRecordsHeadResult,
-) -> Result<(Scope, u64), ReadWireError> {
+pub fn decode_head(wire: ConversationRecordsHeadResult) -> Result<(Scope, u64), ReadWireError> {
     Ok((decode_scope(&wire.scope)?, decimal_u64(&wire.head)?))
 }
-pub(crate) fn decode_page_result(
+pub fn decode_page_result(
     wire: ConversationRecordsPageResult,
     expected: &PageRequest,
 ) -> Result<Page, ReadWireError> {

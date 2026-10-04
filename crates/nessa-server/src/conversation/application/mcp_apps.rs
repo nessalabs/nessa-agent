@@ -4,8 +4,8 @@
 //! conversation service's.
 use super::ConversationFuture;
 use crate::conversation::domain::ConversationId;
-use crate::product_contract::generated::MCP_RESOURCE_TICKET_MS;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::product_contract::generated::MCP_RESOURCE_TICKET_MS;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
 use serde_json::Value;

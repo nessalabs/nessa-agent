@@ -8,12 +8,6 @@ use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 #[cfg(unix)]
 use crate::conversation::infrastructure::NessaRecordWatches;
-use crate::product::generated::AgentsListResult;
-#[cfg(unix)]
-use crate::product::generated::{
-    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
-    ApprovalModeChoice as WireApprovalModeChoice,
-};
 #[cfg(unix)]
 use crate::{
     agent_warm_up::application::{AgentWarmUp, WarmUpSessionPorts},
@@ -65,6 +59,12 @@ use nessa_auth::{
         ports::{Clock, PortFuture},
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
+};
+use nessa_protocol::product::generated::AgentsListResult;
+#[cfg(unix)]
+use nessa_protocol::product::generated::{
+    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
+    ApprovalModeChoice as WireApprovalModeChoice,
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};

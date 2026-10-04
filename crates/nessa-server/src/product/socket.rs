@@ -1,12 +1,6 @@
 use super::change_watch::{
     ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
-#[cfg(test)]
-use super::generated::wire_shape_product_session_ready;
-use super::generated::{
-    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
-    PRODUCT_VERSION,
-};
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
 use super::state::ProductRouteState;
 use super::wire::*;
@@ -17,11 +11,6 @@ use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{ReadRefusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
-use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
-use crate::protocol::{
-    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
-    ResponseFrame, MAX_PAYLOAD_BYTES,
-};
 use axum::extract::ws::{CloseFrame, Message};
 use axum::Error;
 use futures_util::stream::{FuturesUnordered, SplitSink};
@@ -42,6 +31,18 @@ use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
 use nessa_auth::domain::{Action, AudienceId, CredentialId};
+#[cfg(test)]
+use nessa_protocol::product::generated::wire_shape_product_session_ready;
+use nessa_protocol::product::generated::{
+    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
+    PRODUCT_VERSION,
+};
+use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
+use nessa_protocol::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
+use nessa_protocol::protocol::{
+    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
+    ResponseFrame, MAX_PAYLOAD_BYTES,
+};
 use serde_json::json;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -216,7 +217,7 @@ where
     }
     let params: SessionAuthenticateParams =
         serde_json::from_value(frame.params).map_err(|_| (frame.id.clone(), "unauthorized"))?;
-    if !params.supports_v1() {
+    if !supports_product_version(params.min_version, params.max_version) {
         return Err((frame.id, "protocol_incompatible"));
     }
     if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
@@ -1267,7 +1268,7 @@ fn session_ready(
             },
         })
         .collect();
-    SessionReady::from_session(
+    ready_frame(
         state.gateway_id().as_str(),
         session,
         grants,
@@ -1574,11 +1575,6 @@ pub(crate) use tests::watches::HostWatchFixture;
 
 #[cfg(test)]
 mod tests {
-    use super::super::generated::{
-        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
-        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-    };
-    use super::super::passive_read::wire::encode_response;
     use super::super::state::SessionSettings;
     use super::*;
     use crate::agents::domain::AgentId;
@@ -1612,6 +1608,11 @@ mod tests {
         AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
         MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
     };
+    use nessa_protocol::product::generated::{
+        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_protocol::product::passive_read::encode_response;
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
         ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -2931,7 +2932,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.len() > MAX_PAYLOAD_BYTES as usize);
-        assert!(record.len() <= super::super::generated::MAX_RECORD_RESPONSE_BYTES);
+        assert!(record.len() <= nessa_protocol::product::generated::MAX_RECORD_RESPONSE_BYTES);
 
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));

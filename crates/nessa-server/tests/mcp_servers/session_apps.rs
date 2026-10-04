@@ -3,7 +3,9 @@
 //! a real server's session, measured on a clock that records every wait.
 use super::SessionApps;
 use crate::conversation::application::McpApps;
-use crate::product_contract::generated::{MCP_APP_CALL_TIMEOUT_MS, MCP_APP_READ_TIMEOUT_MS};
+use nessa_protocol::product_contract::generated::{
+    MCP_APP_CALL_TIMEOUT_MS, MCP_APP_READ_TIMEOUT_MS,
+};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::UiResourceUri;
 use nessa_sdk::infrastructure::{

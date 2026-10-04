@@ -8,20 +8,20 @@ use std::io::{Error, Result as IoResult, Write};
 
 /// The product response could not be encoded within its published byte budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReadEncodeError {
+pub enum ReadEncodeError {
     ResponseTooLarge,
     InvalidPayload,
 }
 
 /// Invalid wire shape or a source page that failed the sync-engine contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReadWireError {
+pub enum ReadWireError {
     InvalidRequest,
     InvalidPage,
     ResponseTooLarge,
 }
 
-pub(crate) fn decimal_u64(value: &str) -> Result<u64, ReadWireError> {
+pub fn decimal_u64(value: &str) -> Result<u64, ReadWireError> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
         || !value.bytes().all(|byte| byte.is_ascii_digit())
@@ -31,14 +31,14 @@ pub(crate) fn decimal_u64(value: &str) -> Result<u64, ReadWireError> {
     value.parse().map_err(|_| ReadWireError::InvalidRequest)
 }
 
-pub(crate) fn decode_epoch(value: &str) -> Result<u64, ReadWireError> {
+pub fn decode_epoch(value: &str) -> Result<u64, ReadWireError> {
     let epoch = decimal_u64(value)?;
     (epoch > 0)
         .then_some(epoch)
         .ok_or(ReadWireError::InvalidRequest)
 }
 
-pub(crate) fn decode_scope(wire: &RecordScope) -> Result<Scope, ReadWireError> {
+pub fn decode_scope(wire: &RecordScope) -> Result<Scope, ReadWireError> {
     let id = |value: &str| Id::new(value).map_err(|_| ReadWireError::InvalidRequest);
     Ok(Scope::new(
         id(&wire.receiver)?,
@@ -50,7 +50,7 @@ pub(crate) fn decode_scope(wire: &RecordScope) -> Result<Scope, ReadWireError> {
     ))
 }
 
-pub(crate) fn wire_scope(scope: &Scope) -> RecordScope {
+pub fn wire_scope(scope: &Scope) -> RecordScope {
     RecordScope {
         receiver: scope.receiver().as_str().to_owned(),
         origin: scope.origin().as_str().to_owned(),
@@ -62,7 +62,7 @@ pub(crate) fn wire_scope(scope: &Scope) -> RecordScope {
 }
 
 /// Decode standard canonical base64 into at most the admitted payload bytes.
-pub(crate) fn decode_payload(value: &str, maximum: usize) -> Result<Vec<u8>, ReadWireError> {
+pub fn decode_payload(value: &str, maximum: usize) -> Result<Vec<u8>, ReadWireError> {
     let encoded_max = maximum
         .checked_add(2)
         .and_then(|value| (value / 3).checked_mul(4))
@@ -124,7 +124,7 @@ impl Write for CappedWriter {
 
 /// Serialize the actual generated page result in the product response envelope.
 /// The writer stops before allocating beyond `MAX_RECORD_RESPONSE_BYTES`.
-pub(crate) fn encode_response<T: Serialize>(
+pub fn encode_response<T: Serialize>(
     request_id: &str,
     result: &T,
 ) -> Result<String, ReadEncodeError> {
@@ -147,7 +147,7 @@ pub(crate) fn encode_response<T: Serialize>(
 }
 
 /// Serialize a generated parameter DTO using the existing request frame owner.
-pub(crate) fn encode_request<T: Serialize>(
+pub fn encode_request<T: Serialize>(
     id: &str,
     method: &str,
     params: &T,
@@ -169,5 +169,5 @@ pub(crate) fn encode_request<T: Serialize>(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/product/passive_read/wire.rs"]
+#[path = "../../tests/product/passive_read.rs"]
 mod tests;

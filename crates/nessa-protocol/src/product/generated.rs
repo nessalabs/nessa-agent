@@ -1517,7 +1517,7 @@ pub mod product_event {
     pub const CONVERSATION_CHANGED: &str = "conversation.changed";
     pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
 }
-pub(crate) fn wire_shape_session_challenge(value: &Value) -> bool {
+pub fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("minVersion").is_some_and(|field| {
             let _ = field;
@@ -1544,7 +1544,7 @@ pub(crate) fn wire_shape_session_challenge(value: &Value) -> bool {
             .all(|key| ["minVersion", "maxVersion", "nonce", "expiresAt"].contains(&key.as_str()))
     })
 }
-pub(crate) fn wire_shape_product_client_metadata(value: &Value) -> bool {
+pub fn wire_shape_product_client_metadata(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("id").is_some_and(|field| {
             let _ = field;
@@ -1554,7 +1554,7 @@ pub(crate) fn wire_shape_product_client_metadata(value: &Value) -> bool {
         }) && object.keys().all(|key| ["id"].contains(&key.as_str()))
     })
 }
-pub(crate) fn wire_shape_session_authenticate_params(value: &Value) -> bool {
+pub fn wire_shape_session_authenticate_params(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("minVersion").is_some_and(|field| {
             let _ = field;
@@ -1584,7 +1584,7 @@ pub(crate) fn wire_shape_session_authenticate_params(value: &Value) -> bool {
         })
     })
 }
-pub(crate) fn wire_shape_product_resource(value: &Value) -> bool {
+pub fn wire_shape_product_resource(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("organizationId").is_some_and(|field| {
             let _ = field;
@@ -1601,7 +1601,7 @@ pub(crate) fn wire_shape_product_resource(value: &Value) -> bool {
             .all(|key| ["organizationId", "id"].contains(&key.as_str()))
     })
 }
-pub(crate) fn wire_shape_product_grant(value: &Value) -> bool {
+pub fn wire_shape_product_grant(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("action").is_some_and(|field| {
             let _ = field;
@@ -1616,7 +1616,7 @@ pub(crate) fn wire_shape_product_grant(value: &Value) -> bool {
             .all(|key| ["action", "resource"].contains(&key.as_str()))
     })
 }
-pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
+pub fn wire_shape_product_session_ready(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("version").is_some_and(|field| {
             let _ = field;

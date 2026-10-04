@@ -1,21 +1,19 @@
 //! Authenticated native-runtime downloads. A blocking worker owns the single
 //! install permit through durable publication and audit, even if its waiter leaves.
 use super::{
-    generated::{
-        AgentInstallOffer, AgentInstallOptionsResult, AgentInstallParams, AgentInstallResult,
-        MAX_AGENT_INSTALL_REQUEST_ID_BYTES, MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS,
-    },
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::{
-    agent_install::{
-        application::{GatewayInstallFailure, InstallFailure, SourceFailure, StoreFailure},
-        domain::{AgentName, InstallRequest},
-    },
-    protocol::{OutgoingMessage, RequestFrame},
+use crate::agent_install::{
+    application::{GatewayInstallFailure, InstallFailure, SourceFailure, StoreFailure},
+    domain::{AgentName, InstallRequest},
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    AgentInstallOffer, AgentInstallOptionsResult, AgentInstallParams, AgentInstallResult,
+    MAX_AGENT_INSTALL_REQUEST_ID_BYTES, MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
 pub(super) async fn dispatch(
     state: &ProductRouteState,

@@ -22,7 +22,6 @@
 mod attachment;
 pub(crate) mod catalogue_read;
 mod change_watch;
-pub(crate) mod generated;
 pub(crate) mod passive_read;
 pub(crate) mod record_read;
 mod socket;

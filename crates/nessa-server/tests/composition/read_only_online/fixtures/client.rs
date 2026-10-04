@@ -7,12 +7,12 @@ use crate::device_pairing::infrastructure::{
     wire::{encode_request as encode_envelope, NativePairingRequest},
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
-use crate::product::generated::{
-    ProductClientMetadata, SessionAuthenticateParams, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
-};
-use crate::product::passive_read::wire::encode_request;
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_protocol::product::generated::{
+    ProductClientMetadata, SessionAuthenticateParams, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
+};
+use nessa_protocol::product::passive_read::encode_request;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::VecDeque;

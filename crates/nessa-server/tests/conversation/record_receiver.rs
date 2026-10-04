@@ -9,8 +9,8 @@ use crate::conversation::domain::{
     Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
 };
 use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
-use crate::product::generated::{ConversationRecordsHeadResult, ConversationRecordsPageResult};
-use crate::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::product::generated::{ConversationRecordsHeadResult, ConversationRecordsPageResult};
+use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use nessa_local_database::rusqlite::{params, Connection};
@@ -272,12 +272,12 @@ impl ProductSource {
         let response: ConversationRecordsHeadResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
         Ok((
-            crate::product::passive_read::wire::decode_scope(&response.scope).unwrap(),
+            nessa_protocol::product::passive_read::decode_scope(&response.scope).unwrap(),
             response.head.parse().unwrap(),
         ))
     }
     fn request(scope: &Scope) -> Value {
-        serde_json::to_value(crate::product::passive_read::wire::wire_scope(scope)).unwrap()
+        serde_json::to_value(nessa_protocol::product::passive_read::wire_scope(scope)).unwrap()
     }
 }
 impl RecordSource for ProductSource {
@@ -296,7 +296,7 @@ impl RecordSource for ProductSource {
         let response: ConversationRecordsPageResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
         let echoed =
-            crate::product::record_read::wire::decode_page_request(&response.request).unwrap();
+            nessa_protocol::product::record_read::decode_page_request(&response.request).unwrap();
         let records = response
             .records
             .into_iter()

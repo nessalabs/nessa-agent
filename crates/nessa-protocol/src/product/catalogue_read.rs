@@ -1,15 +1,13 @@
 //! Lossless catalogue DTO mapping; shared passive helpers own decimal and JSON bounds.
 
-use super::super::{
-    generated::{
-        CatalogueDescriptor, CatalogueEntryKey, CatalogueManifestRequest,
-        CataloguePass as WirePass, ConversationCatalogueHeadResult,
-        ConversationCatalogueManifestResult, ConversationCatalogueResolveResult,
-    },
-    passive_read::wire::{
-        decimal_u64, decode_payload, decode_scope, encode_response, wire_scope, ReadEncodeError,
-        ReadWireError,
-    },
+use super::passive_read::{
+    decimal_u64, decode_payload, decode_scope, encode_response, wire_scope, ReadEncodeError,
+    ReadWireError,
+};
+use crate::product::generated::{
+    CatalogueDescriptor, CatalogueEntryKey, CatalogueManifestRequest, CataloguePass as WirePass,
+    ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
+    ConversationCatalogueResolveResult,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_sync::replication::{
@@ -20,16 +18,14 @@ use nessa_sync::replication::{
     domain::{Id, Scope},
 };
 
-pub(crate) fn decode_key(wire: &CatalogueEntryKey) -> Result<EntryKey, ReadWireError> {
+pub fn decode_key(wire: &CatalogueEntryKey) -> Result<EntryKey, ReadWireError> {
     Ok(EntryKey {
         creation: decimal_u64(&wire.creation)?,
         id: Id::new(&wire.id).map_err(|_| ReadWireError::InvalidRequest)?,
     })
 }
 
-pub(crate) fn decode_descriptor(
-    wire: &CatalogueDescriptor,
-) -> Result<ManifestEntry, ReadWireError> {
+pub fn decode_descriptor(wire: &CatalogueDescriptor) -> Result<ManifestEntry, ReadWireError> {
     Ok(ManifestEntry {
         key: decode_key(&wire.key)?,
         revision: decimal_u64(&wire.revision)?,
@@ -37,7 +33,7 @@ pub(crate) fn decode_descriptor(
     })
 }
 
-pub(crate) fn decode_pass(wire: &WirePass) -> Result<CataloguePass, ReadWireError> {
+pub fn decode_pass(wire: &WirePass) -> Result<CataloguePass, ReadWireError> {
     Ok(CataloguePass {
         scope: decode_scope(&wire.scope)?,
         completed: decimal_u64(&wire.completed)?,
@@ -47,9 +43,7 @@ pub(crate) fn decode_pass(wire: &WirePass) -> Result<CataloguePass, ReadWireErro
     })
 }
 
-pub(crate) fn decode_manifest(
-    wire: &CatalogueManifestRequest,
-) -> Result<ManifestRequest, ReadWireError> {
+pub fn decode_manifest(wire: &CatalogueManifestRequest) -> Result<ManifestRequest, ReadWireError> {
     Ok(ManifestRequest {
         pass: decode_pass(&wire.pass)?,
         max_entries: usize::try_from(wire.max_entries)
@@ -57,14 +51,14 @@ pub(crate) fn decode_manifest(
     })
 }
 
-pub(crate) fn wire_key(key: &EntryKey) -> CatalogueEntryKey {
+pub fn wire_key(key: &EntryKey) -> CatalogueEntryKey {
     CatalogueEntryKey {
         creation: key.creation.to_string(),
         id: key.id.as_str().to_owned(),
     }
 }
 
-pub(crate) fn wire_descriptor(entry: &ManifestEntry) -> CatalogueDescriptor {
+pub fn wire_descriptor(entry: &ManifestEntry) -> CatalogueDescriptor {
     CatalogueDescriptor {
         key: wire_key(&entry.key),
         revision: entry.revision.to_string(),
@@ -72,7 +66,7 @@ pub(crate) fn wire_descriptor(entry: &ManifestEntry) -> CatalogueDescriptor {
     }
 }
 
-pub(crate) fn wire_pass(pass: &CataloguePass) -> WirePass {
+pub fn wire_pass(pass: &CataloguePass) -> WirePass {
     WirePass {
         scope: wire_scope(&pass.scope),
         completed: pass.completed.to_string(),
@@ -82,11 +76,7 @@ pub(crate) fn wire_pass(pass: &CataloguePass) -> WirePass {
     }
 }
 
-pub(super) fn encode_head(
-    request_id: &str,
-    scope: &Scope,
-    head: u64,
-) -> Result<String, ReadEncodeError> {
+pub fn encode_head(request_id: &str, scope: &Scope, head: u64) -> Result<String, ReadEncodeError> {
     encode_response(
         request_id,
         &ConversationCatalogueHeadResult {
@@ -96,7 +86,7 @@ pub(super) fn encode_head(
     )
 }
 
-pub(super) fn encode_manifest(
+pub fn encode_manifest(
     request_id: &str,
     expected: &ManifestRequest,
     page: ManifestPage,
@@ -116,7 +106,7 @@ pub(super) fn encode_manifest(
     )
 }
 
-pub(super) fn encode_resolved(
+pub fn encode_resolved(
     request_id: &str,
     pass: &CataloguePass,
     descriptor: &ManifestEntry,
@@ -136,12 +126,10 @@ pub(super) fn encode_resolved(
     )
 }
 
-pub(crate) fn decode_head(
-    wire: ConversationCatalogueHeadResult,
-) -> Result<(Scope, u64), ReadWireError> {
+pub fn decode_head(wire: ConversationCatalogueHeadResult) -> Result<(Scope, u64), ReadWireError> {
     Ok((decode_scope(&wire.scope)?, decimal_u64(&wire.head)?))
 }
-pub(crate) fn decode_manifest_result(
+pub fn decode_manifest_result(
     wire: ConversationCatalogueManifestResult,
 ) -> Result<ManifestPage, ReadWireError> {
     if wire.entries.len() > MAX_CATALOGUE_ENTRIES {
@@ -157,7 +145,7 @@ pub(crate) fn decode_manifest_result(
         has_more: wire.has_more,
     })
 }
-pub(crate) fn decode_resolved_result(
+pub fn decode_resolved_result(
     wire: ConversationCatalogueResolveResult,
     maximum: usize,
 ) -> Result<(CataloguePass, ManifestEntry, ResolvedEntry), ReadWireError> {
@@ -174,9 +162,7 @@ pub(crate) fn decode_resolved_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::application::{CatalogueReadOperation, CatalogueReadValue};
     use crate::product::generated::MAX_RECORD_RESPONSE_BYTES;
-    use crate::product_contract::generated::CatalogueReadErrorCode;
     use nessa_sync::replication::catalogue::{MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES};
     use serde_json::Value;
 
@@ -320,17 +306,6 @@ mod tests {
             payload: deleted.payload,
         };
         assert!(encode_resolved("request", &requested.pass, &expected, 1, newer_deleted).is_ok());
-        assert_eq!(
-            super::super::dispatch::encode_value(
-                "request",
-                CatalogueReadOperation::Manifest(requested.clone()),
-                CatalogueReadValue::Head {
-                    scope: requested.pass.scope,
-                    head: 1
-                }
-            ),
-            Err(CatalogueReadErrorCode::Unverifiable)
-        );
     }
 
     #[test]
