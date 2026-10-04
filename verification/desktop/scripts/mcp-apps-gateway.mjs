@@ -38,7 +38,7 @@ import {
   serverScript,
   startLocalGateway,
 } from "../../../scripts/mcp-test-server/local-gateway.mjs"
-import { appFrame, oneMount } from "./lib/apps.mjs"
+import { appFrame, approvalGone, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
@@ -611,9 +611,8 @@ const checks = {
     const withdrawn = await reviewGone(stack, waiting, 15_000)
     const withdrawnMs = Date.now() - closedAt
     if (!withdrawn) failures.push("the review was not withdrawn when the pane closed")
-    const cardGone = !(await approvalNaming(page, DESTRUCTIVE, 5000).then(
-      async (shown) => shown && (await shown.isVisible()),
-    ))
+    const cardGone = await approvalGone(page, DESTRUCTIVE, 5000)
+    const cardGoneMs = Date.now() - closedAt
     if (!cardGone)
       failures.push("the window still shows the review after the pane closed")
     // The inline mount is another: untouched.
@@ -629,6 +628,7 @@ const checks = {
         withdrawn: Boolean(withdrawn),
         withdrawnMs,
         cardGone,
+        cardGoneMs,
         inlineState,
       },
       failures,

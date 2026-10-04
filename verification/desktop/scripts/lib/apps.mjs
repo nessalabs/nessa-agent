@@ -32,3 +32,22 @@ export function oneMount(count) {
   if (count === 0) return "the call has no inline app frame"
   return `the call is drawn as ${count} inline app frames, not one (#418)`
 }
+
+/**
+ * Waits up to `ms` until no visible approval card names `tool`; says whether
+ * it went. A card still shown when the wait starts is waited out, not sampled:
+ * the window drops it on its next read. Errors other than the timeout (a closed
+ * page) propagate.
+ */
+export async function approvalGone(page, tool, ms) {
+  try {
+    await page
+      .locator(css.approvalCard, { hasText: tool })
+      .first()
+      .waitFor({ state: "hidden", timeout: ms })
+    return true
+  } catch (error) {
+    if (error?.name === "TimeoutError") return false
+    throw error
+  }
+}
