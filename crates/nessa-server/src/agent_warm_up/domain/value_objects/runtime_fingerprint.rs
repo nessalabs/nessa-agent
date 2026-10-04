@@ -9,11 +9,16 @@ use std::fmt;
 /// whether tools are enabled, the token limits, the permission policy and the
 /// system prompt — so changing the runtime it launches changes this value.
 ///
-/// That matters because a first-execution scan is paid per file. An install or
-/// an update stages the runtime under a new directory, and that directory is
-/// inside the provider's configuration identity. The MCP servers a harness is
-/// given are not (ADR 344): what a harness starts for each is a stand-in, the
-/// gateway's own executable, which is already running when a warm-up is.
+/// That matters because a warm-up exists for the agent runtime's
+/// first-execution scan, which is paid per file. An install or an update stages
+/// the runtime under a new directory, and that directory is inside the
+/// provider's configuration identity; so is the bundled `nessa` server, which
+/// lives in it.
+///
+/// The configured MCP server list is left out of this key by choice, so that
+/// changing it does not re-warm. A user-configured server's own first launch,
+/// and any first-run scan it needs, is paid when a conversation first uses it,
+/// not by a warm-up.
 ///
 /// The model is part of it too, although changing a model scans nothing: a
 /// warm-up also proves the configuration establishes a session, and that is

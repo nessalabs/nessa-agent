@@ -191,24 +191,26 @@ app widgets alike.
   the harness's MCP traffic now passes through it — and two app methods, with
   policy and audit; what that connection means is designed in
   [mcp-connections](../../design/mcp-connections.md) (#346): a stand-in's
-  arguments carry a digest of the configured server, which the relay compares,
-  so a server changed under an open conversation is refused
-  `configuration-changed`; a gateway restart ends every session, so a restored conversation's handles
-  are gone and the server says so; a server that exits ends its stand-in, as
-  when the harness owned it; and which conversation a stand-in belongs to is
-  carried to the gateway by a token issued for each open, in the stand-in's
-  environment (#348), before any app method exists. The SDK and
-  protocol carry tool identity and `_meta`, which also helps any tool view in
-  the transcript.
+  arguments carry a digest of the configured server, which the relay compares
+  and refuses `configuration-changed` once a list can change while the gateway
+  runs (#480); a gateway restart ends every session, so a restored
+  conversation's handles are gone and the server says so; a server that exits
+  ends its stand-in, as when the harness owned it; and which conversation a
+  stand-in belongs to is carried to the gateway by a token issued for each
+  open, in the stand-in's environment (#348), before any app method exists.
+  The SDK and protocol carry tool identity and `_meta`, which also helps any
+  tool view in the transcript.
 - **Amended (#391): the MCP server list is not part of a conversation's
   restoration identity.** It is a per-open attachment, like the stand-in
-  token, not a selector of the provider's context — the model is not in the
-  fingerprint either. The SDK's fingerprint no longer hashes the servers, so
-  adding, editing or removing one strands no conversation: a new conversation
-  gets the current set at once, and an open one keeps its harness's set until
-  its provider session ends (close, delete, gateway stop), then resumes with
-  the current set. This replaces "the fingerprint still changes exactly when
-  the server does", which the record first chose.
+  token, not a selector of the provider's context. The SDK's fingerprint no
+  longer hashes the servers, so adding, editing or removing one no longer
+  changes a conversation's identity. The gateway reads the list once per run,
+  so it changes only across a restart, which ends every provider session; a
+  restored conversation resumes with the current set. The relay's
+  `configuration-changed` refusal guards a list that changes while the gateway
+  runs, which settings that apply live (#480) introduce. This replaces "the
+  fingerprint still changes exactly when the server does", which the record
+  first chose.
   - The release that ships this strands saved conversations once: their
     saved fingerprint hashed the MCP servers, and with them the gateway
     executable's path, so they answer `conversation_configuration_changed`

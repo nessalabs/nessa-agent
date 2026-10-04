@@ -47,7 +47,7 @@ The gateway's grant (`ConversationGrants`) is a fresh token: 32 random bytes,
 of which it keeps only the SHA-256. The SDK puts it in every stand-in's ACP
 `env` as `NESSA_MCP_SESSION`, the same for `session/new` and
 `session/resume` and for all three profiles. It is never in the arguments,
-so it stays out of the context fingerprint, like credentials. The relay
+which any process list shows, like credentials. The relay
 reads it from its environment and says it in its hello. The session it
 opens is owned by that open (`McpOwner`: the SDK session and the grant).
 When the provider session ends — closed, deleted, stopped, retired, shut
@@ -302,12 +302,15 @@ structured results already do.
   with, but not its MCP servers (#391, ADR 344): the server list is a per-open
   attachment, like the token, and not a selector of the provider's context.
   Adding, editing or removing a server, or moving the gateway's executable or
-  the relay socket, leaves every saved conversation restorable. A stand-in's
+  the relay socket, no longer changes a conversation's identity. The gateway
+  reads the list once per run, so at this head it changes only across a
+  restart, which ends every provider session; a stand-in from an earlier run
+  is refused `unknown-session`, since grants are held in memory. A stand-in's
   arguments still carry the server's name and a digest of the configured
-  command and arguments, which the relay compares: a server changed under an
-  open conversation is refused `configuration-changed`, and that conversation
-  keeps its harness's set until its provider session ends. The session token
-  is in the stand-in's environment, never its arguments.
+  command and arguments, which the relay compares: its `configuration-changed`
+  refusal guards a list that changes while the gateway runs, which settings
+  that apply live (#480) introduce. The session token is in the stand-in's
+  environment, never its arguments.
 - **Restarts.** A gateway restart ends every session with the agents. A
   restored conversation's harness opens new sessions through its stand-ins; a
   handle an old session gave out is unknown to the new one, and the server says

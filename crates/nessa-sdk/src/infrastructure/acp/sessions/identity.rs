@@ -8,10 +8,11 @@
 //!
 //! The MCP servers a harness is given are not hashed. They are a per-open
 //! attachment, like the stand-in grant, and not a selector of the provider's
-//! context: changing them leaves every saved conversation restorable
-//! (`adding_an_mcp_server_keeps_the_identity_and_restores`). The relay refuses
-//! a server whose configuration changed under an open conversation on its own
-//! (`configuration-changed`).
+//! context: adding, editing or removing an MCP server no longer changes a
+//! conversation's identity (the `..._mcp_server_keeps_the_identity...`
+//! contract tests). A host that relays the servers guards a list that
+//! changes while it runs on its own; the gateway's relay answers
+//! `configuration-changed`.
 //!
 //! [`ProviderIdentity`]: crate::application::agent_execution::providers::ProviderIdentity
 use super::AcpConfig;

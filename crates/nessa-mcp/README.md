@@ -26,10 +26,10 @@ Configure it as server `nessa` in the gateway's `agent.mcpServers`; see
 [gateway setup](../../docs/guides/gateway-chat.md). Restart the gateway after
 changing its tool configuration. The server list is not part of a conversation's
 restoration identity: it is attached afresh to each provider session, so saved
-conversations reopen with the current configuration. A server changed under a
-conversation that is still open is refused `configuration-changed` by the
-gateway's relay, and that conversation keeps its harness's set until its
-provider session ends
+conversations reopen with the current configuration. The gateway reads the list
+once per run, so it changes only across a restart, which ends every provider
+session. The relay's `configuration-changed` refusal guards a list that changes
+while the gateway runs, which settings that apply live (#480) introduce
 ([MCP connections](../../docs/design/mcp-connections.md#what-one-connection-per-harness-session-means)).
 
 `shell` accepts `command` and optional `timeoutSeconds` (1–3600, default 120).

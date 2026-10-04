@@ -613,8 +613,11 @@ async fn conversations(
         // arguments, the environment and the workspace, and it is computed
         // from raw OS bytes rather than a lossy path conversion. Changing the
         // runtime the child is launched from changes it, which is what a
-        // first-execution scan is paid for. MCP servers are not in it (ADR
-        // 344); each one the child starts is a stand-in, this executable.
+        // first-execution scan is paid for; the bundled `nessa` server lives
+        // in the same versioned directory. The configured MCP server list is
+        // left out by choice, so changing it does not re-warm: a
+        // user-configured server's first launch, and any first-run scan it
+        // needs, is paid when a conversation first uses it.
         let identity = agent.provider.identity();
         let runtime =
             RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())

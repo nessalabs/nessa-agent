@@ -171,10 +171,10 @@ WebFetch. All Nessa-owned tools are supplied through the configured MCP servers;
 `nessa-mcp` currently supplies `shell`, backed by Shepherd. Server executables and
 arguments come only from trusted local configuration. They are not part of the
 provider restoration fingerprint: the server list is attached to each provider
-open, like the stand-in token, so adding, editing or removing a server leaves
-saved conversations restorable. An open conversation keeps its harness's set
-until its provider session ends. There are no automatically discovered MCP
-servers.
+open, like the stand-in token, so adding, editing or removing a server no
+longer changes a conversation's identity. The list is read once per run, so a
+change takes a restart, which ends every provider session. There are no
+automatically discovered MCP servers.
 
 Native Bash, TaskOutput and TaskStop are disabled so commands use the MCP shell.
 The pinned Claude SDK canonicalizes the historical BashOutput and KillShell names

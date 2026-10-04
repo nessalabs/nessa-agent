@@ -15,9 +15,9 @@
 //! its relay being killed. The SDK's `McpServers` owns the sessions, their
 //! processes and the MCP protocol; this context owns what a harness is
 //! given in place of a server (`domain`: the relay arguments and the
-//! configuration digest the relay compares, so a server changed under an open
-//! conversation is refused `configuration-changed`; ADR 344 keeps the server
-//! list out of the restoration identity),
+//! configuration digest the relay compares, refusing `configuration-changed`
+//! once a list can change while the gateway runs (#480); ADR 344 keeps the
+//! server list out of the restoration identity),
 //! the socket and the hello in front of it, the `mcp-relay` command, and the
 //! adapter the conversation view asks for a tool's UI; and, for an MCP App,
 //! the resource tickets it redeems and the route it redeems them at

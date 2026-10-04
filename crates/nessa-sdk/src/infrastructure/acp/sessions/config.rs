@@ -91,8 +91,9 @@ pub struct AcpConfig {
     /// Trusted MCP servers exposed by profiles that support MCP. Empty disables custom tools.
     /// Servers require tools_enabled and share the provider session lifetime.
     /// Excluded from restoration identity: like `stand_ins`, they are attached to each provider
-    /// open rather than selecting the provider context, so changing them leaves a saved session
-    /// restorable (`adding_an_mcp_server_keeps_the_identity_and_restores`).
+    /// open rather than selecting the provider context, so adding, editing or removing an MCP
+    /// server no longer changes a session's identity
+    /// (`adding_an_mcp_server_keeps_the_identity_and_restores` and its siblings).
     pub mcp_servers: Vec<StdioMcpServer>,
     /// Where each provider open's MCP server processes get their per-open environment, and the
     /// results its stand-ins forward are taken from: a host's grant for the SDK session being

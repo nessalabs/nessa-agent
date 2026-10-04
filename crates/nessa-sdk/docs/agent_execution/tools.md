@@ -60,6 +60,8 @@ names, retaining original permission inputs. Web fetch, execution and thinking
 categories retain their distinct domain/storage values. Native Bash and mode
 changes remain disabled; Nessa's shell is provided through MCP. Trusted
 `AcpConfig::mcp_servers` configurations are not part of restoration identity
-(ADR 344): the server list is a per-open attachment, so changing it leaves saved
-sessions restorable. A host that relays the servers refuses one changed under an
-open session; the gateway's relay answers `configuration-changed`.
+(ADR 344): the server list is a per-open attachment, so adding, editing or
+removing an MCP server no longer changes a saved session's identity. A host that
+relays the servers may refuse one changed while it runs; the gateway reads its
+list once per run, and its relay's `configuration-changed` refusal guards the
+live settings that #480 introduces.
