@@ -46,6 +46,7 @@ export const labsSamples: readonly SampleSession[] = [
       id: "retry-tests",
       command: "cargo test -p nessa-gateway reconnect -- --nocapture",
       reason: "Runs the reconnect tests, including the new budget-exhaustion case.",
+      origin: { kind: "agent" },
     },
     messages: [
       [
@@ -150,6 +151,7 @@ export const labsSamples: readonly SampleSession[] = [
       id: "storm-restart",
       command: "cargo run -p nessa-gateway -- --simulate-clients 200",
       reason: "Restarts the local gateway and opens 200 connections.",
+      origin: { kind: "agent" },
     },
     messages: exchange(
       "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
