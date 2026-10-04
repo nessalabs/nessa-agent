@@ -5,10 +5,12 @@
 //! for managing the stored servers, `config.json`'s `agents.mcpServers`
 //! block (its one parser and writer), the store over the file and its lock,
 //! the live set port over `McpServers` (with the one place a stored server
-//! becomes a launch), and the durable audit of each change.
+//! becomes a launch), the inspector that starts one server once and looks at
+//! it, and the durable audit of each change and inspection.
 mod apps;
 mod config_store;
 mod grants;
+mod inspector;
 mod live_set;
 mod relay;
 mod relay_command;
@@ -31,12 +33,13 @@ pub use apps::SessionApps;
 pub use config_store::OsConfigFiles;
 pub use config_store::{ConfigCheck, ConfigFiles, ConfigJsonStore, ConfigParse, LOCK_WAIT};
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
+pub use inspector::McpServerInspector;
 pub use live_set::{sdk_server, LaunchSettings, LiveMcpServers};
 #[cfg(unix)]
 pub use relay::{bind, BoundRelay};
 pub use relay::{
-    read_line, write_line, Answer, Hello, Refusal, Relay, ANSWER_TIMEOUT, HELLO_TIMEOUT,
-    MAX_HELLO_BYTES,
+    launch_digest, read_line, write_line, Answer, Hello, Refusal, Relay, ANSWER_TIMEOUT,
+    HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
 #[cfg(unix)]
 pub use relay_command::run;

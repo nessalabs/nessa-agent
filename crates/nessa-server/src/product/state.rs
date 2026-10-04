@@ -80,10 +80,10 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
-    /// What `mcpServers.list`, `.save` and `.remove` manage; `None` where this
-    /// gateway holds no live MCP server set — not Unix, no agents configured,
-    /// or MCP off this run because its relay socket could not be bound —
-    /// which they answer `mcp_servers_not_configured`.
+    /// What `mcpServers.list`, `.save`, `.remove` and `.inspect` manage;
+    /// `None` where this gateway holds no live MCP server set — not Unix, no
+    /// agents configured, or MCP off this run because its relay socket could
+    /// not be bound — which they answer `mcp_servers_not_configured`.
     pub(crate) mcp_server_settings: Option<Arc<McpServerSettings>>,
     /// Owner pairing commands, composed only when `config.json` names a native
     /// listen address. `None` answers every pairing method
@@ -223,13 +223,15 @@ impl ProductRouteState {
         self
     }
 
-    /// Register the owner pairing commands of this gateway's native enrollment
-    /// runtime. Without them the pairing methods answer `pairing_not_configured`.
+    /// Register what manages this gateway's stored MCP servers. Without it
+    /// the `mcpServers.*` methods answer `mcp_servers_not_configured`.
     pub fn with_mcp_server_settings(mut self, settings: Arc<McpServerSettings>) -> Self {
         self.mcp_server_settings = Some(settings);
         self
     }
 
+    /// Register the owner pairing commands of this gateway's native enrollment
+    /// runtime. Without them the pairing methods answer `pairing_not_configured`.
     pub fn with_pairing(mut self, pairing: Arc<PairingOwnerCommands>) -> Self {
         self.pairing = Some(pairing);
         self

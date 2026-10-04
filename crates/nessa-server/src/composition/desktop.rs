@@ -96,12 +96,25 @@ pub(super) fn configure(
             )));
         }
     }
-    if settings.agents.is_none() {
-        let relative_workspace = Path::new("workspaces/default");
+    // The default workspace is made whenever it is the one configured, not
+    // only when nothing is: the first `mcpServers` write on a fresh install
+    // stores the `agents` block from these running values, and the next
+    // start must not depend on that block being absent
+    // (`the_default_workspace_is_made_whenever_it_is_the_one_configured`).
+    // Making it again is a no-op; a workspace chosen elsewhere is left alone.
+    let relative_workspace = Path::new("workspaces/default");
+    let default_workspace = data.join(relative_workspace);
+    if settings
+        .agents
+        .as_ref()
+        .is_none_or(|agents| agents.workspace == default_workspace)
+    {
         nessa_local_storage::create_directory_beneath(data, relative_workspace).map_err(failure)?;
+    }
+    if settings.agents.is_none() {
         settings.agents = Some(AgentsConfig {
             catalog: catalog.clone(),
-            workspace: data.join(relative_workspace),
+            workspace: default_workspace,
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),

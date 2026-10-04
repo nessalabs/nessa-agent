@@ -11,10 +11,9 @@
 //! JSON line of at most [`MAX_HELLO_BYTES`] within [`HELLO_TIMEOUT`] is closed
 //! without an answer.
 use super::grants::ConversationGrants;
-use crate::mcp_servers::domain::{admit, configuration_digest, StandInRefusal};
-use nessa_sdk::infrastructure::{
-    acp::sessions::StdioMcpServer,
-    mcp::{McpError, McpOwner, McpServers, McpSession, INITIALIZE_TIMEOUT},
+use crate::mcp_servers::domain::{admit, configuration_digest, ConfigurationKey, StandInRefusal};
+use nessa_sdk::infrastructure::mcp::{
+    McpError, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, time::Duration};
@@ -35,6 +34,21 @@ const NO_CONVERSATION: &str =
 const UNKNOWN: &str = "no MCP server is configured under that name";
 /// What a stand-in of a server since edited is told.
 const CHANGED: &str = "the MCP server is configured differently now; start a new session";
+
+/// The digest a stand-in for `launch` carries, keyed with this process's
+/// `key`: its command, arguments and whole environment
+/// ([`configuration_digest`]). The one place a launch's fields are chosen
+/// for it, read by the stand-ins handed to each open and by the relay that
+/// admits them. The working directory is the gateway's, one for every server
+/// in a run, and not in it.
+pub fn launch_digest(key: &ConfigurationKey, launch: &McpServerLaunch) -> String {
+    configuration_digest(
+        key,
+        &launch.server.command,
+        &launch.server.args,
+        &launch.environment,
+    )
+}
 
 /// What a stand-in says first.
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
@@ -138,29 +152,33 @@ pub struct Relay {
     servers: McpServers,
     /// The tokens issued to open conversations' harnesses.
     grants: ConversationGrants,
+    /// This process's key for each configuration's digest.
+    key: ConfigurationKey,
 }
 impl Relay {
-    pub fn new(servers: McpServers, grants: ConversationGrants) -> Self {
-        Self { servers, grants }
+    pub fn new(servers: McpServers, grants: ConversationGrants, key: ConfigurationKey) -> Self {
+        Self {
+            servers,
+            grants,
+            key,
+        }
     }
 
     /// The server `hello` names as it is configured now, when the hello's
-    /// digest is that configuration's: against the set as it is now, a
-    /// stand-in of a server since edited is refused `configuration-changed`,
-    /// of one since removed `unknown-server`.
-    pub(crate) fn admitted(&self, hello: &Hello) -> Result<StdioMcpServer, StandInRefusal> {
+    /// digest is that configuration's ([`launch_digest`]): against the set
+    /// as it is now, a stand-in of a server since edited — its environment
+    /// alone included — is refused `configuration-changed`, of one since
+    /// removed `unknown-server`.
+    pub(crate) fn admitted(&self, hello: &Hello) -> Result<McpServerLaunch, StandInRefusal> {
         let configured = self.servers.configured();
         let digests = configured
             .iter()
-            .map(|server| {
-                let digest = configuration_digest(&server.command, &server.args);
-                (server.name.clone(), digest)
-            })
+            .map(|launch| (launch.server.name.clone(), launch_digest(&self.key, launch)))
             .collect::<BTreeMap<_, _>>();
         admit(&hello.server, &hello.configuration, &digests)?;
         configured
             .into_iter()
-            .find(|server| server.name == hello.server)
+            .find(|launch| launch.server.name == hello.server)
             .ok_or(StandInRefusal::UnknownServer)
     }
 
@@ -171,7 +189,7 @@ impl Relay {
     /// it now ([`McpServers::open_as`]).
     pub(crate) async fn open_admitted(
         &self,
-        admitted: &StdioMcpServer,
+        admitted: &McpServerLaunch,
         owner: McpOwner,
     ) -> Result<McpSession, (StandInRefusal, String)> {
         self.servers

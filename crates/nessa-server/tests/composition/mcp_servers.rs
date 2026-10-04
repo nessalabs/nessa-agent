@@ -5,7 +5,8 @@
 //! agents the servers themselves.
 use super::super::agent::AgentsConfig;
 use super::{compose, relay_socket, server_environment, stand_ins, StandIns};
-use crate::mcp_servers::domain::{configuration_digest, ConfiguredMcpServer, StdioServer};
+use crate::mcp_servers::domain::{ConfigurationKey, ConfiguredMcpServer, StdioServer};
+use crate::mcp_servers::infrastructure::launch_digest;
 use nessa_sdk::infrastructure::{
     acp::sessions::StdioMcpServer,
     clock::RuntimeClock,
@@ -57,28 +58,47 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     ];
     let gateway = "/bundle/nessa";
     let socket = "/tmp/nessa-mcp-501/0123456789abcdef.sock";
-    let handed = stand_ins(&configured, gateway, socket);
-    for (stand_in, server) in handed.iter().zip(&configured) {
-        assert_eq!(stand_in.name, server.name);
+    let key = ConfigurationKey::new([7; 32]);
+    let configured = launches(&configured);
+    let handed = stand_ins(&configured, gateway, socket, &key);
+    for (stand_in, launch) in handed.iter().zip(&configured) {
+        assert_eq!(stand_in.name, launch.server.name);
         assert_eq!(stand_in.command, Path::new(gateway));
         assert_eq!(
             stand_in.args,
             [
                 "mcp-relay",
                 "/tmp/nessa-mcp-501/0123456789abcdef.sock",
-                server.name.as_str(),
-                configuration_digest(&server.command, &server.args).as_str(),
+                launch.server.name.as_str(),
+                launch_digest(&key, launch).as_str(),
             ]
         );
     }
-    // The same configuration is the same stand-in, run after run; another is
-    // another, so the relay, which compares the digest, refuses a server
-    // changed under an open conversation with `configuration-changed`. The
-    // restoration fingerprint does not read these (ADR 344, #391).
-    assert_eq!(stand_ins(&configured, gateway, socket), handed);
-    let changed = vec![server("mcptest", &["/other.mjs"]), configured[1].clone()];
-    assert_ne!(stand_ins(&changed, gateway, socket)[0].args, handed[0].args);
-    assert_eq!(stand_ins(&changed, gateway, socket)[1].args, handed[1].args);
+    // The same configuration is the same stand-in for this process; another
+    // — its arguments, or only its environment — is another, so the relay,
+    // which compares the digest, refuses a server changed under an open
+    // conversation with `configuration-changed`. Another process's key gives
+    // another stand-in: the restoration fingerprint does not read these
+    // (ADR 344, #391).
+    assert_eq!(stand_ins(&configured, gateway, socket, &key), handed);
+    let mut changed = configured.clone();
+    changed[0].server.args = vec!["/other.mjs".into()];
+    let mut environment_only = configured.clone();
+    environment_only[0]
+        .environment
+        .insert("API_TOKEN".into(), "rotated".into());
+    for edited in [changed, environment_only] {
+        let again = stand_ins(&edited, gateway, socket, &key);
+        assert_ne!(again[0].args, handed[0].args);
+        assert_eq!(again[1].args, handed[1].args);
+    }
+    let other_key = stand_ins(
+        &configured,
+        gateway,
+        socket,
+        &ConfigurationKey::new([8; 32]),
+    );
+    assert_ne!(other_key[0].args, handed[0].args);
 }
 
 #[test]
@@ -117,7 +137,8 @@ fn a_gateway_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
     let gateway = PathBuf::from(std::ffi::OsStr::from_bytes(b"/app/\xff/nessa"));
     let servers = live(&[server("s", &[])]);
-    assert!(StandIns::new(servers, &gateway, Path::new("/tmp/s.sock")).is_none());
+    let key = ConfigurationKey::new([7; 32]);
+    assert!(StandIns::new(servers, &gateway, Path::new("/tmp/s.sock"), key).is_none());
 }
 
 #[test]
@@ -125,7 +146,8 @@ fn a_socket_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
     let socket = PathBuf::from(std::ffi::OsStr::from_bytes(b"/data/\xff/relay.sock"));
     let servers = live(&[server("s", &[])]);
-    assert!(StandIns::new(servers, Path::new("/nessa"), &socket).is_none());
+    let key = ConfigurationKey::new([7; 32]);
+    assert!(StandIns::new(servers, Path::new("/nessa"), &socket, key).is_none());
 }
 
 #[test]
@@ -182,7 +204,10 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
         .await
         .unwrap()
         .expect("composed");
-    assert_eq!(composed.servers.configured(), vec![configured.clone()]);
+    assert_eq!(
+        composed.servers.configured(),
+        launches(std::slice::from_ref(&configured))
+    );
     // Taken into the live set: the configuration keeps no copy.
     assert!(config.mcp_servers.is_empty());
     let handed = config.mcp_stand_ins.opened().current();
@@ -212,10 +237,25 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     }
 }
 
-/// What the composed relay answers a hello naming `token` for `server`.
+/// The digest the stand-in for `name` that a provider open of `config` is
+/// given now carries.
+fn handed_digest(config: &AgentsConfig, name: &str) -> String {
+    config
+        .mcp_stand_ins
+        .opened()
+        .current()
+        .iter()
+        .find(|stand_in| stand_in.name == name)
+        .map(|stand_in| stand_in.args[3].clone())
+        .expect("a stand-in under the name")
+}
+
+/// What the composed relay answers a hello naming `token` for the server
+/// `name` with the digest `configuration`.
 async fn answered(
     composed: &super::McpComposition,
-    server: &StdioMcpServer,
+    name: &str,
+    configuration: &str,
     token: &str,
 ) -> crate::mcp_servers::infrastructure::Answer {
     use crate::mcp_servers::infrastructure::{read_line, write_line, Hello};
@@ -224,8 +264,8 @@ async fn answered(
     tokio::spawn(async move { relay.serve(gateway).await });
     let (read, mut write) = tokio::io::split(stand_in);
     let hello = Hello {
-        server: server.name.clone(),
-        configuration: configuration_digest(&server.command, &server.args),
+        server: name.into(),
+        configuration: configuration.into(),
         session: token.into(),
     };
     write_line(&mut write, &hello).await.unwrap();
@@ -256,17 +296,18 @@ async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
         .find(|(name, _)| name == nessa_sdk::infrastructure::mcp::MCP_SESSION_VARIABLE)
         .map(|(_, token)| token.clone())
         .expect("the agents' opens carry a token");
+    let digest = handed_digest(&config, "mcptest");
     // Let past the session check (this test's server cannot start, so it is
     // refused as unavailable instead); a forged one is not.
     assert!(!matches!(
-        answered(&composed, &configured, &token).await,
+        answered(&composed, "mcptest", &digest, &token).await,
         Answer::Refused {
             reason: Refusal::UnknownSession,
             ..
         }
     ));
     assert!(matches!(
-        answered(&composed, &configured, "forged").await,
+        answered(&composed, "mcptest", &digest, "forged").await,
         Answer::Refused {
             reason: Refusal::UnknownSession,
             ..
@@ -275,7 +316,7 @@ async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
     // Revoked with its open, it is refused too.
     drop(grant);
     assert!(matches!(
-        answered(&composed, &configured, &token).await,
+        answered(&composed, "mcptest", &digest, &token).await,
         Answer::Refused {
             reason: Refusal::UnknownSession,
             ..
@@ -332,16 +373,18 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error() {
     ));
 }
 
-/// A hello for `server` naming `token` is refused for `reason`.
+/// A hello for the server `name` with the digest `configuration`, naming
+/// `token`, is refused for `reason`.
 async fn refused(
     composed: &super::McpComposition,
-    server: &StdioMcpServer,
+    name: &str,
+    configuration: &str,
     token: &str,
     reason: crate::mcp_servers::infrastructure::Refusal,
 ) -> bool {
     use crate::mcp_servers::infrastructure::Answer;
     matches!(
-        answered(composed, server, token).await,
+        answered(composed, name, configuration, token).await,
         Answer::Refused { reason: said, .. } if said == reason
     )
 }
@@ -375,7 +418,7 @@ async fn s18_with_no_server_configured_the_relay_exists_and_a_server_added_reach
     assert!(opened(&config).is_empty());
     let added = server("mcptest", &["/s.mjs"]);
     let (_grant, token) = token(&config);
-    assert!(refused(&composed, &added, &token, Refusal::UnknownServer).await);
+    assert!(refused(&composed, "mcptest", "any", &token, Refusal::UnknownServer).await);
     composed
         .servers
         .replace(launches(std::slice::from_ref(&added)))
@@ -383,13 +426,15 @@ async fn s18_with_no_server_configured_the_relay_exists_and_a_server_added_reach
     assert_eq!(opened(&config), ["mcptest"]);
     // Admitted: this test's server cannot start, so it is refused as
     // unavailable rather than unknown.
-    assert!(refused(&composed, &added, &token, Refusal::Unavailable).await);
+    let digest = handed_digest(&config, "mcptest");
+    assert!(refused(&composed, "mcptest", &digest, &token, Refusal::Unavailable).await);
 }
 
 /// #391 S11–S13 through the composed gateway: an edited server's old
 /// stand-in is refused `configuration-changed` and a new open gets the new
-/// one; a removed server's is refused `unknown-server` and a new open does
-/// not list it; added back, it is in the next open again.
+/// one — whether its arguments changed or only its environment (pass 2b,
+/// decision 2); a removed server's is refused `unknown-server` and a new
+/// open does not list it; added back, it is in the next open again.
 #[tokio::test]
 async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused() {
     use crate::mcp_servers::infrastructure::Refusal;
@@ -402,29 +447,61 @@ async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_r
         .unwrap()
         .expect("composed");
     let (_grant, token) = token(&config);
-    let before = config.mcp_stand_ins.opened().current();
+    let before = handed_digest(&config, "mcptest");
     // S11: edited.
-    let edited = server("mcptest", &["/edited.mjs"]);
-    composed
-        .servers
-        .replace(launches(std::slice::from_ref(&edited)))
-        .unwrap();
-    assert!(refused(&composed, &original, &token, Refusal::ConfigurationChanged).await);
-    assert!(refused(&composed, &edited, &token, Refusal::Unavailable).await);
-    let after = config.mcp_stand_ins.opened().current();
-    assert_eq!(after[0].name, "mcptest");
-    assert_ne!(after[0].args, before[0].args);
+    let edited = launches(&[server("mcptest", &["/edited.mjs"])]);
+    composed.servers.replace(edited.clone()).unwrap();
+    assert!(
+        refused(
+            &composed,
+            "mcptest",
+            &before,
+            &token,
+            Refusal::ConfigurationChanged
+        )
+        .await
+    );
+    let after = handed_digest(&config, "mcptest");
+    assert_ne!(after, before);
+    assert!(refused(&composed, "mcptest", &after, &token, Refusal::Unavailable).await);
+    // S11: only its environment edited.
+    let mut rotated = edited.clone();
+    rotated[0]
+        .environment
+        .insert("API_TOKEN".into(), "rotated".into());
+    composed.servers.replace(rotated).unwrap();
+    assert!(
+        refused(
+            &composed,
+            "mcptest",
+            &after,
+            &token,
+            Refusal::ConfigurationChanged
+        )
+        .await
+    );
+    let rotated = handed_digest(&config, "mcptest");
+    assert_ne!(rotated, after);
+    assert!(refused(&composed, "mcptest", &rotated, &token, Refusal::Unavailable).await);
     // S12: removed.
     composed.servers.replace(Vec::new()).unwrap();
-    assert!(refused(&composed, &edited, &token, Refusal::UnknownServer).await);
+    assert!(
+        refused(
+            &composed,
+            "mcptest",
+            &rotated,
+            &token,
+            Refusal::UnknownServer
+        )
+        .await
+    );
     assert!(opened(&config).is_empty());
     // S13: back again.
-    composed
-        .servers
-        .replace(launches(std::slice::from_ref(&edited)))
-        .unwrap();
+    composed.servers.replace(edited).unwrap();
     assert_eq!(opened(&config), ["mcptest"]);
-    assert!(refused(&composed, &edited, &token, Refusal::Unavailable).await);
+    let back = handed_digest(&config, "mcptest");
+    assert_eq!(back, after);
+    assert!(refused(&composed, "mcptest", &back, &token, Refusal::Unavailable).await);
 }
 
 /// What `config.json`'s `agents.mcpServers` parses to at startup: an entry
@@ -471,7 +548,7 @@ async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_laun
         .servers
         .configured()
         .into_iter()
-        .map(|server| server.name)
+        .map(|launch| launch.server.name)
         .collect();
     assert_eq!(live, ["plain"]);
 }
@@ -567,7 +644,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         .servers
         .configured()
         .into_iter()
-        .map(|server| server.name)
+        .map(|launch| launch.server.name)
         .collect();
     assert_eq!(live, ["mcptest", "nessa"]);
     // Two changes, two records each: requested, then the outcome.
@@ -610,4 +687,44 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         requested["transition"]["envNames"],
         serde_json::json!(["API_TOKEN"])
     );
+    // An inspection of the stored server — whose script is not there, so
+    // its process ends at once — leaves its two records too, naming the
+    // revision that ran and the variables' names.
+    let initiator = McpServerInitiator {
+        organization_id: "organization".into(),
+        principal_id: "principal".into(),
+        credential_id: "credential".into(),
+    };
+    assert!(matches!(
+        settings.inspect(initiator, "mcptest").await,
+        Err(McpServerSettingsError::Inspect(_))
+    ));
+    let inspected: Vec<serde_json::Value> = std::fs::read_dir(&audit)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .filter(|record: &serde_json::Value| record["action"] == "inspect")
+        .collect();
+    assert_eq!(inspected.len(), 2);
+    let requested = inspected
+        .iter()
+        .find(|record| record["phase"] == "requested")
+        .expect("its requested record");
+    assert_eq!(requested["transition"]["revision"], revision);
+    assert_eq!(
+        requested["transition"]["envNames"],
+        serde_json::json!(["API_TOKEN"])
+    );
+    let outcome = inspected
+        .iter()
+        .find(|record| record["phase"] == "outcome")
+        .expect("its outcome");
+    assert_eq!(outcome["transition"]["outcome"], "failed");
+    assert_eq!(outcome["operationId"], requested["operationId"]);
+    for record in &inspected {
+        assert_eq!(record["target"]["name"], "mcptest");
+        assert_eq!(record["initiator"]["principalId"], "principal");
+        assert!(!record.to_string().contains("secret-value"), "{record}");
+    }
 }

@@ -1,26 +1,33 @@
 //! The stored MCP servers' wire commands (#391): `mcpServers.list`,
-//! `mcpServers.save` and `mcpServers.remove`, translated into
-//! [`McpServerSettings`]. The socket has already checked current access and
-//! the `credential.manage` grant before these params are read. Variable
-//! values come in on `save` and never go out: a list, a refusal and the audit
-//! carry names only (`mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`).
+//! `mcpServers.save`, `mcpServers.remove` and `mcpServers.inspect`,
+//! translated into [`McpServerSettings`]. The socket has already checked
+//! current access and the `credential.manage` grant before these params are
+//! read. Variable values come in on `save` and never go out: a list, a
+//! refusal and the audit carry names only
+//! (`mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`). An
+//! inspection's answer is fitted to the frame's byte bound here, where the
+//! frame is written: tools are dropped from the end until it fits
+//! (`i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits`).
 use super::{
     generated::{
-        McpServerInput, McpServerKind, McpServerListEntry, McpServerProblemCode,
-        McpServersAuditUnavailableDetails, McpServersErrorCode, McpServersInvalidDetails,
-        McpServersListResult, McpServersRemoveParams, McpServersRevisionConflictDetails,
-        McpServersSaveParams, McpServersWriteResult,
+        McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
+        McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersErrorCode,
+        McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
+        McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
+        McpServersRevisionConflictDetails, McpServersSaveParams, McpServersWriteResult,
     },
+    mcp_apps::{remote_details, ui_csp, ui_permissions},
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::mcp_servers::{
     application::{
-        EditProblem, McpServerInitiator, McpServerSettingsError, ServerList, ServerProblem,
+        EditProblem, InspectCut, InspectFailure, Inspection, McpServerInitiator,
+        McpServerSettingsError, ServerList, ServerProblem,
     },
     domain::{ServerEdit, ServerSave, StdioServer},
 };
-use crate::protocol::{OutgoingMessage, RequestFrame};
+use crate::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use nessa_auth::application::session::AuthenticatedSession;
 use serde_json::json;
 
@@ -64,6 +71,15 @@ pub(super) async fn dispatch(
                 .edit(initiator(session), params.revision, edit)
                 .await
                 .map(|revision| success(&frame.id, &McpServersWriteResult { revision }))
+        }
+        "mcpServers.inspect" => {
+            let Ok(params) = serde_json::from_value::<McpServersInspectParams>(frame.params) else {
+                return failure(&frame.id, "invalid_request");
+            };
+            settings
+                .inspect(initiator(session), &params.name)
+                .await
+                .map(|inspection| fitted(&frame.id, inspection))
         }
         _ => return failure(&frame.id, "unknown_method"),
     };
@@ -121,52 +137,127 @@ fn listed(list: ServerList) -> McpServersListResult {
     }
 }
 
-fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
+/// `inspection` as the wire carries it, answered for `request_id` in one
+/// frame of at most [`MAX_PAYLOAD_BYTES`]: past that, tools are dropped from
+/// the end until it fits, and it is incomplete with `cut: "bytes"` — unless
+/// a bound had already cut it, which is the cut it keeps.
+pub(super) fn fitted(request_id: &str, inspection: Inspection) -> OutgoingMessage {
+    let mut result = McpServersInspectResult {
+        complete: inspection.cut.is_none(),
+        cut: inspection.cut.map(|cut| match cut {
+            InspectCut::Tools => McpServersInspectCut::Tools,
+            InspectCut::Ui => McpServersInspectCut::Ui,
+            InspectCut::Bytes => McpServersInspectCut::Bytes,
+        }),
+        tools: inspection
+            .tools
+            .into_iter()
+            .map(|tool| McpInspectedTool {
+                name: tool.name,
+                read_only_hint: tool.read_only_hint,
+                destructive_hint: tool.destructive_hint,
+                ui: tool.ui.map(|ui| McpInspectedUi {
+                    uri: ui.uri,
+                    csp: ui_csp(&ui.csp),
+                    permissions: ui_permissions(ui.permissions),
+                }),
+            })
+            .collect(),
+    };
+    let limit = MAX_PAYLOAD_BYTES as usize;
+    loop {
+        let message = success(request_id, &result);
+        let Some(over) = message
+            .to_wire_text()
+            .ok()
+            .and_then(|text| text.len().checked_sub(limit))
+            .filter(|over| *over > 0)
+        else {
+            return message;
+        };
+        // Drop at least `over` bytes' worth of tools from the end, measured
+        // as each is written, then measure the whole frame again.
+        let mut dropped = 0;
+        while dropped < over {
+            let Some(tool) = result.tools.pop() else {
+                break;
+            };
+            dropped += serde_json::to_vec(&tool).map_or(1, |bytes| bytes.len() + 1);
+        }
+        result.complete = false;
+        result.cut.get_or_insert(McpServersInspectCut::Bytes);
+        if result.tools.is_empty() {
+            return success(request_id, &result);
+        }
+    }
+}
+
+/// The code each refusal is answered with.
+fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
     match error {
+        McpServerSettingsError::Invalid(_) => McpServersErrorCode::McpServersInvalid,
+        McpServerSettingsError::ReservedName => McpServersErrorCode::McpServersReservedName,
+        McpServerSettingsError::NotFound => McpServersErrorCode::McpServersNotFound,
+        McpServerSettingsError::RevisionConflict { .. } => {
+            McpServersErrorCode::McpServersRevisionConflict
+        }
+        McpServerSettingsError::Busy => McpServersErrorCode::McpServersBusy,
+        McpServerSettingsError::ConfigInvalid => McpServersErrorCode::McpServersConfigInvalid,
+        McpServerSettingsError::ConfigTooLarge => McpServersErrorCode::McpServersConfigTooLarge,
+        McpServerSettingsError::StorageUnavailable => {
+            McpServersErrorCode::McpServersStorageUnavailable
+        }
+        McpServerSettingsError::AuditUnavailable { .. } => McpServersErrorCode::AuditUnavailable,
+        McpServerSettingsError::Inspect(failure) => match failure {
+            InspectFailure::StartFailed => McpServersErrorCode::McpServerStartFailed,
+            InspectFailure::TimedOut => McpServersErrorCode::McpServerTimedOut,
+            InspectFailure::Gone => McpServersErrorCode::McpServerGone,
+            InspectFailure::Malformed => McpServersErrorCode::McpServerMalformed,
+            InspectFailure::RemoteError { .. } => McpServersErrorCode::McpServerRemoteError,
+        },
+    }
+}
+
+fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
+    let code = code(&error);
+    let details = match error {
         McpServerSettingsError::Invalid(problem) => {
             let (problem, name) = problem_code(problem);
-            failure_with_details(
-                request_id,
-                McpServersErrorCode::McpServersInvalid.as_str(),
-                serde_json::to_value(McpServersInvalidDetails { problem, name })
-                    .expect("generated error details serialize"),
-            )
+            serde_json::to_value(McpServersInvalidDetails { problem, name })
         }
-        McpServerSettingsError::RevisionConflict { revision } => failure_with_details(
-            request_id,
-            McpServersErrorCode::McpServersRevisionConflict.as_str(),
+        McpServerSettingsError::RevisionConflict { revision } => {
             serde_json::to_value(McpServersRevisionConflictDetails { revision })
-                .expect("generated error details serialize"),
-        ),
-        McpServerSettingsError::AuditUnavailable { applied } => failure_with_details(
-            request_id,
-            McpServersErrorCode::AuditUnavailable.as_str(),
-            serde_json::to_value(McpServersAuditUnavailableDetails { applied })
-                .expect("generated error details serialize"),
-        ),
-        McpServerSettingsError::ReservedName => failure(
-            request_id,
-            McpServersErrorCode::McpServersReservedName.as_str(),
-        ),
-        McpServerSettingsError::NotFound => {
-            failure(request_id, McpServersErrorCode::McpServersNotFound.as_str())
         }
-        McpServerSettingsError::Busy => {
-            failure(request_id, McpServersErrorCode::McpServersBusy.as_str())
+        McpServerSettingsError::AuditUnavailable { applied, cause } => {
+            serde_json::to_value(McpServersAuditUnavailableDetails {
+                applied,
+                code: cause.map(|cause| self::code(&cause)),
+            })
         }
-        McpServerSettingsError::ConfigInvalid => failure(
-            request_id,
-            McpServersErrorCode::McpServersConfigInvalid.as_str(),
-        ),
-        McpServerSettingsError::ConfigTooLarge => failure(
-            request_id,
-            McpServersErrorCode::McpServersConfigTooLarge.as_str(),
-        ),
-        McpServerSettingsError::StorageUnavailable => failure(
-            request_id,
-            McpServersErrorCode::McpServersStorageUnavailable.as_str(),
-        ),
-    }
+        McpServerSettingsError::Inspect(InspectFailure::RemoteError { code, message }) => {
+            match remote_details(code, &message) {
+                Some(details) => serde_json::to_value(details),
+                None => {
+                    return failure(
+                        request_id,
+                        McpServersErrorCode::McpServerRemoteError.as_str(),
+                    )
+                }
+            }
+        }
+        McpServerSettingsError::ReservedName
+        | McpServerSettingsError::NotFound
+        | McpServerSettingsError::Busy
+        | McpServerSettingsError::ConfigInvalid
+        | McpServerSettingsError::ConfigTooLarge
+        | McpServerSettingsError::StorageUnavailable
+        | McpServerSettingsError::Inspect(_) => return failure(request_id, code.as_str()),
+    };
+    failure_with_details(
+        request_id,
+        code.as_str(),
+        details.expect("generated error details serialize"),
+    )
 }
 
 /// A problem on the wire, with the name it is about, never a value.

@@ -11,7 +11,8 @@
 //! end_to_end-> relay() -> Relay::serve -> McpServers -> server.py
 //! ```
 use super::domain::{
-    admit, configuration_digest, relay_arguments, StandInRefusal, RELAY_SUBCOMMAND,
+    admit, configuration_digest, relay_arguments, ConfigurationKey, StandInRefusal,
+    RELAY_SUBCOMMAND,
 };
 use super::infrastructure::{
     read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, OsTokens,
@@ -26,7 +27,7 @@ use nessa_sdk::infrastructure::{
     mcp::{McpServerLaunch, McpServers, MCP_SESSION_VARIABLE},
 };
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 
 fn fixture() -> StdioMcpServer {
@@ -40,8 +41,15 @@ fn fixture() -> StdioMcpServer {
     }
 }
 
+/// The key these tests' relays digest with.
+fn key() -> ConfigurationKey {
+    ConfigurationKey::new([7; 32])
+}
+
+/// The digest of `server` started with no environment, under [`key`]: what
+/// [`relay_for`]'s stand-ins carry.
 fn digest(server: &StdioMcpServer) -> String {
-    configuration_digest(&server.command, &server.args)
+    configuration_digest(&key(), &server.command, &server.args, &BTreeMap::new())
 }
 
 /// The relay for `servers`, the sessions behind it, and the grants it lets
@@ -58,7 +66,7 @@ fn relay_for(servers: Vec<StdioMcpServer>) -> (Arc<Relay>, McpServers, Conversat
     let mcp = McpServers::new(launches, Arc::new(RuntimeClock::new())).unwrap();
     let grants = ConversationGrants::new(mcp.clone(), Arc::new(OsTokens));
     (
-        Arc::new(Relay::new(mcp.clone(), grants.clone())),
+        Arc::new(Relay::new(mcp.clone(), grants.clone(), key())),
         mcp,
         grants,
     )
@@ -77,21 +85,39 @@ fn granted(grants: &ConversationGrants, conversation: &str) -> (StandInGrant, St
 }
 
 #[test]
-fn the_digest_changes_with_the_command_and_each_argument_and_their_boundaries() {
+fn the_digest_changes_with_the_command_each_argument_each_variable_and_their_boundaries() {
     let base = fixture();
-    let same = configuration_digest(&base.command, &base.args);
+    let none = BTreeMap::new();
+    let with = |environment: &[(&str, &str)]| -> BTreeMap<OsString, OsString> {
+        environment
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect()
+    };
+    let at = |args: &[String], environment: &BTreeMap<OsString, OsString>| {
+        configuration_digest(&key(), &base.command, args, environment)
+    };
+    let same = at(&base.args, &none);
     assert_eq!(digest(&base), same);
-    assert!(same.starts_with("sha256:") && same.len() == 7 + 64);
-    let other_command = configuration_digest(&PathBuf::from("/usr/bin/python"), &base.args);
-    let other_args = configuration_digest(&base.command, &["x".into()]);
+    assert!(same.starts_with("hmac-sha256:") && same.len() == 12 + 64);
+    let other_command =
+        configuration_digest(&key(), &PathBuf::from("/usr/bin/python"), &base.args, &none);
+    let other_args = at(&["x".into()], &none);
     // Where one argument ends is part of it: ["ab"] is not ["a", "b"].
-    let joined = configuration_digest(&base.command, &["ab".into()]);
-    let split = configuration_digest(&base.command, &["a".into(), "b".into()]);
+    let joined = at(&["ab".into()], &none);
+    let split = at(&["a".into(), "b".into()], &none);
     // And with as many arguments either way: ["ab", "c"] is not ["a", "bc"].
-    let left = configuration_digest(&base.command, &["ab".into(), "c".into()]);
-    let right = configuration_digest(&base.command, &["a".into(), "bc".into()]);
-    let none = configuration_digest(&base.command, &[]);
-    let empty = configuration_digest(&base.command, &[String::new()]);
+    let left = at(&["ab".into(), "c".into()], &none);
+    let right = at(&["a".into(), "bc".into()], &none);
+    let no_args = at(&[], &none);
+    let empty = at(&[String::new()], &none);
+    // A variable's value and its name are each part of it, and so is where
+    // the one ends and the other begins (#391 PR 2 pass 2b, decision 2).
+    let token = at(&base.args, &with(&[("TOKEN", "one")]));
+    let rotated = at(&base.args, &with(&[("TOKEN", "two")]));
+    let renamed = at(&base.args, &with(&[("TOKEN2", "one")]));
+    let shifted = at(&base.args, &with(&[("TOKEN", "2one")]));
+    let unset = at(&base.args, &with(&[("TOKEN", "")]));
     let all = [
         &same,
         &other_command,
@@ -100,13 +126,64 @@ fn the_digest_changes_with_the_command_and_each_argument_and_their_boundaries() 
         &split,
         &left,
         &right,
-        &none,
+        &no_args,
         &empty,
+        &token,
+        &rotated,
+        &renamed,
+        &shifted,
+        &unset,
     ];
     for (index, one) in all.iter().enumerate() {
         for other in &all[index + 1..] {
             assert_ne!(one, other);
         }
+    }
+    // Keyed: another process's key gives another digest of the same server.
+    let other_key = configuration_digest(
+        &ConfigurationKey::new([8; 32]),
+        &base.command,
+        &base.args,
+        &none,
+    );
+    assert_ne!(other_key, same);
+    assert_eq!(format!("{:?}", key()), "ConfigurationKey(..)");
+}
+
+/// #391 PR 2 pass 2b, decision 2: a stand-in's arguments, which a process
+/// list shows, hold neither a variable's value nor an unkeyed hash of it, nor
+/// the unkeyed digest of the configuration — nothing a guessed value could be
+/// checked against without the process's key.
+#[test]
+fn a_stand_ins_arguments_reveal_nothing_about_a_variables_value() {
+    use sha2::{Digest, Sha256};
+    let base = fixture();
+    let value = "secret-value-0123456789";
+    let environment = BTreeMap::from([(OsString::from("API_TOKEN"), OsString::from(value))]);
+    let digest = configuration_digest(&key(), &base.command, &base.args, &environment);
+    let arguments = relay_arguments("/tmp/nessa-mcp-501/s.sock", &base.name, &digest).join(" ");
+    let hex = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    // The same fields, length-prefixed as the keyed digest takes them, unkeyed.
+    let mut unkeyed = Sha256::new();
+    for field in [
+        base.command.as_os_str().as_encoded_bytes(),
+        &(base.args.len() as u64).to_be_bytes(),
+        base.args[0].as_bytes(),
+        &1u64.to_be_bytes(),
+        b"API_TOKEN",
+        value.as_bytes(),
+    ] {
+        unkeyed.update((field.len() as u64).to_be_bytes());
+        unkeyed.update(field);
+    }
+    let unkeyed = format!("{:x}", unkeyed.finalize());
+    for revealing in [
+        value.to_owned(),
+        hex(value.as_bytes()),
+        hex(format!("API_TOKEN={value}").as_bytes()),
+        unkeyed,
+    ] {
+        assert!(!arguments.contains(&revealing), "{arguments}");
     }
 }
 
@@ -279,7 +356,7 @@ async fn without_a_token_an_opens_stand_ins_are_refused() {
     // none is let through.
     assert!(grant.environment().is_empty());
     assert_eq!(grants.live(), 0);
-    let relay = Arc::new(Relay::new(mcp, grants));
+    let relay = Arc::new(Relay::new(mcp, grants, key()));
     assert!(unknown_session(answered(&relay, &server, "").await));
     drop(grant);
 }

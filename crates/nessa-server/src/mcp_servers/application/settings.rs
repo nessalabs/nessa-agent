@@ -1,22 +1,51 @@
-//! `mcpServers.list`, `mcpServers.save` and `mcpServers.remove`: the stored
-//! servers read, and changed under the configuration's lock, with the live
-//! set replaced after each publish and every change audited.
+//! `mcpServers.list`, `mcpServers.save`, `mcpServers.remove` and
+//! `mcpServers.inspect`: the stored servers read, and changed under the
+//! configuration's lock, with the live set replaced after each publish and
+//! every change audited; and one stored server started once and looked at.
 //!
 //! ```text
-//! edit ─▶ audit requested ─▶ store.lock (bounded wait) ─▶ read ─▶ revision? ─▶ ServerEdit::apply
-//!      ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (parse, bound, publish)
-//!      ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
+//! edit    ─▶ audit requested ─▶ store.lock (bounded wait) ─▶ read ─▶ revision? ─▶ ServerEdit::apply
+//!         ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (parse, bound, publish)
+//!         ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
+//! inspect ─▶ a slot (or busy) ─▶ read ─▶ the stored server ─▶ audit requested
+//!         ─▶ ServerInspector::inspect (deadline, caps; stopped after) ─▶ audit outcome
 //! ```
 //!
 //! Arrows are order. The lock is held from the read to the replacement, so
-//! two changes publish and replace in the same order.
+//! two changes publish and replace in the same order. A publish that lands
+//! while the gateway stops answers success with the live set not replaced:
+//! the file is the gateway's, and the next start reads it
+//! (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
+//!
+//! An inspection is audited because it runs an executable the admin chose,
+//! with the server's variables — credentials among them — outside any
+//! conversation, so no other record says the gateway ran it. What starts
+//! nothing is not audited: a reserved or unknown name, no free slot, an
+//! unreadable configuration. When its first record cannot be written,
+//! nothing is started.
 use super::ports::{
-    AuditUnavailable, LiveServerSet, McpServerAction, McpServerAudit, McpServerAuditPhase,
-    McpServerAuditRecord, McpServerChangeRequest, McpServerInitiator, McpServerOutcome,
-    McpServerStore, ServerNames, ServerProblem, StoreError, StoredServers,
+    AuditUnavailable, InspectBounds, InspectFailure, Inspection, LiveServerSet, McpServerAction,
+    McpServerAudit, McpServerAuditPhase, McpServerAuditRecord, McpServerChangeRequest,
+    McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
+    ServerProblem, StoreError, StoredServers,
 };
-use crate::mcp_servers::domain::{ConfiguredMcpServer, EditRefusal, ServerEdit, StdioServer};
-use std::sync::Arc;
+use crate::mcp_servers::domain::{
+    ConfiguredMcpServer, EditRefusal, ServerEdit, StdioServer, MANAGED_SERVER_NAME,
+};
+use crate::product_contract::generated::{
+    MCP_SERVER_INSPECT_DEADLINE_MS, MCP_SERVER_INSPECT_MAX_CONCURRENT,
+    MCP_SERVER_INSPECT_MAX_TOOL_PAGES, MCP_SERVER_INSPECT_MAX_UI_READS,
+};
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
+
+/// What one inspection may spend, as the product schema publishes it
+/// (`x-mcpServerInspect`).
+pub const INSPECT_BOUNDS: InspectBounds = InspectBounds {
+    deadline: Duration::from_millis(MCP_SERVER_INSPECT_DEADLINE_MS),
+    max_tool_pages: MCP_SERVER_INSPECT_MAX_TOOL_PAGES,
+    max_ui_reads: MCP_SERVER_INSPECT_MAX_UI_READS,
+};
 
 /// One row of `mcpServers.list`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,16 +85,24 @@ pub enum McpServerSettingsError {
     RevisionConflict {
         revision: String,
     },
-    /// Another change held the lock past the store's bounded wait.
+    /// Another change held the lock past the store's bounded wait; or every
+    /// inspection slot is taken.
     Busy,
     ConfigInvalid,
     ConfigTooLarge,
     StorageUnavailable,
     /// A record could not be made durable. `applied` says whether the change
-    /// was published (and the live set replaced) all the same.
+    /// was published (and the live set replaced) all the same; `cause` is
+    /// what it would have been answered otherwise — the refusal or failure
+    /// that stopped it — so neither cause is lost
+    /// (`s7_an_unwritable_outcome_after_a_publish_says_it_applied`). Never
+    /// itself an `AuditUnavailable`.
     AuditUnavailable {
         applied: bool,
+        cause: Option<Box<McpServerSettingsError>>,
     },
+    /// The inspected server failed the inspection; it was stopped.
+    Inspect(InspectFailure),
 }
 
 impl McpServerSettingsError {
@@ -81,6 +118,13 @@ impl McpServerSettingsError {
             Self::ConfigTooLarge => "config_too_large",
             Self::StorageUnavailable => "storage_unavailable",
             Self::AuditUnavailable { .. } => "audit_unavailable",
+            Self::Inspect(failure) => match failure {
+                InspectFailure::StartFailed => "start_failed",
+                InspectFailure::TimedOut => "timed_out",
+                InspectFailure::Gone => "gone",
+                InspectFailure::Malformed => "malformed",
+                InspectFailure::RemoteError { .. } => "remote_error",
+            },
         }
     }
     /// Whether the change was refused (the caller can act on it) rather than
@@ -88,7 +132,10 @@ impl McpServerSettingsError {
     fn refused(&self) -> bool {
         !matches!(
             self,
-            Self::Busy | Self::StorageUnavailable | Self::AuditUnavailable { .. }
+            Self::Busy
+                | Self::StorageUnavailable
+                | Self::AuditUnavailable { .. }
+                | Self::Inspect(_)
         )
     }
 }
@@ -104,13 +151,18 @@ impl From<StoreError> for McpServerSettingsError {
     }
 }
 
-/// The stored servers, the live set they are launched as, and the audit of
-/// each change. Composed only where this gateway holds a live set
+/// The stored servers, the live set they are launched as, the audit of
+/// each change and inspection, and what starts a server to inspect it.
+/// Composed only where this gateway holds a live set
 /// (`composition::mcp_servers`).
 pub struct McpServerSettings {
     store: Arc<dyn McpServerStore>,
     audit: Arc<dyn McpServerAudit>,
     live: Arc<dyn LiveServerSet>,
+    inspector: Arc<dyn ServerInspector>,
+    /// One permit per inspection that may run at once
+    /// (`i6_a_third_inspection_at_once_is_busy`).
+    inspections: Arc<Semaphore>,
 }
 
 impl McpServerSettings {
@@ -118,8 +170,15 @@ impl McpServerSettings {
         store: Arc<dyn McpServerStore>,
         audit: Arc<dyn McpServerAudit>,
         live: Arc<dyn LiveServerSet>,
+        inspector: Arc<dyn ServerInspector>,
     ) -> Self {
-        Self { store, audit, live }
+        Self {
+            store,
+            audit,
+            live,
+            inspector,
+            inspections: Arc::new(Semaphore::new(MCP_SERVER_INSPECT_MAX_CONCURRENT)),
+        }
     }
 
     /// The stored servers and their revision, with the managed server.
@@ -204,7 +263,10 @@ impl McpServerSettings {
         };
         self.record(record(McpServerAuditPhase::Requested))
             .await
-            .map_err(|_| McpServerSettingsError::AuditUnavailable { applied: false })?;
+            .map_err(|_| McpServerSettingsError::AuditUnavailable {
+                applied: false,
+                cause: None,
+            })?;
         let result = self.change(&revision, &edit).await;
         let outcome = match &result {
             Ok(change) => McpServerOutcome::Applied {
@@ -226,12 +288,103 @@ impl McpServerSettings {
             .await;
         match (result, recorded) {
             (Ok(change), Ok(())) => Ok(change.after.revision),
-            (Ok(_), Err(AuditUnavailable)) => {
-                Err(McpServerSettingsError::AuditUnavailable { applied: true })
-            }
+            (Ok(_), Err(AuditUnavailable)) => Err(McpServerSettingsError::AuditUnavailable {
+                applied: true,
+                cause: None,
+            }),
             (Err((error, _)), Ok(())) => Err(error),
-            (Err(_), Err(AuditUnavailable)) => {
-                Err(McpServerSettingsError::AuditUnavailable { applied: false })
+            (Err((error, _)), Err(AuditUnavailable)) => {
+                Err(McpServerSettingsError::AuditUnavailable {
+                    applied: false,
+                    cause: Some(Box::new(error)),
+                })
+            }
+        }
+    }
+
+    /// Start the server stored as `name` once, for `initiator`, read what it
+    /// offers within [`INSPECT_BOUNDS`], and stop it — a server turned off as
+    /// well as one turned on. The process runs before the answer whatever
+    /// the answer; it is recorded before it is started and after it stops.
+    ///
+    /// # Errors
+    ///
+    /// [`McpServerSettingsError::ReservedName`] for the managed server,
+    /// `Busy` while every slot is taken, `NotFound`, the store's errors, and
+    /// none of those starts anything or is audited;
+    /// `AuditUnavailable { applied: false }` when the first record cannot be
+    /// written, and nothing is started; `Inspect` with the server's failure;
+    /// and `AuditUnavailable` with whether the server was started, and the
+    /// failure as its cause, when the outcome cannot be recorded.
+    pub async fn inspect(
+        &self,
+        initiator: McpServerInitiator,
+        name: &str,
+    ) -> Result<Inspection, McpServerSettingsError> {
+        if name == MANAGED_SERVER_NAME {
+            return Err(McpServerSettingsError::ReservedName);
+        }
+        let _slot = self
+            .inspections
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| McpServerSettingsError::Busy)?;
+        let store = self.store.clone();
+        let stored = blocking(move || store.read())
+            .await
+            .unwrap_or(Err(StoreError::Unavailable))?;
+        let server = stored
+            .servers
+            .iter()
+            .find(|each| each.server.name == name)
+            .ok_or(McpServerSettingsError::NotFound)?;
+        let operation_id = operation_id();
+        let record = |phase| McpServerAuditRecord {
+            operation_id: operation_id.clone(),
+            initiator: initiator.clone(),
+            request: McpServerChangeRequest {
+                action: McpServerAction::Inspect,
+                target: name.to_owned(),
+                previous_name: None,
+                // The revision the server was read at: which configuration ran.
+                revision: stored.revision.clone(),
+                env_names: server.env_names(),
+                enabled: Some(server.enabled),
+            },
+            phase,
+        };
+        self.record(record(McpServerAuditPhase::Requested))
+            .await
+            .map_err(|_| McpServerSettingsError::AuditUnavailable {
+                applied: false,
+                cause: None,
+            })?;
+        let result = self.inspector.inspect(server, INSPECT_BOUNDS).await;
+        let outcome = match &result {
+            Ok(inspection) => McpServerOutcome::Inspected {
+                tools: inspection.tools.len(),
+                cut: inspection.cut,
+            },
+            Err(failure) => McpServerOutcome::Failed {
+                reason: McpServerSettingsError::Inspect(failure.clone()).reason(),
+                before: None,
+            },
+        };
+        let recorded = self
+            .record(record(McpServerAuditPhase::Outcome(outcome)))
+            .await;
+        match (result, recorded) {
+            (Ok(inspection), Ok(())) => Ok(inspection),
+            (Ok(_), Err(AuditUnavailable)) => Err(McpServerSettingsError::AuditUnavailable {
+                applied: true,
+                cause: None,
+            }),
+            (Err(failure), Ok(())) => Err(McpServerSettingsError::Inspect(failure)),
+            (Err(failure), Err(AuditUnavailable)) => {
+                Err(McpServerSettingsError::AuditUnavailable {
+                    applied: failure.started(),
+                    cause: Some(Box::new(McpServerSettingsError::Inspect(failure))),
+                })
             }
         }
     }
@@ -300,7 +453,10 @@ impl McpServerSettings {
             .await
             .unwrap_or(Err(StoreError::Unavailable))?;
         // Published: the live set follows, under the same lock. Refused only
-        // once the gateway is stopping, when the next start reads the file.
+        // once the gateway is stopping: the change still answers success,
+        // its outcome record says the live set was not replaced, and the
+        // next start reads the file
+        // (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
         let live_set_replaced = self.live.replace(&edited).is_ok();
         Ok((names(&after, &edited), live_set_replaced))
     }

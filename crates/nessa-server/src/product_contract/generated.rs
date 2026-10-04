@@ -184,5 +184,13 @@ pub const MCP_APP_REVIEW_DEADLINE_MS: u64 = 300000;
 pub const MCP_APP_CALL_TIMEOUT_MS: u64 = 60000;
 /// Published MCP App call timing from the product schema, in milliseconds.
 pub const MCP_APP_READ_TIMEOUT_MS: u64 = 10000;
+/// Published mcpServers.inspect policy from the product schema, in milliseconds.
+pub const MCP_SERVER_INSPECT_DEADLINE_MS: u64 = 30000;
+/// Published mcpServers.inspect policy from the product schema.
+pub const MCP_SERVER_INSPECT_MAX_TOOL_PAGES: usize = 8;
+/// Published mcpServers.inspect policy from the product schema.
+pub const MCP_SERVER_INSPECT_MAX_UI_READS: usize = 32;
+/// Published mcpServers.inspect policy from the product schema.
+pub const MCP_SERVER_INSPECT_MAX_CONCURRENT: usize = 2;
 /// Published lifetime of an MCP App's resource ticket from the product schema, in milliseconds.
 pub const MCP_RESOURCE_TICKET_MS: u64 = 60000;

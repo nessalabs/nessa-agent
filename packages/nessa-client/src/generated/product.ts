@@ -899,7 +899,7 @@ export interface McpReadResourceResult {
   /** Whether the app asked for a border, when it said. */
   prefersBorder?: boolean
 }
-/** The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error. */
+/** The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error, or mcp_server_remote_error from mcpServers.inspect. */
 export interface McpRemoteErrorDetails {
   /** The JSON-RPC error code. */
   code: number
@@ -937,7 +937,7 @@ export interface McpServersListResult {
 export interface McpServerEnvEntry {
   /** The variable's name: ASCII letters, digits and _, not starting with a digit. NESSA_MCP_SESSION is reserved. */
   name: string
-  /** Its value, or null to keep the value stored for this name on the server being saved. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
+  /** Its value, or null to keep the value stored for this name on the server being saved. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
   value: string | null
 }
 /** A server as mcpServers.save stores it. */
@@ -1003,12 +1003,52 @@ export interface McpServersRevisionConflictDetails {
   /** The stored revision now; list again before retrying. */
   revision: string
 }
-/** Attached to a refusal coded audit_unavailable from mcpServers.save or mcpServers.remove. */
+/** Attached to a refusal coded audit_unavailable from an mcpServers method. Nothing is rolled back; mcpServers.list shows where things stand. */
 export interface McpServersAuditUnavailableDetails {
-  /** Whether the change was published and the live set replaced all the same. Nothing is rolled back; mcpServers.list shows where things stand. */
+  /** For mcpServers.save and mcpServers.remove: whether the change was published and the live set replaced all the same. For mcpServers.inspect: whether the server was started. */
   applied: boolean
+  /** What the request would have been answered had its record been written: the refusal or failure that stopped it. Absent when nothing stopped it, or when the first record could not be written and nothing was done. Never audit_unavailable. */
+  code?: McpServersErrorCode
 }
-/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long; nothing was written. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change could not be made durable (details: McpServersAuditUnavailableDetails). */
+/** Wire input for mcpServers.inspect: start the stored server under name once, outside any conversation, list what it offers, then stop it. A server turned off can be inspected; a server not yet saved cannot. At most x-mcpServerInspect.maxConcurrent run at once, each within x-mcpServerInspect.deadlineMs. */
+export interface McpServersInspectParams {
+  /** The stored server's name. Unknown: mcp_servers_not_found; nessa: mcp_servers_reserved_name. */
+  name: string
+}
+/** Which bound left an inspection incomplete. tools: the server listed more than x-mcpServerInspect.maxToolPages pages, or more tools than the gateway reads from one server; the rest are not listed. ui: more distinct UI resources than x-mcpServerInspect.maxUiReads; tools past it are listed without ui. bytes: the answer would pass 64 KiB; tools were dropped from the end until it fits. */
+export const McpServersInspectCut = { Tools: "tools", Ui: "ui", Bytes: "bytes" } as const
+export type McpServersInspectCut =
+  (typeof McpServersInspectCut)[keyof typeof McpServersInspectCut]
+/** A tool's MCP App as the server declares it: the resource, and the CSP and permissions it asks for, read as mcp.readResource reads them. */
+export interface McpInspectedUi {
+  /** The ui:// resource the tool declares. */
+  uri: string
+  /** The CSP the app asks for. */
+  csp: McpUiCsp
+  /** What the app asks of the host. */
+  permissions: McpUiPermissions
+}
+/** One tool a server lists, as mcpServers.inspect reports it. */
+export interface McpInspectedTool {
+  /** The tool's name on the server. */
+  name: string
+  /** annotations.readOnlyHint, when the server gives it as a boolean. */
+  readOnlyHint?: boolean
+  /** annotations.destructiveHint, when the server gives it as a boolean. */
+  destructiveHint?: boolean
+  /** Its MCP App, when it declares one and it was read. */
+  ui?: McpInspectedUi
+}
+/** Result of mcpServers.inspect: the tools the server listed, with each MCP App's CSP and permissions. The server has been stopped and its process group killed before this is answered. */
+export interface McpServersInspectResult {
+  /** Whether every tool and UI the server offered is here. */
+  complete: boolean
+  /** Which bound left it incomplete; present exactly when complete is false. */
+  cut?: McpServersInspectCut
+  /** The tools, in the server's order. */
+  tools: McpInspectedTool[]
+}
+/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change or inspection could not be made durable (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails). */
 export const McpServersErrorCode = {
   McpServersNotConfigured: "mcp_servers_not_configured",
   McpServersInvalid: "mcp_servers_invalid",
@@ -1020,6 +1060,11 @@ export const McpServersErrorCode = {
   McpServersConfigTooLarge: "mcp_servers_config_too_large",
   McpServersStorageUnavailable: "mcp_servers_storage_unavailable",
   AuditUnavailable: "audit_unavailable",
+  McpServerStartFailed: "mcp_server_start_failed",
+  McpServerTimedOut: "mcp_server_timed_out",
+  McpServerGone: "mcp_server_gone",
+  McpServerMalformed: "mcp_server_malformed",
+  McpServerRemoteError: "mcp_server_remote_error",
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
@@ -1657,11 +1702,20 @@ export const mcpAppCallTiming = {
   clientAllowanceMs: 10000,
   callDeadlineMs: 370000,
 } as const
+/** How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response. */
+export const mcpServerInspect = {
+  deadlineMs: 30000,
+  maxToolPages: 8,
+  maxUiReads: 32,
+  maxConcurrent: 2,
+  clientAllowanceMs: 10000,
+  requestDeadlineMs: 40000,
+} as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 44,
+  maxReadyMethods: 45,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1749,6 +1803,7 @@ export const ProductMethod = {
   McpServersList: "mcpServers.list",
   McpServersSave: "mcpServers.save",
   McpServersRemove: "mcpServers.remove",
+  McpServersInspect: "mcpServers.inspect",
   PairingCreate: "pairing.create",
   PairingPending: "pairing.pending",
   PairingStatus: "pairing.status",
@@ -1801,6 +1856,7 @@ export const productReadyMethods = [
   "mcpServers.list",
   "mcpServers.save",
   "mcpServers.remove",
+  "mcpServers.inspect",
   "pairing.create",
   "pairing.pending",
   "pairing.status",

@@ -105,6 +105,35 @@ if (mcpAppCallTiming.callDeadlineMs > 2_147_483_647)
 if (mcpAppCallTiming.readTimeoutMs > mcpAppCallTiming.callTimeoutMs)
   throw new Error("MCP App read timeout outlasts a call")
 
+// How long, how far and how many at once mcpServers.inspect runs, with one
+// owner: the gateway reads the bounds as generated constants, and the client
+// waits the deadline plus its allowance (the server's stop and the audit
+// records come after the deadline).
+const inspectPolicy = schema["x-mcpServerInspect"]
+const mcpServerInspect = {}
+for (const name of [
+  "deadlineMs",
+  "maxToolPages",
+  "maxUiReads",
+  "maxConcurrent",
+  "clientAllowanceMs",
+]) {
+  if (
+    !inspectPolicy ||
+    !Object.hasOwn(inspectPolicy, name) ||
+    !Number.isSafeInteger(inspectPolicy[name]) ||
+    inspectPolicy[name] <= 0
+  )
+    throw new Error(`Invalid MCP server inspection policy: ${name}`)
+  mcpServerInspect[name] = inspectPolicy[name]
+}
+if (Object.keys(inspectPolicy).length !== Object.keys(mcpServerInspect).length)
+  throw new Error("MCP server inspection policy has unknown fields")
+mcpServerInspect.requestDeadlineMs =
+  mcpServerInspect.deadlineMs + mcpServerInspect.clientAllowanceMs
+if (mcpServerInspect.requestDeadlineMs > 2_147_483_647)
+  throw new Error("MCP server inspection deadline exceeds the runtime timer range")
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -241,7 +270,9 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     ts += doc(node.description)
     ts += `  ${field}${optional ? "?" : ""}: ${type(node, false)}\n`
     if (!externalRust)
-      rs += `${optional ? '#[serde(default, skip_serializing_if = "Option::is_none")]\n' : ""}pub ${snake(field)}: ${optional ? `Option<${type(node, true).replace(/^Option<(.*)>$/, "$1")}>` : type(node, true)},\n`
+      // A required field that may be null must still be present: serde reads
+      // a missing `Option` as `None` unless told otherwise.
+      rs += `${optional ? '#[serde(default, skip_serializing_if = "Option::is_none")]\n' : Array.isArray(node.type) ? '#[serde(deserialize_with = "Option::deserialize")]\n' : ""}pub ${snake(field)}: ${optional ? `Option<${type(node, true).replace(/^Option<(.*)>$/, "$1")}>` : type(node, true)},\n`
   }
   ts += "}\n"
   if (!externalRust) rs += "}\n"
@@ -471,6 +502,12 @@ for (const [name, value] of Object.entries(passiveReadTiming)) {
 for (const name of ["reviewDeadlineMs", "callTimeoutMs", "readTimeoutMs"]) {
   contractRs += `/// Published MCP App call timing from the product schema, in milliseconds.\npub const MCP_APP_${snake(name).toUpperCase()}: u64 = ${mcpAppCallTiming[name]};\n`
 }
+// The gateway's own bounds for an inspection; the client's allowance and
+// deadline are the client's alone.
+for (const name of ["deadlineMs", "maxToolPages", "maxUiReads", "maxConcurrent"]) {
+  const type = name === "deadlineMs" ? "u64" : "usize"
+  contractRs += `/// Published mcpServers.inspect policy from the product schema${name === "deadlineMs" ? ", in milliseconds" : ""}.\npub const MCP_SERVER_INSPECT_${snake(name).toUpperCase()}: ${type} = ${mcpServerInspect[name]};\n`
+}
 contractRs += `/// Published lifetime of an MCP App's resource ticket from the product schema, in milliseconds.\npub const MCP_RESOURCE_TICKET_MS: u64 = ${bounds.mcpResourceTicketMs};\n`
 ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
@@ -478,6 +515,9 @@ ts += `${doc(
 ts += `${doc(
   "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first.",
 )}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
+ts += `${doc(
+  "How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response.",
+)}export const mcpServerInspect = ${JSON.stringify(mcpServerInspect)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`

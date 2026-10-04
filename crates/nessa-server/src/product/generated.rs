@@ -41,6 +41,7 @@ pub struct ProductSessionReady {
     pub membership_id: String,
     pub credential_id: String,
     pub audience_id: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub expires_at: Option<u64>,
     pub grants: Vec<CredentialGrantDto>,
     pub methods: Vec<String>,
@@ -456,10 +457,15 @@ pub struct AttachmentBeginParams {
 pub struct AttachmentBeginResult {
     pub request_id: String,
     pub state: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub ticket: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub expires_at_ms: Option<u64>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub digest: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub mime_type: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub size: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
@@ -561,6 +567,7 @@ pub struct ConversationView {
     pub transcript_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
     pub approval_mode: ApprovalMode,
@@ -600,7 +607,9 @@ pub struct ConversationListParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSummary {
     pub conversation_id: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub preview: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -885,6 +894,7 @@ pub struct McpServersListResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerEnvEntry {
     pub name: String,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub value: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
@@ -962,6 +972,55 @@ pub struct McpServersRevisionConflictDetails {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServersAuditUnavailableDetails {
     pub applied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<McpServersErrorCode>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersInspectParams {
+    pub name: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServersInspectCut {
+    Tools,
+    Ui,
+    Bytes,
+}
+impl McpServersInspectCut {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tools => "tools",
+            Self::Ui => "ui",
+            Self::Bytes => "bytes",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpInspectedUi {
+    pub uri: String,
+    pub csp: McpUiCsp,
+    pub permissions: McpUiPermissions,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpInspectedTool {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<McpInspectedUi>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersInspectResult {
+    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<McpServersInspectCut>,
+    pub tools: Vec<McpInspectedTool>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -976,6 +1035,11 @@ pub enum McpServersErrorCode {
     McpServersConfigTooLarge,
     McpServersStorageUnavailable,
     AuditUnavailable,
+    McpServerStartFailed,
+    McpServerTimedOut,
+    McpServerGone,
+    McpServerMalformed,
+    McpServerRemoteError,
 }
 impl McpServersErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -990,6 +1054,11 @@ impl McpServersErrorCode {
             Self::McpServersConfigTooLarge => "mcp_servers_config_too_large",
             Self::McpServersStorageUnavailable => "mcp_servers_storage_unavailable",
             Self::AuditUnavailable => "audit_unavailable",
+            Self::McpServerStartFailed => "mcp_server_start_failed",
+            Self::McpServerTimedOut => "mcp_server_timed_out",
+            Self::McpServerGone => "mcp_server_gone",
+            Self::McpServerMalformed => "mcp_server_malformed",
+            Self::McpServerRemoteError => "mcp_server_remote_error",
         }
     }
 }
@@ -1646,6 +1715,7 @@ pub mod product_method {
     pub const MCP_SERVERS_LIST: &str = "mcpServers.list";
     pub const MCP_SERVERS_SAVE: &str = "mcpServers.save";
     pub const MCP_SERVERS_REMOVE: &str = "mcpServers.remove";
+    pub const MCP_SERVERS_INSPECT: &str = "mcpServers.inspect";
     pub const PAIRING_CREATE: &str = "pairing.create";
     pub const PAIRING_PENDING: &str = "pairing.pending";
     pub const PAIRING_STATUS: &str = "pairing.status";
@@ -1809,7 +1879,7 @@ pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 44
+                items.len() <= 45
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1869,6 +1939,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.list",
     "mcpServers.save",
     "mcpServers.remove",
+    "mcpServers.inspect",
     "pairing.create",
     "pairing.pending",
     "pairing.status",

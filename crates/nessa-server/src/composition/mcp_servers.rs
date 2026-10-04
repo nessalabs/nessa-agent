@@ -4,13 +4,16 @@
 //! ```text
 //! AgentsConfig.mcpServers ──LaunchSettings::launch_set──▶ McpServers: the live set (each started by the gateway)
 //!                                 │ configured(), read at each provider open and each hello
-//!                                 ├──▶ StandIns: <this executable> mcp-relay <socket> <name> <digest>
+//!                                 ├──▶ StandIns: <this executable> mcp-relay <socket> <name> <keyed digest>
 //!                                 │             ──▶ every agent's session/new (AcpConfig.mcp_servers)
 //!                                 ├──▶ Relay: admits a stand-in against the digests now
-//!                                 └◀── McpServerSettings::edit replaces it after each publish (`settings`)
+//!                                 ├◀── McpServerSettings::edit replaces it after each publish (`settings`)
+//!                                 └──▶ McpServerInspector: open_once for mcpServers.inspect (`settings`)
 //! ```
 //!
-//! Arrows are what each is built from. On Unix the relay is composed even
+//! Arrows are what each is built from. The digest is keyed with a secret
+//! minted for this process ([`ConfigurationKey`]), which the stand-ins and
+//! the relay share. On Unix the relay is composed even
 //! with no server configured, so a set replaced later reaches the next open.
 //! A relay socket that cannot be bound leaves MCP servers off for this run,
 //! logged: an agent is never handed a server directly instead, because then
@@ -20,17 +23,17 @@ use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
 use crate::core::RunError;
 use crate::mcp_servers::{
     application::McpServerSettings,
-    domain::{configuration_digest, relay_arguments},
+    domain::{relay_arguments, ConfigurationKey},
     infrastructure::{
-        bind, BoundRelay, ConfigCheck, ConfigJsonStore, ConversationGrants, DurableMcpServerAudit,
-        LaunchSettings, LiveMcpServers, OsConfigFiles, OsTokens, Relay, ResourceTicketStore,
-        TicketEvent,
+        bind, launch_digest, BoundRelay, ConfigCheck, ConfigJsonStore, ConversationGrants,
+        DurableMcpServerAudit, LaunchSettings, LiveMcpServers, McpServerInspector, OsConfigFiles,
+        OsTokens, Relay, ResourceTicketStore, TicketEvent, TokenSource,
     },
 };
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
-    mcp::McpServers,
+    mcp::{McpServerLaunch, McpServers},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -131,23 +134,20 @@ pub(super) fn server_environment(
 
 /// The stand-in for each server in `servers`, run by `gateway` over
 /// `socket`: the gateway's executable, `mcp-relay`, the socket, the server's
-/// name, and the digest of its command and arguments, which the relay
-/// compares at each hello.
+/// name, and the digest of its command, arguments and environment keyed with
+/// `key` ([`launch_digest`]), which the relay compares at each hello.
 pub(super) fn stand_ins(
-    servers: &[StdioMcpServer],
+    servers: &[McpServerLaunch],
     gateway: &str,
     socket: &str,
+    key: &ConfigurationKey,
 ) -> Vec<StdioMcpServer> {
     servers
         .iter()
-        .map(|server| StdioMcpServer {
-            name: server.name.clone(),
+        .map(|launch| StdioMcpServer {
+            name: launch.server.name.clone(),
             command: gateway.into(),
-            args: relay_arguments(
-                socket,
-                &server.name,
-                &configuration_digest(&server.command, &server.args),
-            ),
+            args: relay_arguments(socket, &launch.server.name, &launch_digest(key, launch)),
         })
         .collect()
 }
@@ -159,23 +159,44 @@ pub(super) struct StandIns {
     servers: McpServers,
     gateway: String,
     socket: String,
+    key: ConfigurationKey,
 }
 impl StandIns {
-    /// Stand-ins for `servers`, run by `gateway` over `socket`; `None` when
-    /// the gateway's or the socket's path is not UTF-8: a stand-in's command
-    /// and arguments must be ([`StdioMcpServer::problem`]).
-    pub(super) fn new(servers: McpServers, gateway: &Path, socket: &Path) -> Option<Self> {
+    /// Stand-ins for `servers`, run by `gateway` over `socket`, their digests
+    /// keyed with `key`; `None` when the gateway's or the socket's path is
+    /// not UTF-8: a stand-in's command and arguments must be
+    /// ([`StdioMcpServer::problem`]).
+    pub(super) fn new(
+        servers: McpServers,
+        gateway: &Path,
+        socket: &Path,
+        key: ConfigurationKey,
+    ) -> Option<Self> {
         Some(Self {
             servers,
             gateway: gateway.to_str()?.to_owned(),
             socket: socket.to_str()?.to_owned(),
+            key,
         })
     }
 }
 impl McpServerSource for StandIns {
     fn servers(&self) -> Vec<StdioMcpServer> {
-        stand_ins(&self.servers.configured(), &self.gateway, &self.socket)
+        stand_ins(
+            &self.servers.configured(),
+            &self.gateway,
+            &self.socket,
+            &self.key,
+        )
     }
+}
+
+/// A new key for this process's configuration digests, drawn from `tokens`;
+/// `None` when the random source fails.
+pub(super) fn configuration_key(tokens: &dyn TokenSource) -> Option<ConfigurationKey> {
+    let mut bytes = [0; 32];
+    tokens.fill(&mut bytes).ok()?;
+    Some(ConfigurationKey::new(bytes))
 }
 
 /// Take over `agents`' MCP servers: start nothing yet, bind the relay socket
@@ -183,8 +204,9 @@ impl McpServerSource for StandIns {
 /// by `gateway`, for the servers configured then, and give it a grant whose
 /// token its stand-ins carry. Composed with no server configured too, so a
 /// set replaced later ([`McpServers::replace`]) reaches the next open.
-/// `None` when the socket cannot be bound, or a path is not UTF-8 — then
-/// `agents` is left with no MCP servers, and why is logged.
+/// `None` when the socket cannot be bound, a path is not UTF-8, or no key
+/// for the digests could be drawn — then `agents` is left with no MCP
+/// servers, and why is logged.
 ///
 /// # Errors
 ///
@@ -203,7 +225,13 @@ pub(super) async fn compose(
         .map_err(|problem| RunError::Agent(problem.to_string()))?;
     let servers = McpServers::new(launch_set, Arc::new(RuntimeClock::new()))
         .map_err(|error| RunError::Agent(error.to_string()))?;
-    let Some(stand_ins) = StandIns::new(servers.clone(), gateway, socket) else {
+    let Some(key) = configuration_key(&OsTokens) else {
+        tracing::error!(
+            "MCP servers are off this run: no key for their configuration digests could be drawn"
+        );
+        return Ok(None);
+    };
+    let Some(stand_ins) = StandIns::new(servers.clone(), gateway, socket, key.clone()) else {
         tracing::error!(socket = %socket.display(), gateway = %gateway.display(), "MCP servers are off this run: the gateway's or the relay socket's path is not UTF-8");
         return Ok(None);
     };
@@ -219,7 +247,7 @@ pub(super) async fn compose(
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
-        relay: Arc::new(Relay::new(servers.clone(), grants)),
+        relay: Arc::new(Relay::new(servers.clone(), grants, key)),
         servers,
         launches,
         listener,
@@ -234,11 +262,14 @@ pub(super) async fn compose(
 }
 
 /// What manages the stored servers of the namespace whose `config.json` is
-/// at `config` (`mcpServers.list`, `.save`, `.remove`): the file and its lock,
-/// checked by the runtime configuration's own parse and bound; the audit in
-/// `audit` (`<namespace>/conversations/audit/mcp-servers`); and `mcp`'s live
-/// set, replaced after each publish. A file with no `agents` block gains one
-/// from `agents`' catalog and workspace on its first write.
+/// at `config` (`mcpServers.list`, `.save`, `.remove`, `.inspect`): the file
+/// and its lock, checked by the runtime configuration's own parse and bound;
+/// the audit in `audit` (`<namespace>/conversations/audit/mcp-servers`);
+/// `mcp`'s live set, replaced after each publish; and an inspector on the
+/// same SDK client, so a gateway stopping ends an inspection under way. A
+/// file with no `agents` block gains one from `agents`' catalog and
+/// workspace on its first write. Every write re-serialises the whole file
+/// (`ConfigJsonStore`).
 ///
 /// # Errors
 ///
@@ -275,6 +306,11 @@ pub(super) fn settings(
         Arc::new(LiveMcpServers::new(
             mcp.servers.clone(),
             mcp.launches.clone(),
+        )),
+        Arc::new(McpServerInspector::new(
+            mcp.servers.clone(),
+            mcp.launches.clone(),
+            Arc::new(RuntimeClock::new()),
         )),
     ))
 }

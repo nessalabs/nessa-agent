@@ -1,8 +1,10 @@
 //! What managing the stored MCP servers needs from outside: the stored list
-//! and its lock, the live set it is launched as, and somewhere durable to
-//! record each change.
+//! and its lock, the live set it is launched as, a way to start one server
+//! once and look at it, and somewhere durable to record each change and
+//! each inspection.
 use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer};
-use std::{future::Future, pin::Pin};
+use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+use std::{future::Future, pin::Pin, time::Duration};
 
 /// The stored servers, as one read sees them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,6 +133,10 @@ pub struct McpServerChangeRequest {
 pub enum McpServerAction {
     Save,
     Remove,
+    /// `mcpServers.inspect`: the stored server started once and looked at.
+    /// Nothing stored changes; the record is of a process the gateway ran
+    /// with the server's variables.
+    Inspect,
 }
 
 /// Which record of a change this is.
@@ -161,10 +167,18 @@ pub enum McpServerOutcome {
         reason: &'static str,
         before: Option<ServerNames>,
     },
-    /// Failed before anything was written; `before` as for a refusal.
+    /// Failed before anything was written — or, for an inspection, the
+    /// server failed it; `before` as for a refusal.
     Failed {
         reason: &'static str,
         before: Option<ServerNames>,
+    },
+    /// An inspection read what the server offered, within its bounds, and
+    /// the server was stopped. `cut` names the bound that stopped the
+    /// reading early; the answer's own byte bound is the wire's, after this.
+    Inspected {
+        tools: usize,
+        cut: Option<InspectCut>,
     },
 }
 
@@ -184,4 +198,87 @@ pub struct AuditUnavailable;
 pub trait McpServerAudit: Send + Sync {
     /// Make `record` durable.
     fn record(&self, record: &McpServerAuditRecord) -> Result<(), AuditUnavailable>;
+}
+
+/// What one inspection may spend: an overall deadline on the gateway's clock,
+/// from before the server is launched until it has been read, and caps on
+/// the pages of tools and the UI resources read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InspectBounds {
+    pub deadline: Duration,
+    pub max_tool_pages: usize,
+    pub max_ui_reads: usize,
+}
+
+/// Which bound left an inspection incomplete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InspectCut {
+    /// More pages of tools than [`InspectBounds::max_tool_pages`], or more
+    /// tools than the SDK reads from one server.
+    Tools,
+    /// More distinct UI resources than [`InspectBounds::max_ui_reads`]; tools
+    /// past it carry no UI.
+    Ui,
+    /// The answer would pass its byte bound; tools were dropped from the end.
+    Bytes,
+}
+
+/// What a server offered, as one inspection read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inspection {
+    /// Its tools, in its order.
+    pub tools: Vec<InspectedTool>,
+    /// The bound that stopped the reading early, if one did.
+    pub cut: Option<InspectCut>,
+}
+
+/// One tool a server lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InspectedTool {
+    pub name: String,
+    pub read_only_hint: Option<bool>,
+    pub destructive_hint: Option<bool>,
+    /// Its MCP App, when it declares one and it was read.
+    pub ui: Option<InspectedUi>,
+}
+
+/// A tool's MCP App: its resource, and what that resource asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InspectedUi {
+    pub uri: String,
+    pub csp: UiCsp,
+    pub permissions: UiPermissions,
+}
+
+/// Why an inspection read nothing. The server was stopped on each.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InspectFailure {
+    /// Its process could not be launched.
+    StartFailed,
+    /// It did not finish within the deadline, or a request's own budget.
+    TimedOut,
+    /// It ended, or its session was closed, before it answered.
+    Gone,
+    /// It answered something that is not MCP, or a UI resource that is not
+    /// an MCP App within its bounds.
+    Malformed,
+    /// It answered with a JSON-RPC error.
+    RemoteError { code: i64, message: String },
+}
+impl InspectFailure {
+    /// Whether the server's process was started before this.
+    pub fn started(&self) -> bool {
+        !matches!(self, Self::StartFailed)
+    }
+}
+
+/// What [`ServerInspector::inspect`] answers.
+pub type InspectFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Inspection, InspectFailure>> + Send + 'a>>;
+
+/// Starts one stored server once, outside any conversation, reads what it
+/// offers within `bounds`, and stops it with its process group before
+/// answering — however the reading ended.
+pub trait ServerInspector: Send + Sync {
+    fn inspect(&self, server: &ConfiguredMcpServer, bounds: InspectBounds) -> InspectFuture<'_>;
 }

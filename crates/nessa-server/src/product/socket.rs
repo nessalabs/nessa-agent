@@ -1225,7 +1225,10 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
         // A configured MCP server is started with the gateway's authority
         // and given its variables, credentials among them (#391).
-        "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" => Some("credential.manage"),
+        // Inspecting runs a stored server's executable with those variables.
+        "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" | "mcpServers.inspect" => {
+            Some("credential.manage")
+        }
         // Enrolling a device creates a credential for it; Auth asks again for
         // the exact consent inside the runtime.
         "pairing.create"
@@ -2274,7 +2277,12 @@ mod tests {
         let (state, _) = fixture(MembershipRole::Member);
         let state = state.with_mcp_server_settings(Arc::new(settings));
         let session = authenticate(&state).await;
-        for method in ["mcpServers.list", "mcpServers.save", "mcpServers.remove"] {
+        for method in [
+            "mcpServers.list",
+            "mcpServers.save",
+            "mcpServers.remove",
+            "mcpServers.inspect",
+        ] {
             assert_eq!(action_for_method(method), Some("credential.manage"));
             let (ok, answer) =
                 mcp_servers_call(&state, &session, method, json!({"not": "params"})).await;
@@ -2394,6 +2402,14 @@ mod tests {
                 json!({"extra": true}),
                 json!({"code": "invalid_request", "details": null}),
             ),
+            // A variable without `value` is refused, never read as "keep"
+            // (pass 2b, decision 6).
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "API_TOKEN"}]))}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
         ];
         for (method, params, expected) in refusals {
             assert_eq!(
@@ -2405,6 +2421,22 @@ mod tests {
         audit
             .fail_outcome
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        // A refusal whose outcome cannot be recorded carries the refusal's
+        // code (pass 2b, decision 4).
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "unknown"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "audit_unavailable",
+                    "details": {"applied": false, "code": "mcp_servers_not_found"}})
+            )
+        );
         assert_eq!(
             mcp_servers_call(
                 &state,
@@ -2418,6 +2450,189 @@ mod tests {
                 json!({"code": "audit_unavailable", "details": {"applied": true}})
             )
         );
+    }
+
+    /// `mcpServers.inspect` on the wire: the tools with their hints and each
+    /// app's CSP and permissions in `mcp.readResource`'s shapes; each failure
+    /// typed, a server's JSON-RPC error with its details; and a stored name
+    /// required.
+    #[tokio::test]
+    async fn mcp_servers_inspect_answers_typed_tools_and_typed_failures() {
+        use crate::mcp_servers::application::{
+            InspectCut, InspectFailure, InspectedTool, InspectedUi, Inspection,
+        };
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, entry, inspected_over, LeapingClock, MemoryFiles, RecordingAudit,
+            ScriptedInspector,
+        };
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+        let inspector = Arc::new(ScriptedInspector::default());
+        let (settings, _) = inspected_over(
+            MemoryFiles::holding(config(vec![entry("a")])),
+            Arc::new(RecordingAudit::default()),
+            Arc::new(LeapingClock::default()),
+            inspector.clone(),
+        );
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![
+                InspectedTool {
+                    name: "chart".into(),
+                    read_only_hint: Some(true),
+                    destructive_hint: Some(false),
+                    ui: Some(InspectedUi {
+                        uri: "ui://a/chart.html".into(),
+                        csp: UiCsp::new(
+                            vec!["https://api.example.com".into()],
+                            vec![],
+                            vec![],
+                            vec![],
+                        )
+                        .unwrap(),
+                        permissions: UiPermissions {
+                            camera: true,
+                            ..UiPermissions::default()
+                        },
+                    }),
+                },
+                InspectedTool {
+                    name: "plain".into(),
+                    read_only_hint: None,
+                    destructive_hint: None,
+                    ui: None,
+                },
+            ],
+            cut: Some(InspectCut::Tools),
+        });
+        let inspect = |name: &str| {
+            let state = state.clone();
+            let session = session.clone();
+            let params = json!({"name": name});
+            async move { mcp_servers_call(&state, &session, "mcpServers.inspect", params).await }
+        };
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "tools", "tools": [
+                    {"name": "chart", "readOnlyHint": true, "destructiveHint": false,
+                        "ui": {"uri": "ui://a/chart.html",
+                            "csp": {"connectDomains": ["https://api.example.com"],
+                                "resourceDomains": [], "frameDomains": [], "baseUriDomains": []},
+                            "permissions": {"camera": true, "microphone": false,
+                                "geolocation": false, "clipboardWrite": false}}},
+                    {"name": "plain"},
+                ]})
+            )
+        );
+        for (failure, expected) in [
+            (
+                InspectFailure::StartFailed,
+                json!({"code": "mcp_server_start_failed", "details": null}),
+            ),
+            (
+                InspectFailure::TimedOut,
+                json!({"code": "mcp_server_timed_out", "details": null}),
+            ),
+            (
+                InspectFailure::Gone,
+                json!({"code": "mcp_server_gone", "details": null}),
+            ),
+            (
+                InspectFailure::Malformed,
+                json!({"code": "mcp_server_malformed", "details": null}),
+            ),
+            (
+                InspectFailure::RemoteError {
+                    code: -32002,
+                    message: "no\nsuch".into(),
+                },
+                json!({"code": "mcp_server_remote_error",
+                    "details": {"code": -32002, "message": "no such"}}),
+            ),
+            (
+                InspectFailure::RemoteError {
+                    code: i64::MAX,
+                    message: "far".into(),
+                },
+                json!({"code": "mcp_server_remote_error", "details": null}),
+            ),
+        ] {
+            *inspector.answer.lock().unwrap() = Err(failure);
+            assert_eq!(inspect("a").await, (false, expected));
+        }
+        assert_eq!(
+            inspect("unknown").await,
+            (
+                false,
+                json!({"code": "mcp_servers_not_found", "details": null})
+            )
+        );
+        assert_eq!(
+            mcp_servers_call(&state, &session, "mcpServers.inspect", json!({})).await,
+            (false, json!({"code": "invalid_request", "details": null}))
+        );
+    }
+
+    /// I5: an inspection whose answer would pass the frame's 64 KiB loses
+    /// tools from the end until it fits, and says so with `cut: "bytes"` —
+    /// for the longest request id too; one already cut keeps its own cut.
+    #[tokio::test]
+    async fn i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits() {
+        use crate::mcp_servers::application::{InspectCut, InspectedTool, InspectedUi, Inspection};
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+        let source = |n: usize| format!("https://{}.example.com", "d".repeat(400 + n % 7));
+        let tool = |n: usize| InspectedTool {
+            name: format!("tool_{n}"),
+            read_only_hint: Some(true),
+            destructive_hint: None,
+            ui: Some(InspectedUi {
+                uri: format!("ui://a/{n}.html"),
+                csp: UiCsp::new((0..8).map(source).collect(), vec![], vec![], vec![]).unwrap(),
+                permissions: UiPermissions::default(),
+            }),
+        };
+        let request_id = "\u{1}".repeat(256);
+        for (cut, said) in [(None, "bytes"), (Some(InspectCut::Ui), "ui")] {
+            let inspection = Inspection {
+                tools: (0..64).map(tool).collect(),
+                cut,
+            };
+            let message = super::super::mcp_servers::fitted(&request_id, inspection);
+            let text = message.to_wire_text().unwrap();
+            assert!(
+                text.len() <= crate::protocol::MAX_PAYLOAD_BYTES as usize,
+                "{}",
+                text.len()
+            );
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            let payload = response.payload.unwrap();
+            assert_eq!(payload["complete"], false);
+            assert_eq!(payload["cut"], said);
+            let kept = payload["tools"].as_array().unwrap();
+            assert!(!kept.is_empty() && kept.len() < 64, "{}", kept.len());
+            // From the end: the first ones stay, in order.
+            for (index, each) in kept.iter().enumerate() {
+                assert_eq!(each["name"], format!("tool_{index}"));
+            }
+        }
+        // One that fits is answered whole and complete.
+        let small = Inspection {
+            tools: (0..2).map(tool).collect(),
+            cut: None,
+        };
+        let OutgoingMessage::Response(response) = super::super::mcp_servers::fitted("id", small)
+        else {
+            panic!("a response")
+        };
+        let payload = response.payload.unwrap();
+        assert_eq!(payload["complete"], true);
+        assert!(payload.get("cut").is_none());
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
     }
 
     struct UnavailablePolicy;

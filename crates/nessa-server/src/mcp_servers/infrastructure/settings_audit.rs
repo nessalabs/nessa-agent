@@ -1,12 +1,13 @@
-//! Durable evidence of each change to the stored MCP servers, in
+//! Durable evidence of each change to the stored MCP servers, and of each
+//! inspection (a stored server's executable run once), in
 //! `<namespace>/conversations/audit/mcp-servers`: one private JSON file per
 //! record, named by its change and phase, published once and synced, as the
 //! other audits beside it are. A record names servers and variables, never a
 //! variable's value
 //! (`composed_settings_publish_privately_under_the_lock_and_audit_without_values`).
 use crate::mcp_servers::application::{
-    AuditUnavailable, McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
-    McpServerOutcome, ServerNames,
+    AuditUnavailable, InspectCut, McpServerAction, McpServerAudit, McpServerAuditPhase,
+    McpServerAuditRecord, McpServerOutcome, ServerNames,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
@@ -40,6 +41,16 @@ fn names(names: &ServerNames) -> Value {
 fn stored(record: &McpServerAuditRecord) -> Value {
     let request = &record.request;
     let (phase, transition) = match &record.phase {
+        // An inspection names the revision its server was read at, not one
+        // the caller named.
+        McpServerAuditPhase::Requested if request.action == McpServerAction::Inspect => (
+            "requested",
+            json!({
+                "revision": request.revision,
+                "envNames": request.env_names,
+                "enabled": request.enabled,
+            }),
+        ),
         McpServerAuditPhase::Requested => (
             "requested",
             json!({
@@ -69,6 +80,18 @@ fn stored(record: &McpServerAuditRecord) -> Value {
             "outcome",
             json!({"outcome": "failed", "reason": reason, "before": before.as_ref().map(names)}),
         ),
+        McpServerAuditPhase::Outcome(McpServerOutcome::Inspected { tools, cut }) => (
+            "outcome",
+            json!({
+                "outcome": "inspected",
+                "tools": tools,
+                "cut": cut.map(|cut| match cut {
+                    InspectCut::Tools => "tools",
+                    InspectCut::Ui => "ui",
+                    InspectCut::Bytes => "bytes",
+                }),
+            }),
+        ),
     };
     json!({
         "kind": "mcp_servers",
@@ -77,6 +100,7 @@ fn stored(record: &McpServerAuditRecord) -> Value {
         "action": match request.action {
             McpServerAction::Save => "save",
             McpServerAction::Remove => "remove",
+            McpServerAction::Inspect => "inspect",
         },
         "target": {"name": request.target, "previousName": request.previous_name},
         "transition": transition,

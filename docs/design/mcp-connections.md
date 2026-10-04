@@ -67,7 +67,8 @@ end of input (Nessa's own shell server) still does.
 - **What the harness is given.** In `session/new`, each configured server is
   replaced by a stand-in under the same name: the gateway's own executable,
   `mcp-relay`, the relay socket, the server's name, and a digest of the
-  server's configured command and arguments. The set is read from the
+  server's configured command, arguments and environment, keyed with a
+  secret of the gateway process's own (#391). The set is read from the
   gateway's live set at each provider open, and kept for that provider
   session's life ([the live server set](#the-live-server-set-391)).
 - **Stand-in traffic.** The harness's `initialize` is answered by the gateway
@@ -308,8 +309,8 @@ structured results already do.
   attachment, like the token, and not a selector of the provider's context.
   Adding, editing or removing a server, or moving the gateway's executable or
   the relay socket, leaves every saved conversation restorable. A stand-in's
-  arguments still carry the server's name and a digest of the configured
-  command and arguments, which the relay compares against the live set at
+  arguments still carry the server's name and a keyed digest of the
+  configured command, arguments and environment, which the relay compares against the live set at
   each hello: a server changed under an open conversation is refused
   `configuration-changed`, one removed `unknown-server`, and that conversation
   keeps its harness's set until its provider session ends. The session token
@@ -423,6 +424,18 @@ with `McpServers::open_as`, which refuses `ConfigurationChanged` (or
 served by a different configuration under the same name, which is what makes
 it honest to keep the server list out of the restoration identity.
 
+The digest covers what a server is started with: its command, its
+arguments, and its whole environment, names and values
+(`infrastructure::launch_digest` chooses the fields, once, for the stand-ins
+and the relay alike; `open_as` compares the whole launch). A server whose
+variables alone changed is a changed server, so its old stand-in is refused
+`configuration-changed` as an edited command's is. The digest is HMAC-SHA256
+under a key drawn for each gateway process (`ConfigurationKey`) and held only
+in its memory: a stand-in's arguments, which a process list shows, carry
+neither a value nor anything a guessed value could be checked against. Its
+digest changes from run to run, which nothing minds: a restart ends every
+stand-in, and the restoration identity reads none of it.
+
 ### Managing the stored servers
 
 `config.json`'s `agents.mcpServers` holds each server as
@@ -470,16 +483,23 @@ nothing beside it is persisted. Each change, in order:
    revision; make the edit; check the result with the SDK's rules
    (`McpServerLaunch::problem_in`, managed server included).
 4. Write the whole file with only the block replaced, check it again, and
-   publish it in one step, private (0600). A file with no `agents` block
-   gains one from the running catalog and workspace.
+   publish it in one step, private (0600). The whole file is re-serialised:
+   the gateway owns `config.json`, so its key order and layout after a write
+   are the gateway's, and everything else in it keeps its value, not its
+   spelling. A file with no `agents` block gains one from the running catalog
+   and workspace; the desktop makes its default workspace whenever that is
+   the one configured, so the next start does the same with the block as
+   without it.
 5. Replace the live set, still under the lock, so changes publish and
-   replace in the same order. Refused only once the gateway is stopping; the
-   outcome then says `liveSetReplaced: false` and the next start reads the
-   file.
+   replace in the same order. Refused only once the gateway is stopping: the
+   change still answers success, the outcome says `liveSetReplaced: false`,
+   and the next start reads the file.
 6. Unlock, then the outcome record: `applied` with the revision and names
    before and after, or `refused`/`failed` with the reason and what was
    stored when it was read. When it cannot be written: `audit_unavailable`
-   with whether the change applied. Nothing is rolled back.
+   with whether the change applied and, when it did not, the `code` it
+   would have been answered with, so neither cause is lost. Nothing is
+   rolled back.
 
 A record names servers and variables, never a variable's value; so do the
 wire and every `Debug` (`ConfiguredMcpServer`, `ServerSave`,
@@ -491,11 +511,16 @@ Errors are `McpServersErrorCode`: `mcp_servers_not_configured`,
 `mcp_servers_not_found`, `mcp_servers_revision_conflict` (details
 `{revision}`), `mcp_servers_busy`, `mcp_servers_config_invalid`,
 `mcp_servers_config_too_large`, `mcp_servers_storage_unavailable`,
-`audit_unavailable` (details `{applied}`). `mcp_servers_not_configured` means
+`audit_unavailable` (details `{applied, code?}`), and the inspection codes
+below. `mcp_servers_not_configured` means
 this gateway holds no live set to manage: not Unix, no agents configured, or
 MCP off this run because the relay socket could not be bound (or a path is
 not UTF-8). A gateway that holds one always manages it, with or without
-servers configured. `mcpServers.inspect` is not built yet.
+servers configured.
+
+An `env` entry must carry `value`: `null` is the explicit keep, and an entry
+without `value` is refused `invalid_request` rather than read as one. The
+generator makes every required nullable field required on the wire this way.
 
 Row labels are the PR 2 design's (on #391), prefixed `LS` so they do not
 meet the stand-in and forwarded-result rows above.
@@ -508,21 +533,80 @@ meet the stand-in and forwarded-result rows above.
 | LS4 | Lock held past its bound | `busy`; nothing written | `s4_a_lock_held_past_its_bound_is_busy_and_nothing_is_written`, `composed_settings_publish_privately_under_the_lock_and_audit_without_values` |
 | LS5 | Publish fails | `storage_unavailable`; the old file and live set kept; outcome `failed` | `s5_a_failed_publish_keeps_the_old_file_and_live_set` |
 | LS6 | `requested` can't be written | `audit_unavailable`; no lock, no write, no apply | `s6_an_unwritable_requested_record_stops_everything` |
-| LS7 | Published, then the outcome fails | `audit_unavailable` with `applied: true`; the file and live set are new | `s7_an_unwritable_outcome_after_a_publish_says_it_applied` |
+| LS7 | Published, then the outcome fails | `audit_unavailable` with `applied: true`; the file and live set are new. Refused or failed, then the outcome fails: `applied: false` with the refusal's `code` | `s7_an_unwritable_outcome_after_a_publish_says_it_applied`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
 | LS8 | `config.json` doesn't parse, before or after the edit | `config_invalid`; nothing written, nothing repaired | `s8_a_configuration_that_does_not_parse_is_refused_and_never_repaired` |
 | LS9 | The result would pass 64 KiB | `config_too_large`; nothing written | `s9_a_result_past_the_bound_is_refused_and_nothing_is_written` |
 | LS10 | A 17th server, a bad name, a duplicate, `nessa`, a bad or reserved variable name | `invalid` with the typed problem, or `reserved_name`; nothing written | `s10_an_invalid_or_reserved_server_is_refused_with_its_problem`, `no_edit_names_the_managed_server` |
-| LS11 | A server edited while a conversation's harness has it | The running harness and its server process are untouched (a relaunch of the same provider session keeps its set); its stand-in's next hello is refused `configuration-changed`; the next open gets the new stand-in | `a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone`, `s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused`, `each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch`, `a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone` |
+| LS11 | A server edited while a conversation's harness has it — its command, arguments, or only its variables | The running harness and its server process are untouched (a relaunch of the same provider session keeps its set); its stand-in's next hello is refused `configuration-changed`; the next open gets the new stand-in | `a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone`, `s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused`, `each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch`, `a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone` |
 | LS12 | A server removed or turned off while open | Its stand-in's next hello is refused `unknown-server`; a new open does not list it; an open session of it is untouched | the same, `a_disabled_server_stays_stored_and_out_of_the_live_set` |
 | LS13 | Added back, or turned on again | It is in the next open, and its stand-ins are let through | the same |
-| LS14 | `replace` once stopping | Refused `Stopped`; the set is kept; nothing launched | `a_replacement_once_stopping_is_refused_and_launches_nothing` |
+| LS14 | `replace` once stopping | Refused `Stopped`; the set is kept; nothing launched. A `save` or `remove` that publishes then answers success, outcome `liveSetReplaced: false` | `a_replacement_once_stopping_is_refused_and_launches_nothing`, `a_publish_during_stop_answers_success_and_leaves_the_live_set` |
 | LS15 | Rename (`previousName`) | One write: the old name gone, the new one in its place; unknown `previousName` → `not_found` | `s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found` |
 | LS16 | Remove an unknown name | `not_found`; nothing written | `s16_removing_an_unknown_name_is_not_found` |
-| LS17 | `save` keeps a variable with `value: null` | The stored value is kept; a null for a name with no stored value → `invalid` (`environment_value_missing`) | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
+| LS17 | `save` keeps a variable with `value: null` | The stored value is kept; a null for a name with no stored value → `invalid` (`environment_value_missing`); an entry with no `value` at all → `invalid_request` | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
 | LS18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
 | — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |
 | — | `replace` lands between a hello's admission and its open | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |
-| — | A variable's value | Never in the wire, `list`, the audit, or a `Debug` | `a_launch_prints_its_environment_names_never_its_values`, `a_configured_server_prints_its_variable_names_never_their_values`, `the_list_names_each_variable_and_marks_the_managed_server` |
+| — | A variable's value | Never in the wire, `list`, the audit, or a `Debug`; nor in a stand-in's arguments, raw or as an unkeyed hash | `a_launch_prints_its_environment_names_never_its_values`, `a_configured_server_prints_its_variable_names_never_their_values`, `the_list_names_each_variable_and_marks_the_managed_server`, `a_stand_ins_arguments_reveal_nothing_about_a_variables_value` |
+| — | The digest | Changes with the command, each argument, each variable's name and value, and the key | `the_digest_changes_with_the_command_each_argument_each_variable_and_their_boundaries`, `each_server_is_handed_over_as_a_relay_under_its_own_name` |
+| — | A fresh desktop's first write, then a start | The stored `agents` block is read; the default workspace is made all the same | `the_default_workspace_is_made_whenever_it_is_the_one_configured`, `a_write_never_stores_the_managed_server_and_starts_a_missing_block` |
+
+### Inspecting a stored server
+
+`mcpServers.inspect {name}` starts the stored server under `name` once —
+turned on or off, never one not yet saved — outside any conversation, with no
+relay and no session token, through `McpServers::open_once(launch)`: launched
+as the live set launches it (`LaunchSettings`), on the live set's SDK client
+so a gateway stopping ends it, never kept for `tool_ui`, and with no
+background list. It lists the tools (`McpSession::list_tool_pages`) with
+`readOnlyHint` and `destructiveHint` as the server gave them, reads each
+distinct UI resource's CSP and permissions as `mcp.readResource` does, then
+closes the session, which kills the process group, before it answers:
+
+`{complete, cut?, tools: [{name, readOnlyHint?, destructiveHint?, ui?: {uri,
+csp, permissions}}]}`, `csp` and `permissions` in `mcp.readResource`'s shapes.
+
+Its bounds are published in the schema (`x-mcpServerInspect`) and read as
+generated constants: one deadline (30 s) on the injected gateway clock from
+before the launch until the last read, past which the reading is dropped and
+the process group killed; at most 8 pages of tools; at most 32 distinct UI
+reads; at most 2 inspections at once, a third answered `mcp_servers_busy`.
+`cut` names the first bound that stopped the reading early — `tools`, `ui` —
+or `bytes`, when the answer would pass the frame's 64 KiB and tools were
+dropped from the end until it fits (the product layer measures the frame
+it writes). The client waits the deadline plus its allowance.
+
+It asks for `credential.manage`, as the other methods do. It is audited in
+`…/audit/mcp-servers` with `action: "inspect"`: it runs an executable the
+admin chose with the server's variables, credentials among them, and no
+conversation records it. `requested` (target, the revision the server was
+read at, its variable names, whether it is on) is written before the
+launch — when it cannot be, nothing is started — and the outcome
+(`inspected` with the tool count and cut, or `failed` with the reason) after
+the server has stopped; when that cannot be written, `audit_unavailable` says
+whether the server was started, with the failure's `code`. What starts
+nothing is not audited: `nessa` (`mcp_servers_reserved_name`), an unknown
+name (`mcp_servers_not_found`), no free slot, an unreadable file.
+
+Failures: `mcp_server_start_failed` (could not launch), `mcp_server_timed_out`
+(the deadline, or a request's own budget), `mcp_server_gone` (it ended, or
+the gateway stopped), `mcp_server_malformed` (not MCP, or a UI that is not an
+MCP App within its bounds), `mcp_server_remote_error` (a JSON-RPC error,
+details `McpRemoteErrorDetails`). Any failure ends the inspection: a partial
+answer is only ever one a bound cut.
+
+| # | State / event | Expected | Test |
+| --- | --- | --- | --- |
+| I1 | The command is missing | `mcp_server_start_failed` | `i1_a_missing_command_fails_to_start` |
+| I2 | It never answers `initialize` | `mcp_server_timed_out` at the deadline on a manual clock, not before; its process group killed | `i2_a_server_that_never_initializes_times_out_and_its_group_is_killed` |
+| I3 | It exits while listed | `mcp_server_gone` | `i3_a_server_that_exits_mid_list_is_gone` |
+| I4 | Tools or UIs past their caps | `complete: false`, `cut` `tools` or `ui`; within both, complete | `i4_tools_or_apps_past_their_caps_are_cut_and_named` |
+| I5 | The answer would pass 64 KiB | Tools dropped from the end until it fits; `complete: false`, `cut: "bytes"` unless a bound cut it first | `i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits` |
+| I6 | A third inspection at once | `mcp_servers_busy`; nothing started | `i6_a_third_inspection_at_once_is_busy` |
+| I7 | An unknown name, or `nessa` | `mcp_servers_not_found`, `mcp_servers_reserved_name`; nothing started or audited | `i7_an_unknown_or_managed_name_starts_nothing_and_records_nothing` |
+| — | A server that answers | Its tools, hints and apps' CSP and permissions; stopped before the answer | `an_inspection_lists_hints_and_apps_then_stops_the_server`, `mcp_servers_inspect_answers_typed_tools_and_typed_failures` |
+| — | The audit | `requested` before the launch, the outcome after the stop; an unwritable `requested` starts nothing; an unwritable outcome keeps both causes | `an_inspection_starts_a_stored_server_on_or_off_and_is_audited_both_sides`, `an_inspection_is_not_started_unaudited_and_keeps_both_causes`, `composed_settings_publish_privately_under_the_lock_and_audit_without_values` |
+| — | `open_once` | No SDK session, no background list, nothing for `tool_ui`; an invalid launch refused before launching; ended by `stop` | `a_session_opened_once_belongs_to_no_conversation_and_stops_with_the_servers`, `listing_tool_pages_stops_at_its_bound_and_says_there_was_more` |
 
 ## MCP servers leave the restoration identity (#391)
 

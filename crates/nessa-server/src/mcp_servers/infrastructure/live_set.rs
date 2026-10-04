@@ -1,6 +1,7 @@
 //! What the stored servers are launched as — the one place a
-//! [`ConfiguredMcpServer`] becomes an [`McpServerLaunch`], at startup and after
-//! each change — and the live set port over the SDK's [`McpServers`].
+//! [`ConfiguredMcpServer`] becomes an [`McpServerLaunch`], at startup, after
+//! each change, and for an inspection — and the live set port over the SDK's
+//! [`McpServers`].
 //!
 //! ```text
 //! ConfiguredMcpServer ──LaunchSettings::launch_set──▶ McpServerLaunch ──▶ McpServers::replace
@@ -66,8 +67,9 @@ impl LaunchSettings {
     }
 
     /// `server` as launched: in the working directory, with the base
-    /// environment and its own variables over it — its value wins.
-    fn launch(&self, server: &ConfiguredMcpServer) -> McpServerLaunch {
+    /// environment and its own variables over it — its value wins. What the
+    /// live set and an inspection both start.
+    pub(super) fn launch(&self, server: &ConfiguredMcpServer) -> McpServerLaunch {
         let mut environment = self.environment.clone();
         for (name, value) in &server.env {
             environment.insert(name.into(), value.into());

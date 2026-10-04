@@ -1,9 +1,10 @@
 //! Substitutes for what managing the stored servers reads from outside — the
-//! configuration file and its lock, the audit, and the clock — each able to
-//! fail, and the settings built over them.
+//! configuration file and its lock, the audit, the clock, and the server an
+//! inspection starts — each able to fail, and the settings built over them.
 use crate::mcp_servers::application::{
-    AuditUnavailable, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
-    McpServerInitiator, McpServerSettings, StoreLock,
+    AuditUnavailable, InspectBounds, InspectFailure, InspectFuture, Inspection, McpServerAudit,
+    McpServerAuditPhase, McpServerAuditRecord, McpServerInitiator, McpServerSettings,
+    ServerInspector, StoreLock,
 };
 use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
 use crate::mcp_servers::infrastructure::{
@@ -24,6 +25,7 @@ use std::{
     },
     time::Duration,
 };
+use tokio::sync::{watch, Semaphore};
 
 /// What the check refuses: a configuration holding this is not one the
 /// gateway starts with.
@@ -132,6 +134,61 @@ impl Clock for LeapingClock {
     }
 }
 
+/// A clock that moves only when told to, and whose sleeps end once it has
+/// moved past them.
+pub(crate) struct ManualClock(watch::Sender<Duration>);
+impl Default for ManualClock {
+    fn default() -> Self {
+        Self(watch::channel(Duration::ZERO).0)
+    }
+}
+impl ManualClock {
+    pub(crate) fn advance(&self, by: Duration) {
+        self.0.send_modify(|now| *now += by);
+    }
+}
+impl Clock for ManualClock {
+    fn now(&self) -> ClockInstant {
+        ClockInstant::from_origin(*self.0.borrow())
+    }
+    fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
+        let mut now = self.0.subscribe();
+        Box::pin(async move {
+            let _ = now.wait_for(|now| *now >= deadline.since_origin()).await;
+        })
+    }
+}
+
+/// An inspector that answers what it is given, records the servers and
+/// bounds it was asked with, and — while `gate` holds no permit — waits for
+/// one before answering.
+pub(crate) struct ScriptedInspector {
+    pub(crate) answer: Mutex<Result<Inspection, InspectFailure>>,
+    pub(crate) asked: Mutex<Vec<(ConfiguredMcpServer, InspectBounds)>>,
+    pub(crate) gate: Arc<Semaphore>,
+}
+impl Default for ScriptedInspector {
+    fn default() -> Self {
+        Self {
+            answer: Mutex::new(Ok(Inspection {
+                tools: Vec::new(),
+                cut: None,
+            })),
+            asked: Mutex::default(),
+            gate: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+        }
+    }
+}
+impl ServerInspector for ScriptedInspector {
+    fn inspect(&self, server: &ConfiguredMcpServer, bounds: InspectBounds) -> InspectFuture<'_> {
+        self.asked.lock().unwrap().push((server.clone(), bounds));
+        Box::pin(async move {
+            let _passed = self.gate.acquire().await.unwrap();
+            self.answer.lock().unwrap().clone()
+        })
+    }
+}
+
 pub(crate) fn server(name: &str) -> StdioServer {
     StdioServer {
         name: name.into(),
@@ -180,6 +237,16 @@ pub(crate) fn settings_over(
     audit: Arc<RecordingAudit>,
     clock: Arc<dyn Clock>,
 ) -> (McpServerSettings, McpServers) {
+    inspected_over(files, audit, clock, Arc::new(ScriptedInspector::default()))
+}
+
+/// [`settings_over`], inspecting with `inspector`.
+pub(crate) fn inspected_over(
+    files: Arc<MemoryFiles>,
+    audit: Arc<RecordingAudit>,
+    clock: Arc<dyn Clock>,
+    inspector: Arc<dyn ServerInspector>,
+) -> (McpServerSettings, McpServers) {
     let store = ConfigJsonStore::new(
         files.clone(),
         ConfigCheck {
@@ -205,6 +272,7 @@ pub(crate) fn settings_over(
         Arc::new(store),
         audit,
         Arc::new(LiveMcpServers::new(servers.clone(), launches)),
+        inspector,
     );
     (settings, servers)
 }
@@ -222,6 +290,6 @@ pub(crate) fn live(servers: &McpServers) -> Vec<String> {
     servers
         .configured()
         .into_iter()
-        .map(|server| server.name)
+        .map(|launch| launch.server.name)
         .collect()
 }

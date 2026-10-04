@@ -12,6 +12,11 @@
 //! (`s8_a_configuration_that_does_not_parse_is_refused_and_never_repaired`).
 //! The check is composition's
 //! (`RuntimeConfig`), so this holds no second reading of the file.
+//!
+//! A write re-serialises the whole file from its parsed value: the gateway
+//! owns `config.json`, so after a write its layout and key order are the
+//! gateway's, and everything outside `agents.mcpServers` keeps its value,
+//! not its spelling (`a_save_is_published_then_replaces_the_live_set_and_is_audited_both_sides`).
 use super::stored_servers::{block, parse_block, revision};
 use crate::mcp_servers::application::{
     McpServerStore, StoreError, StoreFuture, StoreLock, StoredServers,

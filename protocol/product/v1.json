@@ -13,6 +13,13 @@
     "readTimeoutMs": 10000,
     "clientAllowanceMs": 10000
   },
+  "x-mcpServerInspect": {
+    "deadlineMs": 30000,
+    "maxToolPages": 8,
+    "maxUiReads": 32,
+    "maxConcurrent": 2,
+    "clientAllowanceMs": 10000
+  },
   "x-changeWatchLimits": {
     "globalOwners": 64,
     "principalOwners": 8,
@@ -162,7 +169,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 44,
+          "maxItems": 45,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2306,7 +2313,7 @@
     "McpRemoteErrorDetails": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error.",
+      "description": "The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error, or mcp_server_remote_error from mcpServers.inspect.",
       "properties": {
         "code": {
           "type": "integer",
@@ -2394,7 +2401,7 @@
         },
         "value": {
           "type": ["string", "null"],
-          "description": "Its value, or null to keep the value stored for this name on the server being saved. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing)."
+          "description": "Its value, or null to keep the value stored for this name on the server being saved. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing)."
         }
       },
       "required": ["name", "value"]
@@ -2528,14 +2535,97 @@
     "McpServersAuditUnavailableDetails": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Attached to a refusal coded audit_unavailable from mcpServers.save or mcpServers.remove.",
+      "description": "Attached to a refusal coded audit_unavailable from an mcpServers method. Nothing is rolled back; mcpServers.list shows where things stand.",
       "properties": {
         "applied": {
           "type": "boolean",
-          "description": "Whether the change was published and the live set replaced all the same. Nothing is rolled back; mcpServers.list shows where things stand."
+          "description": "For mcpServers.save and mcpServers.remove: whether the change was published and the live set replaced all the same. For mcpServers.inspect: whether the server was started."
+        },
+        "code": {
+          "$ref": "#/$defs/McpServersErrorCode",
+          "description": "What the request would have been answered had its record been written: the refusal or failure that stopped it. Absent when nothing stopped it, or when the first record could not be written and nothing was done. Never audit_unavailable."
         }
       },
       "required": ["applied"]
+    },
+    "McpServersInspectParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Wire input for mcpServers.inspect: start the stored server under name once, outside any conversation, list what it offers, then stop it. A server turned off can be inspected; a server not yet saved cannot. At most x-mcpServerInspect.maxConcurrent run at once, each within x-mcpServerInspect.deadlineMs.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The stored server's name. Unknown: mcp_servers_not_found; nessa: mcp_servers_reserved_name."
+        }
+      },
+      "required": ["name"]
+    },
+    "McpServersInspectCut": {
+      "type": "string",
+      "enum": ["tools", "ui", "bytes"],
+      "description": "Which bound left an inspection incomplete. tools: the server listed more than x-mcpServerInspect.maxToolPages pages, or more tools than the gateway reads from one server; the rest are not listed. ui: more distinct UI resources than x-mcpServerInspect.maxUiReads; tools past it are listed without ui. bytes: the answer would pass 64 KiB; tools were dropped from the end until it fits."
+    },
+    "McpInspectedUi": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A tool's MCP App as the server declares it: the resource, and the CSP and permissions it asks for, read as mcp.readResource reads them.",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "The ui:// resource the tool declares."
+        },
+        "csp": { "$ref": "#/$defs/McpUiCsp", "description": "The CSP the app asks for." },
+        "permissions": {
+          "$ref": "#/$defs/McpUiPermissions",
+          "description": "What the app asks of the host."
+        }
+      },
+      "required": ["uri", "csp", "permissions"]
+    },
+    "McpInspectedTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One tool a server lists, as mcpServers.inspect reports it.",
+      "properties": {
+        "name": { "type": "string", "description": "The tool's name on the server." },
+        "readOnlyHint": {
+          "type": "boolean",
+          "description": "annotations.readOnlyHint, when the server gives it as a boolean."
+        },
+        "destructiveHint": {
+          "type": "boolean",
+          "description": "annotations.destructiveHint, when the server gives it as a boolean."
+        },
+        "ui": {
+          "$ref": "#/$defs/McpInspectedUi",
+          "description": "Its MCP App, when it declares one and it was read."
+        }
+      },
+      "required": ["name"]
+    },
+    "McpServersInspectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of mcpServers.inspect: the tools the server listed, with each MCP App's CSP and permissions. The server has been stopped and its process group killed before this is answered.",
+      "properties": {
+        "complete": {
+          "type": "boolean",
+          "description": "Whether every tool and UI the server offered is here."
+        },
+        "cut": {
+          "$ref": "#/$defs/McpServersInspectCut",
+          "description": "Which bound left it incomplete; present exactly when complete is false."
+        },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/McpInspectedTool" },
+          "description": "The tools, in the server's order."
+        }
+      },
+      "required": ["complete", "tools"]
     },
     "McpServersErrorCode": {
       "type": "string",
@@ -2549,9 +2639,14 @@
         "mcp_servers_config_invalid",
         "mcp_servers_config_too_large",
         "mcp_servers_storage_unavailable",
-        "audit_unavailable"
+        "audit_unavailable",
+        "mcp_server_start_failed",
+        "mcp_server_timed_out",
+        "mcp_server_gone",
+        "mcp_server_malformed",
+        "mcp_server_remote_error"
       ],
-      "description": "Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long; nothing was written. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change could not be made durable (details: McpServersAuditUnavailableDetails)."
+      "description": "Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change or inspection could not be made durable (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails)."
     },
     "ConversationErrorCode": {
       "type": "string",

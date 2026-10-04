@@ -2,13 +2,14 @@
 //! from each other, revoking a grant's, and the view's lookup of a
 //! conversation's own.
 use super::fixture::{launch, Behaviour, FixtureLauncher, CHART};
-use super::{servers, session, Harness};
+use super::{conversation, servers, session, Harness};
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::UiResourceUri;
 use crate::infrastructure::acp::sessions::{McpServerProblem, StdioMcpServer, MAX_MCP_SERVERS};
 use crate::infrastructure::clock::manual::ManualClock;
 use crate::infrastructure::mcp::{
-    McpError, McpServerLaunch, McpServers, INITIALIZE_TIMEOUT, MCP_SESSION_VARIABLE,
+    McpError, McpServerLaunch, McpServers, INITIALIZE_TIMEOUT, MAX_TOOLS, MAX_TOOL_PAGES,
+    MCP_SESSION_VARIABLE,
 };
 use serde_json::json;
 use std::{ffi::OsString, sync::Arc, time::Duration};
@@ -202,7 +203,11 @@ fn an_invalid_or_repeated_configuration_is_refused() {
         Err(McpError::InvalidConfiguration(McpServerProblem::Name))
     ));
     let servers = McpServers::with_launcher(vec![launch("one")], clock, launcher).unwrap();
-    let names: Vec<_> = servers.configured().into_iter().map(|s| s.name).collect();
+    let names: Vec<_> = servers
+        .configured()
+        .into_iter()
+        .map(|launch| launch.server.name)
+        .collect();
     assert_eq!(names, ["one"]);
 }
 
@@ -210,7 +215,7 @@ fn configured(servers: &McpServers) -> Vec<String> {
     servers
         .configured()
         .into_iter()
-        .map(|server| server.name)
+        .map(|launch| launch.server.name)
         .collect()
 }
 
@@ -689,33 +694,39 @@ async fn a_list_that_falls_behind_the_change_notices_is_read_again() {
 
 /// #391 decision 1: an opening admitted against one configuration is served
 /// by that configuration or refused. A set replaced between the admission and
-/// the opening refuses it `ConfigurationChanged` — or `NotConfigured` once the
-/// name is gone — and launches nothing; the configuration as it is now opens.
+/// the opening — its arguments or only its environment changed (#391 PR 2
+/// pass 2b, decision 2) — refuses it `ConfigurationChanged`, or
+/// `NotConfigured` once the name is gone, and launches nothing; the
+/// configuration as it is now opens.
 #[tokio::test]
 async fn an_opening_admitted_on_a_replaced_configuration_is_refused() {
     let (servers, launcher, _) = servers(Behaviour::default());
-    let admitted = launch("fixture").server;
+    let admitted = launch("fixture");
     let edited = McpServerLaunch {
         server: StdioMcpServer {
             args: vec!["--edited".into()],
-            ..admitted.clone()
+            ..admitted.server.clone()
         },
         ..launch("fixture")
     };
-    servers.replace(vec![edited.clone()]).unwrap();
-    assert!(matches!(
-        servers.open_as(&admitted, super::owner()).await,
-        Err(McpError::ConfigurationChanged)
-    ));
+    let mut environment_only = admitted.clone();
+    environment_only
+        .environment
+        .insert("API_TOKEN".into(), "rotated".into());
+    for replaced in [edited.clone(), environment_only] {
+        servers.replace(vec![replaced]).unwrap();
+        assert!(matches!(
+            servers.open_as(&admitted, super::owner()).await,
+            Err(McpError::ConfigurationChanged)
+        ));
+    }
     assert_eq!(launcher.launches(), 0);
-    servers
-        .open_as(&edited.server, super::owner())
-        .await
-        .unwrap();
+    servers.replace(vec![edited.clone()]).unwrap();
+    servers.open_as(&edited, super::owner()).await.unwrap();
     assert_eq!(launcher.launches(), 1);
     servers.replace(Vec::new()).unwrap();
     assert!(matches!(
-        servers.open_as(&edited.server, super::owner()).await,
+        servers.open_as(&edited, super::owner()).await,
         Err(McpError::NotConfigured)
     ));
 }
@@ -728,4 +739,65 @@ fn a_launch_prints_its_environment_names_never_its_values() {
     let printed = format!("{launch:?}");
     assert!(printed.contains("API_TOKEN"), "{printed}");
     assert!(!printed.contains("secret-value"), "{printed}");
+}
+
+/// #391 PR 2 decision 8: a session opened once, for no SDK session, is
+/// launched on the launch it is given — configured or not — and lists its
+/// tools only when asked: no background list, nothing kept for `tool_ui`.
+/// An invalid launch is refused before anything is launched, and `stop`
+/// ends a session opened once as it ends any other.
+#[tokio::test]
+async fn a_session_opened_once_belongs_to_no_conversation_and_stops_with_the_servers() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    assert!(matches!(
+        servers.open_once(&launch("a__b")).await,
+        Err(McpError::InvalidConfiguration(McpServerProblem::Name))
+    ));
+    assert_eq!(launcher.launches(), 0);
+    // Not in the live set, and opened all the same.
+    let once = servers.open_once(&launch("unconfigured")).await.unwrap();
+    assert_eq!(once.server(), "unconfigured");
+    let server = launcher.server(0);
+    server.arrived("notifications/initialized", 1).await;
+    assert!(server.with_method("tools/list").is_empty());
+    let listed = once.list_tool_pages(MAX_TOOL_PAGES).await.unwrap();
+    assert_eq!(listed.tools.len(), 2);
+    assert!(!listed.more);
+    let call = McpTool::new("unconfigured", "show_chart").unwrap();
+    assert!(servers.tool_ui(&conversation(), &call).is_none());
+    servers.stop().await;
+    server.stopped().await;
+    assert!(matches!(
+        servers.open_once(&launch("unconfigured")).await,
+        Err(McpError::Stopped)
+    ));
+}
+
+/// #391 PR 2 decision 8: `list_tool_pages` stops at its page bound and says
+/// there was more, where `list_tools` refuses the list as too large.
+#[tokio::test]
+async fn listing_tool_pages_stops_at_its_bound_and_says_there_was_more() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let once = servers.open_once(&launch("fixture")).await.unwrap();
+    let tool = |name: &str| json!({ "name": name, "inputSchema": {"type": "object"} });
+    launcher
+        .server(0)
+        .set_pages(vec![vec![tool("a")], vec![tool("b")], vec![tool("c")]]);
+    let two = once.list_tool_pages(2).await.unwrap();
+    let names: Vec<_> = two.tools.iter().map(|each| each.tool().tool()).collect();
+    assert_eq!(names, ["a", "b"]);
+    assert!(two.more);
+    let all = once.list_tool_pages(3).await.unwrap();
+    assert_eq!(all.tools.len(), 3);
+    assert!(!all.more);
+    launcher.server(0).set_pages(vec![(0..=MAX_TOOLS)
+        .map(|n| tool(&format!("t{n}")))
+        .collect()]);
+    let capped = once.list_tool_pages(1).await.unwrap();
+    assert_eq!(capped.tools.len(), MAX_TOOLS);
+    assert!(capped.more);
+    assert_eq!(
+        once.list_tools().await,
+        Err(McpError::TooLarge("tools/list"))
+    );
 }

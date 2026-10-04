@@ -12,7 +12,7 @@ use nessa_sdk::infrastructure::{
     mcp::{McpServerLaunch, McpServers, MCP_SESSION_VARIABLE},
 };
 use nessa_server::mcp_servers::{
-    domain::configuration_digest,
+    domain::{configuration_digest, ConfigurationKey},
     infrastructure::{bind, ConversationGrants, OsTokens, Relay},
 };
 use serde_json::{json, Value};
@@ -38,6 +38,11 @@ fn fixture(args: &[&str]) -> StdioMcpServer {
     }
 }
 
+/// The key the relay served here digests with.
+fn key() -> ConfigurationKey {
+    ConfigurationKey::new([7; 32])
+}
+
 /// A relay socket in `directory` serving `server`, until the runtime ends,
 /// and a conversation's grant with the token its stand-ins carry.
 async fn serve(directory: &Path, server: &StdioMcpServer) -> (PathBuf, StandInGrant, String) {
@@ -56,7 +61,7 @@ async fn serve(directory: &Path, server: &StdioMcpServer) -> (PathBuf, StandInGr
     let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     let grant = grants.grant(&SessionId::new("conversation").unwrap());
     let token = grant.environment()[0].1.clone();
-    tokio::spawn(Arc::new(Relay::new(servers, grants)).listen(listener));
+    tokio::spawn(Arc::new(Relay::new(servers, grants, key())).listen(listener));
     (socket, grant, token)
 }
 
@@ -79,7 +84,7 @@ impl RelayProcess {
                 "mcp-relay",
                 socket.to_str().unwrap(),
                 &server.name,
-                &configuration_digest(&server.command, &server.args),
+                &configuration_digest(&key(), &server.command, &server.args, &BTreeMap::new()),
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
