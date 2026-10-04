@@ -352,6 +352,37 @@ describe("conversation view agreement", () => {
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
   })
 
+  it("refuses an app's review that names a tool other than the one it reviews", () => {
+    const withTools = (tool: string, toolName: string) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName,
+            argumentsJson: "{}",
+            origin: { kind: "app", server: "charts", tool },
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    expect(() =>
+      conversationView(withTools("app_delete_rows", "app_delete_rows"), "conversation"),
+    ).not.toThrow()
+    for (const [tool, toolName] of [
+      ["app_delete_row", "app_delete_rows"],
+      ["App_Delete_Rows", "app_delete_rows"],
+    ])
+      expect(() => conversationView(withTools(tool, toolName), "conversation")).toThrow(
+        "An app's review names a tool other than the one it reviews",
+      )
+  })
+
   it("reads what each permission option decides, and refuses an option that does not say", () => {
     const withOptions = (options: unknown[]) => {
       const value = view()
