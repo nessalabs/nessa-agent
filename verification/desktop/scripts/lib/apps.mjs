@@ -5,7 +5,7 @@
  * through the page.
  */
 import { CannotRun } from "./cli.mjs"
-import { css } from "./selectors.mjs"
+import { css, names } from "./selectors.mjs"
 
 /**
  * The app's own document in the frame drawn in `place` (inline, pane,
@@ -35,34 +35,32 @@ export function oneMount(count) {
   return `the call is drawn as ${count} inline app frames, not one (#418)`
 }
 
-/**
- * The head's words when they end with `tool` as a whole name, case and all.
- * A tool's name may hold any characters (the protocol bounds only its bytes),
- * so the bounds are the head's: whitespace or the start before, its end after.
- * `rows.delete` is not named by "… run rows.delete-all", nor `app_delete_row`
- * by "… run APP_DELETE_ROW".
- */
-export const toolAtEnd = (tool) =>
-  new RegExp(`(?:^|\\s)${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
+/** `text` and nothing else, as a `hasText` pattern: Playwright's string matches a part. */
+export const exactly = (text) =>
+  new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
 
 /**
- * The locator for the first visible approval card whose head names `tool`
- * (`toolAtEnd`). One rule for the card's appearing and its going
- * (`approvalShown`, `approvalGone`): a hidden card that names the tool does
- * not stand for a visible one.
+ * The locator for the first visible review card an app asked for, whose head
+ * is exactly `names.appAsks(server, tool)`. A tool's name may hold any
+ * characters (the protocol bounds only its bytes), so no part of a head stands
+ * for a name: the whole head does. One rule for the card's appearing and its
+ * going (`approvalShown`, `approvalGone`): a hidden card does not stand for a
+ * visible one.
  */
-export const approvalCardFor = (page, tool) =>
+export const approvalCardFor = (page, server, tool) =>
   page
-    .locator(css.approvalCard)
+    .locator(css.appApprovalCard)
     .filter({
-      has: page.locator(css.approvalHeadWords, { hasText: toolAtEnd(tool) }),
+      has: page.locator(css.approvalHeadWords, {
+        hasText: exactly(names.appAsks(server, tool)),
+      }),
       visible: true,
     })
     .first()
 
 /** Waits up to `ms` for `approvalCardFor`'s card to show: the card, or `null`. */
-export async function approvalShown(page, tool, ms = 10_000) {
-  const card = approvalCardFor(page, tool)
+export async function approvalShown(page, server, tool, ms = 10_000) {
+  const card = approvalCardFor(page, server, tool)
   try {
     await card.waitFor({ state: "visible", timeout: ms })
     return card
@@ -77,9 +75,9 @@ export async function approvalShown(page, tool, ms = 10_000) {
  * shown when the wait starts is waited out, not sampled. Errors other than the
  * timeout (a closed page) propagate.
  */
-export async function approvalGone(page, tool, ms) {
+export async function approvalGone(page, server, tool, ms) {
   try {
-    await approvalCardFor(page, tool).waitFor({ state: "hidden", timeout: ms })
+    await approvalCardFor(page, server, tool).waitFor({ state: "hidden", timeout: ms })
     return true
   } catch (error) {
     if (error?.name === "TimeoutError") return false

@@ -336,7 +336,7 @@ async function settleEarlier(page, stack, failures) {
       failures.push("an earlier review of the app's is not the window's approval")
       break
     }
-    const card = await approvalShown(page, DESTRUCTIVE)
+    const card = await approvalShown(page, SERVER, DESTRUCTIVE)
     if (!card) {
       failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
       break
@@ -381,7 +381,7 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
     failures.push("the window's approval is not the review the call opened")
     return seen
   }
-  const card = await approvalShown(page, DESTRUCTIVE)
+  const card = await approvalShown(page, SERVER, DESTRUCTIVE)
   if (!card) {
     failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
     return seen
@@ -579,7 +579,7 @@ const checks = {
     }
     if (!(await reviewShown(stack, waiting)))
       failures.push("the window's approval is not the review the pane's call opened")
-    const card = await approvalShown(page, DESTRUCTIVE)
+    const card = await approvalShown(page, SERVER, DESTRUCTIVE)
     if (!card) failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
     const paneSaid = await said(pane.app, "again")
     if (paneSaid !== "pending")
@@ -601,7 +601,7 @@ const checks = {
     const withdrawnAt = Date.now()
     const withdrawnMs = withdrawn ? withdrawnAt - closedAt : null
     if (!withdrawn) failures.push("the review was not withdrawn when the pane closed")
-    const cardGone = await approvalGone(page, DESTRUCTIVE, 5000)
+    const cardGone = await approvalGone(page, SERVER, DESTRUCTIVE, 5000)
     // From the withdrawal seen to the card gone; null when either was not seen.
     const cardGoneAfterWithdrawnMs =
       withdrawn && cardGone ? Date.now() - withdrawnAt : null

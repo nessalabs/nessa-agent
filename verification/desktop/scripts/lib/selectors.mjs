@@ -108,6 +108,7 @@ export const css = {
 
   // Approval card (arranged by its own width)
   approvalCard: ".workspace-approval", // class
+  appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
   approvalHead: ".workspace-approval-head", // class: who asks, and what
@@ -295,6 +296,8 @@ export const zoneSaid = {
 /** Accessible names, for getByRole / getByText. */
 export const names = {
   agentsEntry: "Agents",
+  /** An app's review card's head: the app by its server, and the tool it asked to run (`approvalHead`). */
+  appAsks: (server, tool) => `The ${server} app wants to run ${tool}`,
   /** A pane's "…" menu: the header picture's two choices (issue #320). */
   chooseHeaderPicture: "Choose Header Picture…",
   useNightScene: "Use Night Scene",
@@ -424,9 +427,9 @@ export const appReview = {
   session: "Clean up the stale rows",
   sessionId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
   /** The card's head: the app by its server, and the tool it named. */
-  head: (tool) => `The mcptest app wants to run ${tool}`,
+  head: (tool) => names.appAsks("mcptest", tool),
   /** The overview row's accessible name: the title, then the app asking. */
-  row: (tool) => `Clean up the stale rows. The mcptest app wants to run ${tool} {}.`,
+  row: (tool) => `Clean up the stale rows. ${names.appAsks("mcptest", tool)} {}.`,
   tool: "app_delete_row",
   /** The fixture page's title, by which the script knows it is served. */
   title: "Nessa: an app's review",
