@@ -1,22 +1,33 @@
 //! Substitutes for what an MCP App's calls go through — the conversation's
 //! MCP session, the audit, the ticket store — and a conversation whose one
 //! turn called a tool with a UI, for the service's tests and the socket's.
+use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     conversation_session, ConversationCaller, ConversationDependencies, ConversationError,
     ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationPermission,
     ConversationPermissionOrigin, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppPorts,
-    McpAppRef, McpApps, McpToolUis, ProviderSessionErasers, RequestedConversation, ResourceTickets,
-    SubmissionMode, SubmittedMessage, TicketEnd, TicketRefusal,
+    McpAppAuditRecord, McpAppCall, McpAppContextUpdate, McpAppFailure, McpAppFuture,
+    McpAppInitiator, McpAppMessage, McpAppPorts, McpAppRef, McpApps, McpToolUis,
+    ProviderSessionErasers, RequestedConversation, ResourceTickets, SubmissionMode,
+    SubmittedMessage, TicketEnd, TicketRefusal,
 };
+use crate::conversation::application::{ConversationAgent, ConversationAgents};
 use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
-    only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
-    Provider, ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
+    AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries, Provider,
+    ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
     DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+use nessa_sdk::application::agent_execution::agents::{AgentError, AgentFuture};
+use nessa_sdk::application::agent_execution::executions::{
+    ExecutionAudit, ExecutionAuditRecord, ExecutionUpdate,
+};
+use nessa_sdk::application::agent_execution::sessions::{
+    CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+};
+use nessa_sdk::domain::agent_execution::prompts::UserMessage;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
 use nessa_sdk::domain::mcp_apps::{
@@ -28,13 +39,84 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::{oneshot, Notify};
 use uuid::Uuid;
 
 pub(crate) const SERVER: &str = "charts";
+
+/// Session storage that saves nothing while `refusing` is set, as a disk that
+/// went away would, and behaves otherwise.
+struct Refusing {
+    refusing: Arc<AtomicBool>,
+    inner: Arc<InMemoryStorage>,
+}
+impl SessionStorage for Refusing {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.inner.read_committed(id)
+    }
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        let refusing = self.refusing.clone();
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let inner = inner.open(id).await?;
+            Ok(Box::new(RefusingLease { refusing, inner }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+struct RefusingLease {
+    refusing: Arc<AtomicBool>,
+    inner: Box<dyn SessionStorageLease>,
+}
+impl SessionStorageLease for RefusingLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        self.inner.load()
+    }
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        if self.refusing.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
+        }
+        self.inner.save_changes(binding, snapshot, units)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
+}
 pub(crate) const UI_TOOL: &str = "show";
 pub(crate) const URI: &str = "ui://charts/show.html";
 pub(crate) const INSTANCE: &str = "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c";
 pub(crate) const OTHER_INSTANCE: &str = "0d6c3e7a-1b2c-4d5e-8f90-a1b2c3d4e5f6";
+
+/// The agent's own audit of what it was given: accepting, until told to fail.
+#[derive(Default)]
+pub(crate) struct ExecutionRecords {
+    pub(crate) failing: AtomicBool,
+    /// When set, the next record says it began and waits until the test
+    /// lets it go: a submission held inside its admission, past the
+    /// conversation's last check and before the agent answered.
+    pub(crate) hold: Mutex<Option<(Arc<Notify>, oneshot::Receiver<()>)>>,
+}
+impl ExecutionAudit for ExecutionRecords {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        let failing = self.failing.load(Ordering::SeqCst);
+        let hold = self.hold.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((began, go)) = hold {
+                began.notify_one();
+                let _ = go.await;
+            }
+            if failing {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
 
 /// The UI the call `charts/show` declared, for the conversation's session.
 pub(crate) struct Uis(String);
@@ -144,6 +226,25 @@ pub(crate) struct Audit {
     pub(crate) failing_after: Mutex<Option<usize>>,
     /// When set, every record takes this long to commit.
     pub(crate) slow: Mutex<Option<Duration>>,
+    /// When set, the next record waits for the test to let it commit,
+    /// saying first that it is waiting.
+    pub(crate) hold: Mutex<Option<Hold>>,
+}
+/// A record held mid-commit until the test lets it go.
+#[derive(Clone)]
+pub(crate) struct Hold {
+    /// Told when a record is waiting.
+    pub(crate) waiting: Arc<Notify>,
+    /// One permit lets one waiting record commit.
+    pub(crate) go: Arc<tokio::sync::Semaphore>,
+}
+impl Default for Hold {
+    fn default() -> Self {
+        Self {
+            waiting: Arc::default(),
+            go: Arc::new(tokio::sync::Semaphore::new(0)),
+        }
+    }
 }
 impl Audit {
     pub(crate) fn phases(&self) -> Vec<McpAppAuditPhase> {
@@ -165,10 +266,15 @@ impl McpAppAudit for Audit {
                 .unwrap()
                 .is_some_and(|after| taken >= after);
         let slow = *self.slow.lock().unwrap();
+        let hold = self.hold.lock().unwrap().take();
         Box::pin(async move {
             // On record only once committed.
             if let Some(slow) = slow {
                 tokio::time::sleep(slow).await;
+            }
+            if let Some(hold) = hold {
+                hold.waiting.notify_one();
+                drop(hold.go.acquire().await.unwrap());
             }
             if failing {
                 Err(ConversationError::Audit)
@@ -228,6 +334,15 @@ pub(crate) struct Fixture {
     pub(crate) apps: Arc<Apps>,
     pub(crate) audit: Arc<Audit>,
     pub(crate) tickets: Arc<Tickets>,
+    /// The conversation's agent: what each turn it ran was given.
+    pub(crate) provider: Arc<ProviderFactory>,
+    /// The conversation's own record.
+    pub(crate) repository: Arc<MemoryRepository>,
+    /// The agent's audit of what it was given.
+    pub(crate) execution_audit: Arc<ExecutionRecords>,
+    /// While set, the agent's session storage saves nothing: it refuses
+    /// whatever it is asked to admit.
+    pub(crate) storage_refuses: Arc<AtomicBool>,
     /// The tool call whose UI the app is.
     pub(crate) execution_id: String,
     pub(crate) tool_id: String,
@@ -246,6 +361,7 @@ impl Fixture {
             ..owner.clone()
         };
         let provider = Arc::new(ProviderFactory::default());
+        let storage_refuses = Arc::new(AtomicBool::new(false));
         provider
             .execution_updates
             .lock()
@@ -266,11 +382,27 @@ impl Fixture {
         let audit = Arc::new(Audit::default());
         let tickets = Arc::new(Tickets::default());
         let repository = Arc::new(MemoryRepository::default());
+        let execution_audit = Arc::new(ExecutionRecords::default());
         let service = ConversationService::with_mcp_apps(
             ConversationDependencies {
-                agents: only(Arc::new(Provider::new(provider))),
-                storage: Arc::new(InMemoryStorage::new()),
-                metadata: repository,
+                agents: ConversationAgents::new(
+                    HashMap::from([(
+                        AgentId::Claude,
+                        ConversationAgent {
+                            provider: Arc::new(Provider::new(provider.clone())),
+                            execution_audit: execution_audit.clone(),
+                            reserved_output_tokens: 4096,
+                            readiness: None,
+                        },
+                    )]),
+                    AgentId::Claude,
+                )
+                .unwrap(),
+                storage: Arc::new(Refusing {
+                    refusing: storage_refuses.clone(),
+                    inner: Arc::new(InMemoryStorage::new()),
+                }),
+                metadata: repository.clone(),
                 mode_audit: Arc::new(RecordingModeAudit::default()),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -349,7 +481,133 @@ impl Fixture {
             apps,
             audit,
             tickets,
+            provider,
+            repository,
+            execution_audit,
+            storage_refuses,
         }
+    }
+
+    /// The app at the mount `instance` sends `text` into the conversation.
+    pub(crate) async fn send_message(
+        &self,
+        instance: &str,
+        text: &str,
+    ) -> Result<String, ConversationError> {
+        // Each its own request: the same request again is the same turn.
+        self.service
+            .send_app_message(
+                self.id.clone(),
+                self.caller(&format!("app-message-{}", Uuid::new_v4())),
+                McpAppMessage {
+                    app: self.app(instance),
+                    server: SERVER.into(),
+                    text: text.into(),
+                },
+            )
+            .await
+    }
+
+    /// The app at the mount `instance` gives the model `text` and
+    /// `structured` content.
+    pub(crate) async fn update_context(
+        &self,
+        instance: &str,
+        text: Option<&str>,
+        structured: Option<&str>,
+    ) -> Result<(), ConversationError> {
+        self.service
+            .update_app_model_context(
+                self.id.clone(),
+                self.caller("app-context"),
+                McpAppContextUpdate {
+                    app: self.app(instance),
+                    server: SERVER.into(),
+                    text: text.map(str::to_owned),
+                    structured_content_json: structured.map(str::to_owned),
+                },
+            )
+            .await
+    }
+
+    /// The person sends `text`, as `execution`.
+    pub(crate) async fn person_sends(&self, execution: &str, text: &str) {
+        self.service
+            .submit(
+                self.id.clone(),
+                self.caller(execution),
+                execution.into(),
+                SubmittedMessage {
+                    text: text.into(),
+                    ..SubmittedMessage::default()
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+    }
+
+    /// The message the agent was given as `execution`, once it was.
+    pub(crate) async fn given(&self, execution: &str) -> UserMessage {
+        let executions = || self.provider.executions.lock().unwrap().clone();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(at) = executions().iter().position(|id| id == execution) {
+                    break self.provider.messages.lock().unwrap()[at].clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The app's message started in the background, with the review it
+    /// waits on once the conversation shows it.
+    pub(crate) async fn held_message(
+        &self,
+        instance: &str,
+        text: &str,
+    ) -> (
+        tokio::task::JoinHandle<Result<String, ConversationError>>,
+        ConversationPermission,
+    ) {
+        self.asked(instance, &format!("held-message-{}", Uuid::new_v4()), text)
+            .await
+    }
+
+    /// [`Self::held_message`], as the app's request `request`.
+    pub(crate) async fn asked(
+        &self,
+        instance: &str,
+        request: &str,
+        text: &str,
+    ) -> (
+        tokio::task::JoinHandle<Result<String, ConversationError>>,
+        ConversationPermission,
+    ) {
+        let before = self.app_reviews().await.len();
+        let service = self.service.clone();
+        let id = self.id.clone();
+        let caller = self.caller(request);
+        let message = McpAppMessage {
+            app: self.app(instance),
+            server: SERVER.into(),
+            text: text.into(),
+        };
+        let task = tokio::spawn(async move { service.send_app_message(id, caller, message).await });
+        let review = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let reviews = self.app_reviews().await;
+                if reviews.len() > before {
+                    break reviews.last().unwrap().clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        (task, review)
     }
 
     /// The owner, acting by `action`.

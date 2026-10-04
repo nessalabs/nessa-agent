@@ -40,7 +40,7 @@ use nessa_sdk::domain::agent_execution::permissions::{
     PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
     PermissionScope,
 };
-use nessa_sdk::domain::agent_execution::prompts::ImageReference;
+use nessa_sdk::domain::agent_execution::prompts::{ImageReference, UserMessage};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sdk::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate};
 use nessa_sdk::domain::effective_capabilities::value_objects::{
@@ -69,6 +69,18 @@ impl ExecutionAudit for AcceptingAudit {
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
+    /// While set, whether a conversation's mode needs verifying cannot be
+    /// read: a submission is refused before the agent sees it.
+    pub(crate) verification_unreadable: AtomicBool,
+    /// While set, that read panics: a submission's own task fails, and
+    /// whether the agent has it is not known to its caller.
+    pub(crate) verification_panics: AtomicBool,
+    /// When set, the next such read says it began and waits until the test
+    /// lets it go: a submission held under its lock, past its resolve.
+    pub(crate) verification_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
+    /// The same, for the read of a pending mode change: a submission held
+    /// under its lock, before its resolve.
+    pub(crate) pending_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
@@ -187,7 +199,14 @@ impl ConversationRepository for MemoryRepository {
                     && request.state == ConversationModeRequestState::Pending
             })
             .cloned();
-        Box::pin(async move { Ok(found) })
+        let gate = self.pending_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((began, open)) = gate {
+                began.notify_one();
+                let _ = open.await;
+            }
+            Ok(found)
+        })
     }
     fn mode_change(
         &self,
@@ -203,12 +222,26 @@ impl ConversationRepository for MemoryRepository {
         Box::pin(async move { Ok(found) })
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        if self.verification_unreadable.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(ConversationError::Metadata) });
+        }
+        assert!(
+            !self.verification_panics.load(Ordering::SeqCst),
+            "the conversation's record cannot be read"
+        );
         let found = self.mode_requests.lock().unwrap().values().any(|request| {
             &request.conversation_id == id
                 && request.state == ConversationModeRequestState::Applied
                 && request.application == Some(ConversationModeApplication::Deferred)
         });
-        Box::pin(async move { Ok(found) })
+        let gate = self.verification_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((began, open)) = gate {
+                began.notify_one();
+                let _ = open.await;
+            }
+            Ok(found)
+        })
     }
     fn observe_mode_application(
         &self,
@@ -586,6 +619,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) executions: Mutex<Vec<String>>,
+    /// The next turn fails as it is prepared, before its prompt is sent.
+    pub(crate) prepare_failure: Mutex<Option<AgentError>>,
     pub(crate) execution_started: Notify,
     pub(crate) execution_gate: Mutex<Option<Receiver<()>>>,
     /// One explicit provider settlement used by failure-path projection tests.
@@ -628,6 +663,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) model_images: AtomicBool,
     /// Every image a dispatched request referred to, in order.
     pub(crate) images: Mutex<Vec<ImageReference>>,
+    /// Every message dispatched, whole, in order: who wrote it and what
+    /// apps gave with it as much as what it said.
+    pub(crate) messages: Mutex<Vec<UserMessage>>,
 }
 
 /// What a conversation holds, as a list a test writes. Remembers every release.
@@ -1043,7 +1081,15 @@ impl ProviderSessionBackend for Backend {
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async move {
+            match self.factory.prepare_failure.lock().unwrap().take() {
+                Some(error) => Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                )),
+                None => Ok(()),
+            }
+        })
     }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
@@ -1062,6 +1108,11 @@ impl ProviderSessionBackend for Backend {
                 .lock()
                 .unwrap()
                 .extend_from_slice(request.user_message.images());
+            self.factory
+                .messages
+                .lock()
+                .unwrap()
+                .push(request.user_message.clone());
             self.factory.execution_started.notify_one();
             let gate = self.factory.execution_gate.lock().unwrap().take();
             if let Some(gate) = gate {

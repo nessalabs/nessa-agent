@@ -9,12 +9,20 @@
 //! beside the agent's, answered through the same `conversation.answer` and
 //! `conversation.cancel`, and each ended exactly once — allowed, denied,
 //! expired, or withdrawn.
+//!
+//! Under the same lock (#390): the context each mount last gave the model,
+//! held until a message admitted while the conversation is idle carries it.
+//! A release, an opening's end, a new opening and a delete drop them unsent;
+//! the conversation's one update lock orders the updates themselves
+//! (`docs/design/mcp-app-calls.md`, "An app in its conversation: the
+//! gateway").
 use super::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
 use super::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
 };
 use crate::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
+use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, UserMessage};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
@@ -46,8 +54,20 @@ pub const MAX_OPEN_APP_REVIEWS: usize = 16;
 pub const MAX_APP_REVIEW_BYTES: usize = 16_000;
 /// How many released mounts a conversation remembers.
 pub const MAX_RELEASED_MOUNTS: usize = 1024;
+/// The most mounts of one conversation that hold a context at once: as many
+/// as one message carries, so a message carries every one held.
+pub const MAX_HELD_CONTEXTS: usize = UserMessage::MAX_APP_MODEL_CONTEXTS;
 /// What an app review's identity starts with.
 const APP_REVIEW_PREFIX: &str = "app-";
+
+/// What an app's review asks the person to allow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewAsk {
+    /// Running a destructive tool of its server.
+    RunTool,
+    /// Sending one message in the conversation as them. Every message asks.
+    SendMessage,
+}
 
 /// Who answered a review.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +116,15 @@ pub enum ReviewRefusal {
     Ended,
 }
 
+/// Why a context was not held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextRefusal {
+    /// [`MAX_HELD_CONTEXTS`] other mounts hold one already.
+    Full,
+    /// Its mount was released, or the opening ended.
+    Gone(ReviewRefusal),
+}
+
 struct Pending {
     review: ConversationPermission,
     bytes: usize,
@@ -107,6 +136,10 @@ struct Pending {
 #[derive(Default)]
 pub struct AppReviews {
     state: Mutex<Reviews>,
+    /// The conversation's one context update at a time, held across its
+    /// room check, its record and its hold ([`Self::one_update`]): so the
+    /// order updates are recorded in is the order they are held in.
+    updates: tokio::sync::Mutex<()>,
 }
 #[derive(Default)]
 struct Reviews {
@@ -125,6 +158,14 @@ struct Reviews {
     ended: bool,
     /// The conversation was deleted: no opening begins again.
     deleted: bool,
+    /// The context each mount last gave, in the order they were given, from
+    /// at most [`MAX_HELD_CONTEXTS`] mounts.
+    contexts: Vec<HeldContext>,
+}
+/// One mount's context, as it gave it.
+struct HeldContext {
+    app: McpAppRef,
+    context: AppModelContext,
 }
 impl Reviews {
     fn key(&self, permission: &str) -> Option<u64> {
@@ -171,8 +212,10 @@ impl AppReviews {
         // Every opening is ended before the next begins. Should one ever not
         // be, its reviews are not carried into this one: let go of, each
         // wait reads its review as withdrawn by the system. Its tickets are
-        // not let go of here; they run out their lifetime.
+        // not let go of here; they run out their lifetime. Nor are the
+        // contexts it held: an opening's apps give the new one nothing.
         state.pending.clear();
+        state.contexts.clear();
         state.epoch
     }
 
@@ -190,9 +233,79 @@ impl AppReviews {
             state.ended = true;
             state.released.clear();
             state.bytes = 0;
+            state.contexts.clear();
             std::mem::take(&mut state.pending)
         };
         withdraw_ended(ended, &McpAppInitiator::System);
+    }
+
+    /// One context update of the conversation at a time: held across its
+    /// room check ([`Self::room`]), its record and its hold ([`Self::hold`]).
+    pub async fn one_update(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.updates.lock().await
+    }
+
+    /// Whether an update of `app` in the opening `epoch` may be given now:
+    /// its mount not released, the opening not ended, and, when it is to
+    /// hold a context (`holds`), room for it — this mount holds one, or
+    /// fewer than [`MAX_HELD_CONTEXTS`] others do. Asked under
+    /// [`Self::one_update`], so nothing takes the room before the hold.
+    pub fn room(&self, epoch: u64, app: &McpAppRef, holds: bool) -> Result<(), ContextRefusal> {
+        let state = self.state.lock().expect("app reviews");
+        state.live(epoch, app).map_err(ContextRefusal::Gone)?;
+        let others = state
+            .contexts
+            .iter()
+            .filter(|held| &held.app != app)
+            .count();
+        if holds && others >= MAX_HELD_CONTEXTS {
+            return Err(ContextRefusal::Full);
+        }
+        Ok(())
+    }
+
+    /// The update of `app`, on record, is what it gives the model now:
+    /// `context`, in place of what it held, or nothing. A release or an end
+    /// that came after its room was checked came after it too, and it is
+    /// not held.
+    pub fn hold(&self, epoch: u64, app: &McpAppRef, context: Option<AppModelContext>) {
+        let mut state = self.state.lock().expect("app reviews");
+        if state.live(epoch, app).is_err() {
+            return;
+        }
+        state.contexts.retain(|held| &held.app != app);
+        if let Some(context) = context {
+            state.contexts.push(HeldContext {
+                app: app.clone(),
+                context,
+            });
+        }
+    }
+
+    /// The contexts held now, in the order they were given.
+    pub fn held(&self) -> Vec<AppModelContext> {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .contexts
+            .iter()
+            .map(|held| held.context.clone())
+            .collect()
+    }
+
+    /// A turn carrying `carried` was admitted: let go of exactly those, by
+    /// their update's identity. A newer update a mount gave since they were
+    /// read is another identity, and stays held.
+    pub fn let_go(&self, carried: &[AppModelContext]) {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .contexts
+            .retain(|held| {
+                !carried
+                    .iter()
+                    .any(|context| context.update_id() == held.context.update_id())
+            });
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -201,20 +314,23 @@ impl AppReviews {
     }
 
     /// Open the review `permission_id` ([`new_review_id`], taken first so
-    /// that its request is on record before it is shown) of `app`'s call to
-    /// `tool` on `server` with `arguments_json`; it stands, in the view,
-    /// until it ends.
+    /// that its request is on record before it is shown) of what `app`
+    /// asks: to run `tool` on `server` with `arguments_json`, or — `tool`
+    /// its own — to send the message `arguments_json` shows. It stands, in
+    /// the view, until it ends.
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         self: &Arc<Self>,
         epoch: u64,
         permission_id: String,
+        ask: ReviewAsk,
         app: &McpAppRef,
         server: &str,
         tool: &str,
         arguments_json: &str,
     ) -> Result<Waiting, ReviewRefusal> {
         let (end, ended) = oneshot::channel();
-        let review = review_of(&permission_id, app, server, tool, arguments_json);
+        let review = review_of(&permission_id, ask, app, server, tool, arguments_json);
         let bytes = encoded_len(&review);
         if bytes > MAX_APP_REVIEW_BYTES {
             return Err(ReviewRefusal::TooLarge);
@@ -339,6 +455,7 @@ impl AppReviews {
                 .filter(|(_, open)| &open.app == app)
                 .map(|(key, _)| *key)
                 .collect();
+            state.contexts.retain(|held| &held.app != app);
             release();
             keys.into_iter()
                 .filter_map(|key| state.remove(key))
@@ -365,27 +482,36 @@ impl AppReviews {
             state.ended = true;
             release();
             state.bytes = 0;
+            state.contexts.clear();
             std::mem::take(&mut state.pending)
         };
         withdraw_ended(ended, by);
     }
 }
 
-/// Whether the review of `app`'s call to `tool` on `server` with
-/// `arguments_json` fits within [`MAX_APP_REVIEW_BYTES`] on its own.
+/// Whether the review of what `app` asks ([`AppReviews::open`]) fits within
+/// [`MAX_APP_REVIEW_BYTES`] on its own.
 pub fn fits(
     permission_id: &str,
+    ask: ReviewAsk,
     app: &McpAppRef,
     server: &str,
     tool: &str,
     arguments_json: &str,
 ) -> bool {
-    encoded_len(&review_of(permission_id, app, server, tool, arguments_json))
-        <= MAX_APP_REVIEW_BYTES
+    encoded_len(&review_of(
+        permission_id,
+        ask,
+        app,
+        server,
+        tool,
+        arguments_json,
+    )) <= MAX_APP_REVIEW_BYTES
 }
 
 fn review_of(
     permission_id: &str,
+    ask: ReviewAsk,
     app: &McpAppRef,
     server: &str,
     tool: &str,
@@ -395,7 +521,12 @@ fn review_of(
         execution_id: app.execution_id.clone(),
         permission_id: permission_id.to_owned(),
         tool_id: app.tool_id.clone(),
-        title: format!("An app asks to run {tool} on {server}"),
+        title: match ask {
+            ReviewAsk::RunTool => format!("An app asks to run {tool} on {server}"),
+            ReviewAsk::SendMessage => {
+                format!("The {tool} app on {server} asks to send a message as you")
+            }
+        },
         tool_name: tool.to_owned(),
         arguments_json: arguments_json.to_owned(),
         options: OPTIONS

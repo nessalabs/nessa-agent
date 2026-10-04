@@ -219,6 +219,37 @@ async fn every_phase_of_one_request_is_its_own_record() {
             McpAppInitiator::System,
             json!({"kind": "ticket_ended", "ticketDigest": "ticket-digest", "cause": "expired"}),
         ),
+        (
+            McpAppAuditPhase::MessageSent {
+                execution_id: "turn-9".into(),
+            },
+            app_initiator(),
+            json!({"kind": "message_sent", "executionId": "turn-9"}),
+        ),
+        (
+            McpAppAuditPhase::MessageNotSent {
+                execution_id: "turn-9".into(),
+            },
+            app_initiator(),
+            json!({"kind": "message_not_sent", "executionId": "turn-9"}),
+        ),
+        (
+            McpAppAuditPhase::MessageUnresolved {
+                execution_id: "turn-9".into(),
+            },
+            app_initiator(),
+            json!({"kind": "message_unresolved", "executionId": "turn-9"}),
+        ),
+        (
+            McpAppAuditPhase::ContextHeld { bytes: 12 },
+            app_initiator(),
+            json!({"kind": "context_held", "bytes": 12}),
+        ),
+        (
+            McpAppAuditPhase::ContextCleared,
+            app_initiator(),
+            json!({"kind": "context_cleared"}),
+        ),
     ];
     let count = cases.len();
     for (phase, initiator, _) in cases.clone() {
@@ -537,5 +568,39 @@ async fn no_argument_result_or_resource_content_is_stored() {
         ] {
             assert!(!text.contains(forbidden), "{forbidden} in {text}");
         }
+    }
+}
+
+#[tokio::test]
+async fn an_apps_message_and_its_context_record_what_they_asked_and_turn_running() {
+    for (ask, stored_ask) in [
+        (
+            McpAppAsk::SendMessage {
+                server: "charts".into(),
+            },
+            json!({"kind": "send_message", "server": "charts"}),
+        ),
+        (
+            McpAppAsk::UpdateModelContext {
+                server: "charts".into(),
+            },
+            json!({"kind": "update_model_context", "server": "charts"}),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("mcp-apps");
+        let audit = audit_at(&directory, 500);
+        let mut record = call(
+            McpAppAuditPhase::Refused(McpAppCode::TurnRunning),
+            app_initiator(),
+        );
+        record.ask = ask;
+        audit.record(record).await.unwrap();
+        let stored = sole_record(&directory);
+        assert_eq!(stored["target"]["ask"], stored_ask);
+        assert_eq!(
+            stored["phase"],
+            json!({"kind": "refused", "code": "turn_running"})
+        );
     }
 }

@@ -2,7 +2,7 @@ use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
-    mcp_apps::{McpAppInitiator, McpAppPorts},
+    mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
@@ -55,7 +55,7 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
+    prompts::{ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UserMessage},
     questions::{QuestionChoice, QuestionId},
     sessions::ExecutionSessionId,
 };
@@ -381,6 +381,44 @@ impl ConversationAgents {
 pub enum SubmissionMode {
     Queue,
     Steer,
+}
+/// Who writes a submission: the person, or an app of theirs, admitted in an
+/// opening of the conversation for one mount.
+pub(super) enum Writer {
+    Person,
+    App {
+        sender: McpAppSource,
+        apps: Arc<AppReviews>,
+        epoch: u64,
+        mount: McpAppRef,
+    },
+}
+impl Writer {
+    fn is_app(&self) -> bool {
+        matches!(self, Self::App { .. })
+    }
+    fn sender(&self) -> MessageSender {
+        match self {
+            Self::Person => MessageSender::Person,
+            Self::App { sender, .. } => MessageSender::App(sender.clone()),
+        }
+    }
+    /// Whether an app's message may still go into `live`: its mount not
+    /// released, the opening it was admitted in not ended, and that opening
+    /// the live one. The person's always may.
+    fn still_admitted(&self, live: &LiveConversation) -> Result<(), ConversationError> {
+        let Self::App {
+            apps, epoch, mount, ..
+        } = self
+        else {
+            return Ok(());
+        };
+        let reopened = !Arc::ptr_eq(&live.app_reviews, apps) || live.app_epoch != *epoch;
+        if reopened || apps.admit(*epoch, mount).is_err() {
+            return Err(ConversationError::McpApp(McpAppError::Cancelled));
+        }
+        Ok(())
+    }
 }
 enum SubmissionDelivery {
     Queued(QueueAdmission),
@@ -975,15 +1013,33 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
+        self.resolve_opening(id, caller, true).await
+    }
+    /// [`Self::resolve`]; with `open` false, only a conversation live now:
+    /// one with none is refused `mcp_cancelled`, and not opened.
+    async fn resolve_opening(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        open: bool,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
         if self.inner.metadata.pending_mode_change(id).await?.is_some() {
             return Err(ConversationError::ApprovalModeUncertain);
         }
-        self.resolve_unchecked(id, caller).await
+        self.resolve_unchecked_opening(id, caller, open).await
     }
     async fn resolve_unchecked(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
+        self.resolve_unchecked_opening(id, caller, true).await
+    }
+    async fn resolve_unchecked_opening(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        open: bool,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
         let actor = caller.actor()?;
         let record = self
@@ -1000,6 +1056,8 @@ impl ConversationService {
             }
             if let Some(slot) = owners.get(id) {
                 slot.clone()
+            } else if !open {
+                return Err(ConversationError::McpApp(McpAppError::Cancelled));
             } else {
                 if owners.len() >= self.inner.limits.max_conversations {
                     return Err(ConversationError::Capacity);
@@ -1699,6 +1757,29 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
+        self.submit_as(id, caller, execution_id, message, mode, Writer::Person)
+            .await
+    }
+    /// [`Self::submit`], written by `writer`. A message admitted while the
+    /// conversation is idle — nothing runs, nothing waits — carries the
+    /// contexts its apps hold, ahead of what it says, and once the agent has
+    /// saved it they are let go of; a message refused, queued behind a turn
+    /// or steered into one carries none, and leaves them held
+    /// (`docs/design/mcp-app-calls.md`, rows C9–C11).
+    ///
+    /// An app's message is refused [`ConversationError::TurnRunning`] while a
+    /// turn runs or input waits, so it never queues behind the person's own
+    /// or fills the queue
+    /// (`m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`).
+    pub(super) async fn submit_as(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+    ) -> Result<SubmissionReceipt, ConversationError> {
         let service = self.clone();
         supervised(async move {
             let SubmittedMessage {
@@ -1747,7 +1828,12 @@ impl ConversationService {
                 .collect::<Result<Vec<_>, _>>()?;
             let message = UserMessage::new(prompt, images, files)
                 .map_err(|_| ConversationError::InvalidInput)?;
-            let live = service.resolve(&id, &caller).await?;
+            // An app's message is for a live opening, and opens none: one
+            // ended without this lock — the desktop stopping the agent — is
+            // refused below, not opened again for it.
+            let live = service
+                .resolve_opening(&id, &caller, !writer.is_app())
+                .await?;
             let non_default_mode = live
                 .projection
                 .lock()
@@ -1787,17 +1873,21 @@ impl ConversationService {
             // checked when it was first accepted. Asking again would turn a
             // retry of a delivered turn into "not found" once its upload was
             // let go, where the same retry of a text turn succeeds.
-            let known = live
+            // A retry carries what its saved record holds, never what is held
+            // now: the agent compares it with the message it has.
+            let original = live
                 .agent
                 .session_manager()
                 .snapshot()
                 .await
-                .is_some_and(|snapshot| {
+                .and_then(|snapshot| {
                     snapshot
                         .invocations
                         .iter()
-                        .any(|record| record.request.execution_id == execution)
+                        .find(|record| record.request.execution_id == execution)
+                        .map(|record| record.request.user_message.app_model_context().to_vec())
                 });
+            let known = original.is_some();
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.
@@ -1866,6 +1956,32 @@ impl ConversationService {
             if reserved > limits.max_output() || reserved >= limits.max_context_window() {
                 return Err(ConversationError::InvalidInput);
             }
+            // Just before the enqueue, still under the submission lock, which
+            // every submission to this conversation takes: an app's message is
+            // for the opening it was admitted in, its mount not released
+            // (`m10_a_release_before_the_submission_lock_refuses_the_message`).
+            writer.still_admitted(&live)?;
+            // Idle: nothing runs and nothing waits, so a message admitted now
+            // starts at once, with nothing ahead of it to reorder or remove.
+            // Only such a message carries what apps hold
+            // (`c10_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held`),
+            // and an app's own message is only ever admitted so
+            // (`m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`).
+            // A retry is the agent's to settle, whatever runs now.
+            let idle = !known && live.agent.idle_for_approval_change().await;
+            if writer.is_app() && !known && !idle {
+                return Err(ConversationError::TurnRunning);
+            }
+            let held = if idle {
+                live.app_reviews.held()
+            } else {
+                Vec::new()
+            };
+            let carried = original.unwrap_or_else(|| held.clone());
+            let message = message
+                .sent_by(writer.sender())
+                .with_app_model_context(carried)
+                .map_err(|_| ConversationError::InvalidInput)?;
             let request = ExecutionRequest {
                 execution_id: execution,
                 user_message: message.clone(),
@@ -1898,7 +2014,15 @@ impl ConversationService {
                         })
                 }
             };
+            // Refused: nothing carried them, and they wait for the next
+            // (`c11_a_refused_submission_lets_go_of_nothing`).
             let delivery = delivery.map_err(ConversationError::Agent)?;
+            // Admitted, and saved before the agent answered: the contexts it
+            // carries are done with. Exactly those, by their updates'
+            // identities — one a mount gave since they were read stays
+            // (`c9_a_newer_update_given_between_the_read_and_the_enqueue_stays`).
+            // Should the turn then fail, they are lost (row C13).
+            live.app_reviews.let_go(&held);
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -3890,7 +4014,8 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
 
 mod app_calls;
 pub use app_calls::{
-    McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS, MAX_RESOURCE_META_BYTES,
+    McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, MAX_APP_CALLS,
+    MAX_RESOURCE_META_BYTES,
 };
 
 #[cfg(test)]

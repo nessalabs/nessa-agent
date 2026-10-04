@@ -73,13 +73,20 @@
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 //!
-//! An MCP App's calls (#348) are the service's too
-//! (`service/app_calls.rs`, `docs/design/mcp-app-calls.md`): each live
-//! conversation's apps — their reviews, and the lock nothing is opened or
-//! issued past once a mount is released or the conversation ended — are
-//! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
+//! An MCP App's calls (#348), and its messages and model context (#390), are
+//! the service's too (`service/app_calls.rs`, `docs/design/mcp-app-calls.md`):
+//! each conversation's apps — their reviews, the contexts they give the
+//! model with the one lock their updates take, and the lock nothing is
+//! opened, held or issued past once a mount is released or the conversation
+//! ended — are `app_reviews.rs`, and the ports the calls go through
+//! `mcp_apps.rs`. An app's message is a submission like the person's
+//! (`service.rs`, `submit_as`), which decides under the submission lock
+//! whether it may go and which held contexts it carries.
 mod app_reviews;
 mod change_watch;
+/// The room an app's review takes of a view, which the schema states too.
+#[cfg(test)]
+pub(crate) use app_reviews::MAX_APP_REVIEW_BYTES;
 pub use change_watch::{WatchNamespaces, WatchRecords};
 mod catalogue;
 pub(crate) mod catalogue_watch;
@@ -142,23 +149,23 @@ pub use record_read::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, McpAppCall, McpAppRead, McpAppResource,
-    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, MAX_APP_CALLS,
-    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    ConversationService, DeletionsLeft, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead,
+    McpAppResource, QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
+    MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,
     ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
     ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationLinkedFile, ConversationList, ConversationListEntry,
-    ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPending,
-    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationReorderOutcome,
-    ConversationStartupFailure, ConversationStartupFailureCode, ConversationTool, ConversationView,
-    ElicitationForwardingSupport, IncomingElicitationSupport, ModelSwitchReportingSupport,
-    NativeHookSuppressionSupport, PermissionDeferralSupport, PermissionDenialSupport,
-    PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport, SubmissionReceipt,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
+    ConversationPending, ConversationPendingMode, ConversationPermission,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationReorderOutcome, ConversationStartupFailure, ConversationStartupFailureCode,
+    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
+    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
+    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
+    SubmissionReceipt, MAX_STRUCTURED_CONTENT_BYTES,
 };
 
 #[cfg(test)]

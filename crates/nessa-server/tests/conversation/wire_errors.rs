@@ -10,6 +10,7 @@ use nessa_sdk::{
             AttachmentPhase,
         },
         providers::UserImageError,
+        sessions::UnknownApp,
     },
     domain::common::value_objects::ImageMediaType,
 };
@@ -404,5 +405,18 @@ fn every_code_audit_names_is_on_the_wire_as_itself() {
     use crate::conversation::application::McpAppCode;
     for code in McpAppCode::ALL {
         assert_eq!(super::wire_code(code).as_str(), code.as_str());
+    }
+}
+
+/// R1-8 (#390): a message naming an app no earlier MCP tool call of the
+/// session drew — or one of another server or tool — is a request no
+/// conversation could take as it stands, as any other invalid input is.
+#[test]
+fn a_message_naming_an_app_the_session_never_saw_is_an_invalid_request() {
+    for unknown in [UnknownApp::NoMcpToolCall, UnknownApp::DifferentMcpTool] {
+        assert_eq!(
+            error_code(&ConversationError::Agent(AgentError::UnknownApp(unknown))),
+            ConversationErrorCode::InvalidRequest
+        );
     }
 }

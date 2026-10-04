@@ -117,6 +117,7 @@ mod mcp_app_lane {
     use super::*;
     use crate::app_call_test_support::{Fixture, INSTANCE, SERVER};
     use crate::conversation::application::{ConversationCaller, MAX_APP_CALLS};
+    use crate::product::generated::MAX_MCP_MESSAGE_BYTES;
     use nessa_auth::domain::{OrganizationId, PrincipalId};
     use std::collections::HashMap;
 
@@ -367,6 +368,166 @@ mod mcp_app_lane {
             assert!(attempt < 100, "no room after every call ended");
             tokio::task::yield_now().await;
         }
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    fn app(fixture: &Fixture, instance: &str) -> serde_json::Value {
+        json!({
+            "executionId": fixture.execution_id,
+            "toolId": fixture.tool_id,
+            "instanceId": instance,
+        })
+    }
+
+    #[tokio::test]
+    async fn an_apps_messages_and_contexts_travel_on_its_lane_and_land_as_its_own() {
+        let fixture = owners_fixture().await;
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        let message = |request: &str, text: &str| {
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": request,
+                "app": app(&fixture, INSTANCE),
+                "server": SERVER,
+                "text": text,
+            })
+        };
+        let context = |request: &str| {
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": request,
+                "app": app(&fixture, INSTANCE),
+                "server": SERVER,
+                "text": "Showing April",
+                "structuredContentJson": "{\"month\":4}",
+            })
+        };
+
+        // Four messages, each waiting on the person: the lane is full, for a
+        // context as much as a call (rows M1, C1).
+        for request in ["m1", "m2", "m3", "m4"] {
+            send_command(&peer, request, "mcp.sendMessage", message(request, request));
+        }
+        until(async || fixture.app_reviews().await.len() == 4).await;
+        send_command(&peer, "ctx", "mcp.updateModelContext", context("ctx"));
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "ctx");
+        assert_eq!(refused["error"]["code"], "temporarily_unavailable");
+
+        // Each message is its own review: allowing one sends that one, with
+        // the turn it became, and the others still wait on theirs.
+        let answer = |request: &str, review: &serde_json::Value, option: &str| {
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": request,
+                "executionId": review["executionId"],
+                "permissionId": review["permissionId"],
+                "optionId": option,
+            })
+        };
+        let reviews = fixture.app_reviews().await;
+        let first = serde_json::to_value(&reviews[0]).unwrap();
+        let sent_text = serde_json::from_str::<serde_json::Value>(
+            first["argumentsJson"].as_str().unwrap(),
+        )
+        .unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        send_command(&peer, "allow", "conversation.answer", answer("allow", &first, "allow"));
+        let answered = responses(&mut peer, 2).await;
+        assert_eq!(answered["allow"]["ok"], true);
+        let execution = answered[sent_text.as_str()]["payload"]["executionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let waiting = fixture.app_reviews().await;
+        assert_eq!(waiting.len(), 3);
+        for (n, review) in waiting.iter().enumerate() {
+            let request = format!("deny-{n}");
+            let review = serde_json::to_value(review).unwrap();
+            send_command(&peer, &request, "conversation.answer", answer(&request, &review, "deny"));
+        }
+        let denied = responses(&mut peer, 6).await;
+        for (id, reply) in &denied {
+            if id.starts_with('m') {
+                assert_eq!(reply["error"]["code"], "mcp_approval_denied", "{id}");
+            } else {
+                assert_eq!(reply["ok"], true, "{id}");
+            }
+        }
+        assert!(fixture.app_reviews().await.is_empty());
+
+        // Text past the schema's own bound is refused at the wire, with
+        // nothing recorded (row M4).
+        let records = fixture.audit.phases().len();
+        send_command(
+            &peer,
+            "long-message",
+            "mcp.sendMessage",
+            message("long-message", &"x".repeat(MAX_MCP_MESSAGE_BYTES + 1)),
+        );
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "long-message");
+        assert_eq!(refused["error"]["code"], "invalid_request");
+        assert_eq!(fixture.audit.phases().len(), records);
+        assert!(fixture.app_reviews().await.is_empty());
+
+        // A context part past the schema's own bound is too large, as the
+        // gateway judges it, and on record (row C3).
+        let mut long = context("long");
+        long["structuredContentJson"] = json!(format!("{{\"a\":{}1}}", " ".repeat(8192)));
+        send_command(&peer, "long", "mcp.updateModelContext", long);
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "long");
+        assert_eq!(refused["error"]["code"], "mcp_request_too_large");
+        assert_eq!(
+            fixture.audit.phases()[records..],
+            [crate::conversation::application::McpAppAuditPhase::Refused(
+                crate::conversation::application::McpAppCode::RequestTooLarge
+            )]
+        );
+
+        // The context now has room, and is applied.
+        send_command(&peer, "ctx2", "mcp.updateModelContext", context("ctx2"));
+        let applied = response(&mut peer).await;
+        assert_eq!(applied["id"], "ctx2", "{applied}");
+        assert_eq!(applied["payload"], json!({"requestId": "ctx2", "applied": true}));
+
+        // The transcript says who wrote it, on the wire.
+        until(async || {
+            send_command(
+                &peer,
+                "read",
+                "conversation.read",
+                json!({"conversationId": fixture.id.to_string()}),
+            );
+            let view = loop {
+                let reply = response(&mut peer).await;
+                if reply["id"] == "read" {
+                    break reply;
+                }
+            };
+            view["payload"]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| {
+                    message["executionId"] == execution.as_str()
+                        && message["app"]
+                            == json!({
+                                "executionId": fixture.execution_id,
+                                "toolId": fixture.tool_id,
+                                "server": SERVER,
+                                "tool": crate::app_call_test_support::UI_TOOL,
+                            })
+                })
+        })
+        .await;
         drop(peer.input);
         task.await.unwrap();
     }

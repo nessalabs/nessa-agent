@@ -7,6 +7,11 @@
 use super::*;
 use crate::conversation::application::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
 use nessa_auth::domain::PrincipalId;
+use nessa_sdk::domain::agent_execution::{
+    executions::ExecutionId,
+    prompts::{AppModelContext, McpAppSource},
+    tools::{McpTool, ToolCallId},
+};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +53,7 @@ fn open(reviews: &Arc<AppReviews>, instance: &str) -> Result<Waiting, ReviewRefu
     reviews.open(
         EPOCH,
         new_review_id(),
+        ReviewAsk::RunTool,
         &app(instance),
         "charts",
         "delete_rows",
@@ -62,6 +68,7 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
         .open(
             EPOCH,
             new_review_id(),
+            ReviewAsk::RunTool,
             &app("i1"),
             "charts",
             "delete_rows",
@@ -254,7 +261,15 @@ async fn a_conversation_ending_withdraws_every_review_as_whoever_ended_it() {
     let reviews = reviews();
     let first = open(&reviews, "i1").unwrap();
     let second = reviews
-        .open(EPOCH, new_review_id(), &app("i2"), "files", "erase", "{}")
+        .open(
+            EPOCH,
+            new_review_id(),
+            ReviewAsk::RunTool,
+            &app("i2"),
+            "files",
+            "erase",
+            "{}",
+        )
         .unwrap();
     let mut released = 0;
     reviews.end(EPOCH, &releaser(), || released += 1);
@@ -319,12 +334,20 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
     let reviews = reviews();
     // One review alone past the share is never opened.
     let large = format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_APP_REVIEW_BYTES));
-    assert!(!fits("app-x", &app("i1"), "charts", "delete_rows", &large));
+    assert!(!fits(
+        "app-x",
+        ReviewAsk::RunTool,
+        &app("i1"),
+        "charts",
+        "delete_rows",
+        &large
+    ));
     assert_eq!(
         reviews
             .open(
                 EPOCH,
                 new_review_id(),
+                ReviewAsk::RunTool,
                 &app("i1"),
                 "charts",
                 "delete_rows",
@@ -339,6 +362,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
         .open(
             EPOCH,
             new_review_id(),
+            ReviewAsk::RunTool,
             &app("i1"),
             "charts",
             "delete_rows",
@@ -350,6 +374,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
             .open(
                 EPOCH,
                 new_review_id(),
+                ReviewAsk::RunTool,
                 &app("i1"),
                 "charts",
                 "delete_rows",
@@ -364,6 +389,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
         .open(
             EPOCH,
             new_review_id(),
+            ReviewAsk::RunTool,
             &app("i1"),
             "charts",
             "delete_rows",
@@ -482,4 +508,225 @@ async fn an_opening_never_carries_another_s_reviews() {
     ));
     assert!(reviews.reviews().is_empty());
     assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
+}
+
+// --- An app in its conversation (#390): its messages' reviews, and the
+// contexts it holds ("An app in its conversation: the gateway") -----------
+
+/// A context the update `update` gave, saying `text`.
+fn context(update: &str, text: &str) -> AppModelContext {
+    AppModelContext::new(
+        McpAppSource::new(
+            ExecutionId::new("e1").unwrap(),
+            ToolCallId::new("t1").unwrap(),
+            McpTool::new("charts", "show").unwrap(),
+        )
+        .unwrap(),
+        update,
+        Some(text.into()),
+        None,
+    )
+    .unwrap()
+    .unwrap()
+}
+
+fn held(reviews: &AppReviews) -> Vec<String> {
+    reviews
+        .held()
+        .iter()
+        .map(|context| context.text().unwrap().to_owned())
+        .collect()
+}
+
+/// `mount`'s update in the first opening, as the service gives one: its
+/// room asked, then held — `None` clears.
+fn give(reviews: &AppReviews, mount: &str, context: Option<AppModelContext>) {
+    reviews.room(EPOCH, &app(mount), context.is_some()).unwrap();
+    reviews.hold(EPOCH, &app(mount), context);
+}
+
+#[test]
+fn c5_c7_each_update_replaces_its_mounts_context_and_a_clear_drops_it() {
+    let reviews = reviews();
+    give(&reviews, "i1", Some(context("u1", "old")));
+    give(&reviews, "i1", Some(context("u2", "new")));
+    assert_eq!(held(&reviews), ["new"]);
+    give(&reviews, "i2", Some(context("u3", "other")));
+    // Held in the order given: a replacement is given last.
+    give(&reviews, "i1", Some(context("u4", "newest")));
+    assert_eq!(held(&reviews), ["other", "newest"]);
+    give(&reviews, "i1", None);
+    assert_eq!(held(&reviews), ["other"]);
+}
+
+#[test]
+fn c6_a_fifth_mount_finds_no_room_and_a_mount_holds_a_place_only_while_it_holds_a_context() {
+    let reviews = reviews();
+    for n in 0..MAX_HELD_CONTEXTS {
+        give(
+            &reviews,
+            &format!("i{n}"),
+            Some(context(&format!("u{n}"), "x")),
+        );
+    }
+    assert_eq!(MAX_HELD_CONTEXTS, 4);
+    assert_eq!(
+        reviews.room(EPOCH, &app("other"), true),
+        Err(ContextRefusal::Full)
+    );
+    // A mount that holds one may replace it, and anyone may clear.
+    assert_eq!(reviews.room(EPOCH, &app("i0"), true), Ok(()));
+    assert_eq!(reviews.room(EPOCH, &app("other"), false), Ok(()));
+    // Cleared, its place is free.
+    give(&reviews, "i0", None);
+    give(&reviews, "other", Some(context("u9", "x")));
+    assert_eq!(held(&reviews).len(), MAX_HELD_CONTEXTS);
+}
+
+#[test]
+fn c17_an_update_whose_mount_was_released_or_whose_opening_ended_after_its_room_is_not_held() {
+    let reviews = reviews();
+    reviews.room(EPOCH, &app("i1"), true).unwrap();
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    reviews.hold(EPOCH, &app("i1"), Some(context("u1", "late")));
+    assert!(held(&reviews).is_empty());
+    assert_eq!(
+        reviews.room(EPOCH, &app("i1"), true),
+        Err(ContextRefusal::Gone(ReviewRefusal::Released))
+    );
+    reviews.room(EPOCH, &app("i2"), true).unwrap();
+    reviews.end(EPOCH, &releaser(), || {});
+    reviews.hold(EPOCH, &app("i2"), Some(context("u2", "late")));
+    assert!(held(&reviews).is_empty());
+    assert_eq!(
+        reviews.room(EPOCH, &app("i2"), false),
+        Err(ContextRefusal::Gone(ReviewRefusal::Ended))
+    );
+}
+
+#[tokio::test]
+async fn c8_one_context_update_of_a_conversation_runs_at_a_time_across_mounts_and_openings() {
+    let reviews = reviews();
+    let first = reviews.one_update().await;
+    reviews.end(EPOCH, &releaser(), || {});
+    reviews.begin();
+    let waiting = tokio::spawn({
+        let reviews = reviews.clone();
+        async move { drop(reviews.one_update().await) }
+    });
+    tokio::task::yield_now().await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        !waiting.is_finished(),
+        "another update of the conversation went while one was taken"
+    );
+    drop(first);
+    waiting.await.unwrap();
+}
+
+#[test]
+fn c9_let_go_drops_exactly_the_updates_carried_and_a_newer_one_stays() {
+    let reviews = reviews();
+    give(&reviews, "i1", Some(context("u1", "one")));
+    give(&reviews, "i2", Some(context("u2", "two")));
+    let read = reviews.held();
+    // Replaced after the message read it, before it was admitted.
+    give(&reviews, "i1", Some(context("u3", "newer")));
+    reviews.let_go(&read);
+    assert_eq!(held(&reviews), ["newer"]);
+    // Letting go of what is no longer held changes nothing.
+    reviews.let_go(&read);
+    assert_eq!(held(&reviews), ["newer"]);
+}
+
+#[test]
+fn c14_c15_contexts_are_dropped_with_their_mount_the_openings_end_a_new_opening_and_a_delete() {
+    let reviews = reviews();
+    give(&reviews, "i1", Some(context("u1", "i1")));
+    give(&reviews, "i2", Some(context("u2", "i2")));
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    assert_eq!(held(&reviews), ["i2"]);
+    reviews.end(EPOCH, &releaser(), || {});
+    assert!(held(&reviews).is_empty());
+    // An opening that was never ended still gives the next nothing.
+    let next = reviews.begin();
+    reviews.room(next, &app("i2"), true).unwrap();
+    reviews.hold(next, &app("i2"), Some(context("u3", "again")));
+    assert_eq!(held(&reviews), ["again"]);
+    let after = reviews.begin();
+    assert!(held(&reviews).is_empty());
+    reviews.room(after, &app("i2"), true).unwrap();
+    reviews.hold(after, &app("i2"), Some(context("u4", "once more")));
+    reviews.delete(|| {});
+    assert!(held(&reviews).is_empty());
+}
+
+#[test]
+fn a_message_review_says_what_it_asks() {
+    let reviews = reviews();
+    let waiting = reviews
+        .open(
+            EPOCH,
+            new_review_id(),
+            ReviewAsk::SendMessage,
+            &app("i1"),
+            "charts",
+            "show",
+            r#"{"text":"hi"}"#,
+        )
+        .unwrap();
+    let shown = reviews.reviews();
+    assert_eq!(
+        shown[0].title,
+        "The show app on charts asks to send a message as you"
+    );
+    assert_eq!(shown[0].arguments_json, r#"{"text":"hi"}"#);
+    assert_eq!(
+        shown[0].origin,
+        ConversationPermissionOrigin::App {
+            server: "charts".into(),
+            tool: "show".into(),
+        }
+    );
+    drop(waiting);
+}
+
+#[tokio::test]
+async fn every_message_is_its_own_review_and_allowing_one_allows_no_other() {
+    let reviews = reviews();
+    let ask = |text: &str| {
+        reviews
+            .open(
+                EPOCH,
+                new_review_id(),
+                ReviewAsk::SendMessage,
+                &app("i1"),
+                "charts",
+                "show",
+                text,
+            )
+            .unwrap()
+    };
+    let first = ask("one");
+    let second = ask("two");
+    let answered = reviews.reviews()[0].clone();
+    assert_eq!(
+        reviews.answer(
+            &answered.execution_id,
+            &answered.permission_id,
+            ALLOW,
+            person()
+        ),
+        ReviewAnswer::Ended
+    );
+    assert_eq!(
+        first.ended(Duration::from_secs(1)).await,
+        ReviewEnd::Allowed(person())
+    );
+    // The same mount's other message still waits on its own review.
+    let open = reviews.reviews();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].permission_id, second.permission_id);
+    drop(second);
+    assert!(reviews.reviews().is_empty());
 }

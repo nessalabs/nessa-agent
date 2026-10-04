@@ -1,19 +1,23 @@
-//! An MCP App's wire commands (#348): `mcp.callTool`, `mcp.readResource`
-//! and `mcp.releaseApp`, translated into the conversation service's app
-//! calls. The socket has already checked current access and the
-//! `conversation.write` grant, and admitted the two calls onto the app lane.
+//! An MCP App's wire commands (#348, #390): `mcp.callTool`,
+//! `mcp.readResource`, `mcp.sendMessage`, `mcp.updateModelContext` and
+//! `mcp.releaseApp`, translated into the conversation service's app calls.
+//! The socket has already checked current access and the
+//! `conversation.write` grant, and admitted all but the release onto the app
+//! lane.
 use super::{
     conversation::{caller, conversation_id, error_code},
     generated::{
         ConversationErrorCode, ConversationMutationResult, McpAppReference, McpCallToolParams,
         McpCallToolResult, McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams,
-        McpRemoteErrorDetails, McpUiCsp, McpUiPermissions,
+        McpRemoteErrorDetails, McpSendMessageParams, McpSendMessageResult, McpUiCsp,
+        McpUiPermissions, McpUpdateModelContextParams, MAX_MCP_MESSAGE_BYTES,
     },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    ConversationError, McpAppCall, McpAppError, McpAppRead, McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
+    ConversationError, McpAppCall, McpAppContextUpdate, McpAppError, McpAppMessage, McpAppRead,
+    McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
 use crate::protocol::{OutgoingMessage, RequestFrame};
@@ -110,6 +114,52 @@ pub(super) async fn dispatch(
                         },
                         domain: resource.domain,
                         prefers_border: resource.prefers_border,
+                    },
+                ))
+            }
+            "mcp.sendMessage" => {
+                let params = params!(McpSendMessageParams);
+                name(&params.server)?;
+                // Past the schema's own bound: a request no gateway takes,
+                // refused here with nothing recorded. Within it, the
+                // service's input bound is the app's to be told of, on
+                // record (`mcp_request_too_large`).
+                if params.text.len() > MAX_MCP_MESSAGE_BYTES {
+                    return Err(ConversationError::InvalidInput);
+                }
+                let execution_id = service
+                    .send_app_message(
+                        conversation_id(&params.conversation_id)?,
+                        caller(session, params.request_id),
+                        McpAppMessage {
+                            app: app(params.app)?,
+                            server: params.server,
+                            text: params.text,
+                        },
+                    )
+                    .await?;
+                Ok(success(&frame.id, &McpSendMessageResult { execution_id }))
+            }
+            "mcp.updateModelContext" => {
+                let params = params!(McpUpdateModelContextParams);
+                name(&params.server)?;
+                service
+                    .update_app_model_context(
+                        conversation_id(&params.conversation_id)?,
+                        caller(session, params.request_id.clone()),
+                        McpAppContextUpdate {
+                            app: app(params.app)?,
+                            server: params.server,
+                            text: params.text,
+                            structured_content_json: params.structured_content_json,
+                        },
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied: true,
                     },
                 ))
             }
