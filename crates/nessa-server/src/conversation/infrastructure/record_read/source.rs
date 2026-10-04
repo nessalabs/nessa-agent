@@ -105,7 +105,8 @@ impl RecordReadSource for NessaRecordReadSource {
             let origin = self.origin.clone();
             let steps = self.discovery_steps;
             // Set when the budget passes or this waiter is dropped (the product
-            // deadline answered read_timeout, or the caller went away).
+            // deadline answered read_timeout). A disconnected socket detaches
+            // its read task instead, so that read stops at the budget.
             let stop = Arc::new(AtomicBool::new(false));
             let _waiter = StopWhenDropped(stop.clone());
             let stopped: Box<dyn Fn() -> bool + Send> = {

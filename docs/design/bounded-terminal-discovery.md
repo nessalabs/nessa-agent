@@ -84,11 +84,14 @@ only when one admitted read stops: before any call after the first, it stops
 when the first of these holds.
 
 - It has made `DISCOVERY_STEPS_PER_READ` (128) calls.
-- `READ_WORK_BUDGET` (200 ms) has passed since the read started. The read holds
+- `READ_WORK_BUDGET` (200 ms) has passed since the adapter started the read's
+  worker; identity lookup and source open count against it. The read holds
   one of the four global record/catalogue read permits and its socket's single
   record slot; the budget gives them back promptly while other reads wait.
-- Its waiter is gone: the product read deadline passed (the socket drops the
-  read when `read_timeout` is answered) or the caller cancelled.
+- Its waiter is gone. The product read deadline drops the read when it answers
+  `read_timeout`. A disconnected socket does not: the socket detaches its
+  record read tasks rather than cancelling them, so that read stops at its
+  budget.
 - Read worker shutdown has started, or a worker fault has fenced new reads.
 
 The first call is always made, so every admitted read advances validation and
@@ -96,14 +99,17 @@ retries converge. Count, byte and memory bounds per read: at most 128 x 16 =
 2,048 returned frames and 128 MiB of returned accounted bytes; each step may
 decode up to twice its returned cap (its lookahead), so up to 256 MiB decoded,
 with no more than one step's records held at a time. In practice the budget
-stops a read first: the time a read holds its permit is the budget plus one
-step (one step decodes at most 2 MiB; measured below about 2 ms on this
-machine), against the ten-second product read deadline. The budget and the
+stops a read first. Its permit and socket slot are held for the budget (which
+began before identity lookup and source open), then through the step that
+overran it (one step decodes at most 2 MiB; measured below about 2 ms on this
+machine) and the SDK source join; on Ready they are held further through
+response delivery (R61). All of this is inside the ten-second product read
+deadline. The budget and the
 waiter check use the async runtime's clock, the same clock the socket's
 read deadline uses; the worker only reads a stop flag between steps.
 
 An admitted read may still finish after its credential is revoked (see
-authorized-record-reads.md). The window that adds is the budget plus one step,
+authorized-record-reads.md). The window that adds is the budget plus the step that overruns it,
 where before this change it was one step; a later read reauthorizes.
 
 A history of realistic two-kilobyte messages fits about 2,000 messages in one
@@ -116,12 +122,12 @@ these numbers.
 
 | Row | State and ordering | Required result and regression boundary |
 | --- | --- | --- |
-| S1 | Cold (restarted or evicted) stream whose captured tail fits in one read's steps and budget; one admitted head read | The read answers the validated committed head with no `source_preparing`. `cold_history_within_read_steps_answers_on_the_first_read` writes 101 real saves (13 steps), restarts storage and reads once; `authenticated_product_processes_resume_download_after_lost_page_and_both_restarts` discovers its cold multi-frame history on the first product request in real processes, after the first gateway start and after a restart. |
+| S1 | Cold (restarted or evicted) stream whose captured tail fits in one read's steps and budget; one admitted head read | The read answers the validated committed head with no `source_preparing`. `cold_history_within_read_steps_answers_on_the_first_read` writes 101 real saves (13 steps), restarts storage and reads once; `authenticated_product_processes_resume_download_after_lost_page_and_both_restarts` discovers its cold multi-frame history on the first product request in real processes, after the first gateway start and after a restart. That real-process case cannot inject the budget and relies on margin, not a guarantee: its whole discovery measured about 0.25 s of test time and answered on the first request 15 of 15 times under heavy load. The adapter tests set the budget to an hour so only the step count decides. |
 | S2 | Cold stream needing more steps than one read may make; the client retries | The read makes its step count of SDK calls and answers `source_preparing` with no head. The next read resumes the SDK's retained offset: with n steps needed and k steps per read there are exactly ceil(n/k) - 1 `source_preparing` answers, so no read replays earlier validation. `history_beyond_read_steps_prepares_then_resumes_without_replay` lowers k to two; it is also the adapter-level evidence that a long cold history still answers `source_preparing` and then resumes. |
 | S3 | A call refuses partway through the steps | The first refusal ends the read with its existing typed mapping. `cold_page_of_a_non_completion_target_refuses_in_one_read` asks a cold page for a save unit's offset and gets `invalid_request` in that one read, where it previously answered `source_preparing` first. Sticky corruption, reset and pruning take the same return path; they are not separately driven through the adapter. |
 | S4 | Another source holds the stream's cache owner, or all sixteen cache entries are occupied | Each SDK call returns `Preparing` without validation work; the read stops at its step count or budget and answers `source_preparing`. A deterministic competing-owner probe through the adapter is unverified; the SDK side is `occupied_stream_and_full_active_cache_refuse_without_replacement_work`. |
 | S5 | A cold read's budget passes while another read waits for the permit it holds | The read stops at its next step boundary and answers `source_preparing`; its permit is released with the answer, the waiting read acquires it, and the cold read's progress is kept for its retry. `read_past_its_work_budget_answers_preparing_and_releases_its_permit` holds the worker at its first step boundary until the budget (lowered to zero) has fired, then checks the answer, the released one-permit semaphore, and a resumed later read. |
-| S6 | The waiter is dropped mid-read: the product read deadline answered `read_timeout`, or the caller cancelled | The worker stops at its next step boundary, still holding its permit through that step and source join (R17/R19), then releases it. `cancelled_read_stops_at_the_next_step_and_releases_its_permit` drops the waiter while the worker is held at a step boundary and sees the permit come back without the read reaching its head. |
+| S6 | The waiter is dropped mid-read: the product read deadline answered `read_timeout` and dropped the read (a disconnected socket detaches its read, which stops at its budget instead, S5) | The worker stops at its next step boundary, still holding its permit through that step and source join (R17/R19), then releases it. `cancelled_read_stops_at_the_next_step_and_releases_its_permit` drops the waiter while the worker is held at a step boundary and sees the permit come back without the read reaching its head. |
 | S7 | Read worker shutdown starts mid-read | The worker stops at its next step boundary; shutdown completes after that step and the source join instead of after the remaining steps. `shutdown_stops_a_multi_step_read_at_the_next_step` starts shutdown while the worker is held at a step boundary and sees shutdown and the read both finish. |
 
 ## Shared discovery correction orderings

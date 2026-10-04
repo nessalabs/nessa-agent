@@ -420,11 +420,13 @@ async fn cold_history_within_read_steps_answers_on_the_first_read() {
     assert!(tail > 16 * 4, "the history needs several SDK steps");
     // A fresh storage on the same files: no discovery progress survives.
     let storage = Arc::new(RecordStorage::new(&root).unwrap());
-    let source = NessaRecordReadSource::new(
+    let mut source = NessaRecordReadSource::new(
         storage.clone(),
         Id::new("origin").unwrap(),
         Handle::current(),
     );
+    // Only the step count may stop this read; the real clock must not.
+    source.work_budget = Duration::from_secs(3600);
     let response = source
         .read(
             admitted_reader(conversation_id),
@@ -456,6 +458,8 @@ async fn history_beyond_read_steps_prepares_then_resumes_without_replay() {
         Id::new("origin").unwrap(),
         Handle::current(),
     );
+    // Only the step count may stop this read; the real clock must not.
+    source.work_budget = Duration::from_secs(3600);
     source.discovery_steps = 2;
     // Every frame here is far below the step's byte limit, so each SDK step
     // validates exactly sixteen frames until the captured tail.
@@ -503,7 +507,9 @@ async fn cold_page_of_a_non_completion_target_refuses_in_one_read() {
         .unwrap()
         .unwrap()
         .scope(Id::new("receiver").unwrap(), Id::new("epoch-3").unwrap());
-    let source = NessaRecordReadSource::new(storage.clone(), origin, Handle::current());
+    let mut source = NessaRecordReadSource::new(storage.clone(), origin, Handle::current());
+    // Only the step count may stop this read; the real clock must not.
+    source.work_budget = Duration::from_secs(3600);
     let unit = tail - 1;
     let result = source
         .read(

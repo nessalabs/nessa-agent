@@ -61,7 +61,10 @@ const CONVERSATION: &str = "6f1c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f";
 const WARM_REPEATS: usize = 20;
 
 fn main() {
-    tracing_subscriber::fmt().with_writer(io::stderr).init();
+    tracing_subscriber::fmt()
+        .with_writer(io::stderr)
+        .with_ansi(false)
+        .init();
     if let Err(error) = run() {
         tracing::error!(%error, "Record read benchmark failed");
         std::process::exit(1);
@@ -86,6 +89,10 @@ fn arguments() -> Result<Arguments, Box<dyn Error>> {
         match flag.as_str() {
             "--sizes" => {
                 parsed.sizes = value.split(',').map(str::parse).collect::<Result<_, _>>()?;
+                // Each turn is one user and one assistant message.
+                if parsed.sizes.iter().any(|size| *size == 0 || size % 2 != 0) {
+                    return Err("--sizes takes positive even message counts".into());
+                }
             }
             "--turns-per-save" => parsed.turns_per_save = value.parse::<usize>()?.max(1),
             "--assistant-bytes" => parsed.assistant_bytes = Some(value.parse()?),
@@ -122,8 +129,10 @@ fn machine() -> Value {
         .args(["-n", "vm.loadavg"])
         .output()
         .ok()
+        .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|text| text.trim().to_owned());
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty());
     json!({
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
