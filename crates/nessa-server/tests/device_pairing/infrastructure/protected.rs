@@ -80,6 +80,37 @@ impl DeviceCredentials for Devices {
 /// The product state a native session is served with: the fixture's registry
 /// and receivers, and a real conversation store for catalogue reads.
 fn sessions(fixture: &Fixture) -> Arc<dyn ProtectedSessions> {
+    sessions_with(fixture, Arc::new(Devices(fixture.registry.clone())))
+}
+/// The registry's device verifier whose key lookup cannot read the registry:
+/// the failure a registry that is unavailable reports.
+struct Unreadable(Arc<nessa_auth::adapters::local::LocalCredentialStore>);
+impl DeviceCredentials for Unreadable {
+    fn verify<'a>(
+        &'a self,
+        proof: &'a DeviceConnectionProof,
+        evidence: &'a CredentialEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, VerifiedCredential> {
+        Box::pin(async move {
+            self.0
+                .device_verifier(proof)
+                .verify(evidence, audience)
+                .await
+        })
+    }
+    fn holds_credential(
+        &self,
+        _: &DeviceConnectionProof,
+        _: &AudienceId,
+    ) -> Result<bool, AccessError> {
+        Err(AccessError::Unavailable)
+    }
+}
+fn sessions_with(
+    fixture: &Fixture,
+    devices: Arc<dyn DeviceCredentials>,
+) -> Arc<dyn ProtectedSessions> {
     let root = private_root(fixture.directory.path(), "conversation-metadata");
     let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
     let state = ProductRouteState::new(
@@ -100,10 +131,7 @@ fn sessions(fixture: &Fixture) -> Arc<dyn ProtectedSessions> {
         metadata,
         Id::new("gateway").unwrap(),
     )));
-    Arc::new(NativeSessions::new(
-        state,
-        Arc::new(Devices(fixture.registry.clone())),
-    ))
+    Arc::new(NativeSessions::new(state, devices))
 }
 
 /// One device paired to Active through the listener: its private state, which
@@ -646,6 +674,14 @@ fn open_product(
     identity: NativeIdentity,
     pin: [u8; 44],
 ) -> Option<NativePairingReply> {
+    open_product_held(address, identity, pin).0
+}
+/// As [`open_product`], keeping the device's end of the connection open.
+fn open_product_held(
+    address: SocketAddr,
+    identity: NativeIdentity,
+    pin: [u8; 44],
+) -> (Option<NativePairingReply>, EnrollmentChannel<TcpStream>) {
     let socket = TcpStream::connect(address).unwrap();
     socket.set_read_timeout(Some(WAIT)).unwrap();
     let transport = NativeTransport::connect(socket, &identity, GatewayTrust::Pinned(pin)).unwrap();
@@ -653,7 +689,11 @@ fn open_product(
     channel
         .send_envelope(&encode_request(&NativePairingRequest::OpenProduct).unwrap())
         .unwrap();
-    decode_reply(&channel.receive_envelope().ok()?).ok()
+    let reply = channel
+        .receive_envelope()
+        .ok()
+        .and_then(|bytes| decode_reply(&bytes).ok());
+    (reply, channel)
 }
 
 /// Row PR15 (review round 2): only a key holding an active device credential
@@ -681,17 +721,24 @@ async fn unregistered_and_revoked_keys_take_no_product_permit() {
     let saved = paired.store.clone();
     let revoked_store = revoked.store.clone();
     let (strangers, revoked_reply, held) = blocking(move || {
-        let strangers = (0..10)
-            .map(|_| {
-                open_product(
-                    address,
-                    NativeIdentity::generate(&mut OsEntropy).unwrap(),
-                    pin,
-                )
-            })
-            .collect::<Vec<_>>();
+        // Every refused peer keeps its end open while the paired device takes
+        // the pool: a refusal that took a product permit first would leave
+        // these connections holding it, and the paired device short.
+        let mut open = Vec::new();
+        let mut strangers = Vec::new();
+        for _ in 0..8 {
+            let (reply, channel) = open_product_held(
+                address,
+                NativeIdentity::generate(&mut OsEntropy).unwrap(),
+                pin,
+            );
+            strangers.push(reply);
+            open.push(channel);
+        }
         let (key, pin) = device_key(&revoked_store);
-        let revoked_reply = open_product(address, NativeIdentity::restore(key).unwrap(), pin);
+        let (revoked_reply, channel) =
+            open_product_held(address, NativeIdentity::restore(key).unwrap(), pin);
+        open.push(channel);
         let held = (0..8)
             .map(|_| {
                 let mut probe = Probe::open(address, &saved);
@@ -700,9 +747,10 @@ async fn unregistered_and_revoked_keys_take_no_product_permit() {
                 probe
             })
             .collect::<Vec<_>>();
-        (strangers, revoked_reply, held)
+        (strangers, revoked_reply, (held, open))
     })
     .await;
+    let (held, open) = held;
     assert!(
         strangers
             .iter()
@@ -724,5 +772,58 @@ async fn unregistered_and_revoked_keys_take_no_product_permit() {
         .await
         .unwrap();
     drop(held);
+    drop(open);
+    fixture.gateway.shutdown().await;
+}
+
+/// Row PR15 (review round 3): when the key lookup cannot read the registry,
+/// a paired device's `openProduct` is refused too, and no product permit is
+/// taken: with eight such refused connections held open, the stop sweeps no
+/// product session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unreadable_registry_refuses_product_admission() {
+    let fixture = Fixture::new().await;
+    let devices = Arc::new(Unreadable(fixture.registry.clone()));
+    let (address, stop, listener, connections) = fixture
+        .listener_serving(Some(sessions_with(&fixture, devices)))
+        .await;
+    let paired = pair(&fixture, address, "paired").await;
+    let saved = paired.store.clone();
+    let (replies, open) = blocking(move || {
+        let mut replies = Vec::new();
+        let mut open = Vec::new();
+        for _ in 0..8 {
+            let (key, pin) = device_key(&saved);
+            let (reply, channel) =
+                open_product_held(address, NativeIdentity::restore(key).unwrap(), pin);
+            replies.push(reply);
+            open.push(channel);
+        }
+        (replies, open)
+    })
+    .await;
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, Some(NativePairingReply::Refused))),
+        "{replies:?}"
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(WAIT, connections.shutdown())
+        .await
+        .unwrap();
+    assert_eq!(
+        connections
+            .product_wake_report()
+            .map_or(0, |report| report.iter().count()),
+        0,
+        "no refused connection holds a product permit"
+    );
+    drop(open);
     fixture.gateway.shutdown().await;
 }
