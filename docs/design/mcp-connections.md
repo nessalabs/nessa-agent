@@ -299,14 +299,15 @@ structured results already do.
 ## What one connection per harness session means
 
 - **Context fingerprint.** The SDK fingerprints what the harness is launched
-  with, and the harness is now launched with the stand-in. Its arguments carry
-  the server's name and a digest of the configured command and arguments, so
-  the fingerprint still changes exactly when a configured server does; it also
-  changes when the gateway's executable or the relay socket's path moves (the
-  socket is `/tmp/nessa-mcp-<uid>/<digest of the namespace's path>.sock`, so it
-  does not move between runs). The session token is in the stand-in's
-  environment, never its arguments, and the grants are outside the
-  fingerprint, so a fresh token on every open never changes it.
+  with, but not its MCP servers (#391, ADR 344): the server list is a per-open
+  attachment, like the token, and not a selector of the provider's context.
+  Adding, editing or removing a server, or moving the gateway's executable or
+  the relay socket, leaves every saved conversation restorable. A stand-in's
+  arguments still carry the server's name and a digest of the configured
+  command and arguments, which the relay compares: a server changed under an
+  open conversation is refused `configuration-changed`, and that conversation
+  keeps its harness's set until its provider session ends. The session token
+  is in the stand-in's environment, never its arguments.
 - **Restarts.** A gateway restart ends every session with the agents. A
   restored conversation's harness opens new sessions through its stand-ins; a
   handle an old session gave out is unknown to the new one, and the server says
@@ -357,8 +358,9 @@ Each row above has at least one test, named after it:
   session closes leaving every close waiting for the stop, stop racing an
   opening; forwarded results kept by the stand-in, S1–S8 and S11 (`forwarded.rs`); a provider open holding its session's grant until it ends and
   through a relaunch of its process, the open naming the manager's session, every
-  `mcpServers` entry carrying the open's environment, and grants left out of
-  the fingerprint.
+  `mcpServers` entry carrying the open's environment, and grants and the MCP
+  server list left out of the fingerprint
+  (`adding_an_mcp_server_keeps_the_identity_and_restores`).
 - SDK, real processes (python fixture): launching as configured, separate
   processes per session, a long call in one not blocking another, killing one
   leaving another, closing stopping the process group, the session ending
@@ -386,3 +388,53 @@ Each row above has at least one test, named after it:
   (`contracts/tools.rs`).
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.
 - Live: `scripts/mcp-test-server/live-check.mjs` with Claude and Codex.
+
+## MCP servers leave the restoration identity (#391)
+
+Removing the server loop from the fingerprint changed every saved
+conversation's identity once — the old hash wrote the number of servers even
+when it was zero. Saved sessions are an append-only, replayed log, so a
+snapshot cannot be edited in place; the gateway appends one durable
+`SessionChange::ProviderIdentity { before, after }` per conversation instead,
+once, as it starts (`conversation::application::identity_retrofit`). It runs
+after session storage initialises and the agent resolver exists, before the
+conversation service is built, so nothing can hold a session lease yet; the
+registry lock already refuses a second gateway. Each conversation's agent,
+model and approval mode resolve through the same resolver reopening uses, to
+the current identity and the one the same provider had under the old
+fingerprint (`previous_identity`); OpenCode is observed under its 5-second
+deadline without admitting a warm-up.
+
+Run: `NotRun → Running → Done (marker) | Incomplete (no marker)`.
+Conversation: `Unexamined → Rewritten | AlreadyCurrent | Foreign | NoHistory |
+Tombstoned | LeftPermanent(reason) | LeftTransient(reason)`. A rewrite is
+audited twice under `conversations/audit/fingerprint-retrofit/` — intent
+(`rewriting`, before/after identities, conversation, cause
+`mcp_servers_left_restoration_identity`, initiator system/gateway start) before
+the append and the outcome after it — and every run records a summary of counts
+and leftovers. The marker is `conversations/retrofit/391-fingerprint.done`.
+The runner, its audit and marker, and the SDK's earlier fingerprint are
+temporary; [#471](https://github.com/nessalabs/nessa-agent/issues/471) deletes
+them together.
+
+| # | State / event | Expected | Marker | Test |
+| --- | --- | --- | --- | --- |
+| R1 | Saved provider == old fingerprint over current config | One `ProviderIdentity` unit appended; reopen restores with no `IdentityMismatch`; audit holds the intent, then `rewritten` | yes | `r1_a_conversation_saved_under_the_previous_identity_is_moved_and_reopens` |
+| R2 | Saved provider == new fingerprint | No write, counted | yes | `r2_a_conversation_already_current_is_counted_and_not_written` |
+| R3 | Matches neither | Untouched, `foreign`; reopen still answers `IdentityMismatch` | yes | `r3_a_conversation_matching_neither_identity_is_left_foreign` |
+| R4 | Next start with the marker present | Nothing opened, nothing audited | n/a | `r4_with_the_marker_present_nothing_is_opened_or_audited` |
+| R5 | Crash after the unit, before `SaveComplete` | Next start reads the prior publication (still old) and retries the exact move; the writer accepts it | after R1 | `r5_a_move_interrupted_before_its_completion_is_retried_exactly` |
+| R6 | Crash after the append, before the marker | Next start: R2 for that conversation, then the marker | yes | `r6_a_run_that_stopped_before_its_marker_finds_the_move_already_current` |
+| R7 | `open_existing` answers `Busy`, or a storage I/O error | `LeftTransient`, recorded | **no** | `r7_a_busy_or_failing_history_is_left_for_the_next_start` |
+| R8 | Never opened (no session stream) | `NoHistory` | yes | `r8_a_conversation_never_opened_has_no_history` |
+| R9 | Log corrupt, wrong stream key, or unfinished and refused | `LeftPermanent(corrupt)`, not repaired | yes | `r9_a_corrupt_or_foreign_keyed_history_is_left_for_good`, `r9_an_unfinished_save_that_is_not_this_move_is_left_for_good` |
+| R10 | Agent not configured or installed, model or mode unavailable, unsupported agent | `LeftPermanent(reason)` | yes | `r10_an_unresolvable_selection_is_left_for_good_with_its_reason` |
+| R11 | OpenCode resolver times out | `LeftTransient(unavailable)`; other conversations still processed, the selection resolved once | **no** | `r11_a_resolver_timeout_leaves_its_conversations_and_processes_the_rest` |
+| R12 | Audit cannot be written before the rewrite | No unit appended, `LeftTransient(audit)` | **no** | `r12_no_move_is_appended_when_its_intent_cannot_be_recorded` |
+| R13 | Intent audited, then the append fails | Outcome `left: storage`, log unchanged | **no** | `r13_a_failed_append_after_its_intent_is_recorded_as_left` |
+| R14 | Conversation tombstoned | Skipped; deletion owns it | yes | `r14_a_deleted_conversation_is_skipped` |
+| R15 | Second gateway in the same namespace | Refused earlier by the registry lock; the retrofit never starts | n/a | existing `bootstrap_is_explicit_private_and_exclusively_locked` (`nessa-auth` local registry) |
+| R16 | Zero MCP servers configured | Still R1: the old hash included the zero length | yes | `r16_with_no_mcp_servers_the_previous_identity_still_differs` (SDK), `previous_identity_differs_with_no_mcp_servers` |
+| R17 | Folding `ProviderIdentity` whose `before` ≠ published, or `before == after` | Refused as corrupt, nothing published | n/a | `a_provider_identity_change_that_does_not_continue_the_published_one_is_refused` |
+| R18 | Summary audit cannot be written | No marker; the next start re-runs and finds R2 | **no** | `r18_no_marker_is_written_when_the_summary_cannot_be_recorded` |
+| R19 | A conversation's metadata row cannot be read (found while building) | `LeftTransient(metadata)`: the store cannot tell a damaged row from a failed read | **no** | `r19_an_unreadable_metadata_row_is_left_for_the_next_start` |

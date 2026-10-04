@@ -6,14 +6,14 @@ use std::fmt;
 /// same model, and the same configuration. The configuration part is the
 /// provider's own credential-free identity — for the ACP provider that covers
 /// the executable, its arguments, the environment it is given, the workspace,
-/// whether tools are enabled, every MCP server binary it will start, the token
-/// limits, the permission policy and the system prompt — so anything that
-/// changes which files are executed changes this value.
+/// whether tools are enabled, the token limits, the permission policy and the
+/// system prompt — so changing the runtime it launches changes this value.
 ///
 /// That matters because a first-execution scan is paid per file. An install or
-/// an update stages the runtime under a new directory and replaces the MCP
-/// binaries beside it, and every one of those is inside the provider's
-/// configuration identity.
+/// an update stages the runtime under a new directory, and that directory is
+/// inside the provider's configuration identity. The MCP servers a harness is
+/// given are not (ADR 344): what a harness starts for each is a stand-in, the
+/// gateway's own executable, which is already running when a warm-up is.
 ///
 /// The model is part of it too, although changing a model scans nothing: a
 /// warm-up also proves the configuration establishes a session, and that is

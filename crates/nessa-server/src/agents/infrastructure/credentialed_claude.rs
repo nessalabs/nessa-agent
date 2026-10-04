@@ -48,6 +48,9 @@ pub struct CredentialedClaudeProvider {
     approval_mode: ApprovalMode,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
+    /// What [`ClaudeAcpProvider::previous_identity`] answers for this
+    /// configuration, for the one-shot fingerprint retrofit alone.
+    previous_identity: ProviderIdentity,
     capabilities: EffectiveCapabilities,
     /// Every binding a deletion launched, kept until it has settled.
     deleting: LaunchedDeletions<ClaudeAcpProvider>,
@@ -70,6 +73,7 @@ impl CredentialedClaudeProvider {
         let provider = ClaudeAcpProvider::new(config.clone(), &model, limits, audit.clone())?
             .with_system_prompt(prompt.clone());
         let identity = provider.identity();
+        let previous_identity = provider.previous_identity();
         let capabilities = provider.capabilities().clone();
         Ok(Self {
             config,
@@ -80,6 +84,7 @@ impl CredentialedClaudeProvider {
             approval_mode: ApprovalMode::Ask,
             credentials,
             identity,
+            previous_identity,
             capabilities,
             deleting: LaunchedDeletions::default(),
         })
@@ -101,6 +106,14 @@ impl CredentialedClaudeProvider {
             })?;
         self.approval_mode = mode;
         Ok(self)
+    }
+
+    /// The identity this provider had under the restoration fingerprint that
+    /// still hashed MCP servers: [`ClaudeAcpProvider::previous_identity`] for
+    /// the same configuration, which no credential reaches. Read only by the
+    /// one-shot fingerprint retrofit, and removed with it in #471.
+    pub fn previous_identity(&self) -> ProviderIdentity {
+        self.previous_identity.clone()
     }
 
     /// A Claude binding launched with the credential current now.

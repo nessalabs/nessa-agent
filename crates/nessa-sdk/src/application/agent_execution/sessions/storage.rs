@@ -23,7 +23,9 @@ use std::{error::Error, fmt, future::Future, mem, pin::Pin, sync::Arc};
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
 
+mod provider_identity;
 mod save;
+pub use provider_identity::SavedProviderIdentity;
 pub use save::{
     SessionLoad, SessionLoadState, SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt,
     SessionSaveUnit,
@@ -351,6 +353,23 @@ pub enum SessionChange {
         before: ProviderContext,
         /// Newly saved context.
         after: ProviderContext,
+    },
+    /// The configuration identity this conversation restores under moved from
+    /// `before` to `after` without any provider effect.
+    ///
+    /// A durable statement that the same provider context is now selected by a
+    /// different [`ProviderIdentity`], for when what the identity is computed
+    /// from changes while the context it selects does not. Folding it refuses
+    /// unless `before` is the published [`SessionSnapshot::provider`] and differs
+    /// from `after`; nothing else in the snapshot changes
+    /// (`a_provider_identity_change_that_does_not_continue_the_published_one_is_refused`).
+    /// In the replay fold (`records::Continuation::stage_change`) only the
+    /// [`SessionChange::Opened`] arm and this one write the provider.
+    ProviderIdentity {
+        /// Previously saved identity, which must equal the published one.
+        before: ProviderIdentity,
+        /// Newly saved identity, different from `before`.
+        after: ProviderIdentity,
     },
 }
 impl SessionSnapshot {

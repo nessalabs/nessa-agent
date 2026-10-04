@@ -43,7 +43,10 @@ use nessa_sdk::application::agent_execution::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, QuestionAnswer,
     },
-    providers::{AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities},
+    providers::{
+        AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities,
+        ProviderIdentity,
+    },
     sessions::{
         MessageCommitClock, SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease,
         StorageError,
@@ -227,6 +230,13 @@ pub struct ConversationAgent {
     pub execution_audit: Arc<dyn ExecutionAudit>,
     /// The output budget every submission to this agent reserves.
     pub reserved_output_tokens: u32,
+    /// The identity this agent's provider had under the restoration
+    /// fingerprint that still hashed MCP servers (ADR 344), read only by the
+    /// one-shot identity retrofit to recognise a conversation saved under it.
+    /// `None` for a provider that never had one — anything but an ACP binding —
+    /// so the retrofit leaves its conversations as they are. Removed with the
+    /// retrofit.
+    pub previous_identity: Option<ProviderIdentity>,
     /// Joins this agent's one-time runtime preparation before its provider is
     /// opened on a request path. Per agent rather than one for the server,
     /// because the first-execution scan being paid for belongs to the runtime

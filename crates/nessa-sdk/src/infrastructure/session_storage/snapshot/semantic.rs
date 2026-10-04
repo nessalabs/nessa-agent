@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     application::agent_execution::{
-        providers::ExecutionReport,
+        providers::{ExecutionReport, ProviderIdentity},
         sessions::{ProviderContext, SessionChange, SessionSaveUnit, StorageError},
     },
     domain::agent_execution::{
@@ -64,6 +64,10 @@ enum WireChange<E = Event> {
         before: Option<String>,
         after: Option<String>,
     },
+    ProviderIdentity {
+        before: Provider,
+        after: Provider,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -84,6 +88,14 @@ fn decode_context(value: Option<String>) -> Result<ProviderContext, StorageError
         .map(|value| value.map_or(ProviderContext::Absent, ProviderContext::Recorded))
 }
 
+fn encode_provider(value: &ProviderIdentity) -> Provider {
+    Provider {
+        name: value.name().into(),
+        model_id: value.model_id().into(),
+        context: value.context().into(),
+    }
+}
+
 fn encode_result(
     value: &Result<
         crate::domain::agent_execution::executions::ExecutionOutcome,
@@ -102,11 +114,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                 context,
             } => Self::Opened {
                 id: id.as_str().into(),
-                provider: Provider {
-                    name: provider.name().into(),
-                    model_id: provider.model_id().into(),
-                    context: provider.context().into(),
-                },
+                provider: encode_provider(provider),
                 context: encode_context(context),
             },
             SessionChange::InputAccepted(record) => Self::InputAccepted {
@@ -166,6 +174,10 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
             SessionChange::ProviderContext { before, after } => Self::ProviderContext {
                 before: encode_context(before),
                 after: encode_context(after),
+            },
+            SessionChange::ProviderIdentity { before, after } => Self::ProviderIdentity {
+                before: encode_provider(before),
+                after: encode_provider(after),
             },
         }
     }
@@ -246,6 +258,10 @@ impl TryFrom<WireChange> for SessionChange {
             WireChange::ProviderContext { before, after } => Self::ProviderContext {
                 before: decode_context(before)?,
                 after: decode_context(after)?,
+            },
+            WireChange::ProviderIdentity { before, after } => Self::ProviderIdentity {
+                before: before.decode()?,
+                after: after.decode()?,
             },
         })
     }
@@ -643,6 +659,55 @@ mod tests {
         let bare = serde_json::to_vec(&WireChange::from(&changes[0])).unwrap();
         assert!(matches!(
             decode_batch(&bare, &ProviderContext::Absent),
+            Err(StorageError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn a_provider_identity_change_round_trips_with_its_exact_identities() {
+        let change = SessionChange::ProviderIdentity {
+            before: ProviderIdentity::new("claude-acp", "model", "sha256:before").unwrap(),
+            after: ProviderIdentity::new("claude-acp", "model", "sha256:after").unwrap(),
+        };
+        let bytes = encode_one(&change).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["changes"][0]["ProviderIdentity"]["after"]["context"],
+            "sha256:after"
+        );
+        assert_eq!(
+            decode_one(&bytes, &ProviderContext::Absent).unwrap(),
+            change
+        );
+    }
+
+    #[test]
+    fn a_provider_identity_change_with_an_unknown_field_or_an_oversized_context_is_refused() {
+        let change = SessionChange::ProviderIdentity {
+            before: ProviderIdentity::new("fixture", "model", "before").unwrap(),
+            after: ProviderIdentity::new("fixture", "model", "after").unwrap(),
+        };
+        let bytes = encode_one(&change).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["changes"][0]["ProviderIdentity"]["unrecognized"] = true.into();
+        assert!(matches!(
+            decode_one(
+                &serde_json::to_vec(&value).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["changes"][0]["ProviderIdentity"]["after"]["context"] =
+            "x".repeat(ProviderIdentity::MAX_CONTEXT_BYTES + 1).into();
+        let oversized = serde_json::to_vec(&value).unwrap();
+        // Refused by the allocation preflight, before the string is decoded.
+        assert!(matches!(
+            super::super::decode::preflight_semantic_batch(oversized.as_slice()),
+            Err(StorageError::Corrupt(_))
+        ));
+        assert!(matches!(
+            decode_one(&oversized, &ProviderContext::Absent),
             Err(StorageError::Corrupt(_))
         ));
     }

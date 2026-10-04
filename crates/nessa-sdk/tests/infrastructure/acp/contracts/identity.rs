@@ -54,7 +54,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     agent.close(close_action()).await.unwrap();
     drop(agent);
     let launches = std::fs::read(root.path().join("launches")).unwrap();
-    for change in 0..7 {
+    for change in 0..6 {
         let mut changed = config.clone();
         match change {
             0 => {
@@ -75,12 +75,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
                     "/nonexistent/different-provider",
                 ))
             }
-            5 => changed.tools_enabled = false,
-            _ => changed.mcp_servers.push(StdioMcpServer {
-                name: "nessa".into(),
-                command: "/trusted/nessa-mcp".into(),
-                args: vec!["--workspace".into(), "/different".into()],
-            }),
+            _ => changed.tools_enabled = false,
         }
         let changed = provider(changed, &model);
         assert_ne!(changed.identity(), identity);
@@ -123,6 +118,70 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
         std::fs::read_to_string(root.path().join("credential-received")).unwrap(),
         "yes"
     );
+}
+
+/// The MCP server list is attached to each open, like the stand-in grant, and
+/// selects no provider context (ADR 344, #391): adding one keeps the identity,
+/// and a conversation saved without it restores with it, launching no process
+/// to find out. The identity it had under the earlier fingerprint, which did
+/// hash the servers, differs — even with none (state table R16).
+#[tokio::test]
+async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
+    let _slot = process_test_slot().await;
+    // `stand-ins` mode records the MCP entries each session request carried.
+    let (root, config, model) = test_acp_configuration("stand-ins", 16);
+    let original = provider(config.clone(), &model);
+    let identity = original.identity();
+    let storage_root = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
+    let session_id = SessionId::new("mcp-servers").unwrap();
+    let manager = || {
+        SessionManager::open(
+            Some(session_id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+    };
+    let agent = attached_agent(Arc::new(original), manager().await.unwrap())
+        .await
+        .unwrap();
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    let mut changed = config.clone();
+    changed.mcp_servers.push(StdioMcpServer {
+        name: "nessa".into(),
+        command: "/trusted/nessa-mcp".into(),
+        args: vec!["--workspace".into(), "/different".into()],
+    });
+    let changed = provider(changed, &model);
+    assert_eq!(changed.identity(), identity);
+    assert_ne!(
+        changed.previous_identity(),
+        provider(config, &model).previous_identity()
+    );
+    let restored = attached_agent(Arc::new(changed), manager().await.unwrap())
+        .await
+        .unwrap();
+    restored.close(close_action()).await.unwrap();
+    // Resumed, with the current set.
+    let resumed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("mcp-servers-resume")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resumed[0]["name"], "nessa");
+}
+
+#[test]
+fn previous_identity_differs_with_no_mcp_servers() {
+    let (_root, config, model) = test_acp_configuration("echo", 16);
+    assert!(config.mcp_servers.is_empty());
+    let current = provider(config, &model);
+    let previous = current.previous_identity();
+    assert_ne!(previous, current.identity());
+    assert_eq!(previous.name(), current.identity().name());
+    assert_eq!(previous.model_id(), current.identity().model_id());
 }
 
 #[test]
@@ -209,6 +268,14 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
         granted.stand_ins = opened;
         assert_eq!(provider(granted, &model).identity(), original);
     }
+    // Nor is the MCP server list (ADR 344, #391).
+    let mut served = config.clone();
+    served.mcp_servers.push(StdioMcpServer {
+        name: "nessa".into(),
+        command: "/trusted/nessa-mcp".into(),
+        args: vec!["--workspace".into(), "/different".into()],
+    });
+    assert_eq!(provider(served, &model).identity(), original);
     let mut left = config.clone();
     let mut right = config;
     left.arguments = vec!["ab".into(), "c".into()];

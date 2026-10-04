@@ -1,21 +1,18 @@
-//! Credential-free restoration identity for exact context-selecting launch inputs.
+//! The restoration fingerprint as it was before MCP servers left it, kept only
+//! for the one-shot retrofit of conversations saved under it.
 //!
-//! Every ACP profile launches a process the same way, so the inputs that select
-//! a restorable context are the same inputs for all of them. The provider name
-//! is not hashed here: [`ProviderIdentity`] already carries it beside this
-//! fingerprint, so two profiles with byte-identical configuration still hold
-//! distinct identities.
+//! **Temporary.** This module, every `previous_identity` that reads it, and the
+//! gateway's retrofit runner are deleted together in #471 ("Delete the #391
+//! one-shot fingerprint retrofit"), once every saved conversation has been
+//! moved to the current identity. Nothing restores or
+//! compares against this fingerprint: it only lets the retrofit recognise a
+//! snapshot saved under it and record the move with
+//! [`SessionChange::ProviderIdentity`](crate::application::agent_execution::sessions::SessionChange::ProviderIdentity).
 //!
-//! The MCP servers a harness is given are not hashed. They are a per-open
-//! attachment, like the stand-in grant, and not a selector of the provider's
-//! context: changing them leaves every saved conversation restorable
-//! (`adding_an_mcp_server_keeps_the_identity_and_restores`). The relay refuses
-//! a server whose configuration changed under an open conversation on its own
-//! (`configuration-changed`). The fingerprint this replaced, which did hash
-//! them, survives only in [`super::retrofit`] for the one-shot retrofit of
-//! conversations saved under it.
-//!
-//! [`ProviderIdentity`]: crate::application::agent_execution::providers::ProviderIdentity
+//! The function is the earlier [`super::identity`] fingerprint verbatim, the
+//! MCP server loop included: it differs from the current one even with no
+//! servers (`previous_identity_differs_with_no_mcp_servers`) and still changes
+//! when one is added (`adding_an_mcp_server_keeps_the_identity_and_restores`).
 use super::AcpConfig;
 use crate::domain::agent_execution::{
     permissions::{PermissionEffect, PermissionScopeView},
@@ -55,6 +52,15 @@ pub(crate) fn fingerprint(
     }
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
     hash.update([u8::from(config.tools_enabled)]);
+    hash.update((config.mcp_servers.len() as u64).to_be_bytes());
+    for server in &config.mcp_servers {
+        field(&mut hash, server.name.as_bytes());
+        field(&mut hash, server.command.as_os_str().as_encoded_bytes());
+        hash.update((server.args.len() as u64).to_be_bytes());
+        for arg in &server.args {
+            field(&mut hash, arg.as_bytes());
+        }
+    }
     hash.update(limits.max_context_window().to_be_bytes());
     hash.update(limits.max_output().to_be_bytes());
     hash.update((config.permissions.decisions().len() as u64).to_be_bytes());

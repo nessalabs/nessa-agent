@@ -67,6 +67,7 @@ use crate::{
     },
     conversation::{
         application::{
+            identity_retrofit::{RestorationIdentities, RestorationIdentitySource},
             ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationError,
             ConversationFuture, ProviderSessionEraser,
         },
@@ -326,6 +327,7 @@ impl CurrentAgentResolver {
                         .runtime(agent)
                         .expect("configured managed adapter")
                         .output_tokens,
+                    previous_identity: Some(built.previous_identity),
                     readiness: None,
                 }))
             })
@@ -476,23 +478,32 @@ impl CurrentAgentResolver {
         }
     }
 
+    /// The current OpenCode generation, observed in the one blocking lane,
+    /// with no warm-up admitted for it.
+    async fn observe_opencode_provider(
+        &self,
+    ) -> Result<Option<ConversationAgent>, ConversationError> {
+        let permit = self
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        let source = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            source.observe_opencode().provider
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+    }
+
     async fn resolve_opencode(
         &self,
     ) -> Result<Option<ConversationAgent>, crate::conversation::application::ConversationError>
     {
         loop {
-            let permit =
-                self.slots.clone().acquire_owned().await.map_err(|_| {
-                    crate::conversation::application::ConversationError::Unavailable
-                })?;
-            let source = self.clone();
-            let observation = tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                source.observe_opencode().provider
-            })
-            .await
-            .map_err(|_| crate::conversation::application::ConversationError::Unavailable)??;
-            let Some(mut agent) = observation else {
+            let Some(mut agent) = self.observe_opencode_provider().await? else {
                 return Ok(None);
             };
             match self.warm_up.admit(&agent)? {
@@ -660,6 +671,46 @@ impl ConversationAgentSource for CurrentAgentResolver {
             })?;
             configured.readiness = readiness;
             Ok(Some(configured))
+        })
+    }
+}
+
+/// The identities the one-shot identity retrofit compares a saved
+/// conversation against, resolved as reopening resolves its provider: the
+/// fixed and managed agents through [`ConversationAgentSource::resolve_for`]
+/// itself, and OpenCode through the same observation and deadline without
+/// admitting a warm-up, because nothing will be opened on what this resolves.
+impl RestorationIdentitySource for CurrentAgentResolver {
+    fn identities<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+    ) -> ConversationFuture<'a, Option<RestorationIdentities>> {
+        Box::pin(async move {
+            let configured = if agent == AgentId::Opencode {
+                if mode != ConversationApprovalMode::Ask {
+                    return Err(ConversationError::ApprovalModeUnavailable);
+                }
+                if self.opencode.configured().is_none() {
+                    return Ok(None);
+                }
+                match tokio::time::timeout(RESOLUTION_DEADLINE, self.observe_opencode_provider())
+                    .await
+                    .map_err(|_| ConversationError::Unavailable)??
+                {
+                    Some(value) if value.provider.identity().model_id() != model => {
+                        return Err(ConversationError::ModelUnavailable)
+                    }
+                    other => other,
+                }
+            } else {
+                self.resolve_for(agent, model, mode).await?
+            };
+            Ok(configured.map(|configured| RestorationIdentities {
+                current: configured.provider.identity(),
+                previous: configured.previous_identity,
+            }))
         })
     }
 }

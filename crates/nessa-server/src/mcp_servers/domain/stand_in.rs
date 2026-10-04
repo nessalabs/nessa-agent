@@ -42,8 +42,9 @@ pub fn configuration_digest(command: &Path, args: &[String]) -> String {
 /// The arguments a stand-in for `server` runs with: [`RELAY_SUBCOMMAND`], the
 /// relay `socket`, the server's name, and its [`configuration_digest`]. Every
 /// one is stable across runs of one namespace, and the digest changes when the
-/// configured server does — which is what a harness's context fingerprint,
-/// reading these, has to see.
+/// configured server does — which is what the relay compares, refusing a
+/// stand-in whose server changed with `configuration-changed`. None of it is
+/// part of a conversation's restoration identity (ADR 344).
 pub fn relay_arguments(socket: &str, server: &str, configuration: &str) -> Vec<String> {
     vec![
         RELAY_SUBCOMMAND.into(),

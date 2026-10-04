@@ -666,6 +666,7 @@ pub(super) fn providers(
             provider,
             execution_audit,
             session_eraser,
+            previous_identity,
         } = match build::provider(
             agent,
             config,
@@ -709,6 +710,7 @@ pub(super) fn providers(
                 provider,
                 execution_audit,
                 reserved_output_tokens: runtime.output_tokens,
+                previous_identity: Some(previous_identity),
                 // Filled in by whoever has somewhere to keep warm-up records.
                 // This builds providers and knows nothing about the durable
                 // directories a warm-up writes to.
@@ -737,6 +739,7 @@ pub(super) fn provider_for(
         provider,
         execution_audit,
         session_eraser: _,
+        previous_identity,
     } = build::provider(
         agent,
         config,
@@ -750,6 +753,7 @@ pub(super) fn provider_for(
         provider,
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
+        previous_identity: Some(previous_identity),
         readiness: None,
     })
 }
@@ -778,6 +782,7 @@ pub(super) fn provider_for_fixed(
         provider,
         execution_audit,
         session_eraser: _,
+        previous_identity,
     } = build::provider(
         agent,
         config,
@@ -791,6 +796,7 @@ pub(super) fn provider_for_fixed(
         provider,
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
+        previous_identity: Some(previous_identity),
         readiness: None,
     })
 }
@@ -903,7 +909,10 @@ pub(super) mod build {
         application::agent_execution::{
             agents::AgentError,
             executions::ExecutionAudit,
-            providers::{AgentProvider, ApprovalMode, ProviderSessionDeleter, UserImageSource},
+            providers::{
+                AgentProvider, ApprovalMode, ProviderIdentity, ProviderSessionDeleter,
+                UserImageSource,
+            },
         },
         domain::{
             agent_execution::{
@@ -927,6 +936,10 @@ pub(super) mod build {
         /// How this agent deletes its own record of a session: its binding,
         /// whose own module says what a delete means for it.
         pub(in crate::composition) session_eraser: Arc<dyn ProviderSessionEraser>,
+        /// The identity this binding had under the restoration fingerprint
+        /// that still hashed MCP servers, for the one-shot retrofit
+        /// (`ConversationAgent::previous_identity`).
+        pub(in crate::composition) previous_identity: ProviderIdentity,
     }
 
     /// The largest ACP frame, derived from the largest message rather than
@@ -1098,53 +1111,63 @@ pub(super) mod build {
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way
         // it deletes its own record of a session.
-        let (provider, binding): (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) =
-            match agent {
-                AgentId::Claude => bound(
-                    CredentialedClaudeProvider::new(
-                        acp,
-                        model,
-                        limits,
-                        audit.clone(),
-                        prompt,
-                        dependencies.credentials.clone(),
-                    )
+        // Each arm also says the identity its binding had under the earlier
+        // fingerprint, read from the concrete binding before it is boxed.
+        let (provider, binding, previous_identity): (
+            Arc<dyn AgentProvider>,
+            Arc<dyn ProviderSessionDeleter>,
+            ProviderIdentity,
+        ) = match agent {
+            AgentId::Claude => {
+                let binding = CredentialedClaudeProvider::new(
+                    acp,
+                    model,
+                    limits,
+                    audit.clone(),
+                    prompt,
+                    dependencies.credentials.clone(),
+                )
+                .map_err(failed)?
+                .with_approval_mode(approval_mode)
+                .map_err(failed)?;
+                let previous = binding.previous_identity();
+                bound(binding, previous)
+            }
+            AgentId::Codex => {
+                let binding = CodexAcpProvider::new(acp, &model, limits, audit.clone())
                     .map_err(failed)?
+                    .with_system_prompt(prompt)
                     .with_approval_mode(approval_mode)
-                    .map_err(failed)?,
-                ),
-                AgentId::Codex => bound(
-                    CodexAcpProvider::new(acp, &model, limits, audit.clone())
-                        .map_err(failed)?
-                        .with_system_prompt(prompt)
-                        .with_approval_mode(approval_mode)
-                        .map_err(failed)?,
-                ),
-                // No prompt, because there is nowhere to put one that Opencode can
-                // be shown to read: its binding offers no `with_system_prompt` for
-                // exactly that reason, and this arm not calling one is the compiler
-                // enforcing it rather than a convention someone has to remember.
-                // Opencode therefore runs under its own instructions. What keeps
-                // that difference from mattering yet is not the session mode, which
-                // only denies edits, but the permission policy its binding launches
-                // it with: reading and searching allowed, everything else denied,
-                // including this server's own MCP shell tool.
-                AgentId::Opencode => {
-                    if approval_mode != ApprovalMode::Ask {
-                        return Err(RunError::Agent(
-                            "OpenCode approval policy is fixed to ask".into(),
-                        ));
-                    }
-                    bound(
-                        OpencodeAcpProvider::new(acp, &model, limits, audit.clone())
-                            .map_err(failed)?,
-                    )
+                    .map_err(failed)?;
+                let previous = binding.previous_identity();
+                bound(binding, previous)
+            }
+            // No prompt, because there is nowhere to put one that Opencode can
+            // be shown to read: its binding offers no `with_system_prompt` for
+            // exactly that reason, and this arm not calling one is the compiler
+            // enforcing it rather than a convention someone has to remember.
+            // Opencode therefore runs under its own instructions. What keeps
+            // that difference from mattering yet is not the session mode, which
+            // only denies edits, but the permission policy its binding launches
+            // it with: reading and searching allowed, everything else denied,
+            // including this server's own MCP shell tool.
+            AgentId::Opencode => {
+                if approval_mode != ApprovalMode::Ask {
+                    return Err(RunError::Agent(
+                        "OpenCode approval policy is fixed to ask".into(),
+                    ));
                 }
-            };
+                let binding =
+                    OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?;
+                let previous = binding.previous_identity();
+                bound(binding, previous)
+            }
+        };
         Ok(ProviderComposition {
             provider,
             execution_audit: audit,
             session_eraser: Arc::new(BindingSessionEraser::new(binding)),
+            previous_identity,
         })
     }
 
@@ -1152,9 +1175,14 @@ pub(super) mod build {
     /// agent deletes its own record of a session.
     fn bound<B: AgentProvider + ProviderSessionDeleter + 'static>(
         binding: B,
-    ) -> (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) {
+        previous_identity: ProviderIdentity,
+    ) -> (
+        Arc<dyn AgentProvider>,
+        Arc<dyn ProviderSessionDeleter>,
+        ProviderIdentity,
+    ) {
         let binding = Arc::new(binding);
-        (binding.clone(), binding)
+        (binding.clone(), binding, previous_identity)
     }
 }
 

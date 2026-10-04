@@ -2046,6 +2046,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),
                 ),
                 reserved_output_tokens: 4096,
+                previous_identity: None,
                 readiness: None,
             },
         )]),

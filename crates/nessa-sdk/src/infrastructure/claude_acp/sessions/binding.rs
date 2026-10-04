@@ -17,7 +17,8 @@ use crate::domain::model_metadata::value_objects::{
     EffortLevel, Modalities, ModelFeatures, ModelProvider,
 };
 use crate::infrastructure::acp::sessions::{
-    binding as acp_binding, deletion::DeletionCleanups, identity, thought_level, AcpConfig,
+    binding as acp_binding, deletion::DeletionCleanups, identity, retrofit, thought_level,
+    AcpConfig,
 };
 use crate::infrastructure::process::ProcessScope;
 use std::sync::Arc;
@@ -224,6 +225,29 @@ impl AgentProvider for ClaudeAcpProvider {
     }
 }
 impl ClaudeAcpProvider {
+    /// The identity this binding had under the restoration fingerprint that
+    /// still hashed its MCP servers, before they left the restoration identity
+    /// (ADR 344). [`AgentProvider::identity`] is the one restoration compares;
+    /// this one is read only by a host's one-shot retrofit, to recognise a
+    /// conversation saved under the earlier fingerprint and record its move
+    /// with [`SessionChange::ProviderIdentity`](crate::application::agent_execution::sessions::SessionChange::ProviderIdentity).
+    ///
+    /// Temporary: removed, with the earlier fingerprint, in #471, which
+    /// deletes the retrofit. It differs from [`AgentProvider::identity`] even
+    /// with no MCP servers, because the earlier fingerprint hashed their count.
+    /// Pure: no process, credential or file is touched.
+    pub fn previous_identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new(
+            "claude-acp",
+            self.capabilities.model().model_id(),
+            retrofit::fingerprint(
+                &self.config,
+                self.capabilities.limits(),
+                self.system_prompt.as_ref(),
+            ),
+        )
+        .expect("validated model and fixed-size context fingerprint")
+    }
     /// The launch configuration every connection this provider opens uses.
     pub(super) fn config(&self) -> &AcpConfig {
         &self.config

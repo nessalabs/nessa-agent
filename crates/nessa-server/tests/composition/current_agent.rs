@@ -36,11 +36,11 @@ use crate::{
     },
     composition::local_auth::SystemClock,
     conversation::application::{
-        ConversationAgentSource, ConversationAgents, ConversationCaller, ConversationDependencies,
-        ConversationLimits, ConversationService, ProviderSessionErasers, SubmissionMode,
-        SubmittedMessage,
+        identity_retrofit::RestorationIdentitySource, ConversationAgentSource, ConversationAgents,
+        ConversationCaller, ConversationDependencies, ConversationLimits, ConversationService,
+        ProviderSessionErasers, SubmissionMode, SubmittedMessage,
     },
-    conversation::domain::ConversationId,
+    conversation::domain::{ConversationApprovalMode, ConversationId},
     conversation_test_support::{
         AcceptingAudit, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository,
         MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted,
@@ -50,7 +50,8 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::providers::{
-        ExecutableUseError, ExecutableUseSnapshot, UserImageFuture, UserImageSource,
+        ExecutableUseError, ExecutableUseSnapshot, ProviderIdentity, UserImageFuture,
+        UserImageSource,
     },
     domain::agent_execution::prompts::ImageReference,
     infrastructure::session_storage::InMemoryStorage,
@@ -229,6 +230,7 @@ fn fixed_agent() -> ConversationAgent {
         provider: Arc::new(Provider::new(Arc::new(ProviderFactory::default()))),
         execution_audit: Arc::new(AcceptingAudit),
         reserved_output_tokens: 4096,
+        previous_identity: None,
         readiness: None,
     }
 }
@@ -1788,4 +1790,153 @@ async fn managed_model_and_mode_refusals_match_fixed_provider_semantics() {
             "unsupported presets are refused before managed-store lookup"
         );
     }
+}
+
+/// The identity retrofit resolves a fixed agent through `resolve_for` itself,
+/// so it is handed the identity reopening compares and the identity the same
+/// provider carried under the earlier fingerprint.
+#[tokio::test]
+async fn retrofit_identities_of_a_fixed_agent_are_those_reopening_resolves() {
+    let root = tempfile::tempdir().unwrap();
+    let previous = ProviderIdentity::new("gateway-test", "test", "earlier").unwrap();
+    let mut fixed = fixed_agent();
+    fixed.previous_identity = Some(previous.clone());
+    let resolver = resolver(
+        root.path(),
+        Arc::new(Store::new(StoreAnswer::Missing)),
+        Arc::new(Credentials::new(CredentialAnswer::Missing)),
+        HashMap::from([(AgentId::Claude, fixed)]),
+    );
+    let identities = resolver
+        .identities(AgentId::Claude, "test", ConversationApprovalMode::Ask)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        identities.current,
+        ProviderIdentity::new("gateway-test", "test", "test").unwrap()
+    );
+    assert_eq!(identities.previous, Some(previous));
+    assert!(matches!(
+        resolver
+            .identities(
+                AgentId::Claude,
+                "another-model",
+                ConversationApprovalMode::Ask
+            )
+            .await,
+        Err(ConversationError::ModelUnavailable)
+    ));
+    assert!(matches!(
+        resolver
+            .identities(AgentId::Codex, "test", ConversationApprovalMode::Ask)
+            .await,
+        Ok(None)
+    ));
+}
+
+/// OpenCode is observed under the resolver's deadline as a cold slot is, and
+/// nothing is prepared or launched for it: nothing will be opened on what the
+/// retrofit resolves.
+#[tokio::test]
+async fn retrofit_identities_of_opencode_admit_no_warm_up_and_launch_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = Arc::new(UseAuthority::default());
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    store.publish_current(
+        &current_release(),
+        ManagedLaunchSnapshot::new(
+            fixture_wrapper(root.path(), "opencode-retrofit", "opencode/minimax-m3"),
+            authority.clone(),
+        ),
+    );
+    let resolver = resolver(
+        root.path(),
+        store,
+        Arc::new(Credentials::new(CredentialAnswer::ApiKey("key".into()))),
+        HashMap::new(),
+    );
+    let identities = resolver
+        .identities(
+            AgentId::Opencode,
+            "opencode/minimax-m3",
+            ConversationApprovalMode::Ask,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let previous = identities.previous.unwrap();
+    assert_ne!(previous, identities.current);
+    assert_eq!(previous.name(), identities.current.name());
+    assert!(!resolver.warm_up_may_hold_resources());
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        resolver
+            .identities(
+                AgentId::Opencode,
+                "opencode/minimax-m3",
+                ConversationApprovalMode::Auto
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUnavailable)
+    ));
+    assert!(matches!(
+        resolver
+            .identities(AgentId::Opencode, "another", ConversationApprovalMode::Ask)
+            .await,
+        Err(ConversationError::ModelUnavailable)
+    ));
+}
+
+/// R11's deadline: an OpenCode observation that never answers leaves the
+/// retrofit with the transient `Unavailable` once the resolver's deadline
+/// passes, without a second observation, and the blocked observation still
+/// owns its slot until it returns.
+#[tokio::test(start_paused = true)]
+async fn retrofit_identities_of_opencode_that_never_answers_are_unavailable_at_the_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Ready(executable(root.path()))));
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let credentials = Arc::new(BlockingCredentials {
+        entered: Mutex::new(Some(entered_tx)),
+        finished: Mutex::new(Some(finished_tx)),
+        release: Mutex::new(release_rx),
+        reads: AtomicUsize::new(0),
+    });
+    let resolver = Arc::new(resolver(
+        root.path(),
+        store,
+        credentials.clone(),
+        HashMap::new(),
+    ));
+
+    let waiting = tokio::spawn({
+        let resolver = resolver.clone();
+        async move {
+            resolver
+                .identities(
+                    AgentId::Opencode,
+                    "opencode/minimax-m3",
+                    ConversationApprovalMode::Ask,
+                )
+                .await
+        }
+    });
+    entered_rx.await.unwrap();
+    tokio::time::advance(RESOLUTION_DEADLINE - Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished(), "the deadline has not passed yet");
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(matches!(
+        waiting.await.unwrap(),
+        Err(ConversationError::Unavailable)
+    ));
+    assert_eq!(credentials.reads.load(Ordering::SeqCst), 1);
+    assert!(!resolver.warm_up_may_hold_resources());
+
+    release_tx.send(()).unwrap();
+    finished_rx.await.unwrap();
+    drop(resolver.slots.clone().acquire_owned().await.unwrap());
 }

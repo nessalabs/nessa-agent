@@ -1587,6 +1587,30 @@ mod tests {
     }
 
     #[test]
+    fn a_replayed_provider_identity_change_moves_the_identity_and_keeps_its_accounting() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let after = ProviderIdentity::new(
+            "provider",
+            "model",
+            "a much longer workspace fingerprint than before",
+        )
+        .unwrap();
+        let change = SessionChange::ProviderIdentity {
+            before: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            after: after.clone(),
+        };
+        let before = fold.committed.retained_bytes();
+        fold.apply(&records(&scope, 3, &save_frames(change, 2, 1)))
+            .unwrap();
+        assert_eq!(fold.snapshot().unwrap().provider, after);
+        assert!(fold.committed.retained_bytes() > before);
+        fold.committed.assert_retained_accounting();
+    }
+
+    #[test]
     fn checkpoint_suffix_matches_full_replay_and_rejects_stale_scope() {
         let scope = scope();
         let first = records(&scope, 1, &save_frames(opened(), 0, 0));

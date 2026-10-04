@@ -224,6 +224,12 @@ pub(super) fn touched(
             .provider_context
             .recorded()
             .map_or(0, |id| id.as_str().len()),
+        SessionChange::ProviderIdentity { .. } => snapshot
+            .provider
+            .name()
+            .len()
+            .saturating_add(snapshot.provider.model_id().len())
+            .saturating_add(snapshot.provider.context().len()),
         SessionChange::QueueDecision(_) => 0,
     })
 }

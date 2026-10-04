@@ -3,6 +3,9 @@ mod acquisition;
 use super::catalogue_changes::CatalogueChanges;
 
 use crate::agents::domain::AgentId;
+use crate::conversation::application::identity_retrofit::{
+    EveryConversation, RetrofitConversations,
+};
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
     CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationCatalogue,
@@ -54,6 +57,10 @@ pub(crate) fn list_query() -> String {
         acquisition::summary("s.")
     )
 }
+
+/// Every conversation's identity, deleted ones included: the identity
+/// retrofit's question.
+pub(crate) const EVERY: &str = "SELECT id FROM conversations ORDER BY id";
 
 /// Every deletion not yet erased, by the partial index that holds only those.
 pub(crate) const UNFINISHED: &str =
@@ -1024,6 +1031,27 @@ impl ConversationRepository for LocalConversationStore {
                     None => {
                         found.unreadable += 1;
                         unreadable("deletions", &name);
+                    }
+                }
+            }
+            Ok(found)
+        })
+    }
+}
+
+impl RetrofitConversations for LocalConversationStore {
+    fn every_conversation(&self) -> ConversationFuture<'_, EveryConversation> {
+        self.run(|connection| {
+            let mut statement = connection.prepare(EVERY).map_err(failed)?;
+            let mut rows = statement.query([]).map_err(failed)?;
+            let mut found = EveryConversation::default();
+            while let Some(row) = rows.next().map_err(failed)? {
+                let name = cells(row.get::<_, String>(0))?.unwrap_or_default();
+                match ConversationId::new(&name).ok() {
+                    Some(id) => found.conversations.push(id),
+                    None => {
+                        found.unreadable += 1;
+                        unreadable("conversations", &name);
                     }
                 }
             }

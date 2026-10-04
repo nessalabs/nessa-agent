@@ -52,6 +52,7 @@ pub(super) enum Shape {
     SemanticReport,
     SemanticSettlement,
     SemanticContext,
+    SemanticIdentity,
     Metadata,
     Images,
     Image,
@@ -144,6 +145,7 @@ impl Shape {
             (Semantic, "ProviderReport") => SemanticReport,
             (Semantic, "LocalSettlement") => SemanticSettlement,
             (Semantic, "ProviderContext") => SemanticContext,
+            (Semantic, "ProviderIdentity") => SemanticIdentity,
             (SemanticOpened, "id" | "context") => Text(256),
             (SemanticOpened, "provider") => Provider,
             (SemanticInput, "metadata") => Metadata,
@@ -153,6 +155,7 @@ impl Shape {
             (SemanticReceipt, "before" | "after") => Acknowledgement,
             (SemanticSettlement, "before" | "after") => Result,
             (SemanticContext, "before" | "after") => Text(256),
+            (SemanticIdentity, "before" | "after") => Provider,
             (
                 SemanticReceipt | SemanticStop | SemanticReport | SemanticSettlement,
                 "execution_id",

@@ -190,16 +190,44 @@ app widgets alike.
 - The gateway gains the connection to each server for each harness session —
   the harness's MCP traffic now passes through it — and two app methods, with
   policy and audit; what that connection means is designed in
-  [mcp-connections](../../design/mcp-connections.md) (#346): a harness's
-  context fingerprint covers its stand-in, whose arguments carry a digest of
-  the configured server, so it still changes exactly when the server does; a
-  gateway restart ends every session, so a restored conversation's handles
+  [mcp-connections](../../design/mcp-connections.md) (#346): a stand-in's
+  arguments carry a digest of the configured server, which the relay compares,
+  so a server changed under an open conversation is refused
+  `configuration-changed`; a gateway restart ends every session, so a restored conversation's handles
   are gone and the server says so; a server that exits ends its stand-in, as
   when the harness owned it; and which conversation a stand-in belongs to is
   carried to the gateway by a token issued for each open, in the stand-in's
   environment (#348), before any app method exists. The SDK and
   protocol carry tool identity and `_meta`, which also helps any tool view in
   the transcript.
+- **Amended (#391): the MCP server list is not part of a conversation's
+  restoration identity.** It is a per-open attachment, like the stand-in
+  token, not a selector of the provider's context — the model is not in the
+  fingerprint either. The SDK's fingerprint no longer hashes the servers, so
+  adding, editing or removing one strands no conversation: a new conversation
+  gets the current set at once, and an open one keeps its harness's set until
+  its provider session ends (close, delete, gateway stop), then resumes with
+  the current set. This replaces "the fingerprint still changes exactly when
+  the server does", which the record first chose.
+  - Changing the function changed every saved conversation's identity once,
+    since the old one also hashed the number of servers. A **one-shot
+    retrofit** at gateway start, before the conversation service exists,
+    moves each conversation whose saved identity is exactly the old
+    fingerprint over the current configuration, and leaves every other as it
+    was. Its state table and tests are in
+    [mcp-connections](../../design/mcp-connections.md#mcp-servers-leave-the-restoration-identity-391).
+  - The move is recorded by a new, permanent durable fact,
+    `SessionChange::ProviderIdentity { before, after }`: this conversation's
+    restoration identity moved from one to the other with no provider effect.
+    Folding it refuses unless `before` is the published identity and differs
+    from `after`. It is not a compatibility reader; appending is the only
+    honest way to change a replayed log.
+  - What is temporary is the old fingerprint function (kept only in the SDK's
+    `acp::sessions::retrofit`, read through each ACP binding's
+    `previous_identity`) and the gateway's retrofit runner with its audit and
+    marker. [#471](https://github.com/nessalabs/nessa-agent/issues/471)
+    deletes them together once installations have started on this version; until then no reader of saved history depends on
+    them.
 - A view like experiments becomes a package with its own release, testable in a
   fake host, and portable.
 - An extension cannot reach into the core: whatever it needs from the

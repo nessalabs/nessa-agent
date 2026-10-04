@@ -24,12 +24,14 @@ use crate::{
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
     conversation::application::{
+        identity_retrofit::{run_identity_retrofit, IdentityRetrofitPorts, RetrofitRun},
         ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts, McpToolUis,
         NoMcpToolUis,
     },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+        DurableConversationFileLinkAudit, DurableConversationModeAudit,
+        DurableIdentityRetrofitAudit, DurableMcpAppAudit, FileIdentityRetrofitMarker,
         LocalConversationStore,
     },
 };
@@ -610,11 +612,11 @@ async fn conversations(
     for agent in built.providers.values_mut() {
         // The provider's own credential-free identity, rather than a
         // hand-picked list of fields: it already covers the executable, its
-        // arguments, the environment, the workspace, and every MCP server
-        // binary the child will start, and it is computed from raw OS bytes
-        // rather than a lossy path conversion. Anything that changes which
-        // files are executed changes it, which is what a first-execution
-        // scan is paid for.
+        // arguments, the environment and the workspace, and it is computed
+        // from raw OS bytes rather than a lossy path conversion. Changing the
+        // runtime the child is launched from changes it, which is what a
+        // first-execution scan is paid for. MCP servers are not in it (ADR
+        // 344); each one the child starts is a stand-in, this executable.
         let identity = agent.provider.identity();
         let runtime =
             RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
@@ -713,6 +715,39 @@ async fn conversations(
         images: attachments.images.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
+    // Once per namespace, before the conversation service exists and so
+    // before anything can hold a session lease: move every conversation saved
+    // under the restoration fingerprint that still hashed MCP servers to the
+    // current one (#391, ADR 344). Its own module says what is left and why;
+    // nothing it leaves stops the gateway starting, and a run that left
+    // something transient writes no marker, so the next start runs again.
+    let retrofit = run_identity_retrofit(&IdentityRetrofitPorts {
+        conversations: metadata.clone(),
+        metadata: metadata.clone(),
+        storage: storage.clone(),
+        identities: resolver.clone(),
+        audit: Arc::new(
+            DurableIdentityRetrofitAudit::new(
+                root.join("audit").join("fingerprint-retrofit"),
+                clock.clone(),
+            )
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+        marker: Arc::new(FileIdentityRetrofitMarker::new(root.join("retrofit"))),
+    })
+    .await;
+    match retrofit {
+        RetrofitRun::AlreadyDone => {}
+        RetrofitRun::Done(summary) => {
+            tracing::info!(?summary, "conversation identity retrofit finished");
+        }
+        RetrofitRun::Incomplete(summary) => {
+            tracing::warn!(
+                ?summary,
+                "conversation identity retrofit left work for the next start"
+            );
+        }
+    }
     let selected = resolver.default_agent()?;
     // The one registry of how each agent deletes its own record of a session:
     // the fixed agents' bindings, built above, and OpenCode's, whose binding

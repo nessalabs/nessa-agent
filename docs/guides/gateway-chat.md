@@ -169,8 +169,12 @@ Build `cargo build -p nessa-server -p nessa-mcp` before starting the gateway.
 `toolsEnabled: true` exposes Claude's native tool preset, including WebSearch and
 WebFetch. All Nessa-owned tools are supplied through the configured MCP servers;
 `nessa-mcp` currently supplies `shell`, backed by Shepherd. Server executables and
-arguments come only from trusted local configuration and enter the provider
-restoration fingerprint. There are no automatically discovered MCP servers.
+arguments come only from trusted local configuration. They are not part of the
+provider restoration fingerprint: the server list is attached to each provider
+open, like the stand-in token, so adding, editing or removing a server leaves
+saved conversations restorable. An open conversation keeps its harness's set
+until its provider session ends. There are no automatically discovered MCP
+servers.
 
 Native Bash, TaskOutput and TaskStop are disabled so commands use the MCP shell.
 The pinned Claude SDK canonicalizes the historical BashOutput and KillShell names
@@ -729,7 +733,8 @@ gateway acknowledgement. The composer's generating animation is disabled.
 ### Restoring after local configuration changes
 
 Saved Claude sessions retain the exact context fingerprint, including workspace,
-launch arguments, system prompt, and tool/MCP configuration. A mismatch returns
+launch arguments, system prompt, and tool configuration — not the MCP server
+list, which is attached to each open (ADR 344). A mismatch returns
 `conversation_configuration_changed`; it does not start another context or erase
 history. The gateway logs the underlying opening failure and retains any required
 cleanup owner. Retrying the same configuration does not resolve a mismatch.
@@ -740,6 +745,17 @@ journal written before a field existed is refused whole. A conversation saved
 before messages could point at files does not reopen. See
 [ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md) for why a migration
 script was written for exactly this and then deleted.
+
+Taking the MCP server list out of the fingerprint changed every saved
+conversation's identity once. The gateway moves those conversations itself, once,
+as it starts and before any can be opened: each whose saved identity is exactly
+what its agent, model and mode resolved to under the earlier fingerprint gets one
+appended `ProviderIdentity` fact moving it to the current identity, with intent,
+outcome and a run summary under `conversations/audit/fingerprint-retrofit/`, and
+`conversations/retrofit/391-fingerprint.done` written once nothing transient was
+left. A conversation whose identity differs for any other reason is left as it
+was and still answers `conversation_configuration_changed`. The runner and the
+earlier fingerprint are temporary (ADR 344).
 
 ### Conversation activity surfaces
 
