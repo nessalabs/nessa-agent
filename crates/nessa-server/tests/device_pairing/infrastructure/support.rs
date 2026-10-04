@@ -31,7 +31,7 @@ use nessa_server::{
         infrastructure::{
             restore_gateway_identity, ConversationReceivers, GatewayPairing,
             NativeEnrollmentConnections, NativeEnrollmentListener, PairingRuntimeDependencies,
-            TcpEnrollmentAccept,
+            ProtectedSessions, TcpEnrollmentAccept,
         },
     },
 };
@@ -279,11 +279,27 @@ impl Fixture {
         JoinHandle<IoResult<()>>,
         Arc<NativeEnrollmentConnections>,
     ) {
+        self.listener_serving(None).await
+    }
+    /// A listener whose `openProduct` connections are served by `sessions`.
+    pub async fn listener_serving(
+        &self,
+        sessions: Option<Arc<dyn ProtectedSessions>>,
+    ) -> (
+        SocketAddr,
+        oneshot::Sender<()>,
+        JoinHandle<IoResult<()>>,
+        Arc<NativeEnrollmentConnections>,
+    ) {
         let socket = TcpEnrollmentAccept::new(TokioTcpListener::bind("127.0.0.1:0").await.unwrap());
-        let connections = Arc::new(NativeEnrollmentConnections::new(
+        let mut connections = NativeEnrollmentConnections::new(
             self.gateway.clone(),
             RuntimeDependencies::default().clock,
-        ));
+        );
+        if let Some(sessions) = sessions {
+            connections = connections.with_protected_sessions(sessions);
+        }
+        let connections = Arc::new(connections);
         let address = socket.local_address().unwrap();
         let listener = NativeEnrollmentListener::new(socket, connections.clone());
         let (stop, stopped) = oneshot::channel();

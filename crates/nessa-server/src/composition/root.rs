@@ -200,8 +200,12 @@ impl CompositionRoot {
         // bind failure drops the browser listener unserved (design row S10).
         let native = match native {
             Some(prepared) => {
-                let bound =
-                    super::native_pairing::bind(prepared, dependencies.clock.clone()).await?;
+                let bound = super::native_pairing::bind(
+                    prepared,
+                    dependencies.clock.clone(),
+                    product.clone(),
+                )
+                .await?;
                 tracing::info!(
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"

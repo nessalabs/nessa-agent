@@ -99,6 +99,7 @@ pub(super) enum WireRequest<'a> {
     Status {
         public: WirePublic<'a>,
     },
+    OpenProduct {},
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]

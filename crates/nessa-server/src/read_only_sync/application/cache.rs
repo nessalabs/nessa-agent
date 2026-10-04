@@ -62,6 +62,9 @@ pub(crate) enum CacheError {
     Uncertain,
     Quota,
     Corrupt,
+    /// The database predates the current cache shape (it has no purge
+    /// receipts). Development caches are not migrated: delete and resync.
+    OutdatedSchema,
     Transcript(StorageError),
     TranscriptScope,
     CatalogueProgress(CatalogueProgressError),
@@ -85,6 +88,9 @@ impl Display for CacheError {
             Self::Uncertain => "cache commit is unconfirmed; reload required",
             Self::Quota => "private cache resource limit reached",
             Self::Corrupt => "private cache evidence is inconsistent",
+            Self::OutdatedSchema => {
+                "private cache predates the current shape; delete it and sync again"
+            }
             Self::CatalogueProgress(_) => "core catalogue progress refused",
             Self::CatalogueValidation(_) => "core catalogue entry refused",
             Self::CatalogueMetadata => "catalogue metadata refused",

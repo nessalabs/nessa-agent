@@ -51,17 +51,33 @@ pub(super) fn fenced(connection: &Connection, scope: &Scope) -> Result<bool, Cac
     fenced_target(connection, scope.receiver(), scope.origin(), scope.stream())
 }
 
+/// A retained catalogue deletion of this conversation, or a purge of its
+/// whole receiver, fences it.
 pub(super) fn fenced_target(
     connection: &Connection,
     receiver: &Id,
     origin: &Id,
     conversation: &Id,
 ) -> Result<bool, CacheError> {
+    if purged(connection, receiver)? {
+        return Ok(true);
+    }
     connection
         .query_row(
             "SELECT EXISTS (SELECT 1 FROM catalogue_deletions
              WHERE receiver = ?1 AND origin = ?2 AND conversation = ?3)",
             params![receiver.as_str(), origin.as_str(), conversation.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(database_error)
+}
+
+/// Whether an authenticated Terminal status purged this receiver.
+pub(super) fn purged(connection: &Connection, receiver: &Id) -> Result<bool, CacheError> {
+    connection
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM cache_purges WHERE receiver = ?1)",
+            params![receiver.as_str()],
             |row| row.get(0),
         )
         .map_err(database_error)

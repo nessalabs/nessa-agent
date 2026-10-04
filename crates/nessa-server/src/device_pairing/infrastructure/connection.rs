@@ -2,6 +2,7 @@
 pub(super) mod wake;
 use super::worker::worker_fault;
 use super::{
+    protected::{ProtectedConnection, ProtectedSessions},
     wire::{self, NativePairingRequest, NativeWireError},
     BeginPairing, EnrollmentChannel, GatewayPairing, NativeFrameError, PairingRuntimeError,
 };
@@ -23,7 +24,10 @@ use tokio::{
     sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::JoinHandle,
 };
-use wake::{NativeWakeReport, WakeEndpoint, WakeEndpoints, NATIVE_CONNECTION_CAPACITY, WAKE_TICK};
+use wake::{
+    NativeWakeReport, WakeEndpoint, WakeEndpoints, NATIVE_CONNECTION_CAPACITY,
+    PRODUCT_SESSION_CAPACITY, WAKE_TICK,
+};
 
 const TLS_DEADLINE: Duration = Duration::from_secs(10);
 const ENROLLMENT_DEADLINE: Duration = Duration::from_secs(30);
@@ -48,6 +52,15 @@ pub enum NativeConnectionFailure {
     /// The claim committed, but its reply could not be encoded or sent. The
     /// claim stands; the device recovers it with a pinned status request.
     ClaimReply(NativeFrameError),
+    /// `openProduct` arrived but no protected product sessions are composed.
+    ProductUnavailable,
+    /// `openProduct` arrived while every product session permit is held, or
+    /// after shutdown closed product admission.
+    ProductCapacity,
+    /// `openProduct` from a key that holds no active device credential.
+    ProductUnregistered,
+    /// Whether the key holds a device credential could not be read.
+    ProductUnverifiable,
 }
 /// Primary failure and independent failure to settle the original charged attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,23 +80,39 @@ impl From<NativeConnectionFailure> for NativeConnectionError {
 }
 
 /// One fixed eight-connection physical owner; admission queues no requests.
+/// A connection whose first envelope is `openProduct` moves to a pool of its
+/// own, also eight, and returns its connection permit, so product sessions
+/// never take the permits enrollment and pinned status need (design row PR10).
 pub struct NativeEnrollmentConnections {
     gateway: Arc<GatewayPairing>,
     clock: Arc<dyn Clock>,
     capacity: Arc<Semaphore>,
     drained: Arc<Notify>,
-    wake: Mutex<WakeEndpoints>,
+    wake: Arc<Mutex<WakeEndpoints>>,
+    product_capacity: Arc<Semaphore>,
+    product_wake: Arc<Mutex<WakeEndpoints>>,
+    sessions: Option<Arc<dyn ProtectedSessions>>,
 }
 impl NativeEnrollmentConnections {
     /// Compose the actual canonical enrollment runtime before accepting sockets.
+    /// Without [`Self::with_protected_sessions`], `openProduct` is refused.
     pub fn new(gateway: Arc<GatewayPairing>, clock: Arc<dyn Clock>) -> Self {
         Self {
             gateway,
             clock,
             capacity: Arc::new(Semaphore::new(NATIVE_CONNECTION_CAPACITY)),
             drained: Arc::new(Notify::new()),
-            wake: Mutex::new(WakeEndpoints::new()),
+            wake: Arc::new(Mutex::new(WakeEndpoints::new())),
+            product_capacity: Arc::new(Semaphore::new(PRODUCT_SESSION_CAPACITY)),
+            product_wake: Arc::new(Mutex::new(WakeEndpoints::new())),
+            sessions: None,
         }
+    }
+    /// Serve a connection whose first envelope is `openProduct` with
+    /// `sessions`, on a product session permit (design rows PR1, PR10, PR13).
+    pub fn with_protected_sessions(mut self, sessions: Arc<dyn ProtectedSessions>) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
     /// Admit one accepted native TCP socket; the blocking worker owns all inputs.
     /// Dropping this future leaves the permit with the worker until it ends
@@ -123,18 +152,37 @@ impl NativeEnrollmentConnections {
         let permit = lease.clone();
         let gateway = self.gateway.clone();
         let handle = Handle::current();
+        let product = self.sessions.as_ref().map(|sessions| ProductAdmission {
+            sessions: sessions.clone(),
+            capacity: self.product_capacity.clone(),
+            wake: self.product_wake.clone(),
+            connections: self.wake.clone(),
+            endpoint: endpoint_for_product(&lease),
+            drained: self.drained.clone(),
+        });
         let worker = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             // Locals unwind physical IO and its runtime before the original permit.
             let runtime = gateway;
-            serve_exchange(&runtime, &handle, stream, deadline, entropy)
+            serve_exchange(&runtime, &handle, stream, deadline, entropy, product)
         });
         drop(wake);
-        Ok(NativeConnectionTask { worker, lease })
+        Ok(NativeConnectionTask {
+            worker,
+            lease,
+            sessions: self.sessions.clone(),
+        })
     }
     pub(crate) fn close(&self) {
         let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
         self.capacity.close();
+        wake.close();
+        drop(wake);
+        let mut wake = self
+            .product_wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.product_capacity.close();
         wake.close();
     }
     /// The wake sweep from the first shutdown, if it has happened. A successful
@@ -145,14 +193,25 @@ impl NativeEnrollmentConnections {
             .unwrap_or_else(PoisonError::into_inner)
             .report()
     }
-    /// Exclude new sockets and await actual blocked/unwinding closure drain.
+    /// The product sessions' wake sweep from the first shutdown, if it has
+    /// happened; as with [`Self::wake_report`], not evidence of a drain.
+    pub fn product_wake_report(&self) -> Option<NativeWakeReport> {
+        self.product_wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .report()
+    }
+    /// Exclude new sockets and await actual blocked/unwinding closure drain,
+    /// of connections and product sessions alike.
     pub async fn shutdown(&self) {
         self.close();
         loop {
             let notified = self.drained.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.capacity.available_permits() == NATIVE_CONNECTION_CAPACITY {
+            if self.capacity.available_permits() == NATIVE_CONNECTION_CAPACITY
+                && self.product_capacity.available_permits() == PRODUCT_SESSION_CAPACITY
+            {
                 return;
             }
             notified.await;
@@ -160,11 +219,16 @@ impl NativeEnrollmentConnections {
     }
 }
 pub(super) struct NativeConnectionTask {
-    worker: JoinHandle<Result<(), NativeConnectionError>>,
+    worker: JoinHandle<Result<Served, NativeConnectionError>>,
     lease: Arc<ConnectionPermit>,
+    sessions: Option<Arc<dyn ProtectedSessions>>,
 }
 impl NativeConnectionTask {
+    /// The blocking worker's outcome. A connection it handed to the product
+    /// returns its connection permit and is served here on its product
+    /// session permit until the session ends (design rows PR1, PR10, PR11).
     pub(super) async fn complete(self) -> NativeConnectionCompletion {
+        let mut lease = Some(self.lease);
         let outcome = self
             .worker
             .await
@@ -174,10 +238,26 @@ impl NativeConnectionTask {
                 )))
             })
             .and_then(|result| result);
-        NativeConnectionCompletion {
-            outcome,
-            lease: self.lease,
-        }
+        let outcome = match (outcome, self.sessions) {
+            (Ok(Served::Enrollment), _) => Ok(()),
+            (Ok(Served::Product(channel, product)), Some(sessions)) => {
+                drop(lease.take());
+                let served = match ProtectedConnection::open(channel.into_transport()) {
+                    Ok(connection) => {
+                        sessions.serve(connection).await;
+                        Ok(())
+                    }
+                    Err(error) => Err(NativeConnectionFailure::Io(error.kind()).into()),
+                };
+                drop(product);
+                served
+            }
+            (Ok(Served::Product(..)), None) => {
+                Err(NativeConnectionFailure::ProductUnavailable.into())
+            }
+            (Err(error), _) => Err(error),
+        };
+        NativeConnectionCompletion { outcome, lease }
     }
     async fn wait(self) -> Result<(), NativeConnectionError> {
         self.complete().await.into_result()
@@ -185,7 +265,7 @@ impl NativeConnectionTask {
 }
 pub(super) struct NativeConnectionCompletion {
     outcome: Result<(), NativeConnectionError>,
-    lease: Arc<ConnectionPermit>,
+    lease: Option<Arc<ConnectionPermit>>,
 }
 impl NativeConnectionCompletion {
     pub(super) fn into_result(self) -> Result<(), NativeConnectionError> {
@@ -199,6 +279,58 @@ struct ConnectionPermit {
     drained: Arc<Notify>,
 }
 impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        drop(self.endpoint.take());
+        drop(self.permit.take());
+        self.drained.notify_waiters();
+    }
+}
+fn endpoint_for_product(lease: &ConnectionPermit) -> Arc<WakeEndpoint> {
+    lease
+        .endpoint
+        .clone()
+        .expect("a live connection permit holds its endpoint")
+}
+/// Admission to the product session pool, taken by the blocking worker when
+/// the first envelope is `openProduct`.
+struct ProductAdmission {
+    sessions: Arc<dyn ProtectedSessions>,
+    capacity: Arc<Semaphore>,
+    wake: Arc<Mutex<WakeEndpoints>>,
+    connections: Arc<Mutex<WakeEndpoints>>,
+    endpoint: Arc<WakeEndpoint>,
+    drained: Arc<Notify>,
+}
+impl ProductAdmission {
+    /// Take a product permit and move the connection's wake endpoint to the
+    /// product sweep. `close` closes the pool under the same lock, so a
+    /// session admitted here is swept, and a closed pool admits nothing.
+    fn admit(&self) -> Result<ProductPermit, NativeConnectionError> {
+        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        let permit =
+            self.capacity.clone().try_acquire_owned().map_err(|_| {
+                NativeConnectionError::from(NativeConnectionFailure::ProductCapacity)
+            })?;
+        wake.register(&self.endpoint);
+        drop(wake);
+        self.connections
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.endpoint);
+        Ok(ProductPermit {
+            endpoint: Some(self.endpoint.clone()),
+            permit: Some(permit),
+            drained: self.drained.clone(),
+        })
+    }
+}
+/// One product session's permit, held until the session ends.
+pub(super) struct ProductPermit {
+    endpoint: Option<Arc<WakeEndpoint>>,
+    permit: Option<OwnedSemaphorePermit>,
+    drained: Arc<Notify>,
+}
+impl Drop for ProductPermit {
     fn drop(&mut self) {
         drop(self.endpoint.take());
         drop(self.permit.take());
@@ -255,12 +387,71 @@ impl NativeSocket for TcpStream {
 /// socket again (`timed_out_send_is_terminal_and_never_retried`). A worker
 /// blocked in a send is therefore not woken by the flag; it ends at its
 /// deadline.
+///
+/// A protected product session moves the socket out ([`Self::take_socket`])
+/// and the TLS state then reads and writes in-memory [`BufferedIo`], which the
+/// async owner fills from and drains to that socket.
 pub(super) struct DeadlineStream<S: NativeSocket = TcpStream> {
-    stream: S,
+    io: NativeIo<S>,
     deadline: Arc<NativeDeadline>,
     wake: Arc<WakeEndpoint>,
     /// Set by a timed-out send; every later call fails with it.
     failed: Option<ErrorKind>,
+}
+enum NativeIo<S> {
+    Socket(S),
+    Buffered(BufferedIo),
+}
+/// Ciphertext between the TLS state and the async socket owner. Reads with
+/// nothing buffered are `WouldBlock`, never end of stream, until the socket
+/// itself ended.
+#[derive(Default)]
+pub(super) struct BufferedIo {
+    inbound: Vec<u8>,
+    inbound_read: usize,
+    ended: bool,
+    outbound: Vec<u8>,
+    outbound_written: usize,
+}
+impl BufferedIo {
+    /// Ciphertext the socket delivered.
+    pub(super) fn receive(&mut self, bytes: &[u8]) {
+        if self.inbound_read == self.inbound.len() {
+            self.inbound.clear();
+            self.inbound_read = 0;
+        }
+        self.inbound.extend_from_slice(bytes);
+    }
+    /// The socket reached end of stream.
+    pub(super) fn end(&mut self) {
+        self.ended = true;
+    }
+    /// Ciphertext not yet written to the socket.
+    pub(super) fn unsent(&self) -> &[u8] {
+        &self.outbound[self.outbound_written..]
+    }
+    /// Record that the socket accepted `count` bytes of [`Self::unsent`].
+    pub(super) fn sent(&mut self, count: usize) {
+        self.outbound_written += count;
+        if self.outbound_written == self.outbound.len() {
+            self.outbound.clear();
+            self.outbound_written = 0;
+        }
+    }
+    fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
+        let available = &self.inbound[self.inbound_read..];
+        if available.is_empty() {
+            return if self.ended {
+                Ok(0)
+            } else {
+                Err(Error::from(ErrorKind::WouldBlock))
+            };
+        }
+        let count = available.len().min(bytes.len());
+        bytes[..count].copy_from_slice(&available[..count]);
+        self.inbound_read += count;
+        Ok(count)
+    }
 }
 impl<S: NativeSocket> DeadlineStream<S> {
     pub(super) fn new(
@@ -280,7 +471,7 @@ impl<S: NativeSocket> DeadlineStream<S> {
         });
         Ok((
             Self {
-                stream,
+                io: NativeIo::Socket(stream),
                 deadline: deadline.clone(),
                 wake,
                 failed: None,
@@ -289,9 +480,35 @@ impl<S: NativeSocket> DeadlineStream<S> {
         ))
     }
     pub(super) fn blocking(&self) -> Result<(), NativeConnectionError> {
-        self.stream
-            .set_nonblocking(false)
-            .map_err(|error| NativeConnectionFailure::Io(error.kind()).into())
+        match &self.io {
+            NativeIo::Socket(stream) => stream
+                .set_nonblocking(false)
+                .map_err(|error| NativeConnectionFailure::Io(error.kind()).into()),
+            NativeIo::Buffered(_) => Err(NativeConnectionFailure::Phase.into()),
+        }
+    }
+    /// Have the async `reader` woken when the owner wakes this socket; `true`
+    /// if it already was, and its IO must stop.
+    pub(super) fn wake_reader(&self, reader: &std::task::Waker) -> bool {
+        self.wake.wake_reader(reader)
+    }
+    /// Move the socket out for an async owner; this stream then buffers.
+    /// `None` if it was already taken.
+    pub(super) fn take_socket(&mut self) -> Option<S> {
+        match std::mem::replace(&mut self.io, NativeIo::Buffered(BufferedIo::default())) {
+            NativeIo::Socket(stream) => Some(stream),
+            buffered => {
+                self.io = buffered;
+                None
+            }
+        }
+    }
+    /// The in-memory ciphertext, once the socket was taken.
+    pub(super) fn buffered(&mut self) -> Option<&mut BufferedIo> {
+        match &mut self.io {
+            NativeIo::Buffered(io) => Some(io),
+            NativeIo::Socket(_) => None,
+        }
     }
     /// The time left in the phase: refused once the stream has failed, once
     /// woken, or past the deadline.
@@ -312,9 +529,22 @@ fn wait_elapsed(error: &Error) -> bool {
 impl<S: NativeSocket> Read for DeadlineStream<S> {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         loop {
-            let wait = self.usable_for()?.min(WAKE_TICK);
-            self.stream.set_read_timeout(Some(wait))?;
-            match self.stream.read(bytes) {
+            // Buffered: the protected phase has no phase deadline; its owner
+            // polls the wake flag, and refuses here once woken.
+            let wait = match &mut self.io {
+                NativeIo::Buffered(io) => {
+                    if self.wake.woken() {
+                        return Err(Error::from(ErrorKind::ConnectionAborted));
+                    }
+                    return io.read(bytes);
+                }
+                NativeIo::Socket(_) => self.usable_for()?.min(WAKE_TICK),
+            };
+            let NativeIo::Socket(stream) = &mut self.io else {
+                unreachable!("buffered reads returned above");
+            };
+            stream.set_read_timeout(Some(wait))?;
+            match stream.read(bytes) {
                 Err(error) if wait_elapsed(&error) => continue,
                 result => return result,
             }
@@ -323,9 +553,19 @@ impl<S: NativeSocket> Read for DeadlineStream<S> {
 }
 impl<S: NativeSocket> Write for DeadlineStream<S> {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
+        if let NativeIo::Buffered(io) = &mut self.io {
+            if self.wake.woken() {
+                return Err(Error::from(ErrorKind::ConnectionAborted));
+            }
+            io.outbound.extend_from_slice(bytes);
+            return Ok(bytes.len());
+        }
         let wait = self.usable_for()?;
-        self.stream.set_write_timeout(Some(wait))?;
-        match self.stream.write(bytes) {
+        let NativeIo::Socket(stream) = &mut self.io else {
+            unreachable!("buffered writes returned above");
+        };
+        stream.set_write_timeout(Some(wait))?;
+        match stream.write(bytes) {
             Err(error) if wait_elapsed(&error) => {
                 self.failed = Some(ErrorKind::TimedOut);
                 Err(Error::from(ErrorKind::TimedOut))
@@ -334,8 +574,14 @@ impl<S: NativeSocket> Write for DeadlineStream<S> {
         }
     }
     fn flush(&mut self) -> IoResult<()> {
+        if let NativeIo::Buffered(_) = &self.io {
+            return Ok(());
+        }
         self.usable_for()?;
-        self.stream.flush()
+        let NativeIo::Socket(stream) = &mut self.io else {
+            unreachable!("buffered flushes returned above");
+        };
+        stream.flush()
     }
 }
 
@@ -343,26 +589,46 @@ impl<S: NativeSocket> Write for DeadlineStream<S> {
 #[path = "../../../tests/device_pairing/infrastructure/deadline_stream.rs"]
 mod deadline_stream_tests;
 
+/// What the blocking worker did with its connection.
+pub(super) enum Served {
+    /// An enrollment exchange or status, finished.
+    Enrollment,
+    /// The first envelope was `openProduct`: the TLS connection, for the
+    /// product session, and its product session permit.
+    Product(Box<EnrollmentChannel<DeadlineStream>>, ProductPermit),
+}
 fn serve_exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
     handle: &Handle,
     stream: DeadlineStream,
     deadline: Arc<NativeDeadline>,
     mut entropy: R,
-) -> Result<(), NativeConnectionError> {
+    product: Option<ProductAdmission>,
+) -> Result<Served, NativeConnectionError> {
     stream.blocking()?;
     let channel = NativeTransport::accept(stream, gateway.identity())
         .map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Crypto(error)))?;
     let mut channel = EnrollmentChannel::new(channel);
-    let result = exchange(gateway, handle, &mut channel, &deadline, &mut entropy);
-    if let Err(error) = &result {
-        if answers_with_refusal(error.failure) {
-            // Best effort: the primary failure is what this connection reports,
-            // whether or not the peer receives the refusal.
-            write_reply(&mut channel, wire::encode_refused()).ok();
+    let result = exchange(
+        gateway,
+        handle,
+        &mut channel,
+        &deadline,
+        &mut entropy,
+        product.as_ref(),
+    );
+    match result {
+        Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
+        Ok(Exchanged::Finished) => Ok(Served::Enrollment),
+        Err(error) => {
+            if answers_with_refusal(error.failure) {
+                // Best effort: the primary failure is what this connection reports,
+                // whether or not the peer receives the refusal.
+                write_reply(&mut channel, wire::encode_refused()).ok();
+            }
+            Err(error)
         }
     }
-    result
 }
 /// A decision the gateway made on a readable channel gets a redacted `Refused`
 /// reply; physical failures do not, because the channel may be unusable.
@@ -371,7 +637,11 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
     match failure {
         NativeConnectionFailure::Runtime(_)
         | NativeConnectionFailure::Phase
-        | NativeConnectionFailure::Wire(_) => true,
+        | NativeConnectionFailure::Wire(_)
+        | NativeConnectionFailure::ProductUnavailable
+        | NativeConnectionFailure::ProductCapacity
+        | NativeConnectionFailure::ProductUnregistered
+        | NativeConnectionFailure::ProductUnverifiable => true,
         NativeConnectionFailure::Capacity
         | NativeConnectionFailure::Crypto(_)
         | NativeConnectionFailure::Io(_)
@@ -379,19 +649,40 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         | NativeConnectionFailure::ClaimReply(_) => false,
     }
 }
+/// How an exchange ended on a readable channel.
+enum Exchanged {
+    /// Enrollment or status answered.
+    Finished,
+    /// The first envelope selected the product session, admitted to its pool.
+    ProductSelected(ProductPermit),
+}
+/// One enrollment exchange. Only a first envelope can select the product
+/// session, only when `product` admission is composed, and only with a free
+/// product session permit (design rows PR1, PR2, PR10, PR13).
 fn exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
     handle: &Handle,
     channel: &mut EnrollmentChannel<DeadlineStream>,
     deadline: &NativeDeadline,
     entropy: &mut R,
-) -> Result<(), NativeConnectionError> {
+    product: Option<&ProductAdmission>,
+) -> Result<Exchanged, NativeConnectionError> {
     begin_enrollment_phase(deadline)?;
     let first = read_request(channel)?;
     check_deadline(deadline)?;
     let public = match first {
+        NativePairingRequest::OpenProduct => {
+            let product = product.ok_or(NativeConnectionFailure::ProductUnavailable)?;
+            // Only a paired device's key may take a product permit (row PR15).
+            match product.sessions.admits(channel.transport().device_proof()) {
+                Ok(true) => {}
+                Ok(false) => return Err(NativeConnectionFailure::ProductUnregistered.into()),
+                Err(_) => return Err(NativeConnectionFailure::ProductUnverifiable.into()),
+            }
+            return product.admit().map(Exchanged::ProductSelected);
+        }
         NativePairingRequest::Status(public) => {
-            return send_status(gateway, handle, channel, public);
+            return send_status(gateway, handle, channel, public).map(|()| Exchanged::Finished);
         }
         NativePairingRequest::Hello(attempt) => {
             handle.block_on(gateway.hello(attempt)).map_err(|error| {
@@ -417,7 +708,8 @@ fn exchange<R: RngCore + CryptoRng>(
         .map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Runtime(error)))?
     {
         BeginPairing::Existing(status) => {
-            return write_reply(channel, wire::encode_status(public, &status));
+            return write_reply(channel, wire::encode_status(public, &status))
+                .map(|()| Exchanged::Finished);
         }
         BeginPairing::Admitted(handshake) => handshake,
     };
@@ -460,15 +752,17 @@ fn exchange<R: RngCore + CryptoRng>(
             error,
         )))
     })?;
-    write_reply(channel, Ok(bytes)).map_err(|error| match error.failure {
-        NativeConnectionFailure::Io(kind) => {
-            NativeConnectionFailure::ClaimReply(NativeFrameError::Io(kind)).into()
-        }
-        NativeConnectionFailure::Wire(wire) => {
-            NativeConnectionFailure::ClaimReply(NativeFrameError::Wire(wire)).into()
-        }
-        _ => error,
-    })
+    write_reply(channel, Ok(bytes))
+        .map(|()| Exchanged::Finished)
+        .map_err(|error| match error.failure {
+            NativeConnectionFailure::Io(kind) => {
+                NativeConnectionFailure::ClaimReply(NativeFrameError::Io(kind)).into()
+            }
+            NativeConnectionFailure::Wire(wire) => {
+                NativeConnectionFailure::ClaimReply(NativeFrameError::Wire(wire)).into()
+            }
+            _ => error,
+        })
 }
 fn admit_confirmation(
     deadline: &NativeDeadline,

@@ -3213,6 +3213,7 @@ dependencies = [
  "tungstenite",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

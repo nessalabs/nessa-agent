@@ -12,11 +12,14 @@
 //! Raw catalogue payload bytes remain the stored representation.
 //! `reset` commits explicit local intent, prior/new progress and audit receipt
 //! with the same transaction; deletion fences and reset history are retained.
+//! `purge` deletes one receiver's rows after an authenticated Terminal status,
+//! with its receipt in the same transaction; that receipt fences the receiver.
 
 mod catalogue;
 mod catalogue_reset;
 mod catalogue_rows;
 mod offline;
+mod purge;
 mod raw_records;
 mod records;
 mod reset;
@@ -46,6 +49,10 @@ mod offline_command_tests;
 #[cfg(test)]
 #[path = "../../../../tests/read_only_sync/infrastructure/reset_commands.rs"]
 mod reset_command_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/read_only_sync/infrastructure/purge.rs"]
+mod purge_tests;
 
 #[cfg(test)]
 #[path = "../../../../tests/read_only_sync/infrastructure/fixtures.rs"]

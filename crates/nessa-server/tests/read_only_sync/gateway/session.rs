@@ -1,12 +1,20 @@
-use super::super::session::{LocalConnector, RpcKind, Session};
+//! The client session against a real native TLS peer: the gateway key pinned,
+//! the device key presented, `openProduct`, then product frames.
+use super::super::session::{DeviceEvidence, LocalConnector, RpcKind, Session};
 use super::super::sources::GatewayConnection;
 use crate::app::ports::Clock;
 use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
 use crate::conversation::infrastructure::{conversation_catalogue_schema, NessaCatalogueSource};
+use crate::device_pairing::infrastructure::{
+    encode_frame,
+    wire::{decode_request, encode_refused, NativePairingRequest},
+    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES,
+};
 use crate::product::catalogue_read::wire::wire_descriptor;
 use crate::product::generated::{
     product_event, product_method, ProductSessionReady, SessionChallenge,
-    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_VERSION,
+    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
+    PRODUCT_VERSION,
 };
 use crate::product::passive_read::wire::wire_scope;
 use crate::product_contract::generated::{
@@ -16,8 +24,8 @@ use crate::protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
+use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_gateway_endpoint::domain::{EndpointIdentity, GatewayEndpoint};
 use nessa_sync::replication::application::{Access, ScopeAuthorizer};
 use nessa_sync::replication::catalogue::{
     CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry, ManifestRequest,
@@ -30,8 +38,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, Result as ThreadResult};
 use std::time::{Duration, Instant};
-use tungstenite::error::ProtocolError;
-use tungstenite::{Error, Message, WebSocket};
 
 struct Time(Instant);
 impl Clock for Time {
@@ -103,77 +109,148 @@ fn ready() -> ProductSessionReady {
         methods: vec![],
     }
 }
-fn send(socket: &mut WebSocket<TcpStream>, message: OutgoingMessage) {
-    socket
-        .send(Message::Text(message.to_wire_text().unwrap().into()))
-        .unwrap();
+/// The gateway side of one protected connection, after `openProduct`.
+struct PeerSocket {
+    transport: NativeTransport<TcpStream>,
+    frames: FrameReader,
 }
-fn request(socket: &mut WebSocket<TcpStream>) -> RequestFrame {
-    match socket.read().unwrap() {
-        Message::Text(text) => RequestFrame::decode(&text).unwrap(),
-        _ => panic!("text request"),
+impl PeerSocket {
+    fn write_raw(&mut self, bytes: &[u8]) {
+        self.transport.write_all(bytes).unwrap();
+        self.transport.flush().unwrap();
+    }
+    fn read_text(&mut self) -> Option<String> {
+        loop {
+            let buffer = self.frames.unfilled().ok()?;
+            let count = self
+                .transport
+                .read(buffer)
+                .ok()
+                .filter(|count| *count > 0)?;
+            if let Some(body) = self.frames.filled(count).ok()? {
+                return String::from_utf8(body).ok();
+            }
+        }
+    }
+    /// The client closed its side: no further frame arrives.
+    fn ended(&mut self) -> bool {
+        self.read_text().is_none()
     }
 }
-fn peer(
-    script: impl FnOnce(&mut WebSocket<TcpStream>) + Send + 'static,
-) -> (GatewayEndpoint, Peer) {
+fn send(socket: &mut PeerSocket, message: OutgoingMessage) {
+    let text = message.to_wire_text().unwrap();
+    let frame = encode_frame(MAX_RECORD_RESPONSE_BYTES, text.as_bytes()).unwrap();
+    socket.write_raw(&frame);
+}
+fn request(socket: &mut PeerSocket) -> RequestFrame {
+    RequestFrame::decode(&socket.read_text().expect("text request")).unwrap()
+}
+/// Where and how a test client dials its peer: the address, the gateway key
+/// it pins, and its own device key.
+struct Endpoint {
+    address: SocketAddr,
+    pin: [u8; 44],
+    device: NativeIdentity,
+}
+impl Endpoint {
+    fn evidence<'a>(&'a self, credential: &'a str) -> DeviceEvidence<'a> {
+        DeviceEvidence {
+            identity: &self.device,
+            pin: self.pin,
+            credential,
+        }
+    }
+}
+fn challenge(socket: &mut PeerSocket) {
+    send(
+        socket,
+        OutgoingMessage::Event(
+            EventFrame::push(
+                product_event::SESSION_CHALLENGE,
+                &SessionChallenge {
+                    min_version: PRODUCT_VERSION,
+                    max_version: PRODUCT_VERSION,
+                    nonce: "nonce".into(),
+                    expires_at: 100,
+                },
+                0,
+                0,
+            )
+            .unwrap(),
+        ),
+    );
+}
+/// A native peer that answers `openProduct` with the scripted exchange only.
+fn native_peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Peer) {
+    native_peer_answering(None, script)
+}
+/// A native peer that answers `openProduct` with `reply`, an enrollment
+/// envelope written as the gateway's `write_reply` writes it, before the
+/// scripted product exchange.
+fn native_peer_answering(
+    reply: Option<Vec<u8>>,
+    script: impl FnOnce(&mut PeerSocket) + Send + 'static,
+) -> (Endpoint, Peer) {
+    let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = gateway.public_spki();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let thread = Peer::spawn(move || {
         let (stream, _) = bounded_accept(&listener);
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut socket = tungstenite::accept(stream).unwrap();
-        send(
-            &mut socket,
-            OutgoingMessage::Event(
-                EventFrame::push(
-                    product_event::SESSION_CHALLENGE,
-                    &SessionChallenge {
-                        min_version: PRODUCT_VERSION,
-                        max_version: PRODUCT_VERSION,
-                        nonce: "nonce".into(),
-                        expires_at: 100,
-                    },
-                    0,
-                    0,
-                )
-                .unwrap(),
-            ),
-        );
-        let authentication = request(&mut socket);
+        let transport = NativeTransport::accept(stream, &gateway).unwrap();
+        let mut selector = EnrollmentChannel::new(transport);
+        let first = selector.receive_envelope().unwrap();
+        assert!(matches!(
+            decode_request(&first).unwrap(),
+            NativePairingRequest::OpenProduct
+        ));
+        if let Some(reply) = reply {
+            selector.send_envelope(&reply).unwrap();
+        }
+        let mut socket = PeerSocket {
+            transport: selector.into_transport(),
+            frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
+        };
+        script(&mut socket);
+    });
+    (
+        Endpoint {
+            address,
+            pin,
+            device: NativeIdentity::generate(&mut OsEntropy).unwrap(),
+        },
+        thread,
+    )
+}
+/// A native peer that authenticates the client, then runs `script`.
+fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Peer) {
+    native_peer(move |socket| {
+        challenge(socket);
+        let authentication = request(socket);
         assert_eq!(authentication.method, product_method::SESSION_AUTHENTICATE);
         assert_eq!(authentication.params["nonce"], "nonce");
+        assert_eq!(authentication.params["credential"], "credential");
         send(
-            &mut socket,
+            socket,
             OutgoingMessage::Response(
                 ResponseFrame::success(&authentication.id, &ready()).unwrap(),
             ),
         );
-        script(&mut socket);
-    });
-    (
-        GatewayEndpoint::new(
-            format!("ws://{address}"),
-            EndpointIdentity::new("018fa012-2222-7222-8222-123456789abc".into(), 1).unwrap(),
-        )
-        .unwrap(),
-        thread,
-    )
+        script(socket);
+    })
 }
-fn connect(endpoint: &GatewayEndpoint) -> Session {
+fn policy() -> GatewayPolicy {
+    GatewayPolicy::new(2000, 1000, 2).unwrap()
+}
+fn connect(endpoint: &Endpoint) -> Session {
     Session::connect(
-        endpoint,
-        "credential",
+        endpoint.address,
+        endpoint.evidence("credential"),
         "example",
         &LocalConnector,
         Arc::new(Time(Instant::now())),
         Arc::new(Never),
-        GatewayPolicy::new(2000, 1000, 8192, 2, 2).unwrap(),
+        policy(),
     )
     .unwrap()
 }
@@ -388,7 +465,7 @@ fn passive_authorizer_preserves_temporary_and_permanent_access_meaning() {
 #[test]
 fn driver_panic_and_returned_value_have_owned_outcomes_and_physical_peer_close() {
     let (endpoint, peer) = peer(|socket| {
-        assert!(socket.read().is_err());
+        assert!(socket.ended());
     });
     let connection = GatewayConnection::new(connect(&endpoint));
     let attempt = connection
@@ -401,21 +478,15 @@ fn driver_panic_and_returned_value_have_owned_outcomes_and_physical_peer_close()
     peer.join().unwrap();
 }
 
+/// Row PR9 (client): an unrequested event flood and an announced frame above
+/// the response bound end the attempt with their typed cause; the oversized
+/// body is never read.
 #[test]
-fn bounded_control_event_and_message_refusals_preserve_actual_typed_cause() {
-    for expected in [
-        GatewayError::ControlCapacity,
-        GatewayError::EventCapacity,
-        GatewayError::ResponseTooLarge,
-    ] {
+fn bounded_event_and_frame_refusals_preserve_actual_typed_cause() {
+    for expected in [GatewayError::EventCapacity, GatewayError::ResponseTooLarge] {
         let (endpoint, peer) = peer(move |socket| {
             let _ = request(socket);
             match expected {
-                GatewayError::ControlCapacity => {
-                    for _ in 0..3 {
-                        socket.send(Message::Ping(Vec::new().into())).unwrap();
-                    }
-                }
                 GatewayError::EventCapacity => {
                     for _ in 0..3 {
                         send(
@@ -427,15 +498,11 @@ fn bounded_control_event_and_message_refusals_preserve_actual_typed_cause() {
                     }
                 }
                 _ => {
-                    socket
-                        .send(Message::Text(
-                            "x".repeat(crate::product::generated::MAX_RECORD_RESPONSE_BYTES + 1)
-                                .into(),
-                        ))
-                        .unwrap();
+                    let announced = u32::try_from(MAX_RECORD_RESPONSE_BYTES + 1).unwrap();
+                    socket.write_raw(&announced.to_be_bytes());
                 }
             }
-            while socket.read().is_ok() {}
+            while !socket.ended() {}
         });
         let mut session = connect(&endpoint);
         session.begin().unwrap();
@@ -451,6 +518,29 @@ fn bounded_control_event_and_message_refusals_preserve_actual_typed_cause() {
         drop(session);
         peer.join().unwrap();
     }
+}
+
+/// Row PR9 (client): a frame cut short by the gateway's close is an untyped
+/// close of this attempt, not a response.
+#[test]
+fn truncated_frame_is_an_untyped_close() {
+    let (endpoint, peer) = peer(|socket| {
+        let _ = request(socket);
+        socket.write_raw(&100u32.to_be_bytes());
+        socket.write_raw(b"{\"type\":\"res\"");
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    assert_eq!(
+        session.rpc(
+            product_method::CONVERSATION_RECORDS_HEAD,
+            &json!({}),
+            RpcKind::Record
+        ),
+        Err(GatewayError::Closed(None))
+    );
+    drop(session);
+    peer.join().unwrap();
 }
 
 #[test]
@@ -489,63 +579,44 @@ fn catalogue_identity_owner_rejects_other_organization_principal_and_schema() {
     assert!(NessaCatalogueSource::check_scope_identity(&org, &owner, &wrong).is_err());
 }
 
+/// A gateway presenting any key but the pinned one is refused by TLS before
+/// `openProduct` or any credential is sent.
 #[test]
-fn bounded_http_upgrade_retains_factory_cause_and_closes_the_physical_peer() {
+fn another_gateway_key_is_refused_before_any_product_frame() {
+    let pinned = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let endpoint = GatewayEndpoint::new(
-        format!("ws://{address}"),
-        EndpointIdentity::new("018fa012-2222-7222-8222-123456789abc".into(), 1).unwrap(),
-    )
-    .unwrap();
+    let served = NativeIdentity::generate(&mut OsEntropy).unwrap();
     let peer = Peer::spawn(move || {
-        let (mut stream, _) = bounded_accept(&listener);
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut request = [0; 4096];
-        assert!(stream.read(&mut request).unwrap() > 0);
-        let response = format!(
-            "HTTP/1.1 101 Switching Protocols\r\nX: {}\r\n",
-            "x".repeat(1024)
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-        assert!(
-            stream.read(&mut request).is_err()
-                || stream.read(&mut request).unwrap_or_default() == 0
-        );
+        let (stream, _) = bounded_accept(&listener);
+        assert!(NativeTransport::accept(stream, &served).is_err());
     });
+    let endpoint = Endpoint {
+        address,
+        pin: pinned,
+        device: NativeIdentity::generate(&mut OsEntropy).unwrap(),
+    };
     let result = Session::connect(
-        &endpoint,
-        "credential",
+        endpoint.address,
+        endpoint.evidence("credential"),
         "example",
         &LocalConnector,
         Arc::new(Time(Instant::now())),
         Arc::new(Never),
-        GatewayPolicy::new(2000, 1000, 128, 2, 2).unwrap(),
+        policy(),
     );
-    assert!(matches!(result, Err(GatewayError::UpgradeTooLarge)));
+    assert!(matches!(result, Err(GatewayError::NativeHandshake)));
     peer.join().unwrap();
 }
 
 #[test]
 fn challenge_scalar_refusal_happens_before_any_authentication_request() {
     for nonce in [String::new(), "x".repeat(257)] {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let endpoint = GatewayEndpoint::new(
-            format!("ws://{address}"),
-            EndpointIdentity::new("018fa012-2222-7222-8222-123456789abc".into(), 1).unwrap(),
-        )
-        .unwrap();
-        let peer = Peer::spawn(move || {
-            let (stream, _) = bounded_accept(&listener);
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut socket = tungstenite::accept(stream).unwrap();
+        let (endpoint, peer) = native_peer(move |socket| {
             send(
-                &mut socket,
+                socket,
                 OutgoingMessage::Event(
                     EventFrame::push(
                         product_event::SESSION_CHALLENGE,
@@ -556,22 +627,84 @@ fn challenge_scalar_refusal_happens_before_any_authentication_request() {
                     .unwrap(),
                 ),
             );
-            assert!(socket.read().is_err());
+            assert!(socket.ended());
         });
         assert!(matches!(
             Session::connect(
-                &endpoint,
-                "credential",
+                endpoint.address,
+                endpoint.evidence("credential"),
                 "example",
                 &LocalConnector,
                 Arc::new(Time(Instant::now())),
                 Arc::new(Never),
-                GatewayPolicy::new(2000, 1000, 8192, 2, 2).unwrap()
+                policy()
             ),
             Err(GatewayError::Protocol)
         ));
         peer.join().unwrap();
     }
+}
+
+/// Rows PR5, PR15 (client): the enrollment `Refused` reply answering
+/// `openProduct` is the typed `ProductRefused`, which asks pinned status
+/// again (row PC5). Any other first frame that is not a product message, and
+/// a `Refused` envelope arriving after product messages began, stay
+/// `Protocol`: only the opening frame is read through the enrollment decoder.
+#[test]
+fn open_product_refusal_is_typed_and_other_frames_stay_protocol() {
+    let refused = encode_refused().unwrap();
+    let (endpoint, peer) = native_peer_answering(Some(refused.clone()), |socket| {
+        assert!(socket.ended());
+    });
+    let result = Session::connect(
+        endpoint.address,
+        endpoint.evidence("credential"),
+        "example",
+        &LocalConnector,
+        Arc::new(Time(Instant::now())),
+        Arc::new(Never),
+        policy(),
+    );
+    assert!(matches!(result, Err(GatewayError::ProductRefused)));
+    peer.join().unwrap();
+
+    let (endpoint, peer) =
+        native_peer_answering(Some(b"{\"kind\":\"unknown\"}".to_vec()), |socket| {
+            assert!(socket.ended());
+        });
+    assert!(matches!(
+        Session::connect(
+            endpoint.address,
+            endpoint.evidence("credential"),
+            "example",
+            &LocalConnector,
+            Arc::new(Time(Instant::now())),
+            Arc::new(Never),
+            policy()
+        ),
+        Err(GatewayError::Protocol)
+    ));
+    peer.join().unwrap();
+
+    let (endpoint, peer) = native_peer(move |socket| {
+        challenge(socket);
+        let _ = request(socket);
+        socket.write_raw(&encode_frame(MAX_RECORD_RESPONSE_BYTES, &refused).unwrap());
+        assert!(socket.ended());
+    });
+    assert!(matches!(
+        Session::connect(
+            endpoint.address,
+            endpoint.evidence("credential"),
+            "example",
+            &LocalConnector,
+            Arc::new(Time(Instant::now())),
+            Arc::new(Never),
+            policy()
+        ),
+        Err(GatewayError::Protocol)
+    ));
+    peer.join().unwrap();
 }
 
 #[test]
@@ -584,45 +717,17 @@ fn authentication_temporary_permanent_and_unknown_refusals_consume_the_shared_cl
         ("unauthorized", SessionCloseReason::AuthenticationFailed),
         ("unknown", SessionCloseReason::AuthenticationFailed),
     ] {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let endpoint = GatewayEndpoint::new(
-            format!("ws://{address}"),
-            EndpointIdentity::new("018fa012-2222-7222-8222-123456789abc".into(), 1).unwrap(),
-        )
-        .unwrap();
-        let peer = Peer::spawn(move || {
-            let (stream, _) = bounded_accept(&listener);
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut socket = tungstenite::accept(stream).unwrap();
+        let (endpoint, peer) = native_peer(move |socket| {
+            challenge(socket);
+            let auth = request(socket);
             send(
-                &mut socket,
-                OutgoingMessage::Event(
-                    EventFrame::push(
-                        product_event::SESSION_CHALLENGE,
-                        &SessionChallenge {
-                            min_version: PRODUCT_VERSION,
-                            max_version: PRODUCT_VERSION,
-                            nonce: "nonce".into(),
-                            expires_at: 100,
-                        },
-                        0,
-                        0,
-                    )
-                    .unwrap(),
-                ),
-            );
-            let auth = request(&mut socket);
-            send(
-                &mut socket,
+                socket,
                 OutgoingMessage::Response(ResponseFrame::failure(&auth.id, code, "sanitized")),
             );
-            assert!(socket.read().is_err());
+            assert!(socket.ended());
         });
         assert!(
-            matches!(Session::connect(&endpoint,"credential","example",&LocalConnector,Arc::new(Time(Instant::now())),Arc::new(Never),GatewayPolicy::new(2000,1000,8192,2,2).unwrap()),Err(GatewayError::Authentication(reason)) if reason==expected)
+            matches!(Session::connect(endpoint.address,endpoint.evidence("credential"),"example",&LocalConnector,Arc::new(Time(Instant::now())),Arc::new(Never),policy()),Err(GatewayError::Authentication(reason)) if reason==expected)
         );
         peer.join().unwrap();
     }
@@ -637,11 +742,13 @@ fn borrowed_authentication_scalar_acquisition_is_bounded_before_connect() {
             Err(ErrorKind::ConnectionRefused.into())
         }
     }
-    let endpoint = GatewayEndpoint::new(
-        "ws://127.0.0.1:8000".into(),
-        EndpointIdentity::new("018fa012-2222-7222-8222-123456789abc".into(), 1).unwrap(),
-    )
-    .unwrap();
+    let endpoint = Endpoint {
+        address: "127.0.0.1:8000".parse().unwrap(),
+        pin: NativeIdentity::generate(&mut OsEntropy)
+            .unwrap()
+            .public_spki(),
+        device: NativeIdentity::generate(&mut OsEntropy).unwrap(),
+    };
     for (credential, client, expected, calls) in [
         (
             "a".repeat(MAX_AUTH_CREDENTIAL_CHARACTERS + 1),
@@ -664,8 +771,8 @@ fn borrowed_authentication_scalar_acquisition_is_bounded_before_connect() {
     ] {
         let connector = RefuseConnect(AtomicUsize::new(0));
         assert!(
-            matches!(Session::connect(&endpoint,&credential,&client,&connector,
-            Arc::new(Time(Instant::now())),Arc::new(Never),GatewayPolicy::new(2000,1000,8192,2,2).unwrap()),Err(error) if error==expected)
+            matches!(Session::connect(endpoint.address,endpoint.evidence(&credential),&client,&connector,
+            Arc::new(Time(Instant::now())),Arc::new(Never),policy()),Err(error) if error==expected)
         );
         assert_eq!(connector.0.load(Ordering::SeqCst), calls);
     }
@@ -702,23 +809,18 @@ fn cancellation_and_deadline_overflow_before_callback_close_without_entering_dri
     }
     for expected in [GatewayError::Cancelled, GatewayError::TimedOut] {
         let (endpoint, peer) = peer(|socket| {
-            assert!(matches!(
-                socket.read(),
-                Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake))
-                    | Err(Error::ConnectionClosed)
-                    | Err(Error::AlreadyClosed)
-            ));
+            assert!(socket.ended());
         });
         let clock = Arc::new(ManualClock(AtomicU64::new(0)));
         let cancel = Arc::new(ManualCancel(AtomicBool::new(false)));
         let session = Session::connect(
-            &endpoint,
-            "credential",
+            endpoint.address,
+            endpoint.evidence("credential"),
             "example",
             &LocalConnector,
             clock.clone(),
             cancel.clone(),
-            GatewayPolicy::new(2000, 1000, 8192, 2, 2).unwrap(),
+            policy(),
         )
         .unwrap();
         let connection = GatewayConnection::new(session);
@@ -809,7 +911,7 @@ fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
                     "typed source refusal",
                 )),
             );
-            assert!(socket.read().is_err());
+            assert!(socket.ended());
         });
         let connection = GatewayConnection::new(connect(&endpoint));
         let mut source = connection.catalogue(Id::new("receiver").unwrap(), 3);
