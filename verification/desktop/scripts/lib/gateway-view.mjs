@@ -1,10 +1,11 @@
 /**
  * Reading a real gateway's conversation view for `mcp-apps-gateway.mjs` and
  * `gateway-window.mjs`: which harness permission its setup answers, which of
- * the app's reviews a step's own action opened, and what a turn said. Pure, so
- * each is tested without a gateway.
+ * the app's reviews a step's own action opened, and what a text-only turn
+ * said. Pure, so each is tested without a gateway.
  */
 import { permissionKey } from "../../../../scripts/mcp-test-server/evidence.mjs"
+import { CannotRun } from "./cli.mjs"
 
 export { permissionKey }
 
@@ -93,20 +94,40 @@ export const stillPending = (reviews, review) =>
   reviews.some((each) => permissionKey(each) === permissionKey(review))
 
 /**
- * What the view's last turn said: `{ user, reply }`, the person's text and the
- * agent's text parts joined — as the window draws them (`gateway-views.ts`),
- * with whitespace folded as the check reads the page's.
+ * Text the window draws as itself: letters, digits, whitespace and plain
+ * punctuation. What `inlineRuns` (`model/transcript.ts`) draws otherwise —
+ * `` `code` `` and `**strong**` — is outside it, as is anything else.
+ */
+const plain = /^[\p{L}\p{N}\s.,:;!?'’"()-]*$/u
+
+/**
+ * What the view's last turn said, `{ user, reply }` with whitespace folded as
+ * the check reads the page's — when its reply is text-only: every part a text
+ * part (no tool, no local notice), and both texts plain. Only then does the
+ * window draw each as its text alone, the reply's parts one after another
+ * (`transcriptFrom` in `gateway-views.ts`, `message.tsx`, `RichText`). Any
+ * other turn, and an empty reply or none, is "could not run": the check
+ * cannot say what the window should draw for it.
  */
 export function lastTurn(view) {
   const turn = view.messages.at(-1)
+  if (!turn) throw new CannotRun("the conversation holds no turn")
   const fold = (text) => text.replace(/\s+/g, " ").trim()
-  return {
-    user: fold(turn?.userText ?? ""),
-    reply: fold(
-      (turn?.parts ?? [])
-        .filter((part) => part.kind === "text")
-        .map((part) => part.text)
-        .join(""),
-    ),
-  }
+  const others = turn.parts
+    .filter((part) => part.kind !== "text")
+    .map((part) => part.kind)
+  const user = fold(turn.userText)
+  const reply = fold(turn.parts.map((part) => part.text ?? "").join(""))
+  if (others.length > 0)
+    throw new CannotRun(`the reply is not text-only: it has ${others.join(", ")} parts`)
+  if (reply === "") throw new CannotRun("the reply is empty")
+  for (const [who, text] of [
+    ["person's message", user],
+    ["reply", reply],
+  ])
+    if (!plain.test(text))
+      throw new CannotRun(
+        `the ${who} ${JSON.stringify(text.slice(0, 200))} is not plain text`,
+      )
+  return { user, reply }
 }

@@ -29,10 +29,8 @@
  */
 import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
-import { setTimeout as sleep } from "node:timers/promises"
 import { join } from "node:path"
 
-import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -46,7 +44,7 @@ import {
   setupOutcome,
   stillPending,
 } from "./lib/gateway-view.mjs"
-import { startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
+import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { css, names } from "./lib/selectors.mjs"
 import { paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
@@ -107,7 +105,7 @@ async function startStack(options) {
   try {
     const started = Date.now()
     const conversationId = randomUUID()
-    const turn = await agentTurn(stack.client, conversationId, options.agent)
+    const turn = await appToolTurn(stack.client, conversationId, options.agent)
     stack.timings.agentTurnMs = Date.now() - started
     const { conversations } = await stack.client.conversation.list({})
     const title = conversations.find(
@@ -126,25 +124,11 @@ async function startStack(options) {
 
 /**
  * Asks `agent` to call the app tool once, allows that call alone, and waits
- * for the turn to end. A gateway with no sign-in for the agent refuses the
- * conversation, and an agent that calls the app tool more than once leaves
- * the steps nothing unambiguous to read: both are "could not run".
+ * for the turn to end (`agentTurn`). A gateway with no sign-in for the agent
+ * refuses the conversation, and an agent that calls the app tool more than
+ * once leaves the steps nothing unambiguous to read: both are "could not run".
  */
-async function agentTurn(client, conversationId, agent) {
-  try {
-    await client.conversation.create({ conversationId, agent })
-    await client.conversation.send(
-      conversationId,
-      // Worded as live-check.mjs's prompt, which each agent follows.
-      `Use the tools of the "${SERVER}" MCP server. Call ${APP_TOOL} (no arguments) ` +
-        "exactly once, and wait for its result. Do not use any other tool. " +
-        "When it has returned, reply with DONE.",
-    )
-  } catch (error) {
-    throw new CannotRun(
-      `the gateway refused the ${agent} conversation (is ${agent} signed in on this machine?): ${error.message}`,
-    )
-  }
+async function appToolTurn(client, conversationId, agent) {
   const once = (calls) =>
     new CannotRun(
       `${agent} called ${APP_TOOL} more than once (${calls}); the check admits exactly one call`,
@@ -152,46 +136,53 @@ async function agentTurn(client, conversationId, agent) {
   // The one call of the app tool allowed, and the permissions answered for it.
   let admitted = null
   const answered = new Set()
-  for (let i = 0; i < 300; i += 1) {
-    await sleep(1000)
-    const view = await client.conversation.read(conversationId)
-    // Only the app tool is allowed, and only one call of it; anything else
-    // stays unanswered.
-    for (;;) {
-      const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)
-      if (extra) throw once(`${admitted}, ${extra}`)
-      if (!allow) break
-      admitted = allow.call
-      answered.add(permissionKey(allow.permission))
-      await client.conversation.answer(
-        conversationId,
-        allow.permission.executionId,
-        allow.permission.permissionId,
-        allow.option.id,
-      )
-    }
-    const last = view.messages.at(-1)
-    if (last && turnEnded(last.status)) {
-      const outcome = setupOutcome(view, SERVER, APP_TOOL)
-      if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
-      const tool = outcome.call
-      if (outcome.kind !== "ready")
-        throw new CannotRun(
-          `${agent}'s turn ended ${last.status}${last.error ? ` (${last.error.code ?? last.error})` : ""}; ` +
-            `${APP_TOOL}: ${tool ? `${tool.status}, resourceUri ${tool.mcp.resourceUri ?? "none"}` : "not called"}; ` +
-            `the view's tools: ${JSON.stringify(view.tools.map(({ title, status, mcp }) => ({ title, status, mcp })))}; ` +
-            `its reply: ${JSON.stringify(
-              last.parts
-                .filter((part) => part.kind === "text")
-                .map((part) => part.text)
-                .join("")
-                .slice(0, 400),
-            )}`,
-        )
-      return { view, tool }
-    }
-  }
-  throw new CannotRun(`${agent}'s turn did not end within 300 s`)
+  const { view, turn: last } = await agentTurn(
+    client,
+    conversationId,
+    // Worded as live-check.mjs's prompt, which each agent follows.
+    `Use the tools of the "${SERVER}" MCP server. Call ${APP_TOOL} (no arguments) ` +
+      "exactly once, and wait for its result. Do not use any other tool. " +
+      "When it has returned, reply with DONE.",
+    {
+      agent,
+      create: true,
+      seconds: 300,
+      // Only the app tool is allowed, and only one call of it; anything else
+      // stays unanswered.
+      onView: async (view) => {
+        for (;;) {
+          const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)
+          if (extra) throw once(`${admitted}, ${extra}`)
+          if (!allow) break
+          admitted = allow.call
+          answered.add(permissionKey(allow.permission))
+          await client.conversation.answer(
+            conversationId,
+            allow.permission.executionId,
+            allow.permission.permissionId,
+            allow.option.id,
+          )
+        }
+      },
+    },
+  )
+  const outcome = setupOutcome(view, SERVER, APP_TOOL)
+  if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
+  const tool = outcome.call
+  if (outcome.kind !== "ready")
+    throw new CannotRun(
+      `${agent}'s turn ended ${last.status}${last.error ? ` (${last.error.code ?? last.error})` : ""}; ` +
+        `${APP_TOOL}: ${tool ? `${tool.status}, resourceUri ${tool.mcp.resourceUri ?? "none"}` : "not called"}; ` +
+        `the view's tools: ${JSON.stringify(view.tools.map(({ title, status, mcp }) => ({ title, status, mcp })))}; ` +
+        `its reply: ${JSON.stringify(
+          last.parts
+            .filter((part) => part.kind === "text")
+            .map((part) => part.text)
+            .join("")
+            .slice(0, 400),
+        )}`,
+    )
+  return { view, tool }
 }
 
 /** The app's pending reviews in the conversation, as the gateway's view says. */

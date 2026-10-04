@@ -214,6 +214,8 @@ export const safeAreaTokens = {
  */
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
+  /** The gateway source's poll and reconnect timing (`defaultGatewayTiming`). */
+  gatewaySource: "/src/desktop/workspace/adapters/gateway/gateway-source.ts",
   /** What a widget host says in each case (`hostLines`). */
   hostTable: "/src/desktop/widgets/model/host-table.ts",
 }

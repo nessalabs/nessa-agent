@@ -591,13 +591,17 @@ says why where the conversations would be.
   reads the index again (the status goes while it reads, which no poll does)
   and connects at once though the poller waits (its host ask comes within a
   second of the click, and early enough in the poller's wait that no poll
-  could have made it), and says the same while nothing changed. While signed
-  out, and while the gateway is not ready, the window does not ask the host
-  at all for four seconds after its last ask, then asks exactly once by eight seconds: after a
-  failed connect it waits out several poll rounds rather than asking the host
-  every second, and then tries again on its own. (The script bounds the wait
-  to four to seven rounds; the unit tests pin the rule, `reconnectRounds + 1`
-  rounds, S10.)
+  could have made it), and says the same while nothing changed. The click is
+  placed just after a host ask — at once if the last came at most a second
+  before, else right after the next — so it lands early in the poller's wait
+  (T0, #419 comment 5976195060). While signed out, and while the gateway is
+  not ready, the window does not ask the host at all for a round short of the
+  poller's wait after its last ask, then asks exactly once by three rounds
+  after it: after a failed connect it waits out several poll rounds rather
+  than asking the host every second, and then tries again on its own. The
+  wait, `pollMs × reconnectRounds`, is read from the gateway source's own
+  `defaultGatewayTiming` in the page (so the script needs `--mode dev`); the
+  unit tests pin the rule, `reconnectRounds + 1` rounds, S10.
   _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a
@@ -613,8 +617,13 @@ says why where the conversations would be.
   `conversation.read` holds, inside the chat area; and a turn sent from
   another surface under the same credential, once the gateway holds it, is
   drawn in the open transcript as its last two messages, the page not
-  reloaded (the gateway source's poller). No console error, page error or
-  failed request at any point. In Chromium and WebKit.
+  reloaded (the gateway source's poller). Every handshake the window makes,
+  each reconnect's too, is the first's: the host's endpoint, client
+  `nessa-panel`, principal `surface:nessa-panel`. No console error, page error
+  or failed request at any point. In Chromium and WebKit. The reply compared
+  is a text-only one (only text parts, plain text, not empty), which the
+  window draws as its text alone; an agent that answers otherwise leaves the
+  steps "could not run", not failed.
   _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
   _Check:_ `gateway-window.mjs` (runs the real frontend as the desktop app —
   `hostGateway`, `connectDevSession`, the gateway source — against a fake host

@@ -16,6 +16,11 @@
  * where the browser's own line that the connection failed is the one console
  * error expected.
  *
+ * The poller's wait it checks against is the gateway source's own
+ * (`defaultGatewayTiming`), read in the page from the dev server's module; a
+ * production build has none to read, so each scenario there is "could not
+ * run" — the script needs --mode dev (the default).
+ *
  * What it does not show: a gateway that answers — that is
  * `gateway-window.mjs`'s, against a real one.
  */
@@ -23,24 +28,48 @@ import { openPage, withEngines } from "./lib/browser.mjs"
 import { attempt } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
-import { css } from "./lib/selectors.mjs"
+import { css, modules } from "./lib/selectors.mjs"
+import { inside, modelValue } from "./lib/workspace.mjs"
 
 const fakeGateway = "ws://127.0.0.1:7499"
 // Nothing listens here and nothing routes it: the connection is refused.
 const noGateway = "ws://127.0.0.1:7498"
 const unread = "Nessa couldn’t read the local server’s conversations just now."
 const signedOut = "This window isn’t signed in to the local server."
-const quietMs = 4_000
-// By then the five-round wait is over and the poller has connected once more.
-const recoveredMs = 8_000
-// The poller's wait after a failed connect: `defaultGatewayTiming`'s
-// `reconnectRounds` (5) rounds, `pollMs` (1000ms) apart at least, counted
-// from the failure, which comes after its ask. So no poller ask comes sooner
-// than this after the last one. Bare Node can't import the TypeScript source,
-// so the number is kept here with the source's names.
-const pollerWaitMs = 5 * 1_000
 // Try Again's ask comes this soon after the click, or it isn't counted.
 const retryAskMs = 1_000
+// An endpoint ask at most this old is fresh enough to click after
+// (T0, comment 5976195060).
+const freshAskMs = 1_000
+// The click waits until the host has gone unasked this long, so the connect
+// that asked has ended (one connect can ask several times, and a click while
+// it runs would join it, S6) and Try Again starts its own.
+const settledMs = 400
+
+/**
+ * The poller's numbers, from the gateway source's own `defaultGatewayTiming`
+ * (`pollMs`, `reconnectRounds`), never copies of them:
+ *
+ * - `pollerWaitMs`, `pollMs × reconnectRounds`: after a failed connect the
+ *   poller refuses `reconnectRounds` rounds, `pollMs` apart at least, counted
+ *   from the failure, which comes after its ask. So no poller ask comes
+ *   sooner than this after the last one.
+ * - `quietMs`, a round short of that wait: nothing asks the host within it.
+ * - `recoveredMs`, the wait and three rounds more: the poller's next connect
+ *   is at most `reconnectRounds + 1` rounds after the failure (S16), and two
+ *   rounds are left for the rounds' own time. It has asked exactly once by
+ *   then, as the ask after it is a whole wait later still.
+ */
+function cadenceOf({ pollMs, reconnectRounds }) {
+  const pollerWaitMs = pollMs * reconnectRounds
+  return {
+    pollMs,
+    reconnectRounds,
+    pollerWaitMs,
+    quietMs: pollerWaitMs - pollMs,
+    recoveredMs: pollerWaitMs + 3 * pollMs,
+  }
+}
 
 const scenarios = [
   {
@@ -158,12 +187,6 @@ async function measure(page) {
   )
 }
 
-const inside = (inner, outer) =>
-  inner.left >= outer.left - 0.5 &&
-  inner.top >= outer.top - 0.5 &&
-  inner.right <= outer.right + 0.5 &&
-  inner.bottom <= outer.bottom + 0.5
-
 function check(scenario, m) {
   const failures = []
   if (m.text !== scenario.says)
@@ -184,10 +207,13 @@ function check(scenario, m) {
   // Never the sample in disguise: no session rows, no sample plugin.
   if (m.rows !== 0) failures.push(`${m.rows} session rows listed`)
   if (m.sample !== 0) failures.push("the sample plugin is drawn")
-  if (m.asked.load_gateway_endpoint < 1)
+  // Counted: a count that is missing fails, never passes.
+  if (!(m.asked.load_gateway_endpoint >= 1))
     failures.push("the host's endpoint was never asked")
-  if (scenario.credentialNeverAsked && m.asked.load_surface_credential > 0)
-    failures.push("the credential was asked for while the gateway was not ready")
+  if (scenario.credentialNeverAsked && m.asked.load_surface_credential !== 0)
+    failures.push(
+      `the credential was asked for while the gateway was not ready (${m.asked.load_surface_credential} times)`,
+    )
   return failures
 }
 
@@ -197,6 +223,9 @@ await main(
     summary:
       "the desktop app's window says why it cannot read the gateway, never the sample",
     defaults: { engine: "chromium,webkit" },
+    help: `
+It reads the poller's wait from the gateway source in the page, so it needs
+--mode dev (the default); under --mode prod each scenario could not run.`,
   },
   async ({ options, rep, url }) => {
     const origin = new URL(url).origin
@@ -214,11 +243,16 @@ await main(
           })
           try {
             const { page } = opened
+            const timing = cadenceOf(
+              await modelValue(page, modules.gatewaySource, "defaultGatewayTiming"),
+            )
+            const { pollerWaitMs, quietMs, recoveredMs } = timing
             const first = await measure(page)
             const failures = check(scenario, first)
-            if (!first.button) return { failures, measured: { first } }
+            if (!first.button) return { failures, measured: { timing, first } }
             // The poller waits out a failed connect (S10): for `quietMs` after
-            // the last ask — inside the five-round wait — nothing asks the host.
+            // the last ask — a round short of the poller's wait — nothing asks
+            // the host.
             let quiet
             let recovered
             if (scenario.cadence) {
@@ -228,7 +262,8 @@ await main(
               }))
               await page.waitForTimeout(Math.max(0, quietMs - since))
               quiet = (await measure(page)).asked.load_gateway_endpoint - count
-              if (quiet > 0)
+              // Not `> 0`: a count that is missing fails too.
+              if (quiet !== 0)
                 failures.push(
                   `the window asked the host ${quiet} times within ${quietMs}ms of its last ask, unprompted`,
                 )
@@ -263,6 +298,39 @@ await main(
                 )
               },
               [css.workspaceEmpty, css.workspaceEmptyRetry],
+            )
+            // T0: the click placed early in a fresh poller wait — after the
+            // last endpoint ask if it is at most `freshAskMs` old, else after
+            // the next one, once the asks have settled — so T3's bound is
+            // far off.
+            const last = await page.evaluate(() => ({
+              count: window.__fakeHostAskTimes.length,
+              age: performance.now() - window.__fakeHostAskTimes.at(-1),
+            }))
+            const waitedForAsk = last.count > 0 && !(last.age <= freshAskMs)
+            if (waitedForAsk) {
+              const asked = await page
+                .waitForFunction(
+                  (count) => window.__fakeHostAskTimes.length > count,
+                  last.count,
+                  { polling: "raf", timeout: recoveredMs },
+                )
+                .then(
+                  () => true,
+                  () => false,
+                )
+              if (!asked)
+                failures.push(
+                  `the window did not ask the host again within ${recoveredMs}ms, unprompted`,
+                )
+            }
+            await page.waitForFunction(
+              // With no ask at all there is nothing to settle: T4 fails it.
+              (quiet) =>
+                window.__fakeHostAskTimes.length === 0 ||
+                performance.now() - window.__fakeHostAskTimes.at(-1) >= quiet,
+              settledMs,
+              { polling: "raf", timeout: recoveredMs },
             )
             await page.click(css.workspaceEmptyRetry)
             const read = await page
@@ -300,11 +368,15 @@ await main(
                 () => null,
               )
             const retryTiming = retry && {
+              waitedForAsk,
               sinceLastAsk:
                 retry.lastBefore === null ? null : retry.clickedAt - retry.lastBefore,
               askAfterClick:
                 retry.firstAfter === null ? null : retry.firstAfter - retry.clickedAt,
             }
+            // How far T3's bound is from where the click landed.
+            if (retryTiming && retryTiming.sinceLastAsk !== null)
+              retryTiming.margin = pollerWaitMs - (retryTiming.sinceLastAsk + retryAskMs)
             if (!retry) failures.push("the click on Try Again was never seen")
             else if (retry.lastBefore === null)
               failures.push("no failed connect came before Try Again for it to beat")
@@ -330,7 +402,7 @@ await main(
             )
             return {
               failures,
-              measured: { first, again, quiet, recovered, retry: retryTiming },
+              measured: { timing, first, again, quiet, recovered, retry: retryTiming },
             }
           } finally {
             await opened.close()

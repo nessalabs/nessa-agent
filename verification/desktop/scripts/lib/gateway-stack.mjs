@@ -1,7 +1,8 @@
 /**
  * A real gateway, the dev server in front of it, and a `NessaClient` on it as
  * a surface of its own: what the checks against a real gateway start from
- * (`mcp-apps-gateway.mjs`, `gateway-window.mjs`).
+ * (`mcp-apps-gateway.mjs`, `gateway-window.mjs`); and an agent's turn on it,
+ * sent and waited out (`agentTurn`).
  *
  * The gateway is `scripts/mcp-test-server/local-gateway.mjs`'s: a temporary
  * `ci` namespace on 127.0.0.1, with one agent's runtime (`options.agent`,
@@ -19,6 +20,7 @@ import {
   serverScript,
   startLocalGateway,
 } from "../../../../scripts/mcp-test-server/local-gateway.mjs"
+import { turnEnded } from "../../../../scripts/mcp-test-server/evidence.mjs"
 import { CannotRun, log } from "./cli.mjs"
 import { freePort, startDevServer } from "./server.mjs"
 
@@ -72,11 +74,16 @@ export async function startGatewayStack(options, instance, { as = "owner" } = {}
   timings.gatewayMs = Date.now() - started
   let dev = null
   let client = null
+  // The gateway stops, and its directory with the credentials goes, whatever
+  // the client or the dev server did as they closed.
   const close = async () => {
-    client?.close()
-    await dev?.close()
-    if (!(await gateway.stop()))
-      log(`the gateway (pid ${gateway.server.pid}) did not exit`)
+    try {
+      client?.close()
+      await dev?.close()
+    } finally {
+      if (!(await gateway.stop()))
+        log(`the gateway (pid ${gateway.server.pid}) did not exit`)
+    }
   }
   const token = () => readFileSync(gateway.token, "utf8").trim()
   try {
@@ -117,4 +124,43 @@ export async function waitFor(check, ms) {
     await sleep(250)
   } while (Date.now() < end)
   return value
+}
+
+/**
+ * Sends `text` in `conversationId` — creating the conversation first when
+ * `create` — and reads the conversation each second until that turn ends,
+ * handing each read to `onView` (which may answer the turn's permissions).
+ * Resolves with `{ view, turn }`: the view in which the turn ended, and the
+ * turn; whether it ended well is the caller's to judge. A conversation or
+ * message the gateway refuses, or a turn that does not end within `seconds`,
+ * is "could not run".
+ */
+export async function agentTurn(
+  client,
+  conversationId,
+  text,
+  { agent, create = false, seconds = 180, onView = async () => {} },
+) {
+  let before
+  try {
+    if (create) await client.conversation.create({ conversationId, agent })
+    // The view's messages are its turns; this one is the one after `before`.
+    before = (await client.conversation.read(conversationId)).messages.length
+    await client.conversation.send(conversationId, text)
+  } catch (error) {
+    throw new CannotRun(
+      `the gateway refused the ${agent} conversation (is ${agent} signed in on this machine?): ${error.message}`,
+    )
+  }
+  let turn
+  for (let i = 0; i < seconds; i += 1) {
+    await sleep(1000)
+    const view = await client.conversation.read(conversationId)
+    await onView(view)
+    turn = view.messages[before]
+    if (turn && turnEnded(turn.status)) return { view, turn }
+  }
+  throw new CannotRun(
+    `${agent}'s turn did not end within ${seconds} s; it was last ${turn?.status ?? "not listed"}`,
+  )
 }
