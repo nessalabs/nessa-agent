@@ -1,5 +1,6 @@
+import { validChanged, validWatchEnded } from "./change-watch-validate.js"
 import { hasUniqueObjectKeys } from "./unique-json.js"
-import { bounds } from "../generated/product.js"
+import { bounds, ProductEvent } from "../generated/product.js"
 import { frameScalars, responsePresence } from "../generated/protocol.js"
 import type { EventFrame, Frame, ResFrame } from "./types.js"
 import type { ProductSessionReady, SessionChallenge } from "./product-types.js"
@@ -140,7 +141,14 @@ export function parseEventFrame(value: unknown): EventFrame | null {
     [...value.event].length < frameScalars.eventNameMinLength
   )
     return null
-  if (!("payload" in value)) return null
+  if (!Object.hasOwn(value, "payload")) return null
+  if (value.event === ProductEvent.ConversationChanged && !validChanged(value.payload))
+    return null
+  if (
+    value.event === ProductEvent.ConversationWatchEnded &&
+    !validWatchEnded(value.payload)
+  )
+    return null
   if (typeof value.seq !== "number" || value.seq < 0 || !Number.isInteger(value.seq)) {
     return null
   }

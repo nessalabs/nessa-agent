@@ -9,11 +9,13 @@ use crate::product::generated::{
 use crate::product::passive_read::wire::encode_request;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Result as IoResult, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
+use tungstenite::protocol::CloseFrame;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -66,6 +68,14 @@ pub(crate) fn command(args: Vec<String>, lose: bool) -> (bool, Option<Value>) {
 pub(crate) struct WireClient {
     socket: WebSocket<MaybeTlsStream<TcpStream>>,
     next: u64,
+    // Frames that arrived while a call waited for its own response, in order.
+    held: VecDeque<Frame>,
+}
+/// One frame as it arrived: its decoded text with the exact encoded length, or
+/// the peer's close.
+pub(crate) enum Frame {
+    Text { value: Value, bytes: usize },
+    Closed(Option<CloseFrame>),
 }
 impl WireClient {
     pub(crate) fn connect(root: &Path) -> Self {
@@ -82,7 +92,11 @@ impl WireClient {
                 .set_write_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
         }
-        let mut client = Self { socket, next: 0 };
+        let mut client = Self {
+            socket,
+            next: 0,
+            held: VecDeque::new(),
+        };
         let challenge = client.value();
         let params = SessionAuthenticateParams {
             min_version: PRODUCT_VERSION,
@@ -98,11 +112,28 @@ impl WireClient {
         client
     }
     fn value(&mut self) -> Value {
+        match self.frame() {
+            Frame::Text { value, .. } => value,
+            Frame::Closed(close) => panic!("peer closed: {close:?}"),
+        }
+    }
+    /// The next frame in arrival order, held ones first.
+    pub(crate) fn frame(&mut self) -> Frame {
+        if let Some(frame) = self.held.pop_front() {
+            return frame;
+        }
         for _ in 0..16 {
-            match self.socket.read().unwrap() {
-                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
-                Message::Ping(value) => self.socket.send(Message::Pong(value)).unwrap(),
-                _ => {}
+            match self.socket.read() {
+                Ok(Message::Text(text)) => {
+                    return Frame::Text {
+                        value: serde_json::from_str(&text).unwrap(),
+                        bytes: text.len(),
+                    }
+                }
+                Ok(Message::Ping(value)) => self.socket.send(Message::Pong(value)).unwrap(),
+                Ok(Message::Close(close)) => return Frame::Closed(close),
+                Ok(_) => {}
+                Err(error) => panic!("frame read failed: {error}"),
             }
         }
         panic!("bounded fixture frame capacity");
@@ -113,10 +144,24 @@ impl WireClient {
         let text = encode_request(&id, method, params).unwrap();
         self.socket.send(Message::Text(text.into())).unwrap();
         for _ in 0..16 {
-            let value = self.value();
-            if value["id"] == id {
-                return value;
+            let frame = match self.socket.read().unwrap() {
+                Message::Text(text) => Frame::Text {
+                    value: serde_json::from_str(&text).unwrap(),
+                    bytes: text.len(),
+                },
+                Message::Ping(value) => {
+                    self.socket.send(Message::Pong(value)).unwrap();
+                    continue;
+                }
+                Message::Close(close) => panic!("peer closed during call: {close:?}"),
+                _ => continue,
+            };
+            if let Frame::Text { value, .. } = &frame {
+                if value["id"] == id {
+                    return value.clone();
+                }
             }
+            self.held.push_back(frame);
         }
         panic!("bounded fixture response capacity");
     }
