@@ -569,7 +569,8 @@ joins its worker on a tracked thread before storage shutdown. Composition
 reader deadline/drain and conversation cleanup failures back to the process. The product
 `record_read/` codec validates pages through sync-engine and caps encoded
 replies; `product/socket.rs` reserves independent record capacity and retains
-it until both physical source work and delivery/drop have finished. The existing
+it until physical source work and queued delivery finish or drop
+([R61 and R64](design/authorized-record-reads.md)). The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
 `core/read_workers/` owns tracked blocking source threads, sticky faults and the

@@ -363,7 +363,8 @@ impl ResponseClass {
 struct QueuedResponse {
     message: WireResponse,
     _slot: Arc<OwnedSemaphorePermit>,
-    // For record replies, this remains owned through the final physical send.
+    // Record replies transfer this to QueuedRecordResponse, whose writer
+    // releases delivery ownership before sending (R64).
     // The read adapter must not return it until its non-entered source thread
     // has finished and joined the SDK worker, including after caller timeout.
     _record_work: Option<RecordReadLease>,
@@ -637,7 +638,7 @@ where
     };
     tokio::pin!(expiry);
     // Admission retains a response slot through the physical write (a record's
-    // until its frame is fed, before the flush, row R64), so a stalled sink
+    // until the writer takes it to send, row R64), so a stalled sink
     // does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
@@ -1468,7 +1469,7 @@ async fn send<S: Sink<Message> + Unpin>(
     message: OutgoingMessage,
 ) -> Result<(), ()> {
     let text = ordinary_text(message)?;
-    timeout(write_timeout, feed_release_flush(socket, text, || {}))
+    timeout(write_timeout, send_text(socket, text))
         .await
         .map_err(|_| ())?
 }
@@ -1540,21 +1541,20 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         _record_work: record_work,
         deadline,
     } = response;
-    // The response's slot and read lease are given back once its frame is in
-    // the sink and before the flush that lets the client see it, so a client
-    // that waits for each answer is never refused slot-busy for its next read
-    // (row R64). An encoding refusal gives them back at once.
-    let release = move || drop((slot, record_work));
+    // The response's slot and read lease are given back as soon as its frame
+    // is encoded and checked, before any call that can write a byte: a
+    // WebSocket can write inside `start_send` (a pong due after the peer's
+    // ping), so no flush order is relied on. After physical source completion,
+    // a client waiting for the answer finds capacity free for its next read
+    // (row R64). An encoding refusal gives delivery ownership back at once.
     let text = match message {
         WireResponse::Ordinary(message) => {
             let text = ordinary_text(*message)?;
-            return within_deadline(
-                deadline,
-                timeout(write_timeout, feed_release_flush(socket, text, release)),
-            )
-            .await
-            .ok_or(())?
-            .map_err(|_| ())?;
+            drop((slot, record_work));
+            return within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
+                .await
+                .ok_or(())?
+                .map_err(|_| ())?;
         }
         WireResponse::Record { text } => text,
         // The record lane carries the five passive methods' answers only:
@@ -1562,6 +1562,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // this arm is never reached. It is still delivered as `send_queued`
         // would, under this response's deadline, rather than dropped.
         message @ WireResponse::Watch(_) => {
+            drop((slot, record_work));
             return within_deadline(deadline, send_queued(write_timeout, socket, message))
                 .await
                 .ok_or(())?;
@@ -1570,40 +1571,18 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
     if text.len() > MAX_RECORD_RESPONSE_BYTES {
         return Err(());
     }
-    within_deadline(deadline, feed_release_flush(socket, text, release))
+    drop((slot, record_work));
+    within_deadline(deadline, send_text(socket, text))
         .await
         .ok_or(())?
 }
 
-/// The largest WebSocket frame header (RFC 6455 section 5.2): 2 bytes, an
-/// 8-byte extended length, and a 4-byte mask, which a server never sends.
-const WEBSOCKET_MAX_FRAME_HEADER_BYTES: usize = 14;
-
-/// The WebSocket write buffer each product socket upgrades with: the largest
-/// record frame and its header, so tungstenite keeps a fed record frame in its
-/// buffer until `feed_release_flush` flushes it (it writes inside
-/// `start_send` only once the buffer passes this size).
-pub const WEBSOCKET_WRITE_BUFFER_BYTES: usize =
-    MAX_RECORD_RESPONSE_BYTES + WEBSOCKET_MAX_FRAME_HEADER_BYTES;
-
-/// Hand `text` to the sink, call `release`, then flush. The native profile's
-/// protected transport keeps a fed frame's ciphertext until the flush. The
-/// WebSocket keeps it in a write buffer sized in `server::entrypoint::http`
-/// for the largest record frame, unless a control frame is due in the same
-/// write: tungstenite then queues a pong after the frame and may write both
-/// inside `start_send`. The product's own clients send no pings, so for them
-/// nothing `release` gives back is still held once they can read the frame.
-async fn feed_release_flush<S: Sink<Message> + Unpin>(
-    socket: &mut S,
-    text: String,
-    release: impl FnOnce(),
-) -> Result<(), ()> {
+/// Send one text frame and flush it.
+async fn send_text<S: Sink<Message> + Unpin>(socket: &mut S, text: String) -> Result<(), ()> {
     socket
-        .feed(Message::Text(text.into()))
+        .send(Message::Text(text.into()))
         .await
-        .map_err(|_| ())?;
-    release();
-    socket.flush().await.map_err(|_| ())
+        .map_err(|_| ())
 }
 
 /// The one mapping from an access error to how a live connection closes.
@@ -1698,7 +1677,10 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use tokio::io::DuplexStream;
     use tokio::runtime::Handle;
+    use tokio_tungstenite::tungstenite::{protocol::Role, Message as Frame};
+    use tokio_tungstenite::WebSocketStream;
     use uuid::Uuid;
 
     struct RecordBinding;
@@ -3012,7 +2994,8 @@ mod tests {
         let (refusal_send, refusals) = mpsc::channel(1);
         let (ordinary_send, ordinary) = mpsc::channel(16);
         let (record_send, records) = mpsc::channel(1);
-        let slots = Arc::new(Semaphore::new(2));
+        let slots = Arc::new(Semaphore::new(1));
+        let control_slots = Arc::new(Semaphore::new(1));
         let record_capacity = Arc::new(Semaphore::new(1));
         let deliveries = Arc::new(WatchDeliveries::new());
         let writer = tokio::spawn(write_authenticated(
@@ -3041,15 +3024,30 @@ mod tests {
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
-                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _slot: control_slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
             })))
             .await
             .unwrap();
-        // The record frame is in the sink and its flush is stalled: its
-        // capacity is already back (row R64); the control still holds its own.
+        // The record's send is stalled: its capacity came back when the writer
+        // took it (row R64); the control still holds its own.
         assert_eq!(slots.available_permits(), 1);
         assert_eq!(record_capacity.available_permits(), 1);
+        // One extra answer can be retained while the first send is active.
+        // It owns the only record slot, so a third read cannot be admitted.
+        record_send
+            .send(QueuedRecordResponse::new(QueuedResponse {
+                message: WireResponse::record("{}".into()),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: Some(RecordReadLease::new(
+                    record_capacity.clone().try_acquire_owned().unwrap(),
+                )),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(slots.available_permits(), 0);
+        assert_eq!(record_capacity.available_permits(), 0);
+        assert!(slots.clone().try_acquire_owned().is_err());
         release.send(()).unwrap();
         let Message::Text(first) = peer.message().await else {
             panic!("record response expected")
@@ -3060,6 +3058,10 @@ mod tests {
         };
         let value: Value = serde_json::from_str(&second).unwrap();
         assert_eq!(value["id"], "control");
+        let Message::Text(third) = peer.message().await else {
+            panic!("second record response expected")
+        };
+        assert_eq!(third.as_str(), "{}");
         // Close the same delivery interest as the production connection owner.
         deliveries.close();
         drop(control_send);
@@ -3067,7 +3069,8 @@ mod tests {
         drop(ordinary_send);
         drop(record_send);
         writer.await.unwrap();
-        assert_eq!(slots.available_permits(), 2);
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(control_slots.available_permits(), 1);
         assert_eq!(record_capacity.available_permits(), 1);
 
         let (mut socket, _peer) = test_socket(None);
@@ -3079,129 +3082,92 @@ mod tests {
         );
     }
 
-    /// Row R64: a sink that, at the flush making a record frame visible,
-    /// notes whether the socket's record slot and the global read permit were
-    /// already free, as a client that waits for each answer needs them to be.
-    struct FlushObservesCapacity {
+    /// Row R64: a real server WebSocket over an in-memory duplex, as the
+    /// product's sink, noting the socket's free record slot and global read
+    /// permits at the first call that can write a byte.
+    struct ObservedWebSocket {
+        inner: WebSocketStream<DuplexStream>,
         slots: Arc<Semaphore>,
         reads: Arc<Semaphore>,
-        fed: bool,
-        free_at_flush: Vec<(usize, usize)>,
+        free_at_first_write: Option<(usize, usize)>,
     }
-    impl Sink<Message> for FlushObservesCapacity {
+    impl ObservedWebSocket {
+        fn observe(&mut self) {
+            let free = (
+                self.slots.available_permits(),
+                self.reads.available_permits(),
+            );
+            self.free_at_first_write.get_or_insert(free);
+        }
+    }
+    impl Sink<Message> for ObservedWebSocket {
         type Error = Error;
         fn poll_ready(
             self: Pin<&mut Self>,
-            _: &mut std::task::Context<'_>,
+            context: &mut std::task::Context<'_>,
         ) -> Poll<Result<(), Error>> {
-            Poll::Ready(Ok(()))
+            let this = self.get_mut();
+            this.observe();
+            Pin::new(&mut this.inner)
+                .poll_ready(context)
+                .map_err(Error::new)
         }
-        fn start_send(self: Pin<&mut Self>, _: Message) -> Result<(), Error> {
-            self.get_mut().fed = true;
-            Ok(())
+        fn start_send(self: Pin<&mut Self>, message: Message) -> Result<(), Error> {
+            let this = self.get_mut();
+            this.observe();
+            let Message::Text(text) = message else {
+                panic!("the record lane sends text")
+            };
+            let text = Frame::text(text.as_str());
+            Pin::new(&mut this.inner)
+                .start_send(text)
+                .map_err(Error::new)
         }
         fn poll_flush(
             self: Pin<&mut Self>,
-            _: &mut std::task::Context<'_>,
+            context: &mut std::task::Context<'_>,
         ) -> Poll<Result<(), Error>> {
             let this = self.get_mut();
-            if std::mem::take(&mut this.fed) {
-                let free = (
-                    this.slots.available_permits(),
-                    this.reads.available_permits(),
-                );
-                this.free_at_flush.push(free);
-            }
-            Poll::Ready(Ok(()))
+            this.observe();
+            Pin::new(&mut this.inner)
+                .poll_flush(context)
+                .map_err(Error::new)
         }
         fn poll_close(
             self: Pin<&mut Self>,
-            _: &mut std::task::Context<'_>,
+            context: &mut std::task::Context<'_>,
         ) -> Poll<Result<(), Error>> {
-            Poll::Ready(Ok(()))
+            Pin::new(&mut self.get_mut().inner)
+                .poll_close(context)
+                .map_err(Error::new)
         }
     }
 
-    /// A server WebSocket over an in-memory duplex with this write buffer, and
-    /// the client end's raw bytes.
-    async fn websocket_pair(
-        write_buffer: Option<usize>,
-    ) -> (
-        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
-        tokio::io::DuplexStream,
-    ) {
-        use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
-        let (server, client) = tokio::io::duplex(4 * WEBSOCKET_WRITE_BUFFER_BYTES);
-        let mut config = WebSocketConfig::default();
-        if let Some(size) = write_buffer {
-            config = config.write_buffer_size(size);
-        }
-        let socket =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(server, Role::Server, Some(config))
-                .await;
-        (socket, client)
-    }
-
-    /// Whether any byte is ready to read from `peer` now.
-    async fn bytes_ready(peer: &mut tokio::io::DuplexStream) -> usize {
-        use tokio::io::AsyncReadExt;
-        let mut buffer = vec![0; 2 * WEBSOCKET_WRITE_BUFFER_BYTES];
-        match timeout(Duration::from_millis(50), peer.read(&mut buffer)).await {
-            Ok(read) => read.unwrap(),
-            Err(_) => 0,
-        }
-    }
-
-    /// Row R64's transport half: with the product's write buffer, a fed
-    /// maximum record frame stays in tungstenite's buffer until the flush.
+    /// The client pings before each read, so tungstenite has a pong due and
+    /// writes it with the answer inside `start_send`. The record slot and read
+    /// permit are free before any byte of either answer can reach the client,
+    /// for a record and for a refusal on the record lane.
     #[tokio::test]
-    async fn websocket_keeps_a_fed_maximum_record_frame_until_the_flush() {
-        let (mut socket, mut peer) = websocket_pair(Some(WEBSOCKET_WRITE_BUFFER_BYTES)).await;
-        let text = "x".repeat(MAX_RECORD_RESPONSE_BYTES);
-        socket
-            .feed(tokio_tungstenite::tungstenite::Message::text(text))
-            .await
-            .unwrap();
-        assert_eq!(bytes_ready(&mut peer).await, 0);
-        socket.flush().await.unwrap();
-        // The frame's 10-byte header and its payload.
-        let mut arrived = 0;
-        while arrived < MAX_RECORD_RESPONSE_BYTES + 10 {
-            let read = bytes_ready(&mut peer).await;
-            assert!(read > 0, "flushed frame arrives");
-            arrived += read;
-        }
-        assert_eq!(arrived, MAX_RECORD_RESPONSE_BYTES + 10);
-    }
-
-    /// The revert probe: with tungstenite's default write buffer the same fed
-    /// frame is written inside `start_send`, before any flush, so dropping the
-    /// upgrade's `write_buffer_size` would reopen #492.
-    #[tokio::test]
-    async fn default_websocket_buffer_sends_a_maximum_record_frame_before_the_flush() {
-        let (mut socket, mut peer) = websocket_pair(None).await;
-        let text = "x".repeat(MAX_RECORD_RESPONSE_BYTES);
-        socket
-            .feed(tokio_tungstenite::tungstenite::Message::text(text))
-            .await
-            .unwrap();
-        assert!(bytes_ready(&mut peer).await > 0);
-    }
-
-    #[tokio::test]
-    async fn record_capacity_is_free_before_its_frame_is_flushed() {
+    async fn record_capacity_is_free_before_any_byte_reaches_a_pinging_client() {
+        let (server, client) = tokio::io::duplex(4 * MAX_RECORD_RESPONSE_BYTES);
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
         let slots = Arc::new(Semaphore::new(1));
         let reads = Arc::new(Semaphore::new(4));
-        let mut socket = FlushObservesCapacity {
+        let mut socket = ObservedWebSocket {
+            inner: WebSocketStream::from_raw_socket(server, Role::Server, None).await,
             slots: slots.clone(),
             reads: reads.clone(),
-            fed: false,
-            free_at_flush: vec![],
+            free_at_first_write: None,
         };
         for message in [
             WireResponse::record("{}".into()),
+            WireResponse::record("x".repeat(MAX_RECORD_RESPONSE_BYTES)),
             WireResponse::ordinary(failure("read", "source_preparing")),
         ] {
+            client.send(Frame::Ping(vec![1].into())).await.unwrap();
+            // The server reads the ping, which queues its pong.
+            let ping = socket.inner.next().await.unwrap().unwrap();
+            assert!(matches!(ping, Frame::Ping(_)), "{ping:?}");
             let slot = Arc::new(slots.clone().try_acquire_owned().unwrap());
             let permit = reads.clone().try_acquire_owned().unwrap();
             let response = QueuedRecordResponse::owned(
@@ -3209,13 +3175,32 @@ mod tests {
                 Some(slot.clone()),
                 Some(RecordReadLease::new((permit, slot))),
             );
+            socket.free_at_first_write = None;
             assert!(
                 send_record_queued(Duration::from_secs(1), &mut socket, response)
                     .await
                     .is_ok()
             );
+            assert_eq!(socket.free_at_first_write, Some((1, 4)));
+            // The pong and the answer both arrive, in tungstenite's order.
+            let mut kinds = Vec::new();
+            for _ in 0..2 {
+                kinds.push(
+                    match timeout(Duration::from_secs(1), client.next())
+                        .await
+                        .expect("pong and answer arrive")
+                        .unwrap()
+                        .unwrap()
+                    {
+                        Frame::Pong(_) => "pong",
+                        Frame::Text(_) => "text",
+                        other => panic!("unexpected frame {}", other.len()),
+                    },
+                );
+            }
+            kinds.sort_unstable();
+            assert_eq!(kinds, ["pong", "text"]);
         }
-        assert_eq!(socket.free_at_flush, [(1, 4), (1, 4)]);
     }
 
     #[tokio::test]
@@ -3323,8 +3308,8 @@ mod tests {
             })))
             .await
             .unwrap();
-        // Only the queued control's slot is held while the fed record's flush
-        // is stalled (row R64).
+        // Only the queued control's slot is held while the record's send is
+        // stalled (row R64).
         assert_eq!(slots.available_permits(), 1);
         tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
         timeout(Duration::from_secs(1), writer)

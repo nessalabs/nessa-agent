@@ -57,8 +57,8 @@ impl RecordReadLease {
 }
 
 /// The read thread returns its token only after its SDK source is fully joined.
-/// The product writer retains it until the response's frame is fed into the
-/// sink, before the flush that makes it visible, or until socket teardown.
+/// The product writer retains it until the response is encoded and checked
+/// for sending (row R64), or until socket teardown.
 pub struct RecordReadResponse {
     pub value: RecordReadValue,
     pub lease: RecordReadLease,
