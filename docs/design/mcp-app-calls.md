@@ -26,8 +26,11 @@ the gateway does with it (#348, part b).
   record per step, keyed by a call id the gateway mints.
 - **Resource tickets** (`mcp_servers::infrastructure::resource_tickets`) and
   `GET /mcp-resources` (`mcp_servers::entrypoint::http`).
-- **The socket's app lane** (`product::socket`): 4 calls per socket;
-  `mcp.releaseApp` on the control lane.
+- **The socket's app lane** (`product::socket`): 4 calls per socket —
+  `mcp.callTool`, `mcp.readResource`, `mcp.sendMessage` and
+  `mcp.updateModelContext` — and `mcp.releaseApp` on the control lane.
+- **An app's messages and model context** (#390): the same flow and state,
+  [below](#an-app-in-its-conversation-the-gateway-390).
 - **The client** (`packages/nessa-client`, `client.mcpApps`).
 
 ## Who the app is
@@ -44,7 +47,7 @@ Each step is recorded with who took it:
 
 | Who | Initiator |
 | --- | --- |
-| the app | the app, on behalf of the caller of `mcp.callTool` or `mcp.readResource` |
+| the app | the app, on behalf of the caller of `mcp.callTool`, `mcp.readResource`, `mcp.sendMessage` or `mcp.updateModelContext` |
 | the person who answered a review | that person, with their request |
 | the caller of `mcp.releaseApp` | that caller, with their request |
 | the person who closed or deleted the conversation | that person, with their request |
@@ -223,11 +226,13 @@ Anything still running after that is logged as such.
 ## An app in its conversation (#390)
 
 An app may write the person's next message (MCP Apps' `ui/message`) and give
-the model context (`ui/update-model-context`). #390 lands in three pull
-requests: this SDK slice, then the gateway, protocol and client, then the
-desktop. This section is the SDK's part: the values, how they are saved and
-sent, and which apps a message may name. The gateway's tables join it with
-the second.
+the model context (`ui/update-model-context`). #390 lands in four pull
+requests: the SDK, then the gateway and protocol (with the client's view
+agreement), then the client's API, then the desktop. This section is the
+SDK's part: the values, how they are saved and sent, and which apps a
+message may name. The gateway's part is
+["An app in its conversation: the gateway"](#an-app-in-its-conversation-the-gateway-390)
+below.
 
 **Decisions.**
 
@@ -370,6 +375,232 @@ was.
 | B5 | a context past the frame with the message | `MessageTooLarge`; the count is at least the encoded size |
 | B6 | a configured model without text input, and a message carrying app contexts, even with no text of its own | refused as a message with text is (`InvalidInput`): the contexts are a leading text block |
 
+## An app in its conversation: the gateway (#390)
+
+`mcp.sendMessage` puts an app's text into its conversation as the person's
+turn, written by the app; `mcp.updateModelContext` holds what a mount gives
+the model until a message carries it. Both run in the conversation service
+(`service/app_calls.rs`, with the submission path in `service.rs`), and what
+a conversation's apps hold is `app_reviews.rs`'s, under its one lock. The
+wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls).
+
+**Decisions.**
+
+- **Consent is asked per message.** Every `mcp.sendMessage` opens an app
+  review (`ReviewAsk::SendMessage`, `origin: {kind: "app", server, tool}`),
+  titled "The `<tool>` app on `<server>` asks to send a message as you", with
+  `argumentsJson` = `{"text": …}` — what the person is shown is what is
+  sent. It is answered with `conversation.answer` / `conversation.cancel`,
+  whatever the approval mode. There is no consent set and no allowance
+  between messages. The one exception: a retry whose turn the live agent
+  already holds (`holds_turn`, read from the SDK snapshot) is not asked
+  again, since a denial could not take it back.
+- **What a message is.** Text only. Blank is `invalid_request`, on record.
+  Past the schema's 8192 bytes — held equal to `ConversationSendParams.text`
+  by the generator, and published to the gateway as `MAX_MCP_MESSAGE_BYTES` —
+  it is `invalid_request` at the wire, with nothing recorded. Past the
+  service's own `max_input_bytes` (never larger) it is
+  `mcp_request_too_large`, on record. A review that would not fit
+  `MAX_APP_REVIEW_BYTES` is `mcp_request_too_large`, and no review opens.
+- **When it is refused.** Inside `submit_as`, under the per-conversation
+  submission lock every submission takes, just before the enqueue: if the
+  conversation is not idle — the predicate `setApprovalMode` already uses
+  (`idle_for_approval_change`: nothing runs and nothing waits) — the app's
+  message is refused `turn_running`. An app's message never queues and never
+  fills the queue.
+- **Who wrote it.** `McpAppSource` is built from the conversation view's own
+  `tools` entry for the app's tool call, so it carries the harness-observed
+  spelling the SDK compares; it goes on the message with `sent_by`. The view
+  projects it as an optional `app` on `ConversationMessage` and
+  `ConversationPending`, and the client refuses a view whose pending entry's
+  author differs from its message's (K10).
+- **Holding contexts.** Each mount holds one `AppModelContext`. A new update
+  replaces it (given last, so the held order is the order given) and an
+  update with neither part, or only an empty text, clears it.
+  `AppModelContext::new` is the one judge of "one object", "neither part"
+  and the 8 KiB bound. At most 4 mounts hold one (`MAX_HELD_CONTEXTS`, which
+  is `UserMessage::MAX_APP_MODEL_CONTEXTS`); a fifth is refused
+  `temporarily_unavailable`. A conversation's updates take its one update
+  lock (`AppReviews::one_update`, a `tokio::sync::Mutex`, across openings),
+  held across the room check, the record and the hold: the recorded order is
+  the held order, with no reservation and no sequence number.
+- **Which message carries them.** Only a message admitted while the
+  conversation is idle, the person's or an app's: it starts at once, so
+  nothing ahead of it can reorder or remove it. An app's own message is
+  always admitted idle. A message queued behind a running turn, or steered
+  into one, carries none and leaves them held.
+- **Letting go.** Under the submission lock the held contexts are read and
+  put on the message, then it is enqueued. When the enqueue returns `Ok` —
+  the SDK has saved the turn's `InputAccepted` — `let_go` removes exactly the
+  carried contexts, by `update_id`: a newer update given in between is
+  another identity, and stays. On `Err` nothing is let go. If the turn then
+  fails, those contexts are lost, and the app may give them again (C13). A
+  release, an opening's end, a new opening and a delete drop held contexts
+  unsent.
+- **Retries.** An app's message's execution is `"app-"` and the first 32 hex
+  digits of a SHA-256 over the length-prefixed conversation, app execution,
+  tool call, mount and `requestId`. The same request from the same mount is
+  the same turn, not asked again, and the SDK settles it: the same text
+  answers the first delivery, other text is `submission_conflict`. A retry
+  carries what its saved record holds, never what is held now.
+- **Audit.** Phases `MessageSent`, `MessageNotSent` and `MessageUnresolved`
+  (each with `executionId`), `ContextHeld { bytes }` and `ContextCleared`;
+  asks `send_message` and `update_model_context`; the code `turn_running`.
+  Why a held context was never sent is not a record of its own: it is read
+  from the record of the update that replaced or cleared it, the release or
+  end that dropped it, or the record of the turn that carried it.
+- **R1-8.** `AgentError::UnknownApp(_)` is `invalid_request` on the wire
+  (`product/conversation.rs`), as any other invalid input. The gateway's own
+  messages name apps resolved from the transcript, so it does not meet it.
+
+### A message
+
+| # | State | Event | Next | Effect / record |
+|---|---|---|---|---|
+| M1 | — | the 32 gateway slots, or the socket's 4, are full | — | `temporarily_unavailable`; nothing recorded |
+| M2 | — | the app is not an MCP tool call with a UI here, or names another server | — | `Refused(mcp_app_unknown / mcp_server_mismatch)` |
+| M3 | — | blank text | — | `Refused(invalid_request)` |
+| M4 | — | text past the schema bound / past `max_input_bytes` | — | `invalid_request` at the wire, nothing recorded / `Refused(mcp_request_too_large)` |
+| M5 | — | the mount was released, or its opening ended | — | `Refused(mcp_cancelled)`, by the system |
+| M6 | — | the derived execution is a turn the live conversation holds (a retry) | Sending | `Admitted`; no review |
+| M7 | — | otherwise, and the review fits | Waiting | `ApprovalRequested{permission_id}` |
+| M7b | — | the review does not fit 16 000 bytes | — | `Refused(mcp_request_too_large)`; no review |
+| M7c | — | 16 app reviews open, or 16 000 bytes held | — | `Withdrawn(RequestCancelled)` by the system; `temporarily_unavailable` |
+| M8 | Waiting | the person allows | Sending | `Approved{permission_id}`, by that person |
+| M9 | Waiting | denied or cancelled / deadline / caller gone / release / close, delete, stop or gateway stop | — | `Denied` → `mcp_approval_denied` / `Expired` → `mcp_approval_expired` / `Withdrawn(cause)` → `mcp_cancelled` |
+| M10 | Sending, under the submission lock | the mount released, the opening ended, or another epoch | — | `Refused(mcp_cancelled)`, by the system; not enqueued; no opening started |
+| M11 | Sending, under the lock | a turn runs or input waits (not for M6) | — | `Refused(turn_running)`; nothing let go |
+| M12 | Sending, under the lock | idle; the enqueue returns (`InputAccepted` saved) | — | carries the held contexts (C9); `MessageSent{execution_id}`; answered `{executionId}`; the transcript shows the person's turn with `app` set |
+| M13 | Sending | the submission is refused (closed, deadline, storage, invalid, conflict, …) | — | `MessageNotSent{execution_id}`; that code |
+| M14 | Sending | taken, but its admission evidence failed | — | `MessageSent{execution_id}`; the evidence failure's code |
+| M15 | Sending | outcome unknown (`submission_unresolved`, a supervised failure) | — | `MessageUnresolved{execution_id}`; that code |
+| M16 | before the send | a record cannot be written | — | `audit_unavailable`; the step not taken |
+| M16b | sent | `MessageSent` cannot be written | — | the agent has the turn; `audit_unavailable`; `executionId` withheld |
+| M17 | — | the same `requestId` from the same mount again, also after a reopening | M6 | the same execution; the same text gives the original delivery, other text `submission_conflict` |
+| M18 | Sending, past the lock's check | a release lands | Sending | sent all the same, as a call past its last check is |
+
+### A context
+
+| # | State | Event | Next | Effect / record |
+|---|---|---|---|---|
+| C1 | — | slots full | — | `temporarily_unavailable` |
+| C2 | — | the app is unknown / another server / released / its opening ended | — | as M2, M5 |
+| C3 | — | text and structured content together past `AppModelContext::MAX_BYTES` | — | `Refused(mcp_request_too_large)` |
+| C4 | — | structured content that is not one JSON object | — | `Refused(invalid_request)` |
+| C5 | none / held | an update with content; this mount holds one, or fewer than 4 other mounts do | held | `ContextHeld{bytes}`; replaces the mount's context; its `update_id` is this call's id |
+| C6 | none | 4 other mounts hold one | none | `Refused(temporarily_unavailable)` |
+| C7 | any | neither part, or only an empty text | none | `ContextCleared` |
+| C8 | — | two updates in one conversation at once | — | one at a time under the conversation's update lock; the last one recorded stands |
+| C9 | held | a message admitted while idle (the person's or an app's); the enqueue returns | none for those carried | on the saved message, in the order given; let go by `update_id`; a newer update given meanwhile stays |
+| C10 | held | a message queued behind a running turn, or steered into one | held | carries none |
+| C11 | held | the submission is refused | held | nothing let go |
+| C12 | held | a retry of an execution the agent has | held | carries what its saved record holds |
+| C13 | carried, let go | the turn fails, or never reaches the agent | — | lost; the app may give it again (recorded limit) |
+| C14 | held | `mcp.releaseApp` for its mount | none | dropped unsent |
+| C15 | held | the opening ends (close, delete, stop, gateway stop) | none | all dropped |
+| C16 | any | the record cannot be written | unchanged | `audit_unavailable`; nothing held or cleared |
+| C17 | — | a release or end between the record and the hold | none | not held; answered `applied: true` |
+
+```mermaid
+sequenceDiagram
+    participant App as App host
+    participant Svc as Gateway conversation service
+    participant Apps as Conversation app state
+    participant Audit as MCP app audit
+    participant Person
+    participant SDK as SDK agent
+    App->>Svc: mcp.updateModelContext(app, text, structuredContentJson)
+    Svc->>Apps: under the update lock, room for 4 mounts
+    Svc->>Audit: ContextHeld or ContextCleared
+    Svc->>Apps: hold in place of the mount's, or clear
+    Svc-->>App: applied
+    App->>Svc: mcp.sendMessage(app, text)
+    Svc->>Audit: ApprovalRequested
+    Person->>Svc: conversation.answer allow
+    Svc->>Audit: Approved by that person
+    Svc->>Svc: under the submission lock, opening and mount still live, else mcp_cancelled
+    alt a turn runs or input waits
+        Svc-->>App: turn_running
+    else idle
+        Svc->>Apps: read held contexts
+        Svc->>SDK: enqueue the message sent by the app, with the contexts
+        SDK-->>Svc: admitted, InputAccepted saved
+        Svc->>Apps: let go of exactly the carried update ids
+        Svc->>Audit: MessageSent
+        Svc-->>App: executionId
+    end
+```
+
+**Recorded limits.**
+
+- A context carried by a turn that then fails, or never reaches the agent, is
+  lost (C13); the app may give it again.
+- A person's message queued behind a running turn, or steered into one,
+  delivers no app context (C10); it waits at most one turn.
+- If the person allows an app's message after sending one of their own, the
+  app is answered `turn_running`.
+- Two mounts of one tool call look the same to the agent.
+- Why a held context was never sent is read from other records (the
+  decision on audit above), not from one of its own.
+
+### Tests (gateway)
+
+Each row has at least one test, named after it.
+
+- `crates/nessa-server/tests/conversation/app_messages.rs`:
+  - M1, C1 `m1_c1_messages_and_contexts_take_one_of_the_gateways_app_call_slots`
+  - M2 `m2_a_message_from_no_app_or_for_another_server_is_refused_on_record`
+  - M3, M4 (the service's bound) `m3_m4_a_blank_message_or_one_past_the_input_bound_is_refused`
+  - M5 `m5_a_released_mount_sends_nothing_and_asks_nobody`
+  - M6, M17 `m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_again`, and after a reopening `m17_a_retry_of_a_sent_message_after_a_reopening_is_not_asked_again`
+  - M7, M8, M12 `m7_m8_m12_a_message_asks_and_allowed_lands_as_the_persons_turn_written_by_the_app`; every message asks: `m7_every_message_asks_and_allowing_one_allows_no_other`
+  - M7b `m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_opened`
+  - M7c `m7c_with_the_reviews_full_a_message_is_withdrawn_and_unavailable`
+  - M9 `m9_a_denied_message_is_not_sent_and_the_next_asks_again`, `m9_a_message_nobody_answers_expires_and_is_not_sent`, `m9_a_message_whose_caller_went_is_withdrawn_on_record`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_the_mounts_release`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_a_close`
+  - M10 `m10_a_release_before_the_submission_lock_refuses_the_message`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`, `m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_it`, `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`, `m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing`, `m10_a_message_admitted_in_one_opening_is_not_sent_into_another`
+  - M11 `m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`
+  - M13 `m13_a_message_the_conversation_refuses_is_on_record_as_not_sent`
+  - M14, C13 `m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carried_is_lost`
+  - M15 `m15_a_message_whose_submission_task_failed_is_on_record_as_unresolved`
+  - M16 `m16_a_message_whose_step_cannot_be_recorded_is_not_sent_or_shown`
+  - M16b `m16b_a_message_whose_sending_cannot_be_recorded_is_the_agents_and_its_turn_withheld`
+  - M18 `m18_a_release_past_the_locks_check_finds_the_message_sent`
+  - C2 `c2_a_context_from_no_app_another_server_or_a_released_mount_is_refused`
+  - C3, C4 `c3_c4_a_context_past_its_bound_or_with_structure_that_is_no_object_is_refused`
+  - C5, C9 `c5_c9_the_latest_context_goes_with_the_next_idle_message_once_and_names_its_update`; an app's own message: `c9_an_apps_own_message_carries_the_context_too`; the newer update: `c9_a_newer_update_given_between_the_read_and_the_enqueue_stays`
+  - C6 `c6_at_most_four_mounts_hold_a_context_and_a_message_frees_their_places`
+  - C7 `c7_an_update_with_neither_part_or_an_empty_text_clears_what_the_mount_held`
+  - C8 `c8_two_updates_at_once_are_recorded_in_the_order_they_are_held`
+  - C10 `c10_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held`, `c10_a_message_steered_into_a_turn_carries_no_context`
+  - C11 `c11_a_refused_submission_lets_go_of_nothing` (and M11's turn_running)
+  - C12 `c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`
+  - C13 `c13_a_context_carried_by_a_turn_that_then_fails_is_lost`
+  - C14 `c14_a_mounts_release_drops_its_context_unsent`
+  - C15 `c15_the_openings_end_drops_every_context_unsent`
+  - C16 `c16_an_update_that_cannot_be_recorded_changes_nothing`
+  - C17 `c17_a_release_between_the_record_and_the_hold_holds_nothing`
+- `crates/nessa-server/tests/conversation/app_reviews.rs`: `ReviewAsk::SendMessage`
+  (`a_message_review_says_what_it_asks`,
+  `every_message_is_its_own_review_and_allowing_one_allows_no_other`); the
+  held contexts (`c5_c7_…`, `c6_a_fifth_mount_finds_no_room_…`, `c8_one_context_update_…`,
+  `c9_let_go_drops_exactly_the_updates_carried_and_a_newer_one_stays`,
+  `c14_c15_contexts_are_dropped_with_their_mount_the_openings_end_a_new_opening_and_a_delete`,
+  `c17_an_update_whose_mount_was_released_…`).
+- `crates/nessa-server/tests/conversation/mcp_app_audit.rs`: the new phases
+  (`every_phase_of_one_request_is_its_own_record`) and asks
+  (`an_apps_message_and_its_context_record_what_they_asked_and_turn_running`).
+- `crates/nessa-server/tests/conversation/agreement.rs`: `McpAppCode::ALL`
+  against the protocol, and the bounds the schema states
+  (`an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps`).
+- `crates/nessa-server/tests/conversation/wire_errors.rs`: R1-8
+  (`a_message_naming_an_app_the_session_never_saw_is_an_invalid_request`).
+- `crates/nessa-server/tests/mcp_servers/gateway.rs`: both methods on the
+  app lane, M1 and C1 at the socket, M4 at the wire, C3 past a part's schema
+  bound, and the transcript's `app` on the wire
+  (`an_apps_messages_and_contexts_travel_on_its_lane_and_land_as_its_own`).
+- `packages/nessa-client/src/protocol/conversation-validate.test.ts`: K10.
+- `protocol/product/fixtures.json` and `pnpm protocol:check`: the new shapes.
+
 ## Lanes
 
 App calls have 4 slots on each socket. A destructive call holds its slot while
@@ -398,6 +629,8 @@ Each row above has a test, named after it:
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `wire_errors.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
+- An app in its conversation, the gateway's rows: listed under
+  ["Tests (gateway)"](#tests-gateway) above.
 - An app in its conversation, the SDK's rows: "The app a message names",
   each row asked by admission, restoration and a replayed record log alike,
   in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`

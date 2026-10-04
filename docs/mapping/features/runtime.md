@@ -491,7 +491,9 @@ a gateway-owned review, independently of the conversation approval mode.
 | `conversation.answer` / `conversation.cancel` | Routes gateway app reviews before SDK reviews. App-origin reviews offer allow-once/deny-once and expire after five minutes. Exact execution/review identities are required. |
 | `mcp.readResource` | Same originating app/server and validated `ui://` URI; one upstream read, resource metadata, and a single-use bearer ticket for held HTML bytes. |
 | `GET /mcp-resources` | `x-nessa-resource-ticket` authorizes redemption without a second HTTP authentication step; trusted-origin check, one consumption, and redemption audit precede bytes. |
-| `mcp.releaseApp` | Idempotently withdraws current waiting reviews and releases current unredeemed tickets for the exact mount; no permanent mount revocation or provider close. |
+| `mcp.sendMessage` | Text at most the conversation's input bound, submitted as the person's turn written by the app (`MessageSender::App`, persisted with the invocation). Every message waits on its own app review, except a retry of a turn the agent already has; refused `turn_running` while a turn runs or input waits. |
+| `mcp.updateModelContext` | Holds one context per mount (8 KiB, at most 4 mounts), one update per conversation at a time, recorded before it is held; the next message admitted while nothing runs or waits carries the held contexts, as one leading ACP text block, and they are let go of once that message is saved (lost if its turn then fails; queued and steered messages carry none). Released or ended mounts drop theirs unsent. |
+| `mcp.releaseApp` | Idempotently withdraws current waiting reviews, releases current unredeemed tickets and drops the held context for the exact mount; no permanent mount revocation or provider close. |
 
 ```mermaid
 sequenceDiagram

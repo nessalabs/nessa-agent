@@ -696,9 +696,10 @@ resources wait in behind their tickets, and the view's tool UI lookup
 with its stand-in, gives the agents the grants, and builds the ticket store,
 before any agent is built. The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
-`mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
-service's (`conversation/application/service/app_calls.rs`, with the reviews
-in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
+`mcp_servers/infrastructure/apps.rs`; the calls' flow, and an app's
+messages and model context (#390), are the conversation service's
+(`conversation/application/service/app_calls.rs`, with the reviews and held
+contexts in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
 `conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
 `product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
 one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
