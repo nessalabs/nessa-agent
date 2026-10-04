@@ -82,6 +82,7 @@ impl AgentError {
                 | Self::Scheduling(_)
                 | Self::UserImage(_)
                 | Self::ImageInputRefused(_)
+                | Self::UnknownApp(_)
                 | Self::MessageTooLarge { .. }
                 | Self::Busy
                 | Self::Closed

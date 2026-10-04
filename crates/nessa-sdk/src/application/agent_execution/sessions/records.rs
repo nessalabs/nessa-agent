@@ -386,6 +386,15 @@ impl continuation::Continuation {
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
+                super::app_sources::validate_app_sources(
+                    &record.request.user_message,
+                    |execution, tool| {
+                        positions.get(execution).and_then(|&index| {
+                            invocations[index].mcp_tool(&snapshot.invocations[index], tool)
+                        })
+                    },
+                )
+                .map_err(corrupt)?;
                 if !record.events.is_empty()
                     || record.provider_report.is_some()
                     || record.local_cancellation.is_some()

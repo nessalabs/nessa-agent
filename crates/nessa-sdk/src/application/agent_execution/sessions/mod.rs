@@ -50,7 +50,11 @@
 //! or a tool/review/terminal or settlement save.
 //! A process failure may lose unfinished text. Consequential changes require saved
 //! evidence; snapshots expose only committed state. Adapters choose its encoding.
+//! `app_sources` owns which apps a message may name: MCP tool calls the
+//! session recorded before it, asked at admission and of restored history.
 
+mod app_sources;
+pub use app_sources::UnknownApp;
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
 mod manager;

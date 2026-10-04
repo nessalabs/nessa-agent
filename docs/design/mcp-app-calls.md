@@ -263,10 +263,10 @@ the second.
   read, so a value the domain refuses is `Corrupt`, not a message the agent
   is handed.
 - **Records saved before this (#437).** Under One current contract no older
-  reader is kept: a session record without the two fields is `Corrupt` when
-  its own conversation is restored, and no other conversation is affected.
-  The version marker and a typed "another version" refusal for session
-  record streams (ADR 202 rule 1) are #437's, not this slice's.
+  reader is kept: a message saved without the two fields is a record of
+  another shape, refused as `Corrupt` when the conversation it belongs to is
+  restored. The version marker and a typed "another version" refusal for
+  session record streams (ADR 202 rule 1) are #437's, not this slice's.
 - **When a context is done with.** The SDK gives its caller one fact:
   admission returns only once the turn's `InputAccepted` is saved. The rule
   the coordinator settled on #390 is that a host lets a context go once the
@@ -326,7 +326,7 @@ Admission checks that it was.
 | P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
 | P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
 | P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
-| P5 | a record without `user_app` or `user_app_model_context` | `Corrupt`, for that conversation only; another opens |
+| P5 | a saved message without `user_app` or `user_app_model_context`, as one saved before #390 | `Corrupt`, not read as the person's with nothing given |
 | P6 | an `UnknownApp` failure saved and read back | the same variant |
 | P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
 | B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
@@ -369,8 +369,7 @@ Each row above has a test, named after it:
   admission against saved turns in `sessions/manager.rs`
   (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`), and at
   every entry in `agents/messages.rs`; V1–V7 in
-  `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P4
-  in `snapshot/semantic.rs`, P5 in
-  `crates/nessa-sdk/tests/infrastructure/session_storage/record.rs`, P6 in
+  `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P5
+  in `snapshot/semantic.rs`, P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`.

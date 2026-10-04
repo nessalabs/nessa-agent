@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::PromptText;
+use super::{AppModelContext, MessageSender, PromptText};
 use crate::domain::{
     agent_execution::ExecutionError,
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -195,7 +195,10 @@ impl LinkedFile {
 }
 
 /// What a user said in one turn: text, the images it carries, and the files it
-/// points at, in that order.
+/// points at, in that order; who wrote it (the person, unless
+/// [`Self::sent_by`] says an app did); and what apps gave the model to know
+/// with it ([`Self::with_app_model_context`]), which is not part of what it
+/// says.
 ///
 /// Text is optional because an image or a file alone is a complete message; a
 /// message with none of the three is not one. Images and files each keep the
@@ -210,6 +213,8 @@ pub struct UserMessage {
     text: Option<PromptText>,
     images: Box<[ImageReference]>,
     files: Box<[LinkedFile]>,
+    sender: MessageSender,
+    app_model_context: Box<[AppModelContext]>,
 }
 impl UserMessage {
     /// Most images in one message.
@@ -235,8 +240,13 @@ impl UserMessage {
     /// inside any frame an adapter carries.
     pub const MAX_FILES: usize = 10;
 
+    /// Most apps' contexts one message carries: with [`AppModelContext::MAX_BYTES`]
+    /// each, at most 32 KiB of context goes with one turn.
+    pub const MAX_APP_MODEL_CONTEXTS: usize = 4;
+
     /// Combine optional `text` with `images` and `files`, each in attachment
-    /// order. All three empty is [`ExecutionError::EmptyValue`]; more than
+    /// order: the person's message, carrying no app's context. All three
+    /// empty is [`ExecutionError::EmptyValue`]; more than
     /// [`Self::MAX_IMAGES`] or [`Self::MAX_FILES`] is
     /// [`ExecutionError::TooManyValues`]; more than [`Self::MAX_IMAGE_BYTES`]
     /// in total is [`ExecutionError::ValueTooLong`]. The same image or file may
@@ -272,15 +282,68 @@ impl UserMessage {
             text,
             images: images.into_boxed_slice(),
             files: files.into_boxed_slice(),
+            sender: MessageSender::Person,
+            app_model_context: Box::default(),
         })
     }
-    /// A message of text alone, which cannot fail: the text is already nonblank.
+    /// A message of text alone, the person's, which cannot fail: the text is
+    /// already nonblank.
     pub fn text_only(text: PromptText) -> Self {
         Self {
             text: Some(text),
             images: Box::default(),
             files: Box::default(),
+            sender: MessageSender::Person,
+            app_model_context: Box::default(),
         }
+    }
+    /// This message, written by `sender`. A message is the person's until
+    /// it is said otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use nessa_sdk::domain::agent_execution::executions::ExecutionId;
+    /// use nessa_sdk::domain::agent_execution::prompts::{
+    ///     McpAppSource, MessageSender, PromptText, UserMessage,
+    /// };
+    /// use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId};
+    ///
+    /// let message = UserMessage::text_only(PromptText::new("Plot May")?);
+    /// assert_eq!(message.sender(), &MessageSender::Person);
+    /// let app = McpAppSource::new(
+    ///     ExecutionId::new("turn-1")?,
+    ///     ToolCallId::new("call-1")?,
+    ///     McpTool::new("charts", "plot")?,
+    /// )?;
+    /// let message = message.sent_by(MessageSender::App(app.clone()));
+    /// assert_eq!(message.sender(), &MessageSender::App(app));
+    /// # Ok::<(), nessa_sdk::domain::agent_execution::ExecutionError>(())
+    /// ```
+    #[must_use]
+    pub fn sent_by(self, sender: MessageSender) -> Self {
+        Self { sender, ..self }
+    }
+    /// This message, carrying `contexts` — what apps gave the model to
+    /// know — in the order given, in place of any it carried.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError::TooManyValues`] past [`Self::MAX_APP_MODEL_CONTEXTS`].
+    pub fn with_app_model_context(
+        self,
+        contexts: Vec<AppModelContext>,
+    ) -> Result<Self, ExecutionError> {
+        if contexts.len() > Self::MAX_APP_MODEL_CONTEXTS {
+            return Err(ExecutionError::TooManyValues {
+                field: "user message app contexts",
+                max: Self::MAX_APP_MODEL_CONTEXTS,
+            });
+        }
+        Ok(Self {
+            app_model_context: contexts.into_boxed_slice(),
+            ..self
+        })
     }
     /// The text, when the user wrote any.
     pub fn text(&self) -> Option<&PromptText> {
@@ -298,5 +361,14 @@ impl UserMessage {
     /// at none. Nothing here has been opened.
     pub fn files(&self) -> &[LinkedFile] {
         &self.files
+    }
+    /// Who wrote it: the person, or an app on their behalf.
+    pub fn sender(&self) -> &MessageSender {
+        &self.sender
+    }
+    /// What apps gave the model to know, sent ahead of the message and not
+    /// part of what it says; empty when none did.
+    pub fn app_model_context(&self) -> &[AppModelContext] {
+        &self.app_model_context
     }
 }

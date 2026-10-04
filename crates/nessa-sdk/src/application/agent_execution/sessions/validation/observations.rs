@@ -2,13 +2,14 @@
 use super::{corrupt, validate_observation_context};
 use crate::application::agent_execution::{
     executions::{limits::validate_observation_id, ExecutionEvent, ExecutionUpdate},
-    sessions::{InvocationRecord, ProviderContext, StorageError},
+    sessions::{app_sources, InvocationRecord, ProviderContext, StorageError},
 };
 use crate::domain::agent_execution::{
     permissions::{
         PermissionId, PermissionRequest, PermissionStateView, ReviewDeclineId, ReviewDeclineStage,
     },
     questions::QuestionId,
+    tools::ToolCallId,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -22,6 +23,9 @@ pub(super) struct Observations {
     declines: HashMap<ReviewDeclineId, usize>,
     asked_ids: HashSet<QuestionId>,
     open_questions: HashSet<QuestionId>,
+    // Each MCP tool call's first observation naming its MCP identity, so an
+    // app a later message names is found without scanning the invocation.
+    mcp_tool_calls: HashMap<ToolCallId, usize>,
     identity_bytes: usize,
 }
 pub(super) enum ObservationUndo {
@@ -31,6 +35,7 @@ pub(super) enum ObservationUndo {
     Declined(ReviewDeclineId, Option<usize>),
     Asked(QuestionId),
     Closed(QuestionId),
+    McpToolCall(ToolCallId),
 }
 impl Observations {
     pub(super) fn observe(
@@ -44,7 +49,14 @@ impl Observations {
         let undo = match event.update() {
             ExecutionUpdate::Tool(tool) => {
                 validate_observation_id(tool.id().as_str()).map_err(corrupt)?;
-                ObservationUndo::None
+                match app_sources::mcp_tool_call(event.update()) {
+                    Some((id, _)) if !self.mcp_tool_calls.contains_key(id) => {
+                        self.mcp_tool_calls.insert(id.clone(), index);
+                        self.identity_bytes = self.identity_bytes.saturating_add(id.as_str().len());
+                        ObservationUndo::McpToolCall(id.clone())
+                    }
+                    _ => ObservationUndo::None,
+                }
             }
             ExecutionUpdate::PermissionRequested { id, tool_id, .. } => {
                 validate_observation_id(id.as_str()).map_err(corrupt)?;
@@ -182,7 +194,16 @@ impl Observations {
                 self.identity_bytes += id.as_str().len();
                 self.open_questions.insert(id);
             }
+            ObservationUndo::McpToolCall(id) => {
+                self.mcp_tool_calls.remove(&id);
+                self.identity_bytes -= id.as_str().len();
+            }
         }
+    }
+    /// The event of `record` (the invocation these observations are of) that
+    /// first named `tool_id`'s MCP identity.
+    pub(super) fn mcp_tool_call(&self, tool_id: &ToolCallId) -> Option<usize> {
+        self.mcp_tool_calls.get(tool_id).copied()
     }
     pub(super) fn retained_bytes(&self) -> usize {
         self.identity_bytes
@@ -210,6 +231,11 @@ impl Observations {
                 self.open_questions
                     .capacity()
                     .saturating_mul(size_of::<QuestionId>() + 16),
+            )
+            .saturating_add(
+                self.mcp_tool_calls
+                    .capacity()
+                    .saturating_mul(size_of::<(ToolCallId, usize)>() + 16),
             )
     }
 }

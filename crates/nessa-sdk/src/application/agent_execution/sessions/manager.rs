@@ -1,5 +1,5 @@
 use super::{
-    attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
+    app_sources, attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
     InvocationSchedulingEvent, MessageCommitClock, ProviderContext, QueueHistoryRecord,
     SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
     SessionStorage, SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
@@ -647,6 +647,15 @@ impl SessionManager {
                     "session retained invocation limit reached".into(),
                 ));
             }
+            // Asked of the turns saved so far, under the lock that admits
+            // the next: an app it names was drawn before it.
+            app_sources::validate_against(&request.user_message, |execution| {
+                snapshot
+                    .invocations
+                    .iter()
+                    .find(|record| &record.request.execution_id == execution)
+            })
+            .map_err(AgentError::UnknownApp)?;
             let mut next = snapshot.clone();
             let target_event_offset = scheduling
                 .first()
