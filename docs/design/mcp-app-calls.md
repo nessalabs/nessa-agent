@@ -330,7 +330,15 @@ other (A11); restoration, replay and `validate_saved` take the position it
 returns, and admission saves the offset through it, refusing a target that is
 not a saved turn. Each path still bounds the offset against the target
 history it holds: at most the target's preceding events on restoration,
-exactly its events so far on replay. Restoration cannot tell whether an
+exactly its events so far on replay
+(`a_steering_offset_is_bounded_by_the_target_history_each_path_holds`). A
+replayed injection takes no bound of its own: replay's admission bound is
+exact (restoration's holds for a message restored before it), and a target's
+events only grow while the message is saved, as a failed unit takes back its
+facts last first, the target's later events before the message. The
+saved position is also the provider correlation a history holds, read through
+the same owner (`a_saved_steering_position_needs_a_recorded_provider_context`).
+Restoration cannot tell whether an
 *earlier* turn's tool call was observed before a later message was admitted
 when the two turns overlapped (a recorded limit). Admission checks that it
 was.

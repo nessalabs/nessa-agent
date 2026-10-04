@@ -8,12 +8,17 @@
 //! validation::continuation ──┐
 //! records InputAccepted ─────┼─> saved ──> Option<SteeringPosition>
 //! records Injected ──────────┘                ├─> app_sources::validate_saved
-//!                                             └─> each caller's bound on the target's history
+//!                                             ├─> provider correlation evidence
+//!                                             └─> a bound on the target's history
+//! validation::continuation ──┐
+//! ProviderEvidence ──────────┴─> any_saved ──> provider correlation evidence
 //! ```
 //!
 //! Arrows show who asks. The pair is read from a saved invocation only here,
-//! so restoration and replay refuse the same half-saved pair; each caller
-//! still bounds the offset against the target history it holds.
+//! so restoration and replay refuse the same half-saved pair. Restoration and
+//! replay's `InputAccepted` each still bound the offset against the target
+//! history they hold; an injection keeps admission's bound, as a target's
+//! events only grow (`records::validate_target_prefix`).
 #![deny(missing_docs)]
 
 use super::{InvocationRecord, StorageError};
@@ -48,6 +53,23 @@ impl<'a> SteeringPosition<'a> {
                 "targetless input has a steering offset".into(),
             )),
         }
+    }
+
+    /// Whether any of `invocations` was steered natively into a turn: the
+    /// provider correlation a saved history holds. Every scheduling edge
+    /// names its first edge's target (`InvocationHistory::schedule`), so the
+    /// saved position answers for all of them.
+    ///
+    /// # Errors
+    ///
+    /// `Corrupt` for a half-saved position, as [`Self::saved`].
+    pub(crate) fn any_saved(invocations: &[InvocationRecord]) -> Result<bool, StorageError> {
+        for invocation in invocations {
+            if SteeringPosition::saved(invocation)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The position a message steered into `target` takes when it is

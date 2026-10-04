@@ -611,6 +611,103 @@ fn a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call() {
     );
 }
 
+/// Each path bounds a saved offset by the target history it holds. Replay's
+/// `InputAccepted` holds the target's events so far, and takes exactly their
+/// count: one short or one past it is `Corrupt`. Restoration holds the whole
+/// target, and takes at most its count: one past it is `Corrupt`, and one
+/// short is restored, as the target may have run on after the message.
+#[test]
+fn a_steering_offset_is_bounded_by_the_target_history_each_path_holds() {
+    // The target observed one event before the message, and none after.
+    let log = steered_log(&[], DRAWN, text(), vec![tool_call("plain")], Vec::new());
+    let valid = fold_changes(None, &log).unwrap();
+    for offset in [0, 2] {
+        let mut replayed = log.clone();
+        for change in &mut replayed {
+            if let SessionChange::InputAccepted(record) = change {
+                if record.request.execution_id.as_str() == STEERED {
+                    record.target_event_offset = Some(offset);
+                }
+            }
+        }
+        assert_eq!(
+            fold_changes(None, &replayed).map(drop),
+            Err(StorageError::Corrupt(
+                "steering offset is outside the prior target history".into()
+            )),
+            "replay, offset {offset}"
+        );
+    }
+    let mut restored = valid.clone();
+    invocation_mut(&mut restored, STEERED).target_event_offset = Some(2);
+    assert_eq!(
+        validation::validate(&restored),
+        Err(StorageError::Corrupt(
+            "steering offset is outside the preceding target history".into()
+        )),
+        "restoration, one past"
+    );
+    invocation_mut(&mut restored, STEERED).target_event_offset = Some(0);
+    assert_eq!(
+        validation::validate(&restored),
+        Ok(()),
+        "restoration, one short"
+    );
+}
+
+/// A saved steering position is provider correlation evidence, read through
+/// `SteeringPosition`: a message steered natively into a turn that has no
+/// other provider evidence (an immediate turn still in flight) needs a
+/// recorded provider context, on restoration and on replay alike.
+#[test]
+fn a_saved_steering_position_needs_a_recorded_provider_context() {
+    let mut running = turn(DRAWN, text(), Vec::new());
+    running.events.clear();
+    running.result = None;
+    running.local_outcome = None;
+    let mut steered = running.clone();
+    steered.request.execution_id = ExecutionId::new(STEERED).unwrap();
+    steered.submission = SubmissionMode::Steering;
+    steered.target_event_offset = Some(0);
+    steered.scheduling = vec![InvocationSchedulingEvent {
+        kind: InvocationKind::Steering,
+        target: Some(ExecutionId::new(DRAWN).unwrap()),
+        before: None,
+        stage: InvocationStage::Queued,
+        cause: SchedulingCause::Submitted,
+        actor: Some(ActionContext::new("user", "test", "invoke").unwrap()),
+    }];
+    let mut restored = snapshot(vec![running, steered]);
+    let judged = |restored: &SessionSnapshot| {
+        let mut replayed = vec![SessionChange::Opened {
+            id: restored.id.clone(),
+            provider: restored.provider.clone(),
+            context: restored.provider_context.clone(),
+        }];
+        replayed.extend(
+            restored
+                .invocations
+                .iter()
+                .cloned()
+                .map(|record| SessionChange::InputAccepted(Box::new(record))),
+        );
+        (
+            validation::validate(restored),
+            fold_changes(None, &replayed).map(drop),
+        )
+    };
+    assert_eq!(judged(&restored), (Ok(()), Ok(())), "recorded context");
+    restored.provider_context = ProviderContext::Absent;
+    let refused = Err(StorageError::Corrupt(
+        "provider evidence requires a recorded provider context".into(),
+    ));
+    assert_eq!(
+        judged(&restored),
+        (refused.clone(), refused),
+        "absent context"
+    );
+}
+
 #[test]
 fn a10_a_persons_message_carrying_no_context_looks_nothing_up() {
     assert_eq!(

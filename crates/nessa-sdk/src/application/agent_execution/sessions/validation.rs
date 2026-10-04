@@ -192,13 +192,7 @@ pub(super) fn continuation(
                     )
                 })
             }),
-            snapshot.invocations.iter().any(|invocation| {
-                invocation.target_event_offset.is_some()
-                    || invocation
-                        .scheduling
-                        .iter()
-                        .any(|event| event.target.is_some())
-            }),
+            SteeringPosition::any_saved(&snapshot.invocations)?,
             snapshot
                 .queue_history
                 .iter()

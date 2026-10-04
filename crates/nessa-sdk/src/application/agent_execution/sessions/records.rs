@@ -114,14 +114,20 @@ fn apply_history<T>(
     Ok(result)
 }
 
-/// Admission captures the exact target output prefix. A later injection may
-/// observe more output, but neither fact can borrow evidence from the future.
+/// A steered message names a prior turn that can take steering. At admission
+/// its offset is exactly the target's events so far, so it borrows no output
+/// from the future
+/// (`a_steering_offset_is_bounded_by_the_target_history_each_path_holds`). A
+/// later injection takes no offset bound of its own: the
+/// target's events only grow while the message is saved (a failed unit takes
+/// back its facts last first, the target's later events before the message),
+/// so admission's bound, or restoration's, still holds.
 fn validate_target_prefix(
     snapshot: &SessionSnapshot,
     positions: &HashMap<ExecutionId, usize>,
     histories: &HashMap<ExecutionId, InvocationHistory>,
     steering: Option<SteeringPosition<'_>>,
-    exact: bool,
+    at_admission: bool,
 ) -> Result<(), StorageError> {
     let Some(steering) = steering else {
         return Ok(());
@@ -131,9 +137,7 @@ fn validate_target_prefix(
         .get(target)
         .and_then(|index| snapshot.invocations.get(*index))
         .ok_or_else(|| corrupt("steering target is not a prior invocation"))?;
-    let count = record.events.len();
-    let offset = steering.offset();
-    if (exact && offset != count) || offset > count {
+    if at_admission && steering.offset() != record.events.len() {
         return Err(corrupt(
             "steering offset is outside the prior target history",
         ));
@@ -156,11 +160,14 @@ pub(super) struct ProviderEvidence {
 }
 
 impl ProviderEvidence {
-    fn from_snapshot(snapshot: Option<&SessionSnapshot>) -> Self {
+    /// # Errors
+    ///
+    /// `Corrupt` for a half-saved steering position (`SteeringPosition::saved`).
+    fn from_snapshot(snapshot: Option<&SessionSnapshot>) -> Result<Self, StorageError> {
         let Some(snapshot) = snapshot else {
-            return Self::default();
+            return Ok(Self::default());
         };
-        Self {
+        Ok(Self {
             observations: snapshot
                 .invocations
                 .iter()
@@ -177,15 +184,12 @@ impl ProviderEvidence {
                     )
                 })
             }),
-            correlation: snapshot.invocations.iter().any(|record| {
-                record.target_event_offset.is_some()
-                    || record.scheduling.iter().any(|event| event.target.is_some())
-            }),
+            correlation: SteeringPosition::any_saved(&snapshot.invocations)?,
             selected: snapshot
                 .queue_history
                 .iter()
                 .any(|record| matches!(record.mutation, QueueMutation::Selected { .. })),
-        }
+        })
     }
 
     fn validate(self, context: &ProviderContext) -> Result<(), StorageError> {
@@ -393,8 +397,8 @@ impl continuation::Continuation {
                     return Err(corrupt("new input carries later evidence"));
                 }
                 let mut next_evidence = *provider_evidence;
-                next_evidence.correlation |= record.target_event_offset.is_some()
-                    || record.scheduling.iter().any(|event| event.target.is_some());
+                // New input carries one scheduling edge at most (above).
+                next_evidence.correlation |= steering.is_some();
                 next_evidence.dispatched |= record.scheduling.iter().any(|event| {
                     matches!(
                         event.stage,
@@ -449,9 +453,9 @@ impl continuation::Continuation {
                         .get(execution_id)
                         .and_then(|index| snapshot.invocations.get(*index))
                         .ok_or_else(|| corrupt("semantic fact has no accepted input"))?;
-                    // Bounded by the admitted position: an injection naming
-                    // another target is refused below by
-                    // `InvocationHistory::schedule`.
+                    // The admitted position still holds (see
+                    // `validate_target_prefix`): an injection naming another
+                    // target is refused below by `InvocationHistory::schedule`.
                     validate_target_prefix(
                         snapshot,
                         positions,

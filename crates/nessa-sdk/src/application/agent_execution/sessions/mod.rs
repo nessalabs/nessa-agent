@@ -53,7 +53,8 @@
 //! `app_sources` owns which apps a message may name: MCP tool calls the
 //! session recorded before it, asked at admission and of restored history.
 //! `steering_position` owns where a steered message stands in its target turn,
-//! read once from saved history for restoration, replay and `app_sources`.
+//! read once from saved history for restoration, replay, `app_sources` and
+//! provider correlation evidence.
 
 mod app_sources;
 pub use app_sources::UnknownApp;

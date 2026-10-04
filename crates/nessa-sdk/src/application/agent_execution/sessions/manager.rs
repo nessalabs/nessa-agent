@@ -658,9 +658,13 @@ impl SessionManager {
             })
             .map_err(AgentError::UnknownApp)?;
             let mut next = snapshot.clone();
-            // A steered message's offset is its target's saved event count;
-            // a target not saved has none, and is refused rather than saved
-            // as half a position.
+            // A steered message's offset is its target's saved event count.
+            // A target not saved has none: a defensive refusal of an
+            // invariant, since no `Agent` entry reaches it (a native steer
+            // targets the running turn, saved at its own admission). The SDK
+            // has no internal-error variant, so it is `InvalidInput`, saving
+            // nothing rather than half a position
+            // (`admission_saves_a_steering_target_with_its_offset_or_refuses_it`).
             let target_event_offset = scheduling
                 .first()
                 .and_then(|edge| edge.target.as_ref())
