@@ -5,7 +5,8 @@
 //! owner (create, pending, status, decide) --> Auth AuthorizePairing + PairingStore
 //! activation (approve)  --> owner + PairingStore stage/publish + receivers (pair, current)
 //! cleanup (ended stage) --> PairingStore stage lease + receivers (lookup, fence)
-//! read_status (device status) --> Auth PairingStore + live TLS proof + receivers (current)
+//! read_status (device status) --> Auth PairingStore + live TLS proof + receivers (holding)
+//! recurrence            <-- activation, cleanup (whether a failure will recur)
 //! status                <-- read_status (projection it returns)
 //! ```
 //! Arrows point from a use case to the owner it asks. Auth decides every
@@ -15,6 +16,7 @@ mod cleanup;
 mod owner;
 mod read_status;
 mod receivers;
+pub mod recurrence;
 mod status;
 pub use activation::{ActivationError, Approval, FreshStage};
 pub use cleanup::{CleanupError, SettleCleanup};

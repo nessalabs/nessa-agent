@@ -11,6 +11,7 @@
 //! up the original receipt (design row P48). Auth keeps the first terminal
 //! cause and initiator; this only completes the physical obligation.
 use super::receivers::{PairingReceivers, ReceiverError, ReceiverRequest};
+use super::recurrence::{receiver_error_recurs, store_error_recurs};
 use nessa_auth::{
     application::{
         pairing::{
@@ -32,6 +33,17 @@ pub enum CleanupError {
     Enrollment(PairingStoreError),
     /// The receiver authority refused or failed.
     Receiver(ReceiverError),
+}
+
+impl CleanupError {
+    /// Whether trying the same cleanup again will fail the same way, as the
+    /// one recurrence classifier decides.
+    pub fn recurs(&self) -> bool {
+        match self {
+            Self::Enrollment(error) => store_error_recurs(*error),
+            Self::Receiver(error) => receiver_error_recurs(*error),
+        }
+    }
 }
 
 /// The cleanup use case. It needs no session: cleanup is the system finishing

@@ -1418,7 +1418,8 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
     let (address, stop, listener, connections) = fixture.listener().await;
     drop(store);
     let store = Arc::new(FilePairingState::open(&root, Path::new("state")).unwrap());
-    let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    assert!(store.load_pending().unwrap().is_some());
     assert_eq!(
         tokio::time::timeout(
             WAIT,
@@ -1433,6 +1434,9 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
             terminal: Some(TerminalCause::Expired),
         }
     );
+    // Slice 2b row A16: the invitation has ended, so the attempt can never
+    // claim it; the pending record goes and a new code can be enrolled.
+    assert!(store.load_pending().unwrap().is_none());
     client.shutdown().await;
     stop.send(()).unwrap();
     tokio::time::timeout(WAIT, listener)

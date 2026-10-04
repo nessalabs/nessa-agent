@@ -3529,7 +3529,7 @@
     "PairingActivationStop": {
       "type": "string",
       "enum": ["retryable", "permanent"],
-      "description": "Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again."
+      "description": "Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress, or the owner's session expired, in which case sign in again first); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again."
     },
     "PairingApproveResult": {
       "type": "object",

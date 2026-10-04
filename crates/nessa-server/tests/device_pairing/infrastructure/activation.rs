@@ -60,13 +60,14 @@ use tokio::sync::oneshot;
 /// The real receiver authority behind the port, with switches that lose a
 /// pair's answer after it committed, answer for another credential, revoke the
 /// receiver right after pairing, refuse lookups, or park a pair until released.
-struct Receivers {
+pub(crate) struct Receivers {
     authority: Arc<LocalReceiverAuthority>,
     real: ConversationReceivers,
-    lose_pair_answer: AtomicBool,
+    pub(crate) lose_pair_answer: AtomicBool,
     wrong_credential: AtomicBool,
-    revoke_after_pair: AtomicBool,
+    pub(crate) revoke_after_pair: AtomicBool,
     refuse_lookups: AtomicBool,
+    refuse_fences: AtomicBool,
     not_holding: AtomicBool,
     park: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
     pairs: AtomicUsize,
@@ -80,6 +81,7 @@ impl Receivers {
             wrong_credential: AtomicBool::new(false),
             revoke_after_pair: AtomicBool::new(false),
             refuse_lookups: AtomicBool::new(false),
+            refuse_fences: AtomicBool::new(false),
             not_holding: AtomicBool::new(false),
             park: Mutex::new(None),
             pairs: AtomicUsize::new(0),
@@ -152,7 +154,7 @@ impl PairingReceivers for Receivers {
         receiver: &ResourceId,
         paired_epoch: u64,
     ) -> Result<ReceiverOutcome, ReceiverError> {
-        if self.refuse_lookups.load(Ordering::SeqCst) {
+        if self.refuse_lookups.load(Ordering::SeqCst) || self.refuse_fences.load(Ordering::SeqCst) {
             return Err(ReceiverError::Unavailable);
         }
         self.real.fence(request, receiver, paired_epoch)
@@ -161,7 +163,7 @@ impl PairingReceivers for Receivers {
 
 /// A fixture whose gateway reaches the real receiver authority through the
 /// switchable `Receivers`.
-async fn fixture() -> (Fixture, Arc<Receivers>) {
+pub(crate) async fn fixture() -> (Fixture, Arc<Receivers>) {
     let switches = Arc::new(Mutex::new(None));
     let captured = switches.clone();
     let fixture = Fixture::with_receivers(move |authority| {
@@ -1011,5 +1013,75 @@ async fn terminal_status_ends_the_device_record_and_allows_a_new_enrollment() {
     .unwrap()
     .unwrap();
     assert!(matches!(again, NativePairingStatus::Claimed(_)));
+    claimed.finish(&fixture).await;
+}
+
+/// Rows A9, A13: an Active credential revoked by its owner is fenced by the
+/// next owner read, lookup only, with the revocation's cause kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_active_receiver_is_fenced_by_the_next_read() {
+    let (fixture, receivers) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    let active = approve(&fixture, &claimed).await;
+    let credential = active.credential().unwrap().clone();
+    fixture
+        .registry
+        .revoke_sync(
+            nessa_auth::application::credential_admin::RevokeCredentialRequest {
+                request_id: "revoke-device".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: credential.as_str().into(),
+                revoked_at: 111,
+            },
+        )
+        .unwrap();
+    let revoked = fixture.registry.read_pairing(claimed.id).unwrap();
+    assert!(revoked.cleanup_pending());
+    assert!(transitions(&fixture, &credential).unwrap().active);
+    let read = fixture
+        .gateway
+        .owner_status(&fixture.session, claimed.id)
+        .await
+        .unwrap();
+    assert!(!read.cleanup_pending());
+    assert_eq!(read.terminal(), revoked.terminal());
+    assert_eq!(read.terminal().unwrap().0, TerminalCause::CredentialRevoked);
+    assert!(!transitions(&fixture, &credential).unwrap().active);
+    assert_eq!(receivers.pairs.load(Ordering::SeqCst), 1);
+    claimed.finish(&fixture).await;
+}
+
+/// Rows A13, A15: an expiry whose cleanup remembers the receiver and then
+/// cannot fence it still answers, with the record as cleanup left it; the
+/// next read, once the receiver authority answers, finishes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_answers_with_the_record_as_cleanup_left_it() {
+    let (fixture, receivers) = fixture().await;
+    let claimed = Claimed::new(&fixture, "device").await;
+    receivers.wrong_credential.store(true, Ordering::SeqCst);
+    let staging = approve(&fixture, &claimed).await;
+    receivers.wrong_credential.store(false, Ordering::SeqCst);
+    assert!(staging.receiver_binding().is_none());
+    receivers.refuse_fences.store(true, Ordering::SeqCst);
+    fixture.time.set(staging.expires_at_ms());
+    let read = fixture
+        .gateway
+        .owner_status(&fixture.session, claimed.id)
+        .await
+        .unwrap();
+    assert_eq!(read.terminal().unwrap().0, TerminalCause::Expired);
+    assert!(read.cleanup_pending());
+    assert!(
+        read.receiver_binding().is_some(),
+        "the remembered receiver shows"
+    );
+    assert_eq!(read, fixture.registry.read_pairing(claimed.id).unwrap());
+    receivers.refuse_fences.store(false, Ordering::SeqCst);
+    let settled = fixture
+        .gateway
+        .owner_status(&fixture.session, claimed.id)
+        .await
+        .unwrap();
+    assert!(!settled.cleanup_pending());
     claimed.finish(&fixture).await;
 }

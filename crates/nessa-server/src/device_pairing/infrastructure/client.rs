@@ -196,9 +196,10 @@ impl NativeEnrollmentClient {
     /// the pending record in one publication (design row A10). If that save
     /// fails the pending record stays, and the next status delivers the same
     /// credential again. A credential other than the one already saved is
-    /// refused as a storage conflict. A Terminal status for this enrollment
-    /// removes the device's record, pending or credential, before it is
-    /// returned (design row A14), so the device can enroll again.
+    /// refused as a storage conflict. A Terminal status for this enrollment, or
+    /// an Unclaimed one whose invitation has ended, removes the device's
+    /// record, pending or credential, before it is returned (design rows A14,
+    /// A16), so the device can enroll again.
     pub async fn status(
         &self,
         stream: TcpStream,
@@ -236,11 +237,16 @@ impl NativeEnrollmentClient {
                     .map_err(NativeClientError::Storage)?,
                 // Authenticated end of this enrollment: the record goes, and
                 // the returned status is the trusted end signal (row A14).
-                NativePairingStatus::Terminal { .. } => pending
+                // An attempt left unclaimed by an invitation that has ended
+                // can never claim it either (row A16).
+                NativePairingStatus::Terminal { .. }
+                | NativePairingStatus::Unclaimed {
+                    terminal: Some(_), ..
+                } => pending
                     .end_enrollment(public)
                     .map_err(NativeClientError::Storage)?,
                 NativePairingStatus::Pending(_)
-                | NativePairingStatus::Unclaimed { .. }
+                | NativePairingStatus::Unclaimed { terminal: None, .. }
                 | NativePairingStatus::Claimed(_)
                 | NativePairingStatus::Approved(_)
                 | NativePairingStatus::Staging(_) => {}

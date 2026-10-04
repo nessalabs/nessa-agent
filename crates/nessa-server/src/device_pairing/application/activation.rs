@@ -14,10 +14,10 @@
 use super::cleanup::{CleanupError, SettleCleanup};
 use super::owner::{OwnerError, PairingOwner};
 use super::receivers::{ReceiverError, ReceiverRequest};
+use super::recurrence::{access_error_recurs, receiver_error_recurs, store_error_recurs};
 use nessa_auth::{
     application::{
         pairing::{OwnerDecision, PairingStoreError, StageOwnership},
-        ports::AccessError,
         session::AuthenticatedSession,
     },
     domain::{
@@ -51,46 +51,20 @@ pub enum ActivationError {
 }
 
 impl ActivationError {
-    /// Whether approving again can finish activation: a failure that can clear
-    /// (storage, receiver or worker unavailable, a stage another approval
-    /// holds, a stale revision or admission), as opposed to one that will
-    /// refuse the same way (the receiver no longer holds the pairing, the
-    /// owner lost the grant, a conflicting record), which needs a cancel and a
-    /// new pairing. An ended enrollment's unfinished cleanup is retried by the
-    /// gateway's reconciliation, so it counts as retryable.
+    /// Whether approving again can finish activation, as the one recurrence
+    /// classifier decides: a failure that can clear, including an expired
+    /// owner session (re-authenticate), is retryable; one that refuses the same
+    /// way needs a cancel and a new pairing. An ended enrollment's unfinished
+    /// cleanup follows the same rule as startup's restart policy.
     pub fn retryable(&self) -> bool {
-        match self {
-            Self::Owner(OwnerError::Authorization(error)) => {
-                matches!(error, AccessError::Unavailable | AccessError::StaleRevision)
-            }
-            Self::Owner(OwnerError::Enrollment(error)) => store_error_retryable(*error),
-            Self::Owner(OwnerError::Domain(_)) => false,
-            Self::Receiver(error) => receiver_error_retryable(*error),
-            Self::ReceiverNotCurrent => false,
-            Self::Cleanup(CleanupError::Enrollment(error)) => store_error_retryable(*error),
-            Self::Cleanup(CleanupError::Receiver(error)) => receiver_error_retryable(*error),
+        !match self {
+            Self::Owner(OwnerError::Authorization(error)) => access_error_recurs(*error),
+            Self::Owner(OwnerError::Enrollment(error)) => store_error_recurs(*error),
+            Self::Owner(OwnerError::Domain(_)) => true,
+            Self::Receiver(error) => receiver_error_recurs(*error),
+            Self::ReceiverNotCurrent => true,
+            Self::Cleanup(error) => error.recurs(),
         }
-    }
-}
-fn store_error_retryable(error: PairingStoreError) -> bool {
-    match error {
-        PairingStoreError::StageOccupied
-        | PairingStoreError::WorkerFault(_)
-        | PairingStoreError::StaleRevision
-        | PairingStoreError::Unavailable
-        | PairingStoreError::PrivateState(_) => true,
-        PairingStoreError::GatewayKeyHistoryExists
-        | PairingStoreError::NotFound
-        | PairingStoreError::Domain(_) => false,
-    }
-}
-fn receiver_error_retryable(error: ReceiverError) -> bool {
-    match error {
-        ReceiverError::Unavailable => true,
-        ReceiverError::Conflict
-        | ReceiverError::Missing
-        | ReceiverError::Exhausted
-        | ReceiverError::NotPaired => false,
     }
 }
 

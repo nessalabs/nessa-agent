@@ -218,9 +218,13 @@ impl PairingOwner<'_> {
         .await
         {
             Ok(settled) => Ok(settled),
+            // Cleanup may have got partway (a receiver remembered) before
+            // failing: answer with the record as it now stands (row A15).
             Err(error) => {
                 tracing::warn!(invitation = ?id, ?error, "device pairing cleanup left pending");
-                Ok(record)
+                self.enrollments
+                    .read_pairing(id)
+                    .map_err(OwnerError::Enrollment)
             }
         }
     }
