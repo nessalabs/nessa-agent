@@ -2053,7 +2053,8 @@ owners: current session and grant, receiver binding, owner, epoch.
 ```text
 native listener --> connection (TLS, first envelope)
    Hello/Status   --> enrollment (unchanged)
-   openProduct    --> ProtectedConnection (async framed TLS, same permit)
+   openProduct    --> paired key? --> product pool permit (connection permit returned)
+                  --> ProtectedConnection (async framed TLS)
                   --> product::native (SessionProof = device verifier)
                   --> product socket serve_session --> run_authenticated
                   --> AdmitPassiveRead --> record/catalogue sources
@@ -2081,11 +2082,11 @@ pinned enrollment status does.
 
 | Row | Event or ordering | Result | Test |
 | --- | --- | --- | --- |
-| PR1 | First envelope is `openProduct` on a TLS connection with any client key | The connection becomes a product session on the same permit: challenge, authentication, ready. Enrollment Hello/Status are unchanged | `protected_session_reads_with_the_issued_credential` |
+| PR1 | First envelope is `openProduct` on a TLS connection whose key holds a device credential | The connection moves to the product session pool (row PR10), returns its connection permit, and becomes a product session: challenge, authentication, ready. Enrollment Hello/Status are unchanged | `protected_session_reads_with_the_issued_credential` |
 | PR2 | `openProduct` after Hello | Not a first envelope: refused as Phase and answered `Refused`, as any out-of-order request | `open_product_is_only_a_first_envelope_and_needs_sessions` |
 | PR3 | Credential id of the TLS-proved key's Active credential | Ready; each passive read admitted by `AdmitPassiveRead` with the issued receiver and current epoch; a write method is `forbidden` | `protected_session_reads_with_the_issued_credential` |
 | PR4 | Another device's credential id on this key; the owner's bearer secret; an unknown id | `unauthorized` before ready, then close; no read is possible | `protected_session_refuses_another_devices_credential` |
-| PR5 | Credential revoked before authentication | `unauthorized`; the client asks pinned status again, which reads Terminal | `protected_session_refuses_after_revocation`; harness `b.revoked_reads_terminal_and_purges` |
+| PR5 | Credential revoked before a new connection | `openProduct` is refused (row PR15) before a product permit; a session that reached authentication first is refused `unauthorized`. The client asks pinned status again, which reads Terminal | `protected_session_refuses_after_revocation`; harness `b.revoked_reads_terminal_and_purges` |
 | PR6 | Credential revoked while a session is open | The next read's fresh admission refuses (`unauthorized`), or the periodic current-state check has closed the session; no further page is served | `protected_session_refuses_after_revocation` |
 | PR7 | Request names another receiver or a stale epoch | `wrong_receiver` / `stale_epoch` from admission, before the source; the exact scope still reads | `protected_session_refuses_scope_substitution`; harness `probe.*` |
 | PR8 | An authentication frame carrying another connection's nonce | `unauthorized`: the nonce is per connection. Replayed TLS records cannot complete a new handshake | `protected_session_refuses_replayed_authentication` |
@@ -2094,6 +2095,8 @@ pinned enrollment status does.
 | PR11 | Gateway stop while protected sessions are idle, authenticated or not | The wake endpoint wakes the session's reading task at once (it registered with the endpoint), and the TLS stream refuses every further read and write. The session ends, drains, every permit returns, and the listener's stop completes well inside the handshake deadline | `protected_sessions_have_their_own_pool_and_are_woken_by_shutdown` |
 | PR12 | Client stops reading; or reads normally while the gateway's send waits on a full socket | A non-reading client: the product writer's existing write and record-send deadlines end the session. A reading client: only the writing task writes to the socket, so the reading task never takes its write wakeup; TLS output produced while reading waits for the next write. The parked send completes when the socket drains | existing writer deadline tests; `reading_never_takes_the_writers_wakeup` |
 | PR13 | No product sessions composed | `openProduct` answered `Refused` | `open_product_is_only_a_first_envelope_and_needs_sessions` |
+| PR15 | `openProduct` from a key that holds no active device credential: never paired, or revoked | Answered `Refused` before a product permit is taken, so unpaired peers cannot hold the pool. The check asks the registry's one device binding rule (`DeviceCredentialVerifier::holds_credential`, the rule `verify` applies to a named credential); the session still runs full authentication. A registry that cannot be read refuses too | `unregistered_and_revoked_keys_take_no_product_permit`; `protected_session_refuses_after_revocation` |
+| PR16 | TLS raises a fatal alert while a session reads (a record that fails authentication) | The read ends with an error and the session ends; the alert TLS queued is sent by the connection's one bounded nonblocking flush when it is dropped, before the socket closes, rather than a bare close | `a_fatal_alert_is_sent_before_the_close` |
 | PR14 | The gateway presents a key other than the pinned one | TLS refuses before `openProduct` or any credential is sent: `NativeHandshake` | `another_gateway_key_is_refused_before_any_product_frame` |
 | PC1 | Client start: no issued credential (nothing, or only a pending record) | Refused before any connection or cache open (`notPaired`) | `online_unusable_enrollment_does_not_open_cache` |
 | PC2 | Pinned status reads Active | Its receiver and epoch are the read parameters; the credential id is the evidence | composition `online_*` tests; harness |

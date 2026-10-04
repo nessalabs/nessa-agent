@@ -57,6 +57,10 @@ pub enum NativeConnectionFailure {
     /// `openProduct` arrived while every product session permit is held, or
     /// after shutdown closed product admission.
     ProductCapacity,
+    /// `openProduct` from a key that holds no active device credential.
+    ProductUnregistered,
+    /// Whether the key holds a device credential could not be read.
+    ProductUnverifiable,
 }
 /// Primary failure and independent failure to settle the original charged attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,7 +152,8 @@ impl NativeEnrollmentConnections {
         let permit = lease.clone();
         let gateway = self.gateway.clone();
         let handle = Handle::current();
-        let product = self.sessions.as_ref().map(|_| ProductAdmission {
+        let product = self.sessions.as_ref().map(|sessions| ProductAdmission {
+            sessions: sessions.clone(),
             capacity: self.product_capacity.clone(),
             wake: self.product_wake.clone(),
             connections: self.wake.clone(),
@@ -289,6 +294,7 @@ fn endpoint_for_product(lease: &ConnectionPermit) -> Arc<WakeEndpoint> {
 /// Admission to the product session pool, taken by the blocking worker when
 /// the first envelope is `openProduct`.
 struct ProductAdmission {
+    sessions: Arc<dyn ProtectedSessions>,
     capacity: Arc<Semaphore>,
     wake: Arc<Mutex<WakeEndpoints>>,
     connections: Arc<Mutex<WakeEndpoints>>,
@@ -633,7 +639,9 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         | NativeConnectionFailure::Phase
         | NativeConnectionFailure::Wire(_)
         | NativeConnectionFailure::ProductUnavailable
-        | NativeConnectionFailure::ProductCapacity => true,
+        | NativeConnectionFailure::ProductCapacity
+        | NativeConnectionFailure::ProductUnregistered
+        | NativeConnectionFailure::ProductUnverifiable => true,
         NativeConnectionFailure::Capacity
         | NativeConnectionFailure::Crypto(_)
         | NativeConnectionFailure::Io(_)
@@ -665,6 +673,12 @@ fn exchange<R: RngCore + CryptoRng>(
     let public = match first {
         NativePairingRequest::OpenProduct => {
             let product = product.ok_or(NativeConnectionFailure::ProductUnavailable)?;
+            // Only a paired device's key may take a product permit (row PR15).
+            match product.sessions.admits(channel.transport().device_proof()) {
+                Ok(true) => {}
+                Ok(false) => return Err(NativeConnectionFailure::ProductUnregistered.into()),
+                Err(_) => return Err(NativeConnectionFailure::ProductUnverifiable.into()),
+            }
             return product.admit().map(Exchanged::ProductSelected);
         }
         NativePairingRequest::Status(public) => {

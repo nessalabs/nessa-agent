@@ -17,7 +17,7 @@ use axum::Error;
 use futures_util::{Sink, Stream};
 use nessa_auth::application::{
     pairing::DeviceConnectionProof,
-    ports::{CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential},
+    ports::{AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential},
 };
 use nessa_auth::domain::AudienceId;
 use std::{
@@ -39,6 +39,14 @@ pub trait DeviceCredentials: Send + Sync {
         evidence: &'a CredentialEvidence,
         audience: &'a AudienceId,
     ) -> PortFuture<'a, VerifiedCredential>;
+    /// Whether the key in `proof` holds any active device credential for
+    /// `audience`; the same binding rule `verify` applies, asked without a
+    /// named credential.
+    fn holds_credential(
+        &self,
+        proof: &DeviceConnectionProof,
+        audience: &AudienceId,
+    ) -> Result<bool, AccessError>;
 }
 
 /// Product sessions for protected native connections, composed once.
@@ -57,6 +65,9 @@ impl NativeSessions {
     }
 }
 impl ProtectedSessions for NativeSessions {
+    fn admits(&self, proof: &DeviceConnectionProof) -> Result<bool, AccessError> {
+        self.proof.0.holds_credential(proof, &self.state.audience)
+    }
     fn serve(&self, connection: ProtectedConnection) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         let state = self.state.clone();
         let proof = self.proof.clone();

@@ -34,8 +34,8 @@ use nessa_auth::{
     application::{
         pairing::{DeviceConnectionProof, PairingWorkerFault},
         ports::{
-            Clock, CredentialEvidence, CredentialVerifier, PolicyEvaluator, PortFuture,
-            VerifiedCredential,
+            AccessError, Clock, CredentialEvidence, CredentialVerifier, PolicyEvaluator,
+            PortFuture, VerifiedCredential,
         },
     },
     domain::{AudienceId, Resource},
@@ -204,6 +204,13 @@ impl DeviceCredentials for RegistryDevices {
                 .verify(evidence, audience)
                 .await
         })
+    }
+    fn holds_credential(
+        &self,
+        proof: &DeviceConnectionProof,
+        audience: &AudienceId,
+    ) -> Result<bool, AccessError> {
+        self.0.device_verifier(proof).holds_credential(audience)
     }
 }
 

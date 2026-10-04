@@ -15,8 +15,11 @@ use super::connection::DeadlineStream;
 use super::frames::{encode_frame, FrameReader};
 use crate::product::generated::MAX_RECORD_RESPONSE_BYTES;
 use crate::protocol::MAX_PAYLOAD_BYTES;
-use futures_util::{Sink, Stream};
-use nessa_auth::{adapters::pairing::NativeTransport, application::pairing::DeviceConnectionProof};
+use futures_util::{task::noop_waker_ref, Sink, Stream};
+use nessa_auth::{
+    adapters::pairing::NativeTransport,
+    application::{pairing::DeviceConnectionProof, ports::AccessError},
+};
 use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result as IoResult, Write},
@@ -40,8 +43,16 @@ const SOCKET_READ_BYTES: usize = 16 * 1024;
 
 /// The composed product side of protected native connections.
 pub trait ProtectedSessions: Send + Sync {
-    /// Serve one connection until its session ends. The connection's permit is
-    /// held by the caller for the whole of the returned future.
+    /// Whether a connection whose TLS handshake proved `proof` may take a
+    /// product session permit: its key holds an active device credential for
+    /// this gateway. Asked before the permit is taken, so peers that are not
+    /// paired devices cannot hold the pool; the session still authenticates
+    /// in full (design row PR15).
+    fn admits(&self, proof: &DeviceConnectionProof) -> Result<bool, AccessError>;
+    /// Serve one connection until its session ends. The connection has moved
+    /// to the product pool and returned its connection permit; its product
+    /// session permit is held by the caller for the whole of the returned
+    /// future (design row PR10).
     fn serve(&self, connection: ProtectedConnection) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
@@ -53,12 +64,15 @@ pub trait ProtectedSessions: Send + Sync {
 /// refuses every further read and write (`DeadlineStream`), before or after
 /// authentication (`protected_sessions_have_their_own_pool_and_are_woken_by_shutdown`).
 ///
-/// The writing task alone writes to the socket. Ciphertext TLS produces while
-/// reading (an alert, a key-update reply) waits in the buffer for the next
-/// write, because a socket keeps one waker per direction and a reader that
-/// polled the write side would take the writer's
-/// (`reading_never_takes_the_writers_wakeup`).
-pub struct ProtectedConnection<S = TcpStream> {
+/// While the session runs, the writing task alone writes to the socket.
+/// Ciphertext TLS produces while reading (an alert, a key-update reply) waits
+/// in the buffer for the next write, because a socket keeps one waker per
+/// direction and a reader that polled the write side would take the writer's
+/// (`reading_never_takes_the_writers_wakeup`). When the connection is dropped,
+/// whatever is still buffered gets one nonblocking attempt to reach the
+/// socket, so a fatal alert TLS raised while reading is sent rather than
+/// replaced by a bare close (`a_fatal_alert_is_sent_before_the_close`).
+pub struct ProtectedConnection<S: AsyncRead + AsyncWrite + Unpin = TcpStream> {
     transport: NativeTransport<DeadlineStream>,
     socket: S,
     frames: FrameReader,
@@ -158,6 +172,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ProtectedConnection<S> {
         }
         context.waker().wake_by_ref();
         Poll::Pending
+    }
+}
+impl<S: AsyncRead + AsyncWrite + Unpin> Drop for ProtectedConnection<S> {
+    /// One bounded flush: nonblocking writes until the buffer is empty or the
+    /// socket would block. Nothing waits; the session that owned the
+    /// connection has already ended.
+    fn drop(&mut self) {
+        let mut context = Context::from_waker(noop_waker_ref());
+        let _ = self.poll_send(&mut context);
     }
 }
 impl<S: AsyncRead + AsyncWrite + Unpin> Stream for ProtectedConnection<S> {

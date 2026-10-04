@@ -1,7 +1,8 @@
 //! Native enrollment over TLS and PAKE: the gateway listener and runtime, the
 //! device client, framing, and the bounded blocking workers they run on. A
 //! connection whose first envelope is `openProduct` becomes a protected product
-//! session on the same permit.
+//! session, moving to the product session pool and returning its connection
+//! permit.
 //!
 //! ```text
 //! listener --> connection --> runtime --> application (owner, read_status) --> Auth

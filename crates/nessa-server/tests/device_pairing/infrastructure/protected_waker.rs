@@ -8,13 +8,14 @@ use super::*;
 use crate::app::dependencies::RuntimeDependencies;
 use futures_util::{SinkExt, StreamExt};
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, OsEntropy};
+use std::task::{Context, Poll};
 use std::{
     io::{Read, Write},
     net::TcpListener,
     sync::mpsc,
     time::Duration,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
 const RESPONSE: usize = 100_000;
 
@@ -111,4 +112,104 @@ async fn reading_never_takes_the_writers_wakeup() {
     assert!(written.unwrap().is_ok());
     assert_eq!(peer.join().unwrap(), RESPONSE);
     reader.abort();
+}
+
+/// A socket double: it delivers `incoming` and records every byte written.
+struct Recorder {
+    incoming: Vec<u8>,
+    written: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+impl tokio::io::AsyncRead for Recorder {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let count = buffer.remaining().min(this.incoming.len());
+        buffer.put_slice(&this.incoming[..count]);
+        this.incoming.drain(..count);
+        if count == 0 {
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+impl tokio::io::AsyncWrite for Recorder {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.written.lock().unwrap().extend_from_slice(bytes);
+        Poll::Ready(Ok(bytes.len()))
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// Review round 2, L2: a record that fails TLS authentication ends the read
+/// with an error and TLS queues a fatal alert. No write follows, but dropping
+/// the connection sends the alert before the socket closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fatal_alert_is_sent_before_the_close() {
+    let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = gateway.public_spki();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = std::thread::spawn(move || {
+        let socket = std::net::TcpStream::connect(address).unwrap();
+        let device = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        NativeTransport::connect(socket, &device, GatewayTrust::Pinned(pin)).map(drop)
+    });
+    let (accepted, peer_address) = listener.accept().unwrap();
+    let mut transport = tokio::task::spawn_blocking(move || {
+        let (stream, _) = DeadlineStream::new(
+            accepted,
+            RuntimeDependencies::default().clock,
+            WakeEndpoint::new(peer_address),
+        )
+        .unwrap();
+        stream.blocking().unwrap();
+        NativeTransport::accept(stream, &gateway).unwrap()
+    })
+    .await
+    .unwrap();
+    peer.join().unwrap().unwrap();
+    let _socket = transport.stream_mut().take_socket().unwrap();
+    // An application-data record whose contents cannot be authenticated.
+    let mut forged = vec![0x17, 0x03, 0x03, 0x00, 0x20];
+    forged.extend_from_slice(&[0x5a; 0x20]);
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut connection = ProtectedConnection::over(
+        transport,
+        Recorder {
+            incoming: forged,
+            written: written.clone(),
+        },
+    );
+    let read = connection.next().await;
+    assert!(
+        matches!(read, Some(Err(_))),
+        "the forged record fails the read"
+    );
+    assert!(written.lock().unwrap().is_empty(), "reading writes nothing");
+    drop(connection);
+    let sent = written.lock().unwrap().clone();
+    assert!(
+        !sent.is_empty(),
+        "the queued fatal alert reaches the socket"
+    );
+    // An encrypted TLS 1.3 alert travels as an application-data record.
+    assert_eq!(&sent[..3], &[0x17, 0x03, 0x03]);
 }

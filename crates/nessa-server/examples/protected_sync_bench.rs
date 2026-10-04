@@ -423,18 +423,18 @@ fn probe(
     let (pin, credential, epoch) = a.saved();
     let address = gateway.native;
     let identity = || a.identity();
-    // Another key presenting A's credential id.
-    let mut stranger = Probe::open(
+    // Another key, holding no device credential, is refused at `openProduct`
+    // before it can hold a product permit or present A's credential id.
+    let stranger = Probe::open(
         address,
         NativeIdentity::generate(&mut OsEntropy).unwrap(),
         pin,
     );
-    let nonce = stranger.nonce.clone();
-    let wrong_key = stranger.authenticate(&credential, &nonce);
+    let wrong_key = stranger.first.clone();
     checks.check(
         "probe.wrong_key_refused",
-        code(&wrong_key) == "unauthorized",
-        wrong_key.clone().unwrap_or_default(),
+        wrong_key["kind"] == "refused",
+        wrong_key.clone(),
     );
     // A recorded authentication replayed on another connection.
     let first = Probe::open(address, identity(), pin);
@@ -481,7 +481,7 @@ fn probe(
     let after = std::fs::read(&a.cache).unwrap_or_default();
     checks.check("probe.cache_untouched", before == after, Value::Null);
     let _ = b;
-    json!({"wrongKey": code(&wrong_key), "replayed": code(&replayed),
+    json!({"wrongKey": wrong_key["kind"], "replayed": code(&replayed),
         "otherReceiver": code(&other), "staleEpoch": code(&stale)})
 }
 fn code(response: &Option<Value>) -> String {
@@ -957,6 +957,8 @@ struct Probe {
     frames: FrameReader,
     next: u64,
     nonce: String,
+    /// The gateway's first reply: the challenge, or a refused envelope.
+    first: Value,
 }
 impl Probe {
     fn open(address: SocketAddr, identity: NativeIdentity, pin: [u8; 44]) -> Self {
@@ -973,8 +975,10 @@ impl Probe {
             frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
             next: 0,
             nonce: String::new(),
+            first: Value::Null,
         };
         let challenge = probe.value().unwrap_or_default();
+        probe.first = challenge.clone();
         probe.nonce = challenge["payload"]["nonce"]
             .as_str()
             .unwrap_or_default()

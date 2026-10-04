@@ -14,7 +14,9 @@ use nessa_auth::{
     application::{
         credential_admin::RevokeCredentialRequest,
         pairing::{ClientPendingStore, DeviceConnectionProof, PairingStore, PrivateKeyMaterial},
-        ports::{CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential},
+        ports::{
+            AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential,
+        },
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
@@ -65,6 +67,13 @@ impl DeviceCredentials for Devices {
                 .verify(evidence, audience)
                 .await
         })
+    }
+    fn holds_credential(
+        &self,
+        proof: &DeviceConnectionProof,
+        audience: &AudienceId,
+    ) -> Result<bool, AccessError> {
+        self.0.device_verifier(proof).holds_credential(audience)
     }
 }
 
@@ -338,8 +347,8 @@ async fn protected_session_refuses_another_devices_credential() {
 }
 
 /// Rows PR5, PR6, A9: revoking the credential refuses the open session's next
-/// read and every later authentication; the device's pinned status reads
-/// Terminal.
+/// read, and a new connection with its key is refused at `openProduct`; the
+/// device's pinned status reads Terminal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn protected_session_refuses_after_revocation() {
     let fixture = Fixture::new().await;
@@ -364,9 +373,10 @@ async fn protected_session_refuses_after_revocation() {
             })
             .unwrap();
         let after = probe.catalogue_head(&receiver, epoch);
-        let mut fresh = Probe::open(address, &saved);
-        let nonce = fresh.nonce.clone();
-        let again = fresh.authenticate(&credential, &nonce).unwrap();
+        // A new connection with the revoked key gets no product session at
+        // all: `openProduct` is refused before a permit (row PR15).
+        let (key, pin) = device_key(&saved);
+        let again = open_product(address, NativeIdentity::restore(key).unwrap(), pin);
         (before, after, again)
     })
     .await;
@@ -377,7 +387,10 @@ async fn protected_session_refuses_after_revocation() {
         assert_eq!(after["ok"], false, "{after}");
         assert_eq!(code(&after), "unauthorized");
     }
-    assert_eq!(code(&again), "unauthorized");
+    assert!(
+        matches!(again, Some(NativePairingReply::Refused)),
+        "{again:?}"
+    );
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
     fixture.gateway.shutdown().await;
@@ -622,5 +635,94 @@ async fn protected_sessions_have_their_own_pool_and_are_woken_by_shutdown() {
     assert_eq!(connections.product_wake_report().unwrap().iter().count(), 8);
     let closed = blocking(move || held.into_iter().all(|mut probe| probe.value().is_none())).await;
     assert!(closed, "every held session was closed by the wake");
+    fixture.gateway.shutdown().await;
+}
+
+/// `openProduct` on a TLS connection with `identity`'s key: the gateway's
+/// first reply, or `None` once it closed. A product session's first reply is
+/// its challenge, which is not an enrollment envelope.
+fn open_product(
+    address: SocketAddr,
+    identity: NativeIdentity,
+    pin: [u8; 44],
+) -> Option<NativePairingReply> {
+    let socket = TcpStream::connect(address).unwrap();
+    socket.set_read_timeout(Some(WAIT)).unwrap();
+    let transport = NativeTransport::connect(socket, &identity, GatewayTrust::Pinned(pin)).unwrap();
+    let mut channel = EnrollmentChannel::new(transport);
+    channel
+        .send_envelope(&encode_request(&NativePairingRequest::OpenProduct).unwrap())
+        .unwrap();
+    decode_reply(&channel.receive_envelope().ok()?).ok()
+}
+
+/// Row PR15 (review round 2): only a key holding an active device credential
+/// may take a product permit. Keys that are not paired, and a revoked one, are
+/// answered `Refused` and hold nothing: after more refusals than the pool has
+/// permits, the paired device still opens all eight sessions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unregistered_and_revoked_keys_take_no_product_permit() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, connections) =
+        fixture.listener_serving(Some(sessions(&fixture))).await;
+    let paired = pair(&fixture, address, "paired").await;
+    let revoked = pair(&fixture, address, "revoked").await;
+    fixture
+        .registry
+        .revoke_sync(RevokeCredentialRequest {
+            request_id: "revoke-device".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: revoked.credential.clone(),
+            revoked_at: 111,
+        })
+        .unwrap();
+    let pin = fixture.gateway.identity().public_spki();
+    let credential = paired.credential.clone();
+    let saved = paired.store.clone();
+    let revoked_store = revoked.store.clone();
+    let (strangers, revoked_reply, held) = blocking(move || {
+        let strangers = (0..10)
+            .map(|_| {
+                open_product(
+                    address,
+                    NativeIdentity::generate(&mut OsEntropy).unwrap(),
+                    pin,
+                )
+            })
+            .collect::<Vec<_>>();
+        let (key, pin) = device_key(&revoked_store);
+        let revoked_reply = open_product(address, NativeIdentity::restore(key).unwrap(), pin);
+        let held = (0..8)
+            .map(|_| {
+                let mut probe = Probe::open(address, &saved);
+                let nonce = probe.nonce.clone();
+                assert_eq!(probe.authenticate(&credential, &nonce).unwrap()["ok"], true);
+                probe
+            })
+            .collect::<Vec<_>>();
+        (strangers, revoked_reply, held)
+    })
+    .await;
+    assert!(
+        strangers
+            .iter()
+            .all(|reply| matches!(reply, Some(NativePairingReply::Refused))),
+        "{strangers:?}"
+    );
+    assert!(
+        matches!(revoked_reply, Some(NativePairingReply::Refused)),
+        "{revoked_reply:?}"
+    );
+    assert_eq!(held.len(), 8, "the paired device holds the whole pool");
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(WAIT, connections.shutdown())
+        .await
+        .unwrap();
+    drop(held);
     fixture.gateway.shutdown().await;
 }
