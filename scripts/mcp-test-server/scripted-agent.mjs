@@ -165,7 +165,7 @@ const handlers = {
     const twice = names.findIndex((name, index) => names.indexOf(name) !== index)
     if (twice !== -1)
       throw new Error(
-        names[twice] === undefined
+        !names[twice]
           ? "two MCP servers with no name"
           : `two MCP servers named ${names[twice]}`,
       )

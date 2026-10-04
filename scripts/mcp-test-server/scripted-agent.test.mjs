@@ -424,10 +424,12 @@ test("a cancel while the call is in flight ends the turn cancelled, and nothing 
     mcpServers: [slow.server],
   })
   const { sessionId } = opened.result
+  const asked = Date.now()
   const turn = agent.request("session/prompt", { sessionId, prompt: [] })
-  await sleep(300)
   agent.notify("session/cancel", { sessionId })
   const answered = await turn
+  // Answered once the stand-in's answer came, not at the cancel.
+  assert.ok(Date.now() - asked >= 1400, "answered before the call settled")
   assert.deepEqual(answered.result, { stopReason: "cancelled" })
   assert.equal(answered.notes.length, 0)
   // The session goes on: a cancel with nothing in flight changes nothing.
@@ -452,10 +454,12 @@ test("a cancel while the call is in flight ends the turn cancelled even when the
   const { sessionId } = (
     await agent.request("session/new", { cwd: here, mcpServers: [refusing.server] })
   ).result
+  const asked = Date.now()
   const turn = agent.request("session/prompt", { sessionId, prompt: [] })
-  await sleep(300)
   agent.notify("session/cancel", { sessionId })
   const answered = await turn
+  // Answered once the stand-in's refusal came, not at the cancel.
+  assert.ok(Date.now() - asked >= 1400, "answered before the call settled")
   assert.equal(answered.error, undefined, answered.error?.message)
   assert.deepEqual(answered.result, { stopReason: "cancelled" })
   assert.equal(answered.notes.length, 0)
@@ -473,10 +477,12 @@ test("a cancel while the call is in flight ends the turn cancelled even when the
     await agent.request("session/new", { cwd: here, mcpServers: [silent.server] })
   ).result
   // The request's own 20 s outlasts the call's 10 s deadline.
+  const asked = Date.now()
   const turn = agent.request("session/prompt", { sessionId, prompt: [] })
-  await sleep(300)
   agent.notify("session/cancel", { sessionId })
   const answered = await turn
+  // Answered once the call's 10 s deadline passed, not at the cancel.
+  assert.ok(Date.now() - asked >= 9500, "answered before the call settled")
   assert.equal(answered.error, undefined, answered.error?.message)
   assert.deepEqual(answered.result, { stopReason: "cancelled" })
   assert.equal(answered.notes.length, 0)
@@ -499,10 +505,12 @@ test("a cancel while the call is in flight ends the turn cancelled even when the
   const { sessionId } = (
     await agent.request("session/new", { cwd: here, mcpServers: [exiting.server] })
   ).result
+  const asked = Date.now()
   const turn = agent.request("session/prompt", { sessionId, prompt: [] })
-  await sleep(300)
   agent.notify("session/cancel", { sessionId })
   const answered = await turn
+  // Answered once the stand-in exited, not at the cancel.
+  assert.ok(Date.now() - asked >= 1400, "answered before the call settled")
   assert.equal(answered.error, undefined, answered.error?.message)
   assert.deepEqual(answered.result, { stopReason: "cancelled" })
   assert.equal(answered.notes.length, 0)
@@ -528,7 +536,6 @@ test("a cancel for another session leaves the prompt in flight alone", async (t)
   const idle = (await agent.request("session/new", { cwd: here, mcpServers: [mcptest] }))
     .result.sessionId
   const turn = agent.request("session/prompt", { sessionId: busy, prompt: [] })
-  await sleep(300)
   agent.notify("session/cancel", { sessionId: idle })
   // Not cancelled: the call's own failure is the turn's answer.
   assert.match((await turn).error.message, /refused tools\/call/)
@@ -572,7 +579,6 @@ test("a second prompt while one is in flight is refused", async (t) => {
     await agent.request("session/new", { cwd: here, mcpServers: [slow.server] })
   ).result
   const first = agent.request("session/prompt", { sessionId, prompt: [] })
-  await sleep(300)
   const second = await agent.request("session/prompt", { sessionId, prompt: [] })
   assert.match(second.error.message, /already in a prompt/)
   // The stand-in answers {}, which the recorded call cannot stand for.
@@ -634,6 +640,12 @@ test("two MCP servers with no name are refused as alike", async () => {
     mcpServers: [nameless, { ...nameless, command: join(here, "no-such-command") }],
   })
   assert.equal(opened.error.message, "two MCP servers with no name")
+  const blank = { ...mcptest, name: "" }
+  const blanks = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [blank, { ...blank, command: join(here, "no-such-command") }],
+  })
+  assert.equal(blanks.error.message, "two MCP servers with no name")
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })
