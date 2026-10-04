@@ -176,6 +176,20 @@ saved conversations restorable. An open conversation keeps its harness's set
 until its provider session ends. There are no automatically discovered MCP
 servers.
 
+An `mcpServers` entry may also carry `"enabled": false`, which keeps it
+configured but gives it to no new conversation, and `"env": {"NAME": "value"}`,
+variables it is given over the gateway's own (its value wins;
+`NESSA_MCP_SESSION` is reserved). An entry without them is on with no
+variables of its own. A caller holding `credential.manage` can list and change
+the servers on a running gateway with `mcpServers.list`, `mcpServers.save` and
+`mcpServers.remove`: each change rewrites `config.json` under
+`config.json.lock`, is audited under `conversations/audit/mcp-servers`, and
+reaches the next conversation without a restart. Variable values never leave
+the gateway; a list names them. `nessa` is Nessa's own server and is listed as
+managed, never changed. The
+[MCP connections design](../design/mcp-connections.md#managing-the-stored-servers)
+has the order, the error codes and the state table.
+
 Native Bash, TaskOutput and TaskStop are disabled so commands use the MCP shell.
 The pinned Claude SDK canonicalizes the historical BashOutput and KillShell names
 to TaskOutput and TaskStop before applying permission rules.

@@ -2,11 +2,12 @@
 //! session (ADR 344), composed before any agent is built.
 //!
 //! ```text
-//! AgentsConfig.mcpServers ──▶ McpServers: the live set (each started by the gateway)
+//! AgentsConfig.mcpServers ──LaunchSettings::launch_set──▶ McpServers: the live set (each started by the gateway)
 //!                                 │ configured(), read at each provider open and each hello
 //!                                 ├──▶ StandIns: <this executable> mcp-relay <socket> <name> <digest>
 //!                                 │             ──▶ every agent's session/new (AcpConfig.mcp_servers)
-//!                                 └──▶ Relay: admits a stand-in against the digests now
+//!                                 ├──▶ Relay: admits a stand-in against the digests now
+//!                                 └◀── McpServerSettings::edit replaces it after each publish (`settings`)
 //! ```
 //!
 //! Arrows are what each is built from. On Unix the relay is composed even
@@ -15,17 +16,21 @@
 //! logged: an agent is never handed a server directly instead, because then
 //! its calls and an app's would reach different sessions.
 use super::agent::{agent_search_path, AgentsConfig};
+use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
 use crate::core::RunError;
 use crate::mcp_servers::{
+    application::McpServerSettings,
     domain::{configuration_digest, relay_arguments},
     infrastructure::{
-        bind, BoundRelay, ConversationGrants, OsTokens, Relay, ResourceTicketStore, TicketEvent,
+        bind, BoundRelay, ConfigCheck, ConfigJsonStore, ConversationGrants, DurableMcpServerAudit,
+        LaunchSettings, LiveMcpServers, OsConfigFiles, OsTokens, Relay, ResourceTicketStore,
+        TicketEvent,
     },
 };
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
-    mcp::{McpServerLaunch, McpServers},
+    mcp::McpServers,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -46,6 +51,9 @@ pub(super) const RESOURCE_TICKET_SWEEP: Duration = Duration::from_secs(5);
 /// is listening and stop once conversations have, and the relay to serve.
 pub(super) struct McpComposition {
     pub(super) servers: McpServers,
+    /// How a stored server is launched, and the managed one: what each
+    /// change's live set is built with ([`settings`]).
+    pub(super) launches: LaunchSettings,
     pub(super) relay: Arc<Relay>,
     pub(super) listener: BoundRelay,
     /// The MCP App resources held behind tickets: the conversation service
@@ -189,15 +197,11 @@ pub(super) async fn compose(
     environment: BTreeMap<OsString, OsString>,
 ) -> Result<Option<McpComposition>, RunError> {
     let configured = std::mem::take(&mut agents.mcp_servers);
-    let launches = configured
-        .into_iter()
-        .map(|server| McpServerLaunch {
-            server,
-            working_directory: agents.workspace.clone(),
-            environment: environment.clone(),
-        })
-        .collect();
-    let servers = McpServers::new(launches, Arc::new(RuntimeClock::new()))
+    let launches = LaunchSettings::new(&configured, agents.workspace.clone(), environment);
+    let launch_set = launches
+        .launch_set(&configured)
+        .map_err(|problem| RunError::Agent(problem.to_string()))?;
+    let servers = McpServers::new(launch_set, Arc::new(RuntimeClock::new()))
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let Some(stand_ins) = StandIns::new(servers.clone(), gateway, socket) else {
         tracing::error!(socket = %socket.display(), gateway = %gateway.display(), "MCP servers are off this run: the gateway's or the relay socket's path is not UTF-8");
@@ -217,6 +221,7 @@ pub(super) async fn compose(
     Ok(Some(McpComposition {
         relay: Arc::new(Relay::new(servers.clone(), grants)),
         servers,
+        launches,
         listener,
         resource_tickets: Arc::new(ResourceTicketStore::new(
             Arc::new(super::local_auth::SystemClock),
@@ -226,6 +231,52 @@ pub(super) async fn compose(
         ticket_events: Some(ticket_events),
         ticket_recorder: None,
     }))
+}
+
+/// What manages the stored servers of the namespace whose `config.json` is
+/// at `config` (`mcpServers.list`, `.save`, `.remove`): the file and its lock,
+/// checked by the runtime configuration's own parse and bound; the audit in
+/// `audit` (`<namespace>/conversations/audit/mcp-servers`); and `mcp`'s live
+/// set, replaced after each publish. A file with no `agents` block gains one
+/// from `agents`' catalog and workspace on its first write.
+///
+/// # Errors
+///
+/// [`RunError::Agent`] when the audit's directory cannot be created.
+pub(super) fn settings(
+    mcp: &McpComposition,
+    agents: &AgentsConfig,
+    config: PathBuf,
+    audit: PathBuf,
+) -> Result<McpServerSettings, RunError> {
+    let mut block = serde_json::Map::new();
+    block.insert(
+        "catalog".into(),
+        serde_json::Value::String(agents.catalog.to_string_lossy().into_owned()),
+    );
+    block.insert(
+        "workspace".into(),
+        serde_json::Value::String(agents.workspace.to_string_lossy().into_owned()),
+    );
+    let store = ConfigJsonStore::new(
+        Arc::new(OsConfigFiles::new(config)),
+        ConfigCheck {
+            limit: MAX_CONFIG_BYTES,
+            parses: Box::new(|bytes| RuntimeConfig::parse(bytes).is_ok()),
+        },
+        block,
+        Arc::new(RuntimeClock::new()),
+    );
+    let audit = DurableMcpServerAudit::new(audit, Arc::new(super::local_auth::SystemClock))
+        .map_err(|_| RunError::Agent("the MCP server audit could not be opened".into()))?;
+    Ok(McpServerSettings::new(
+        Arc::new(store),
+        Arc::new(audit),
+        Arc::new(LiveMcpServers::new(
+            mcp.servers.clone(),
+            mcp.launches.clone(),
+        )),
+    ))
 }
 
 #[cfg(all(test, unix))]

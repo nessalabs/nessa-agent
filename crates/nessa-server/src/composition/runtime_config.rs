@@ -5,6 +5,10 @@ use nessa_auth::adapters::local::LocalStoreConfig;
 use serde::Deserialize;
 use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
 
+/// The most bytes `config.json` may have: what startup reads and what a
+/// change to the stored MCP servers may write (`mcp_servers::settings`).
+pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
+
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct RuntimeConfig {
@@ -43,10 +47,11 @@ impl RuntimeConfig {
     /// Optional config.json beside auth/, scoped to the same stage and instance.
     /// Invalid existing files fail startup; only a missing file selects defaults.
     pub fn load(auth_directory: &Path) -> Result<Self, RunError> {
-        let path = auth_directory
-            .parent()
-            .ok_or_else(|| invalid("invalid data directory"))?
-            .join("config.json");
+        let path = config_path(
+            auth_directory
+                .parent()
+                .ok_or_else(|| invalid("invalid data directory"))?,
+        );
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => {}
             Ok(_) => return Err(refused("config.json must be a regular file")),
@@ -58,14 +63,16 @@ impl RuntimeConfig {
         let file = nessa_local_storage::open(&path, nessa_local_storage::OpenMode::Read)
             .map_err(invalid)?;
         let mut bytes = Vec::new();
-        file.take(65_537).read_to_end(&mut bytes).map_err(invalid)?;
-        if bytes.len() > 65_536 {
+        file.take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(invalid)?;
+        if bytes.len() > MAX_CONFIG_BYTES {
             return Err(refused("config.json exceeds 64 KiB"));
         }
         Self::parse(&bytes)
     }
 
-    fn parse(bytes: &[u8]) -> Result<Self, RunError> {
+    pub(super) fn parse(bytes: &[u8]) -> Result<Self, RunError> {
         let config: Self = serde_json::from_slice(bytes).map_err(refused)?;
         config.registry.validate().map_err(refused)?;
         config.session()?;
@@ -83,6 +90,11 @@ impl RuntimeConfig {
         .map_err(refused)
     }
 }
+/// Where the namespace at `namespace` keeps `config.json`.
+pub(super) fn config_path(namespace: &Path) -> std::path::PathBuf {
+    namespace.join("config.json")
+}
+
 /// `config.json` could not be read: the file system can change before the next
 /// start, so this stays a retried setup failure.
 fn invalid(error: impl std::fmt::Display) -> RunError {

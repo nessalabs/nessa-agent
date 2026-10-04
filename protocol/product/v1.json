@@ -162,7 +162,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 41,
+          "maxItems": 44,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2322,6 +2322,236 @@
         }
       },
       "required": ["code", "message"]
+    },
+    "McpServerKind": {
+      "type": "string",
+      "enum": ["stdio"],
+      "description": "How a configured MCP server is reached. stdio: the gateway starts it as a local process and speaks MCP over its standard input and output."
+    },
+    "McpServerListEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One configured MCP server as mcpServers.list reports it. Variable values never leave the gateway; only their names are listed.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/McpServerKind",
+          "description": "How the server is reached."
+        },
+        "name": {
+          "type": "string",
+          "description": "The server's name, unique among the configured servers."
+        },
+        "command": {
+          "type": "string",
+          "description": "The absolute path of the executable the gateway starts."
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The arguments it is started with, in order."
+        },
+        "envNames": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The names of the variables it is given over the gateway's own, in order. Never their values."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether new conversations are given it. A server turned off stays configured."
+        },
+        "managed": {
+          "type": "boolean",
+          "description": "Nessa's own server: listed, never saved or removed through these methods."
+        }
+      },
+      "required": ["kind", "name", "command", "args", "envNames", "enabled", "managed"]
+    },
+    "McpServersListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of mcpServers.list: the configured servers and the revision a save or remove must name.",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "description": "A digest of the stored server list. A save or remove naming any other revision is refused mcp_servers_revision_conflict."
+        },
+        "servers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/McpServerListEntry" },
+          "description": "The stored servers in stored order, then the managed one."
+        }
+      },
+      "required": ["revision", "servers"]
+    },
+    "McpServerEnvEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One variable a saved server is given.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The variable's name: ASCII letters, digits and _, not starting with a digit. NESSA_MCP_SESSION is reserved."
+        },
+        "value": {
+          "type": ["string", "null"],
+          "description": "Its value, or null to keep the value stored for this name on the server being saved. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing)."
+        }
+      },
+      "required": ["name", "value"]
+    },
+    "McpServerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A server as mcpServers.save stores it.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/McpServerKind",
+          "description": "How the server is reached."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name: ASCII letters, digits, - and _, 1-64 bytes, without __. nessa is reserved."
+        },
+        "command": {
+          "type": "string",
+          "description": "The absolute path of its executable."
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Its arguments, in order. Never put credentials here; use env."
+        },
+        "env": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/McpServerEnvEntry" },
+          "description": "Every variable it is given over the gateway's own, in order; a stored variable left out is removed."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether new conversations are given it."
+        }
+      },
+      "required": ["kind", "name", "command", "args", "env", "enabled"]
+    },
+    "McpServersSaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Wire input for mcpServers.save: store a server, adding it or replacing the one under its name, or renaming the one under previousName, in one write.",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "description": "The revision the caller last listed."
+        },
+        "previousName": {
+          "type": "string",
+          "description": "The name the server is stored under now, when it is being renamed. Unknown: mcp_servers_not_found."
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerInput",
+          "description": "The server as it should be stored."
+        }
+      },
+      "required": ["revision", "server"]
+    },
+    "McpServersRemoveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Wire input for mcpServers.remove: take a stored server out of the configuration.",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "description": "The revision the caller last listed."
+        },
+        "name": {
+          "type": "string",
+          "description": "The stored server's name. Unknown: mcp_servers_not_found."
+        }
+      },
+      "required": ["revision", "name"]
+    },
+    "McpServersWriteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of mcpServers.save and mcpServers.remove: the published configuration's revision. New conversations get the new server set; running ones keep theirs.",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "description": "The stored server list's revision now."
+        }
+      },
+      "required": ["revision"]
+    },
+    "McpServerProblemCode": {
+      "type": "string",
+      "enum": [
+        "too_many",
+        "duplicate_name",
+        "name",
+        "command",
+        "arguments",
+        "environment_name",
+        "reserved_environment_name",
+        "environment_value",
+        "environment_value_missing",
+        "environment_name_repeated"
+      ],
+      "description": "Why a saved server is invalid. too_many: more than 16 servers, the managed one included. duplicate_name: another server has the name. name: not 1-64 bytes of ASCII letters, digits, - and _, or holds __. command: not an absolute UTF-8 path. arguments: more than 64, or one over 8192 bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1-256 bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value. environment_name_repeated: a variable given twice."
+    },
+    "McpServersInvalidDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Attached to a refusal coded mcp_servers_invalid.",
+      "properties": {
+        "problem": {
+          "$ref": "#/$defs/McpServerProblemCode",
+          "description": "What is wrong."
+        },
+        "name": {
+          "type": "string",
+          "description": "The server or variable name the problem is about, when it is about one. Never a value."
+        }
+      },
+      "required": ["problem"]
+    },
+    "McpServersRevisionConflictDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Attached to a refusal coded mcp_servers_revision_conflict.",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "description": "The stored revision now; list again before retrying."
+        }
+      },
+      "required": ["revision"]
+    },
+    "McpServersAuditUnavailableDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Attached to a refusal coded audit_unavailable from mcpServers.save or mcpServers.remove.",
+      "properties": {
+        "applied": {
+          "type": "boolean",
+          "description": "Whether the change was published and the live set replaced all the same. Nothing is rolled back; mcpServers.list shows where things stand."
+        }
+      },
+      "required": ["applied"]
+    },
+    "McpServersErrorCode": {
+      "type": "string",
+      "enum": [
+        "mcp_servers_not_configured",
+        "mcp_servers_invalid",
+        "mcp_servers_reserved_name",
+        "mcp_servers_not_found",
+        "mcp_servers_revision_conflict",
+        "mcp_servers_busy",
+        "mcp_servers_config_invalid",
+        "mcp_servers_config_too_large",
+        "mcp_servers_storage_unavailable",
+        "audit_unavailable"
+      ],
+      "description": "Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long; nothing was written. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change could not be made durable (details: McpServersAuditUnavailableDetails)."
     },
     "ConversationErrorCode": {
       "type": "string",

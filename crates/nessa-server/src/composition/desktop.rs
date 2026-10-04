@@ -7,6 +7,7 @@ use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
+use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
 use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::collections::HashMap;
@@ -153,12 +154,13 @@ pub(super) fn configure(
                 output_tokens: 4096,
             });
     }
-    // Only the Nessa-owned server is replaced. User-configured MCP servers retain their settings.
-    agents.mcp_servers.retain(|server| server.name != "nessa");
-    agents
-        .mcp_servers
-        .push(nessa_sdk::infrastructure::acp::sessions::StdioMcpServer {
-            name: "nessa".into(),
+    // Only the Nessa-owned server is replaced, in memory: `config.json` never
+    // gains it (`composed_settings_publish_privately_under_the_lock_and_audit_without_values`).
+    // User-configured MCP servers retain their settings.
+    agents.mcp_servers.retain(|server| !server.managed());
+    agents.mcp_servers.push(ConfiguredMcpServer {
+        server: StdioServer {
+            name: MANAGED_SERVER_NAME.into(),
             command: mcp,
             args: vec![
                 "--workspace".into(),
@@ -166,7 +168,10 @@ pub(super) fn configure(
                 "--audit-directory".into(),
                 data.join("process-audit").to_string_lossy().into_owned(),
             ],
-        });
+        },
+        enabled: true,
+        env: Default::default(),
+    });
     Ok(())
 }
 

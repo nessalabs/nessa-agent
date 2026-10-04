@@ -5,7 +5,7 @@
 //! agents the servers themselves.
 use super::super::agent::AgentsConfig;
 use super::{compose, relay_socket, server_environment, stand_ins, StandIns};
-use crate::mcp_servers::domain::configuration_digest;
+use crate::mcp_servers::domain::{configuration_digest, ConfiguredMcpServer, StdioServer};
 use nessa_sdk::infrastructure::{
     acp::sessions::StdioMcpServer,
     clock::RuntimeClock,
@@ -30,7 +30,18 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
     AgentsConfig {
         catalog: PathBuf::from("/runtime/models.json"),
         workspace: std::env::temp_dir(),
-        mcp_servers: servers,
+        mcp_servers: servers
+            .into_iter()
+            .map(|server| ConfiguredMcpServer {
+                server: StdioServer {
+                    name: server.name,
+                    command: server.command,
+                    args: server.args,
+                },
+                enabled: true,
+                env: BTreeMap::new(),
+            })
+            .collect(),
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
         selected: None,
@@ -414,4 +425,189 @@ async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_r
         .unwrap();
     assert_eq!(opened(&config), ["mcptest"]);
     assert!(refused(&composed, &edited, &token, Refusal::Unavailable).await);
+}
+
+/// What `config.json`'s `agents.mcpServers` parses to at startup: an entry
+/// without `enabled` or `env` is on with no variables of its own; one turned
+/// off stays configured and is left out of the live set; and the runtime
+/// configuration refuses anything else in an entry.
+#[tokio::test]
+async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_launched() {
+    use super::super::runtime_config::RuntimeConfig;
+    let parsed = RuntimeConfig::parse(
+        br#"{"agents":{"catalog":"/m.json","workspace":"/w","mcpServers":[
+            {"name":"plain","command":"/usr/bin/python3"},
+            {"name":"off","command":"/usr/bin/python3","enabled":false,"env":{"TOKEN":"secret"}}
+        ]}}"#,
+    )
+    .unwrap();
+    let mut config = parsed.agents.unwrap();
+    let rows: Vec<_> = config
+        .mcp_servers
+        .iter()
+        .map(|each| (each.server.name.as_str(), each.enabled, each.env_names()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("plain", true, vec![]),
+            ("off", false, vec!["TOKEN".to_owned()])
+        ]
+    );
+    assert!(!format!("{config:?}").contains("secret"));
+    assert!(RuntimeConfig::parse(
+        br#"{"agents":{"catalog":"/m.json","workspace":"/w","mcpServers":[
+            {"name":"x","command":"/usr/bin/python3","url":"https://example.com"}]}}"#
+    )
+    .is_err());
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    config.stand_ins = Default::default();
+    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap()
+        .expect("composed");
+    let live: Vec<_> = composed
+        .servers
+        .configured()
+        .into_iter()
+        .map(|server| server.name)
+        .collect();
+    assert_eq!(live, ["plain"]);
+}
+
+/// The composed settings over the real file, lock, parse and audit: a save is
+/// published private (0600) as a whole file that the runtime configuration
+/// still starts with, never gaining the desktop's managed server; the lock
+/// beside it is `config.json.lock`; each change leaves its two records, with
+/// variable names and never a value.
+#[tokio::test]
+async fn composed_settings_publish_privately_under_the_lock_and_audit_without_values() {
+    use super::super::runtime_config::RuntimeConfig;
+    use super::settings;
+    use crate::mcp_servers::application::{McpServerInitiator, McpServerSettingsError};
+    use crate::mcp_servers::domain::{ServerEdit, ServerSave, MANAGED_SERVER_NAME};
+    use crate::mcp_servers::infrastructure::{ConfigFiles, OsConfigFiles};
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    // A namespace is private, as composition creates it.
+    let namespace = root.path().join("namespace");
+    nessa_local_storage::create_directory(&namespace).unwrap();
+    let config_path = namespace.join("config.json");
+    nessa_local_storage::open(&config_path, nessa_local_storage::OpenMode::CreateNew)
+        .unwrap()
+        .write_all(br#"{"session":{"writeTimeoutMs":75}}"#)
+        .unwrap();
+    // As the desktop composes it: the managed server in memory only.
+    let mut config = agents(vec![server(MANAGED_SERVER_NAME, &["--workspace", "/w"])]);
+    let composed = compose(
+        &mut config,
+        &namespace.join("mcp").join("relay.sock"),
+        Path::new("/nessa"),
+        BTreeMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("composed");
+    let audit = namespace.join("audit");
+    let settings = settings(&composed, &config, config_path.clone(), audit.clone()).unwrap();
+    let initiator = McpServerInitiator {
+        organization_id: "organization".into(),
+        principal_id: "principal".into(),
+        credential_id: "credential".into(),
+    };
+    let list = settings.list().await.unwrap();
+    assert_eq!(list.servers.len(), 1);
+    assert!(list.servers[0].managed);
+    let save = ServerEdit::Save(ServerSave {
+        previous_name: None,
+        server: StdioServer {
+            name: "mcptest".into(),
+            command: "/usr/bin/python3".into(),
+            args: vec!["/s.mjs".into()],
+        },
+        env: vec![("API_TOKEN".into(), Some("secret-value".into()))],
+        enabled: true,
+    });
+    // While another holder has `config.json.lock`, nothing is written.
+    let holder = OsConfigFiles::new(config_path.clone());
+    let held = holder.try_lock().unwrap().expect("the lock");
+    assert!(holder.try_lock().unwrap().is_none());
+    assert!(namespace.join("config.json.lock").is_file());
+    assert_eq!(
+        settings
+            .edit(initiator.clone(), list.revision.clone(), save.clone())
+            .await,
+        Err(McpServerSettingsError::Busy)
+    );
+    drop(held);
+    let revision = settings.edit(initiator, list.revision, save).await.unwrap();
+    assert_eq!(settings.list().await.unwrap().revision, revision);
+    let bytes = std::fs::read(&config_path).unwrap();
+    let mode = std::fs::metadata(&config_path)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let reread = RuntimeConfig::parse(&bytes).unwrap();
+    assert_eq!(
+        reread.session().unwrap().write_timeout(),
+        std::time::Duration::from_millis(75)
+    );
+    let agents = reread.agents.unwrap();
+    assert_eq!(agents.workspace, std::env::temp_dir());
+    let stored: Vec<_> = agents
+        .mcp_servers
+        .iter()
+        .map(|each| each.server.name.as_str())
+        .collect();
+    assert_eq!(stored, ["mcptest"]);
+    let live: Vec<_> = composed
+        .servers
+        .configured()
+        .into_iter()
+        .map(|server| server.name)
+        .collect();
+    assert_eq!(live, ["mcptest", "nessa"]);
+    // Two changes, two records each: requested, then the outcome.
+    let mut records: Vec<serde_json::Value> = std::fs::read_dir(&audit)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(records.len(), 4);
+    records.sort_by_key(|record| record["observedAtMs"].as_u64());
+    for record in &records {
+        assert_eq!(record["kind"], "mcp_servers");
+        assert_eq!(record["target"]["name"], "mcptest");
+        assert_eq!(record["cause"], "caller_requested");
+        assert_eq!(record["initiator"]["principalId"], "principal");
+        assert_eq!(record["initiator"]["credentialId"], "credential");
+        assert!(!record.to_string().contains("secret-value"), "{record}");
+    }
+    let applied = records
+        .iter()
+        .find(|record| record["transition"]["outcome"] == "applied")
+        .expect("an applied outcome");
+    assert_eq!(applied["transition"]["after"]["revision"], revision);
+    assert_eq!(
+        applied["transition"]["after"]["names"],
+        serde_json::json!(["mcptest"])
+    );
+    assert_eq!(
+        applied["transition"]["before"]["names"],
+        serde_json::json!([])
+    );
+    let requested = records
+        .iter()
+        .find(|record| {
+            record["phase"] == "requested" && record["operationId"] == applied["operationId"]
+        })
+        .expect("its requested record");
+    assert_eq!(
+        requested["transition"]["envNames"],
+        serde_json::json!(["API_TOKEN"])
+    );
 }

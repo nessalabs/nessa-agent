@@ -906,6 +906,123 @@ export interface McpRemoteErrorDetails {
   /** The server's message, at most 512 characters, control characters as spaces. */
   message: string
 }
+/** How a configured MCP server is reached. stdio: the gateway starts it as a local process and speaks MCP over its standard input and output. */
+export const McpServerKind = { Stdio: "stdio" } as const
+export type McpServerKind = (typeof McpServerKind)[keyof typeof McpServerKind]
+/** One configured MCP server as mcpServers.list reports it. Variable values never leave the gateway; only their names are listed. */
+export interface McpServerListEntry {
+  /** How the server is reached. */
+  kind: McpServerKind
+  /** The server's name, unique among the configured servers. */
+  name: string
+  /** The absolute path of the executable the gateway starts. */
+  command: string
+  /** The arguments it is started with, in order. */
+  args: string[]
+  /** The names of the variables it is given over the gateway's own, in order. Never their values. */
+  envNames: string[]
+  /** Whether new conversations are given it. A server turned off stays configured. */
+  enabled: boolean
+  /** Nessa's own server: listed, never saved or removed through these methods. */
+  managed: boolean
+}
+/** Result of mcpServers.list: the configured servers and the revision a save or remove must name. */
+export interface McpServersListResult {
+  /** A digest of the stored server list. A save or remove naming any other revision is refused mcp_servers_revision_conflict. */
+  revision: string
+  /** The stored servers in stored order, then the managed one. */
+  servers: McpServerListEntry[]
+}
+/** One variable a saved server is given. */
+export interface McpServerEnvEntry {
+  /** The variable's name: ASCII letters, digits and _, not starting with a digit. NESSA_MCP_SESSION is reserved. */
+  name: string
+  /** Its value, or null to keep the value stored for this name on the server being saved. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
+  value: string | null
+}
+/** A server as mcpServers.save stores it. */
+export interface McpServerInput {
+  /** How the server is reached. */
+  kind: McpServerKind
+  /** Its name: ASCII letters, digits, - and _, 1-64 bytes, without __. nessa is reserved. */
+  name: string
+  /** The absolute path of its executable. */
+  command: string
+  /** Its arguments, in order. Never put credentials here; use env. */
+  args: string[]
+  /** Every variable it is given over the gateway's own, in order; a stored variable left out is removed. */
+  env: McpServerEnvEntry[]
+  /** Whether new conversations are given it. */
+  enabled: boolean
+}
+/** Wire input for mcpServers.save: store a server, adding it or replacing the one under its name, or renaming the one under previousName, in one write. */
+export interface McpServersSaveParams {
+  /** The revision the caller last listed. */
+  revision: string
+  /** The name the server is stored under now, when it is being renamed. Unknown: mcp_servers_not_found. */
+  previousName?: string
+  /** The server as it should be stored. */
+  server: McpServerInput
+}
+/** Wire input for mcpServers.remove: take a stored server out of the configuration. */
+export interface McpServersRemoveParams {
+  /** The revision the caller last listed. */
+  revision: string
+  /** The stored server's name. Unknown: mcp_servers_not_found. */
+  name: string
+}
+/** Result of mcpServers.save and mcpServers.remove: the published configuration's revision. New conversations get the new server set; running ones keep theirs. */
+export interface McpServersWriteResult {
+  /** The stored server list's revision now. */
+  revision: string
+}
+/** Why a saved server is invalid. too_many: more than 16 servers, the managed one included. duplicate_name: another server has the name. name: not 1-64 bytes of ASCII letters, digits, - and _, or holds __. command: not an absolute UTF-8 path. arguments: more than 64, or one over 8192 bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1-256 bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value. environment_name_repeated: a variable given twice. */
+export const McpServerProblemCode = {
+  TooMany: "too_many",
+  DuplicateName: "duplicate_name",
+  Name: "name",
+  Command: "command",
+  Arguments: "arguments",
+  EnvironmentName: "environment_name",
+  ReservedEnvironmentName: "reserved_environment_name",
+  EnvironmentValue: "environment_value",
+  EnvironmentValueMissing: "environment_value_missing",
+  EnvironmentNameRepeated: "environment_name_repeated",
+} as const
+export type McpServerProblemCode =
+  (typeof McpServerProblemCode)[keyof typeof McpServerProblemCode]
+/** Attached to a refusal coded mcp_servers_invalid. */
+export interface McpServersInvalidDetails {
+  /** What is wrong. */
+  problem: McpServerProblemCode
+  /** The server or variable name the problem is about, when it is about one. Never a value. */
+  name?: string
+}
+/** Attached to a refusal coded mcp_servers_revision_conflict. */
+export interface McpServersRevisionConflictDetails {
+  /** The stored revision now; list again before retrying. */
+  revision: string
+}
+/** Attached to a refusal coded audit_unavailable from mcpServers.save or mcpServers.remove. */
+export interface McpServersAuditUnavailableDetails {
+  /** Whether the change was published and the live set replaced all the same. Nothing is rolled back; mcpServers.list shows where things stand. */
+  applied: boolean
+}
+/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound). mcp_servers_invalid: the saved server or the resulting set breaks a rule (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long; nothing was written. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written; it is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB. mcp_servers_storage_unavailable: config.json could not be read, locked or published; the stored file and the live set are unchanged. audit_unavailable: a record of the change could not be made durable (details: McpServersAuditUnavailableDetails). */
+export const McpServersErrorCode = {
+  McpServersNotConfigured: "mcp_servers_not_configured",
+  McpServersInvalid: "mcp_servers_invalid",
+  McpServersReservedName: "mcp_servers_reserved_name",
+  McpServersNotFound: "mcp_servers_not_found",
+  McpServersRevisionConflict: "mcp_servers_revision_conflict",
+  McpServersBusy: "mcp_servers_busy",
+  McpServersConfigInvalid: "mcp_servers_config_invalid",
+  McpServersConfigTooLarge: "mcp_servers_config_too_large",
+  McpServersStorageUnavailable: "mcp_servers_storage_unavailable",
+  AuditUnavailable: "audit_unavailable",
+} as const
+export type McpServersErrorCode =
+  (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
 /** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 32 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
@@ -1544,7 +1661,7 @@ export const mcpAppCallTiming = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 41,
+  maxReadyMethods: 44,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1629,6 +1746,9 @@ export const ProductMethod = {
   McpCallTool: "mcp.callTool",
   McpReadResource: "mcp.readResource",
   McpReleaseApp: "mcp.releaseApp",
+  McpServersList: "mcpServers.list",
+  McpServersSave: "mcpServers.save",
+  McpServersRemove: "mcpServers.remove",
   PairingCreate: "pairing.create",
   PairingPending: "pairing.pending",
   PairingStatus: "pairing.status",
@@ -1678,6 +1798,9 @@ export const productReadyMethods = [
   "mcp.callTool",
   "mcp.readResource",
   "mcp.releaseApp",
+  "mcpServers.list",
+  "mcpServers.save",
+  "mcpServers.remove",
   "pairing.create",
   "pairing.pending",
   "pairing.status",

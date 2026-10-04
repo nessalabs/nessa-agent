@@ -75,7 +75,10 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
         assert_eq!(runtime.paths(), [bundle.join(entry)], "{id:?}");
     }
     assert_eq!(agents.mcp_servers.len(), 1);
-    assert_eq!(agents.mcp_servers[0].command, bundle.join("nessa-mcp"));
+    assert_eq!(
+        agents.mcp_servers[0].server.command,
+        bundle.join("nessa-mcp")
+    );
     assert!(!data.join("config.json").exists());
 }
 

@@ -1033,6 +1033,9 @@ async fn dispatch_authorized(
         method if method.starts_with("mcp.") => {
             super::mcp_apps::dispatch(state, session, frame).await
         }
+        method if method.starts_with("mcpServers.") => {
+            super::mcp_servers::dispatch(state, session, frame).await
+        }
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
@@ -1220,6 +1223,9 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcp.readResource"
         | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
+        // A configured MCP server is started with the gateway's authority
+        // and given its variables, credentials among them (#391).
+        "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" => Some("credential.manage"),
         // Enrolling a device creates a credential for it; Auth asks again for
         // the exact consent inside the runtime.
         "pairing.create"
@@ -2228,6 +2234,190 @@ mod tests {
         };
         assert!(!denied.ok);
         assert_eq!(denied.error.unwrap().code, "forbidden");
+    }
+
+    /// What the MCP server methods answer through `dispatch` on `state` for
+    /// `method` with `params`: whether it succeeded, and its payload, or its
+    /// error code and details.
+    async fn mcp_servers_call(
+        state: &ProductRouteState,
+        session: &AuthenticatedSession,
+        method: &str,
+        params: Value,
+    ) -> (bool, Value) {
+        let frame = RequestFrame {
+            params,
+            ..request("mcp", method)
+        };
+        let OutgoingMessage::Response(response) = dispatch(state, session, frame).await else {
+            panic!("response expected")
+        };
+        if response.ok {
+            (true, response.payload.unwrap())
+        } else {
+            let error = response.error.unwrap();
+            (false, json!({"code": error.code, "details": error.details}))
+        }
+    }
+
+    /// #391 S1: a caller without `credential.manage` is refused `forbidden`
+    /// by every MCP server method before its params are read, and nothing is
+    /// audited, read or written.
+    #[tokio::test]
+    async fn s1_mcp_servers_are_forbidden_without_credential_manage_before_params() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let files = MemoryFiles::holding(config(vec![]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_for(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Member);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        for method in ["mcpServers.list", "mcpServers.save", "mcpServers.remove"] {
+            assert_eq!(action_for_method(method), Some("credential.manage"));
+            let (ok, answer) =
+                mcp_servers_call(&state, &session, method, json!({"not": "params"})).await;
+            assert!(!ok);
+            assert_eq!(answer["code"], "forbidden", "{method}");
+        }
+        assert!(audit.records().is_empty());
+        assert_eq!(files.locks.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(files.publishes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The MCP server methods on the wire: `kind: "stdio"`, variable names in
+    /// a list and never a value, a null value keeping the stored one, and each
+    /// refusal typed with its details; a gateway with no live set to manage
+    /// answers `mcp_servers_not_configured`.
+    #[tokio::test]
+    async fn mcp_servers_on_the_wire_carry_names_only_and_typed_refusals() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let (bare, _) = fixture(MembershipRole::Admin);
+        let session = authenticate(&bare).await;
+        assert_eq!(
+            mcp_servers_call(&bare, &session, "mcpServers.list", json!({})).await,
+            (
+                false,
+                json!({"code": "mcp_servers_not_configured", "details": null})
+            )
+        );
+        let files = MemoryFiles::holding(config(vec![]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_for(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let list = |state: &ProductRouteState| {
+            let state = state.clone();
+            let session = session.clone();
+            async move {
+                let (ok, listed) =
+                    mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+                assert!(ok, "{listed}");
+                listed
+            }
+        };
+        let listed = list(&state).await;
+        assert_eq!(listed["servers"][0]["kind"], "stdio");
+        assert_eq!(listed["servers"][0]["managed"], true);
+        let input = |env: Value| {
+            json!({"kind": "stdio", "name": "mcptest", "command": "/usr/bin/python3",
+                "args": ["/s.py"], "env": env, "enabled": true})
+        };
+        let (ok, saved) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"],
+                "server": input(json!([{"name": "API_TOKEN", "value": "secret-value"}]))}),
+        )
+        .await;
+        assert!(ok, "{saved}");
+        let listed = list(&state).await;
+        assert_eq!(listed["revision"], saved["revision"]);
+        assert_eq!(
+            listed["servers"][0],
+            json!({"kind": "stdio", "name": "mcptest", "command": "/usr/bin/python3",
+                "args": ["/s.py"], "envNames": ["API_TOKEN"], "enabled": true, "managed": false})
+        );
+        assert!(!listed.to_string().contains("secret-value"));
+        // A null keeps the stored value.
+        let (ok, kept) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"],
+                "server": input(json!([{"name": "API_TOKEN", "value": null}]))}),
+        )
+        .await;
+        assert!(ok, "{kept}");
+        assert_eq!(
+            files.document()["agents"]["mcpServers"][0]["env"],
+            json!({"API_TOKEN": "secret-value"})
+        );
+        let refusals = [
+            (
+                "mcpServers.save",
+                json!({"revision": "stale", "server": input(json!([]))}),
+                json!({"code": "mcp_servers_revision_conflict",
+                    "details": {"revision": kept["revision"]}}),
+            ),
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "NEVER", "value": null}]))}),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_value_missing", "name": "NEVER"}}),
+            ),
+            (
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "nessa"}),
+                json!({"code": "mcp_servers_reserved_name", "details": null}),
+            ),
+            (
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "unknown"}),
+                json!({"code": "mcp_servers_not_found", "details": null}),
+            ),
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": {"kind": "remote", "name": "x", "command": "/x", "args": [],
+                        "env": [], "enabled": true}}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            (
+                "mcpServers.list",
+                json!({"extra": true}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+        ];
+        for (method, params, expected) in refusals {
+            assert_eq!(
+                mcp_servers_call(&state, &session, method, params.clone()).await,
+                (false, expected),
+                "{method} {params}"
+            );
+        }
+        audit
+            .fail_outcome
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "mcptest"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "audit_unavailable", "details": {"applied": true}})
+            )
+        );
     }
 
     struct UnavailablePolicy;

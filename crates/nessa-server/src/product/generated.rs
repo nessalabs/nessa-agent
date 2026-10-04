@@ -854,6 +854,147 @@ pub struct McpRemoteErrorDetails {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum McpServerKind {
+    Stdio,
+}
+impl McpServerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServerListEntry {
+    pub kind: McpServerKind,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env_names: Vec<String>,
+    pub enabled: bool,
+    pub managed: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersListResult {
+    pub revision: String,
+    pub servers: Vec<McpServerListEntry>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServerEnvEntry {
+    pub name: String,
+    pub value: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServerInput {
+    pub kind: McpServerKind,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<McpServerEnvEntry>,
+    pub enabled: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersSaveParams {
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_name: Option<String>,
+    pub server: McpServerInput,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersRemoveParams {
+    pub revision: String,
+    pub name: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersWriteResult {
+    pub revision: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerProblemCode {
+    TooMany,
+    DuplicateName,
+    Name,
+    Command,
+    Arguments,
+    EnvironmentName,
+    ReservedEnvironmentName,
+    EnvironmentValue,
+    EnvironmentValueMissing,
+    EnvironmentNameRepeated,
+}
+impl McpServerProblemCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TooMany => "too_many",
+            Self::DuplicateName => "duplicate_name",
+            Self::Name => "name",
+            Self::Command => "command",
+            Self::Arguments => "arguments",
+            Self::EnvironmentName => "environment_name",
+            Self::ReservedEnvironmentName => "reserved_environment_name",
+            Self::EnvironmentValue => "environment_value",
+            Self::EnvironmentValueMissing => "environment_value_missing",
+            Self::EnvironmentNameRepeated => "environment_name_repeated",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersInvalidDetails {
+    pub problem: McpServerProblemCode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersRevisionConflictDetails {
+    pub revision: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersAuditUnavailableDetails {
+    pub applied: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServersErrorCode {
+    McpServersNotConfigured,
+    McpServersInvalid,
+    McpServersReservedName,
+    McpServersNotFound,
+    McpServersRevisionConflict,
+    McpServersBusy,
+    McpServersConfigInvalid,
+    McpServersConfigTooLarge,
+    McpServersStorageUnavailable,
+    AuditUnavailable,
+}
+impl McpServersErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::McpServersNotConfigured => "mcp_servers_not_configured",
+            Self::McpServersInvalid => "mcp_servers_invalid",
+            Self::McpServersReservedName => "mcp_servers_reserved_name",
+            Self::McpServersNotFound => "mcp_servers_not_found",
+            Self::McpServersRevisionConflict => "mcp_servers_revision_conflict",
+            Self::McpServersBusy => "mcp_servers_busy",
+            Self::McpServersConfigInvalid => "mcp_servers_config_invalid",
+            Self::McpServersConfigTooLarge => "mcp_servers_config_too_large",
+            Self::McpServersStorageUnavailable => "mcp_servers_storage_unavailable",
+            Self::AuditUnavailable => "audit_unavailable",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConversationErrorCode {
     AgentNotConfigured,
     AgentUnsupported,
@@ -1502,6 +1643,9 @@ pub mod product_method {
     pub const MCP_CALL_TOOL: &str = "mcp.callTool";
     pub const MCP_READ_RESOURCE: &str = "mcp.readResource";
     pub const MCP_RELEASE_APP: &str = "mcp.releaseApp";
+    pub const MCP_SERVERS_LIST: &str = "mcpServers.list";
+    pub const MCP_SERVERS_SAVE: &str = "mcpServers.save";
+    pub const MCP_SERVERS_REMOVE: &str = "mcpServers.remove";
     pub const PAIRING_CREATE: &str = "pairing.create";
     pub const PAIRING_PENDING: &str = "pairing.pending";
     pub const PAIRING_STATUS: &str = "pairing.status";
@@ -1665,7 +1809,7 @@ pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 41
+                items.len() <= 44
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1722,6 +1866,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcp.callTool",
     "mcp.readResource",
     "mcp.releaseApp",
+    "mcpServers.list",
+    "mcpServers.save",
+    "mcpServers.remove",
     "pairing.create",
     "pairing.pending",
     "pairing.status",

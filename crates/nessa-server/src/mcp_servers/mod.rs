@@ -2,12 +2,15 @@
 //! session (ADR 344).
 //!
 //! ```text
-//! harness ──spawns──▶ nessa mcp-relay ──relay socket──▶ Relay ──▶ McpServers::open (SDK)
+//! harness ──spawns──▶ nessa mcp-relay ──relay socket──▶ Relay ──▶ McpServers::open_as (SDK)
 //!                                                                    │ a session: one server
 //!                                                                    ▼ process, one connection
 //! conversation view ──McpToolUis──▶ ListedToolUis ──tool_ui──────────┘ (open sessions' lists)
 //!
 //! conversation service ──ResourceTickets::issue──▶ ResourceTicketStore ◀──redeem── GET /mcp-resources
+//!
+//! mcpServers.* ──▶ McpServerSettings ──▶ config.json (under its lock), audit/mcp-servers
+//!                                    └──replace──▶ McpServers (the live set)
 //! ```
 //!
 //! Arrows are calls and bytes. Each stand-in that says hello gets a session of
@@ -21,10 +24,15 @@
 //! the socket and the hello in front of it, the `mcp-relay` command, and the
 //! adapter the conversation view asks for a tool's UI; and, for an MCP App,
 //! the resource tickets it redeems and the route it redeems them at
-//! (`entrypoint`). Composition (`composition::mcp_servers`) builds it and
+//! (`entrypoint`). Managing the stored servers (`mcpServers.list`, `.save`,
+//! `.remove`) is `application`: a user's server as stored and the edits to the
+//! stored list are `domain`, the file, its lock and the audit
+//! `infrastructure`, and each change replaces the live set after it is
+//! published. Composition (`composition::mcp_servers`) builds it and
 //! replaces each configured server with its stand-in before any agent is
 //! built. The design, with its state tables, is
 //! `docs/design/mcp-connections.md`.
+pub mod application;
 pub mod domain;
 pub mod entrypoint;
 pub mod infrastructure;

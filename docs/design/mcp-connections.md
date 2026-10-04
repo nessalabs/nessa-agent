@@ -416,18 +416,113 @@ with a digit; never `NESSA_MCP_SESSION` (`MCP_SESSION_VARIABLE`, the
 stand-ins' token); no NUL in a value. `AcpConfig::validate`, `McpServers::new`
 and `replace` all ask it.
 
-Row numbers are the PR 2 design's, on #391; this pass builds S11–S14 and
-S18, and the gateway methods that will call `replace` come later.
+A stand-in is opened only on the configuration it was admitted against:
+the relay admits a hello against the digests, then opens what it admitted
+with `McpServers::open_as`, which refuses `ConfigurationChanged` (or
+`NotConfigured`) when the set was replaced in between. So a stand-in is never
+served by a different configuration under the same name, which is what makes
+it honest to keep the server list out of the restoration identity.
+
+### Managing the stored servers
+
+`config.json`'s `agents.mcpServers` holds each server as
+`{name, command, args?, enabled?, env?}`; one without `enabled` is on, one
+without `env` has no variables of its own (the current contract's default).
+`mcp_servers::infrastructure::stored_servers` is the one reader and writer of
+that shape, at startup (`AgentsConfig`) and on each change. In the gateway
+it is a `ConfiguredMcpServer { server, enabled, env }`; the SDK's
+`StdioMcpServer` does not grow. A server's environment is the gateway's base
+(`server_environment`) with its own `env` over it — its value wins — built in
+one place, `LaunchSettings`, at startup and after each change. A server
+turned off stays in the file and out of the live set; it is still checked,
+and still counts towards `MAX_MCP_SERVERS`.
+
+`nessa` is Nessa's own server (`MANAGED_SERVER_NAME`). The desktop drops any
+stored `nessa` and adds the bundled one in memory; the gateway takes it from
+the startup configuration into `LaunchSettings`, lists it `managed`, and
+refuses every save or remove naming it (`mcp_servers_reserved_name`). A write
+edits the file, not the composed configuration, so the file never gains it.
+
+`mcpServers.list`, `mcpServers.save` and `mcpServers.remove` all ask for
+`credential.manage`; a caller without it is refused `forbidden` before the
+params are read.
+
+- `mcpServers.list` → `{revision, servers: [{kind: "stdio", name, command,
+  args, envNames, enabled, managed}]}`: stored order, then the managed server.
+- `mcpServers.save {revision, previousName?, server: {kind: "stdio", name,
+  command, args, env: [{name, value | null}], enabled}}` → `{revision}`. The
+  server's `env` is exactly the names listed; `value: null` keeps the value
+  stored for that name on the server being saved (the one under
+  `previousName`, else under `name`).
+- `mcpServers.remove {revision, name}` → `{revision}`.
+
+The revision is a digest of the stored block (`[]` when there is none);
+nothing beside it is persisted. Each change, in order:
+
+1. The `requested` record (`…/conversations/audit/mcp-servers`), with the
+   target, the caller's revision, the variable names and the initiator. When
+   it cannot be written: `audit_unavailable` (`applied: false`), and nothing
+   is locked, written or applied.
+2. `config.json.lock`, tried every 20 ms for at most 2 s on the gateway
+   clock; still held: `mcp_servers_busy`.
+3. Read the file, checked by the runtime configuration's own parse and its
+   64 KiB bound (`RuntimeConfig::parse`, `MAX_CONFIG_BYTES`); compare the
+   revision; make the edit; check the result with the SDK's rules
+   (`McpServerLaunch::problem_in`, managed server included).
+4. Write the whole file with only the block replaced, check it again, and
+   publish it in one step, private (0600). A file with no `agents` block
+   gains one from the running catalog and workspace.
+5. Replace the live set, still under the lock, so changes publish and
+   replace in the same order. Refused only once the gateway is stopping; the
+   outcome then says `liveSetReplaced: false` and the next start reads the
+   file.
+6. Unlock, then the outcome record: `applied` with the revision and names
+   before and after, or `refused`/`failed` with the reason and what was
+   stored when it was read. When it cannot be written: `audit_unavailable`
+   with whether the change applied. Nothing is rolled back.
+
+A record names servers and variables, never a variable's value; so do the
+wire and every `Debug` (`ConfiguredMcpServer`, `ServerSave`,
+`McpServerLaunch`). The file is never repaired: one that does not parse is
+refused `mcp_servers_config_invalid` before and after the edit.
+
+Errors are `McpServersErrorCode`: `mcp_servers_not_configured`,
+`mcp_servers_invalid` (details `{problem, name?}`), `mcp_servers_reserved_name`,
+`mcp_servers_not_found`, `mcp_servers_revision_conflict` (details
+`{revision}`), `mcp_servers_busy`, `mcp_servers_config_invalid`,
+`mcp_servers_config_too_large`, `mcp_servers_storage_unavailable`,
+`audit_unavailable` (details `{applied}`). `mcp_servers_not_configured` means
+this gateway holds no live set to manage: not Unix, no agents configured, or
+MCP off this run because the relay socket could not be bound (or a path is
+not UTF-8). A gateway that holds one always manages it, with or without
+servers configured. `mcpServers.inspect` is not built yet.
+
+Row labels are the PR 2 design's (on #391), prefixed `LS` so they do not
+meet the stand-in and forwarded-result rows above.
 
 | # | State / event | Expected | Test |
 | --- | --- | --- | --- |
-| S11 | A server edited while a conversation's harness has it | The running harness and its server process are untouched (a relaunch of the same provider session keeps its set); its stand-in's next hello is refused `configuration-changed`; the next open gets the new stand-in | `a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone`, `s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused`, `each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch`, `a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone` |
-| S12 | A server removed while open | Its stand-in's next hello is refused `unknown-server`; a new open does not list it; an open session of it is untouched | the same |
-| S13 | A removed server added back | It is in the next open, and its stand-ins are let through | the same |
-| S14 | `replace` once stopping | Refused `Stopped`; the set is kept; nothing launched | `a_replacement_once_stopping_is_refused_and_launches_nothing` |
-| S18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
+| LS1 | Caller lacks `credential.manage` | `forbidden` before params are read; nothing audited, locked or written | `s1_mcp_servers_are_forbidden_without_credential_manage_before_params` |
+| LS2 | `save` or `remove` with a stale revision | `revision_conflict` with the current revision; nothing written; `requested`, then `refused` | `s2_a_stale_revision_is_refused_with_the_current_one_and_nothing_is_written`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
+| LS3 | Two saves at one revision at once | The lock serialises them; the first wins, the second gets LS2 | `s3_two_saves_at_one_revision_are_serialised_and_the_second_conflicts` |
+| LS4 | Lock held past its bound | `busy`; nothing written | `s4_a_lock_held_past_its_bound_is_busy_and_nothing_is_written`, `composed_settings_publish_privately_under_the_lock_and_audit_without_values` |
+| LS5 | Publish fails | `storage_unavailable`; the old file and live set kept; outcome `failed` | `s5_a_failed_publish_keeps_the_old_file_and_live_set` |
+| LS6 | `requested` can't be written | `audit_unavailable`; no lock, no write, no apply | `s6_an_unwritable_requested_record_stops_everything` |
+| LS7 | Published, then the outcome fails | `audit_unavailable` with `applied: true`; the file and live set are new | `s7_an_unwritable_outcome_after_a_publish_says_it_applied` |
+| LS8 | `config.json` doesn't parse, before or after the edit | `config_invalid`; nothing written, nothing repaired | `s8_a_configuration_that_does_not_parse_is_refused_and_never_repaired` |
+| LS9 | The result would pass 64 KiB | `config_too_large`; nothing written | `s9_a_result_past_the_bound_is_refused_and_nothing_is_written` |
+| LS10 | A 17th server, a bad name, a duplicate, `nessa`, a bad or reserved variable name | `invalid` with the typed problem, or `reserved_name`; nothing written | `s10_an_invalid_or_reserved_server_is_refused_with_its_problem`, `no_edit_names_the_managed_server` |
+| LS11 | A server edited while a conversation's harness has it | The running harness and its server process are untouched (a relaunch of the same provider session keeps its set); its stand-in's next hello is refused `configuration-changed`; the next open gets the new stand-in | `a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone`, `s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused`, `each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch`, `a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone` |
+| LS12 | A server removed or turned off while open | Its stand-in's next hello is refused `unknown-server`; a new open does not list it; an open session of it is untouched | the same, `a_disabled_server_stays_stored_and_out_of_the_live_set` |
+| LS13 | Added back, or turned on again | It is in the next open, and its stand-ins are let through | the same |
+| LS14 | `replace` once stopping | Refused `Stopped`; the set is kept; nothing launched | `a_replacement_once_stopping_is_refused_and_launches_nothing` |
+| LS15 | Rename (`previousName`) | One write: the old name gone, the new one in its place; unknown `previousName` → `not_found` | `s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found` |
+| LS16 | Remove an unknown name | `not_found`; nothing written | `s16_removing_an_unknown_name_is_not_found` |
+| LS17 | `save` keeps a variable with `value: null` | The stored value is kept; a null for a name with no stored value → `invalid` (`environment_value_missing`) | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
+| LS18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
 | — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |
-| — | `replace` lands between a hello's admission and its open | The stand-in, admitted against the old digest, is served by the new configuration of the same name; its next hello is refused as S11 | not tested: one read apart, and no harm beyond S11's |
+| — | `replace` lands between a hello's admission and its open | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |
+| — | A variable's value | Never in the wire, `list`, the audit, or a `Debug` | `a_launch_prints_its_environment_names_never_its_values`, `a_configured_server_prints_its_variable_names_never_their_values`, `the_list_names_each_variable_and_marks_the_managed_server` |
 
 ## MCP servers leave the restoration identity (#391)
 

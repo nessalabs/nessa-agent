@@ -46,12 +46,10 @@ use crate::agents::infrastructure::CredentialedClaudeProvider;
 use crate::conversation::application::{ConversationAgent, ProviderSessionErasers};
 #[cfg(any(unix, test))]
 use crate::core::RunError;
+use crate::mcp_servers::{domain::ConfiguredMcpServer, infrastructure::stored_servers};
 #[cfg(unix)]
 use nessa_auth::application::ports::Clock;
-use nessa_sdk::{
-    application::agent_execution::providers::ExecutableUseSnapshot,
-    infrastructure::acp::sessions::StdioMcpServer,
-};
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, UserImageSource},
@@ -75,11 +73,13 @@ use std::{collections::HashMap, path::PathBuf};
 pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
     pub workspace: PathBuf,
-    /// The MCP servers configured at startup. Composition takes them into
-    /// the gateway's live set ([`super::mcp_servers`]) before any agent is
-    /// built, leaving this empty; agents read `mcp_stand_ins` instead.
-    #[serde(default)]
-    pub mcp_servers: Vec<StdioMcpServer>,
+    /// The MCP servers configured at startup, each with whether it is on and
+    /// its own variables (`mcp_servers::infrastructure::stored_servers`, the
+    /// one reader of the block). Composition takes them into the gateway's
+    /// live set ([`super::mcp_servers`]) before any agent is built, leaving
+    /// this empty; agents read `mcp_stand_ins` instead.
+    #[serde(default, deserialize_with = "stored_servers")]
+    pub mcp_servers: Vec<ConfiguredMcpServer>,
     /// What each provider open's `mcpServers` are read from: the stand-ins
     /// for the gateway's live set once MCP is composed
     /// ([`super::mcp_servers`]), none before. Never configured. Unix only,

@@ -685,18 +685,30 @@ opening) and the open sessions and their tool lists, `process` for a
 server's process group, `wire` for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
-the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
+the resource ticket, and a user's server as stored with the edits made to
+the stored list (`domain/configured_server.rs`), the relay socket, the
+`mcp-relay` command, the
 grants that tie each stand-in to its conversation (each the owner's own
 grant, carrying what its stand-ins forward), the store an MCP App's
 resources wait in behind their tickets, and the view's tool UI lookup
 (`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
-(`entrypoint`); `composition/mcp_servers.rs` takes the configured servers
+(`entrypoint`); managing the stored servers — `mcpServers.list`, `.save` and
+`.remove`, their wire in `product/mcp_servers.rs` — is
+`application/settings.rs` over its ports (`application/ports.rs`), with
+the adapters `infrastructure/stored_servers.rs` (the one reader and writer of
+`agents.mcpServers`), `infrastructure/config_store.rs` (`config.json`, its
+lock and the lock's bounded wait), `infrastructure/live_set.rs` (the live set
+over `McpServers`, and `LaunchSettings`, the one place a stored server becomes
+a launch) and `infrastructure/settings_audit.rs`
+([design](design/mcp-connections.md#managing-the-stored-servers));
+`composition/mcp_servers.rs` takes the configured servers
 into `McpServers`, the one owner of the live set, gives every provider open
 the stand-ins for that set as it is then (`StandIns`, an
 `McpServerSource`), gives the agents the grants, and builds the relay —
 on Unix even with no server configured — and the ticket store, before any
-agent is built. The relay admits each stand-in against the set's digests at
-its hello. The policy an MCP App's calls are held to is
+agent is built, and builds the settings over the live set. The relay admits
+each stand-in against the set's digests at its hello, then opens only what it
+admitted (`McpServers::open_as`). The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
 `mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
 service's (`conversation/application/service/app_calls.rs`, with the reviews
