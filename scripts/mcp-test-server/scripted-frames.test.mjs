@@ -2,7 +2,8 @@
  * `scripted-frames.mjs` against the recordings it replays (the design table
  * on #418): a reported call keeps the recorded call's shape, carries its own
  * id and the server's result where the harness puts it, and the handshake
- * answers what the SDK checks.
+ * answers what the SDK checks. `CLAUDE_CALL_ID` is held to the SDK's source
+ * instead (`stand_in.rs`'s `CALL_ID`).
  */
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"

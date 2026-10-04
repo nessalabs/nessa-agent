@@ -11,7 +11,10 @@
  * written at the places that harness carries them (`PLACES`). What this
  * knows of a harness is those places; the test checks them against the
  * recordings, so a recording that carries the call anywhere else fails it,
- * and replaying the recorded call reproduces the recording exactly.
+ * and replaying the recorded call reproduces the recording exactly. One
+ * thing it knows comes from elsewhere: where Claude's harness names a call in
+ * its `tools/call` (`CLAUDE_CALL_ID`), which the test holds to the SDK's
+ * `CALL_ID`, not to the recordings.
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"

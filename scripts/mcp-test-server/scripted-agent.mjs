@@ -275,9 +275,9 @@ const handlers = {
     }
     // Cancelled while the call was in flight: the turn ends so, and reports
     // nothing (the recordings hold no cancelled call). The stand-in may still
-    // keep the call's result under its id, unreported, and the SDK's bound of
-    // 32 kept results drops it (docs/design/mcp-connections.md, Forwarded
-    // results, S9).
+    // keep the call's result under its id, unreported, until the SDK's bound
+    // of 32 kept results drops it or its grant goes
+    // (docs/design/mcp-connections.md, Forwarded results, S9).
     if (prompt.cancelled) return { stopReason: "cancelled" }
     const update = (update) =>
       send({ method: "session/update", params: { sessionId, update } })
