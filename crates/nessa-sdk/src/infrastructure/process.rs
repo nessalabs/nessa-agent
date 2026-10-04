@@ -387,6 +387,10 @@ impl Drop for ProcessScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SignalDelivery {
     Delivered,
+    /// Only unix can be refused without failing: the non-unix `signal_group`
+    /// has no group signal and returns `Err(CleanupUncertain)` at once, the
+    /// same verdict `wait_scope` would reach after its budget.
+    #[cfg(unix)]
     NotDelivered,
 }
 #[cfg(unix)]
