@@ -71,7 +71,9 @@ pub(crate) fn mcp_tool_calls(
 
 /// Whether every app `message` names — its writer, then each context's giver
 /// in order — is the MCP tool call `recorded` finds for it, to the same server
-/// and tool. `recorded` answers from the turns before the message only.
+/// and tool, compared exactly as observed ([`McpAppSource`] names it in the
+/// harness's spelling). `recorded` answers from the turns before the message
+/// only.
 ///
 /// # Errors
 ///

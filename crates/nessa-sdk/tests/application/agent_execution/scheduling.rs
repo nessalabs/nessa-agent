@@ -914,3 +914,76 @@ async fn scheduling_close_cause_survives_after_hook_failure_without_relabelling_
     assert_eq!(transition.cause, SchedulingCause::SessionClosed);
     assert_eq!(transition.actor, Some(close_action()));
 }
+
+/// An app no earlier MCP tool call drew ("The app a message names", A2, A6)
+/// is refused while a turn runs, at native steering into that turn and at
+/// the queued and steered entries: nothing is saved, steered, queued or
+/// started. Here the app names the running turn's own tool call, which no
+/// saved observation shows. A person's correction steered after it is
+/// injected, so the refusal is the app's, not the steering path's.
+#[tokio::test]
+async fn a_forged_app_is_refused_while_a_turn_runs_at_every_steering_entry() {
+    use nessa_sdk::application::agent_execution::sessions::UnknownApp;
+    use nessa_sdk::domain::agent_execution::{
+        prompts::{McpAppSource, MessageSender},
+        tools::{McpTool, ToolCallId},
+    };
+    let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
+    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let running = started(&mut calls, "active").await;
+    let saved = storage.snapshot();
+    let forged = ExecutionRequest {
+        user_message: request("forged").user_message.sent_by(MessageSender::App(
+            McpAppSource::new(
+                ExecutionId::new("active").unwrap(),
+                ToolCallId::new("call-1").unwrap(),
+                McpTool::new("charts", "show").unwrap(),
+            )
+            .unwrap(),
+        )),
+        ..request("forged")
+    };
+    let refused = Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall));
+    assert_eq!(
+        agent.steer(forged.clone(), actor()).await.map(drop),
+        refused
+    );
+    assert_eq!(
+        agent
+            .enqueue_steering(forged.clone(), actor())
+            .await
+            .map(drop),
+        refused
+    );
+    assert_eq!(agent.enqueue(forged, actor()).await.map(drop), refused);
+    assert!(provider.steered.lock().unwrap().is_empty());
+    assert_eq!(storage.snapshot(), saved);
+
+    assert!(matches!(
+        agent.steer(request("correction"), actor()).await,
+        Ok(SteeringDelivery::Injected { target, .. }) if target.as_str() == "active"
+    ));
+    assert_eq!(
+        provider
+            .steered
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, input)| input.execution_id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        ["correction"]
+    );
+    complete(running);
+    assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Completed));
+    assert!(calls.try_recv().is_err());
+    assert_eq!(
+        storage
+            .snapshot()
+            .invocations
+            .iter()
+            .map(|record| record.request.execution_id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        ["active", "correction"]
+    );
+    agent.close(close_action()).await.unwrap();
+}

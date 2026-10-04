@@ -16,11 +16,19 @@ use crate::domain::agent_execution::{
 /// Nothing here is authenticated: an app speaks on the person's behalf, under
 /// their credential, and this says which app it was.
 ///
+/// The server and tool are the call's MCP identity as the session observed
+/// it, in the harness's spelling ([`McpTool`]): `rows_get` for a call Claude's
+/// harness made to the listed `rows.get`. That observed identity is the one
+/// fact the session holds about the call, and admission compares it exactly,
+/// so an app named with the listed spelling of a renamed call is refused
+/// (`an_app_names_its_call_as_the_session_observed_it`).
+///
 /// Building one checks only its own fields. A session admits a message that
 /// names it — as its writer, or as the giver of a context it carries — only
 /// when its tool call is an MCP tool call an earlier turn of that session
 /// observed, to this same server and tool; otherwise admission refuses the
-/// message (the session's `AgentError::UnknownApp`) and saves nothing.
+/// message (the session's `AgentError::UnknownApp`) and saves nothing
+/// (`an_app_no_earlier_mcp_tool_call_drew_is_refused_at_every_entry`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpAppSource {
     execution_id: ExecutionId,
@@ -32,7 +40,8 @@ impl McpAppSource {
     pub const MAX_TOOL_ID_BYTES: usize = ExecutionId::MAX_BYTES;
 
     /// The app drawn for the tool call `tool_id` of `execution_id`, which
-    /// called `tool`.
+    /// called `tool` — as the session observed that call, in the harness's
+    /// spelling, not as the server listed the tool.
     ///
     /// # Errors
     ///
@@ -64,7 +73,8 @@ impl McpAppSource {
     pub fn tool_id(&self) -> &ToolCallId {
         &self.tool_id
     }
-    /// The MCP server and tool the app's tool call was to.
+    /// The MCP server and tool the app's tool call was to, as the session
+    /// observed the call (the harness's spelling, which admission compares).
     pub fn tool(&self) -> &McpTool {
         &self.tool
     }

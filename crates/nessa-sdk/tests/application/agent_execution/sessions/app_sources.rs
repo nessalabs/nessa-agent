@@ -349,3 +349,59 @@ fn a9_a_replayed_tool_call_rolled_back_with_its_unit_draws_no_app() {
         .unwrap();
     assert_eq!(continuation.apply_unit(&[message("turn-2")]), Ok(()));
 }
+
+/// An app is named by its call's MCP identity as the session observed it:
+/// Claude's harness spells the listed `rows.get` as `rows_get`, and that is
+/// the identity compared (A1, A5), not the server's listing.
+#[test]
+fn an_app_names_its_call_as_the_session_observed_it() {
+    let renamed = || {
+        turn(
+            DRAWN,
+            text(),
+            vec![tool_call("call-1").with_mcp_tool(mcp("mcptest", "rows_get"))],
+        )
+    };
+    let listed = app(DRAWN, "call-1", mcp("mcptest", "rows.get"));
+    judged(
+        vec![renamed()],
+        from(listed.clone()),
+        Err(UnknownApp::DifferentMcpTool),
+    );
+    judged(
+        vec![renamed()],
+        carrying([listed]),
+        Err(UnknownApp::DifferentMcpTool),
+    );
+    let observed = app(DRAWN, "call-1", mcp("mcptest", "rows_get"));
+    judged(vec![renamed()], from(observed.clone()), Ok(()));
+    judged(vec![renamed()], carrying([observed]), Ok(()));
+}
+
+/// A call seen first as `charts/show` and then as `charts/hide` names no app
+/// either way on restoration: the snapshot and the record log that keep both
+/// observations are refused for the call itself, before any message is asked
+/// about. Admission's side, where the second observation is refused live, is
+/// `admission_keeps_a_calls_first_mcp_identity`.
+#[test]
+fn a_restored_call_seen_as_two_mcp_tools_names_no_app() {
+    let twice = turn(
+        DRAWN,
+        text(),
+        vec![
+            tool_call("call-1").with_mcp_tool(mcp("charts", "show")),
+            tool_call("call-1").with_mcp_tool(mcp("charts", "hide")),
+        ],
+    );
+    for named in [drawn(), app(DRAWN, "call-1", mcp("charts", "hide"))] {
+        let restored = snapshot(vec![twice.clone(), turn("turn-2", from(named), Vec::new())]);
+        let different = |result: Result<(), StorageError>| {
+            assert!(
+                matches!(&result, Err(StorageError::Corrupt(message)) if message.contains("DifferentMcpTool")),
+                "{result:?}"
+            )
+        };
+        different(validation::validate(&restored));
+        different(fold_changes(None, &record_log(&restored)).map(drop));
+    }
+}

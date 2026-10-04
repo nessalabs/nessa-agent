@@ -300,6 +300,14 @@ impl UserMessage {
     /// This message, written by `sender`. A message is the person's until
     /// it is said otherwise.
     ///
+    /// Who wrote it is part of the message's equality, so the same words from
+    /// another sender are another message. Resubmitted under the execution ID
+    /// of a saved message, it is refused and nothing of it is saved or sent:
+    /// the agent's `invoke` refuses any ID a saved invocation holds
+    /// (`AgentError::InvalidInput`), and its queued and steered entries return
+    /// `AgentError::SubmissionConflict`. The saved message keeps its sender
+    /// (`a_retry_that_changes_who_wrote_a_saved_message_is_refused_at_every_entry`).
+    ///
     /// # Examples
     ///
     /// ```

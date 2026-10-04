@@ -235,8 +235,12 @@ the second.
   `MessageSender`: the person, or an app (`McpAppSource`: the execution and
   tool call that drew it, and the MCP server and tool that call was to). A
   message is the person's until said otherwise. The sender is part of the
-  message's equality, so a retry that changed it is another message, which
-  the session settles as a conflict.
+  message's equality, so a retry under a saved message's execution ID that
+  changed it is another message under a used ID, and nothing of it is
+  saved or sent: `invoke` refuses any ID a saved invocation holds
+  (`InvalidInput`, "execution ID already belongs to a saved invocation"),
+  and `enqueue`, `enqueue_steering` and `steer` return `SubmissionConflict`.
+  The saved message keeps its writer.
 - **What an app gave the model goes with a message, not in it.**
   `AppModelContext` is one app's context: its text, its structured content
   (the JSON text of one object), or both, and the identity of the host's
@@ -279,11 +283,16 @@ the second.
 Every app a message names — its writer, and the giver of each context it
 carries — is an MCP tool call recorded earlier in the session: the tool call
 `tool_id` of an earlier turn `execution_id`, observed with an MCP identity
-whose server and tool are the app's. The SDK session owns the rule
-(`sessions::app_sources`). It is asked at admission, under the session's
-evidence lock, against the turns already saved (`begin_record`, which every
-immediate, queued and steered submission goes through); and of every
-restored snapshot (`validation::continuation`) and replayed record log
+whose server and tool are the app's. The app names that identity as the
+session observed it, in the harness's spelling (`rows_get` for a call
+Claude's harness made to the listed `rows.get`): it is the one fact the
+session holds about the call, and it is compared exactly, so the listed
+spelling of a renamed call is `DifferentMcpTool`. A host that resolves an
+app from a transcript carries the observed spelling. The SDK session owns
+the rule (`sessions::app_sources`). It is asked at admission, under the
+session's evidence lock, against the turns already saved (`begin_record`,
+which every immediate, queued and steered submission goes through); and of
+every restored snapshot (`validation::continuation`) and replayed record log
 (`InputAccepted` in `records`), against the turns before the message,
 through each earlier turn's index of its MCP tool calls. That index is
 built as its observations are validated and taken back with a unit that
@@ -326,7 +335,7 @@ Admission checks that it was.
 | P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
 | P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
 | P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
-| P5 | a saved message without `user_app` or `user_app_model_context`, as one saved before #390 | `Corrupt`, not read as the person's with nothing given |
+| P5 | a saved message without `user_app` or `user_app_model_context`, as one saved before #390 | `Corrupt`, for that conversation only; another opens |
 | P6 | an `UnknownApp` failure saved and read back | the same variant |
 | P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
 | B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
@@ -367,9 +376,14 @@ Each row above has a test, named after it:
   each row asked by admission, restoration and a replayed record log alike,
   in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`,
   admission against saved turns in `sessions/manager.rs`
-  (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`), and at
-  every entry in `agents/messages.rs`; V1–V7 in
+  (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`,
+  `admission_keeps_a_calls_first_mcp_identity`), at every entry in
+  `agents/messages.rs` (refused, admitted, and a retry that changed the
+  writer), and at every steering entry while a turn runs in
+  `scheduling.rs`; V1–V7 in
   `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P5
-  in `snapshot/semantic.rs`, P6 in
+  in `snapshot/semantic.rs`, and P5's other conversation opening in the
+  tests of `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
+  (it frames a save group by hand); P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`.

@@ -846,6 +846,65 @@ async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
     assert_eq!(accepted, [ExecutionId::new("drawn").unwrap()]);
 }
 
+/// A call observed as `charts/show` and then reported as `charts/hide` keeps
+/// its first MCP identity: the second observation is refused and saved as
+/// nothing, so admission refuses an app naming `charts/hide`
+/// (`DifferentMcpTool`) and takes `charts/show`, as restoration refuses the
+/// two together (`a_restored_call_seen_as_two_mcp_tools_names_no_app`).
+#[tokio::test]
+async fn admission_keeps_a_calls_first_mcp_identity() {
+    use crate::application::agent_execution::sessions::UnknownApp;
+    use crate::domain::agent_execution::{
+        prompts::{McpAppSource, MessageSender},
+        tools::{McpTool, ToolCallId, ToolCallUpdate},
+    };
+    let (manager, _lease, active) = manager(0).await;
+    let show = || McpTool::new("charts", "show").unwrap();
+    let hide = || McpTool::new("charts", "hide").unwrap();
+    let observed = |tool: McpTool| {
+        ExecutionEvent::new(
+            active.clone(),
+            ExecutionUpdate::Tool(
+                ToolCallUpdate::new(
+                    ToolCallId::new("call-1").unwrap(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_mcp_tool(tool),
+            ),
+        )
+    };
+    let request = |id: &str, tool: McpTool| ExecutionRequest {
+        execution_id: ExecutionId::new(id).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("plot").unwrap()).sent_by(
+            MessageSender::App(
+                McpAppSource::new(active.clone(), ToolCallId::new("call-1").unwrap(), tool)
+                    .unwrap(),
+            ),
+        ),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let actor = || ActionContext::new("user", "test", "invoke").unwrap();
+
+    manager.event(observed(show())).await.unwrap();
+    assert!(matches!(
+        manager.event(observed(hide())).await,
+        Err(StorageError::Corrupt(message)) if message.contains("DifferentMcpTool")
+    ));
+    assert_eq!(
+        manager.begin(request("hidden", hide()), actor()).await,
+        Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
+    );
+    assert_eq!(
+        manager.begin(request("shown", show()), actor()).await,
+        Ok(1)
+    );
+}
+
 fn text(id: &ExecutionId) -> ExecutionEvent {
     ExecutionEvent::new(
         id.clone(),

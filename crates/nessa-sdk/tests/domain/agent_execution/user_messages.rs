@@ -373,7 +373,8 @@ fn a_message_is_the_persons_until_said_otherwise_and_carries_at_most_four_contex
     let sent = message.clone().sent_by(MessageSender::App(app("call-1")));
     assert_eq!(sent.sender(), &MessageSender::App(app("call-1")));
     // Who wrote it is part of the message: the same words from an app are
-    // another message, so a retry that changed it is a conflict.
+    // another message, so a retry that changed it is refused
+    // (`a_retry_that_changes_who_wrote_a_saved_message_is_refused_at_every_entry`).
     assert_ne!(sent, message);
 
     let context = |id: &str| {

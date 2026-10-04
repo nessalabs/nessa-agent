@@ -565,3 +565,140 @@ async fn an_app_no_earlier_mcp_tool_call_drew_is_refused_at_every_entry() {
         agent.close(actor()).await.unwrap();
     }
 }
+
+/// The app of the tool call `call-1` that the turn `drawing` made to
+/// `charts/show`, as [`agent_with_a_drawn_app`] records it.
+fn drawn_app() -> nessa_sdk::domain::agent_execution::prompts::McpAppSource {
+    use nessa_sdk::domain::agent_execution::{
+        prompts::McpAppSource,
+        tools::{McpTool, ToolCallId},
+    };
+    McpAppSource::new(
+        ExecutionId::new("drawing").unwrap(),
+        ToolCallId::new("call-1").unwrap(),
+        McpTool::new("charts", "show").unwrap(),
+    )
+    .unwrap()
+}
+
+/// An agent over `storage` whose conversation holds one completed turn,
+/// `drawing`, that observed its tool call `call-1` as MCP `charts/show`
+/// (`drawn_app`). The turn is run, then its observation is added to the
+/// saved record and the conversation restored, which is the history
+/// admission reads.
+async fn agent_with_a_drawn_app(storage: &MemoryStorage, provider: Arc<ImageProvider>) -> Agent {
+    use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
+    let agent = attached_agent(provider.clone(), storage.manager().await)
+        .await
+        .unwrap();
+    agent.invoke(request("drawing"), actor()).await.unwrap();
+    agent.close(actor()).await.unwrap();
+    drop(agent);
+    {
+        let mut state = storage.0.lock().unwrap();
+        let drawing = &mut state.snapshot.as_mut().unwrap().invocations[0];
+        let id = drawing.request.execution_id.clone();
+        drawing.events.insert(
+            0,
+            ExecutionEvent::new(
+                id,
+                ExecutionUpdate::Tool(
+                    ToolCallUpdate::new(
+                        ToolCallId::new("call-1").unwrap(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+                ),
+            ),
+        );
+    }
+    attached_agent(provider, storage.manager().await)
+        .await
+        .unwrap()
+}
+
+/// An app an earlier turn's MCP tool call drew ("The app a message names",
+/// A1) is admitted at every entry, immediate, queued and steered alike, and
+/// saved as the message's writer.
+#[tokio::test]
+async fn an_app_an_earlier_mcp_tool_call_drew_is_admitted_at_every_entry() {
+    use nessa_sdk::domain::agent_execution::prompts::MessageSender;
+    for operation in 0..4 {
+        let storage = MemoryStorage::default();
+        let provider = ImageProvider::new(AGENT_TAKES_IMAGES, None);
+        let agent = agent_with_a_drawn_app(&storage, provider.clone()).await;
+        let executions = provider.executions.load(Ordering::SeqCst);
+        let input = ExecutionRequest {
+            user_message: UserMessage::text_only(PromptText::new("plot").unwrap())
+                .sent_by(MessageSender::App(drawn_app())),
+            ..request("from-app")
+        };
+        assert_eq!(
+            submit(&agent, input.clone(), operation).await,
+            Ok(ExecutionOutcome::Completed),
+            "operation {operation}"
+        );
+        assert_eq!(provider.executions.load(Ordering::SeqCst), executions + 1);
+        let snapshot = storage.snapshot();
+        assert_eq!(snapshot.invocations.len(), 2, "operation {operation}");
+        assert_eq!(snapshot.invocations[1].request, input);
+        agent.close(actor()).await.unwrap();
+    }
+}
+
+/// A retry of a saved message that says an app wrote it, where the person
+/// did, is another message under a used ID: `invoke` refuses the ID as
+/// already belonging to a saved invocation (`InvalidInput`), and queued and
+/// steered entries settle it as `SubmissionConflict`. Either way nothing is
+/// written, nothing is sent, and the saved message stays the person's. The
+/// app is one the conversation recorded, so the refusal is the retry's, not
+/// the app's.
+#[tokio::test]
+async fn a_retry_that_changes_who_wrote_a_saved_message_is_refused_at_every_entry() {
+    use nessa_sdk::domain::agent_execution::prompts::MessageSender;
+    for operation in 0..4 {
+        let storage = MemoryStorage::default();
+        let provider = ImageProvider::new(AGENT_TAKES_IMAGES, None);
+        let agent = agent_with_a_drawn_app(&storage, provider.clone()).await;
+        let person = request("same");
+        assert_eq!(
+            submit(&agent, person.clone(), operation).await,
+            Ok(ExecutionOutcome::Completed),
+            "operation {operation}"
+        );
+        let executions = provider.executions.load(Ordering::SeqCst);
+        let writes = storage.0.lock().unwrap().writes;
+        let from_app = ExecutionRequest {
+            user_message: person
+                .user_message
+                .clone()
+                .sent_by(MessageSender::App(drawn_app())),
+            ..person.clone()
+        };
+        let refused = match operation {
+            0 => Err(AgentError::InvalidInput(
+                "execution ID already belongs to a saved invocation".into(),
+            )),
+            _ => Err(AgentError::SubmissionConflict),
+        };
+        assert_eq!(
+            submit(&agent, from_app, operation).await,
+            refused,
+            "operation {operation}"
+        );
+        assert_eq!(provider.executions.load(Ordering::SeqCst), executions);
+        assert_eq!(storage.0.lock().unwrap().writes, writes);
+        let snapshot = storage.snapshot();
+        assert_eq!(snapshot.invocations.len(), 2, "operation {operation}");
+        assert_eq!(snapshot.invocations[1].request, person);
+        assert_eq!(
+            snapshot.invocations[1].request.user_message.sender(),
+            &MessageSender::Person
+        );
+        agent.close(actor()).await.unwrap();
+    }
+}

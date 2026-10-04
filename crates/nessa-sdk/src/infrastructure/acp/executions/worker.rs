@@ -1033,9 +1033,10 @@ impl<P: AcpProfile> Worker<P> {
         Ok(())
     }
 
-    /// The ACP content blocks for one user message: its text, then its images
-    /// in attachment order. Nothing has been written when this fails, so the
-    /// caller rejects the input without a dispatch.
+    /// The ACP content blocks for one user message, in [`content_blocks`]'
+    /// order: the block of what apps gave the model first, when there is one,
+    /// then the message itself. Nothing has been written when this fails, so
+    /// the caller rejects the input without a dispatch.
     ///
     /// This never waits. The session read, verified, and encoded `images`
     /// before it sent the command, because this task is the only one polling
