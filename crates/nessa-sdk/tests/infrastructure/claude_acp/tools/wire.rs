@@ -523,8 +523,11 @@ fn a_call_is_left_without_an_mcp_identity_where_none_can_be_named_exactly() {
     let mut names = HashMap::new();
     // Built-in tools, a frame naming nothing, an unconfigured server, and a
     // name two configured servers both fit.
-    // Configured names cannot hold `__` (`AcpConfig::validate`), but one may
-    // end in `_`: `a` and `a_` both fit `mcp__a___c`.
+    // A configured name holds no `__` and neither starts nor ends with `_`
+    // (`StdioMcpServer::problem`), so no configuration gives two fitting
+    // prefixes. These are handed in directly — `a` and `a_` both fit
+    // `mcp__a___c` — to show the split withholds an identity rather than
+    // guess, were two ever to fit.
     let ambiguous = vec!["mcp__a__".to_owned(), "mcp__a___".to_owned()];
     for (frame, prefixes) in [
         (mcp_frame("read", "Read"), vec!["mcp__nessa__".to_owned()]),
