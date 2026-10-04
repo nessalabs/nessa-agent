@@ -38,6 +38,19 @@ impl Namespace {
     fn root(&self) -> PathBuf {
         self.directory.path().join("namespace")
     }
+    /// The namespace's receiver-access store, as composition opens it.
+    fn receivers(&self) -> Arc<LocalReceiverAuthority> {
+        let root = self.root().join("conversations");
+        nessa_local_storage::create_directory(&root).unwrap();
+        Arc::new(
+            LocalReceiverAuthority::open(
+                &root.join("receiver-access.sqlite3"),
+                "policy",
+                Arc::new(SystemClock),
+            )
+            .unwrap(),
+        )
+    }
     fn registry(&self) -> Arc<LocalCredentialStore> {
         Arc::new(LocalCredentialStore::open(self.root().join("auth"), "credentials.json").unwrap())
     }
@@ -88,6 +101,7 @@ impl Namespace {
             namespace: self.root(),
             registry,
             policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+            receivers: self.receivers(),
             clock: Arc::new(SystemClock),
             gateway: Resource::new(
                 OrganizationId::new("org").unwrap(),
@@ -240,5 +254,30 @@ async fn native_shutdown_joins_a_held_peer() {
     assert!(
         failed.borrow().is_none(),
         "a stop is not a listener failure"
+    );
+}
+
+/// Row D6: a listener task that faulted leaves its drain unknown, so `join`
+/// returns that fault and does not go on to reconcile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn faulted_listener_join_reports_the_fault_without_reconciling() {
+    let namespace = Namespace::new();
+    namespace.bootstrap().await;
+    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(namespace.registry()))
+        .await
+        .unwrap();
+    let bound = bind(prepared, RuntimeDependencies::default().clock)
+        .await
+        .unwrap();
+    let running = RunningNative {
+        gateway: bound.gateway.clone(),
+        stop: None,
+        task: tokio::spawn(async { panic!("native listener fault") }),
+    };
+    assert_eq!(
+        tokio::time::timeout(WAIT, running.join()).await.unwrap(),
+        Err(NativeShutdownFailure::ListenerFault(
+            PairingWorkerFault::Panic
+        ))
     );
 }

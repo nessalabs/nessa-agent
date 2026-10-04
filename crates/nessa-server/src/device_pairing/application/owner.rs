@@ -1,4 +1,6 @@
 //! Owner commands derive canonical consent from current authenticated identity.
+use super::cleanup::SettleCleanup;
+use super::receivers::PairingReceivers;
 use nessa_auth::{
     application::{
         pairing::{
@@ -15,6 +17,7 @@ use nessa_auth::{
         Resource,
     },
 };
+use std::sync::Arc;
 /// Typed refusal at the owner operation boundary; no provider diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnerError {
@@ -42,7 +45,10 @@ pub struct PairingOwner<'a> {
     /// Current session/membership/grant policy owner, reevaluated per command.
     pub authorization: AuthorizePairing<'a>,
     /// Existing registry owner; writes retain its revision CAS and audit history.
-    pub enrollments: &'a dyn PairingStore,
+    /// Shared ownership because a stage lease keeps the registry alive.
+    pub enrollments: &'a Arc<dyn PairingStore>,
+    /// The canonical receiver authority an approved enrollment is paired with.
+    pub receivers: &'a dyn PairingReceivers,
     /// The gateway resource, chosen by composition rather than by the request.
     pub gateway: &'a Resource,
     /// Composition-selected finite invitation policy.
@@ -83,7 +89,7 @@ impl PairingOwner<'_> {
             .map_err(OwnerError::Enrollment)?
         {
             if record.intent().resource() == self.gateway {
-                self.expire(record.id())?;
+                self.expire(record.id()).await?;
             }
         }
         // An expiry advances the registry revision an admission is bound to, so
@@ -156,7 +162,7 @@ impl PairingOwner<'_> {
         id: InvitationId,
     ) -> Result<PairingRecord, OwnerError> {
         self.admit(session, id).await?;
-        self.expire(id)
+        self.expire(id).await
     }
     /// Record explicit approval of an exact displayed key, denial, or cancellation.
     /// Existing registry behavior atomically revokes an Active key on cancellation;
@@ -170,14 +176,14 @@ impl PairingOwner<'_> {
         self.admit(session, id).await?;
         // Expiry before the decision, so a past-due enrollment keeps Expired.
         // It may advance the registry revision, so admit again for the write.
-        self.expire(id)?;
+        self.expire(id).await?;
         let admission = self.admit(session, id).await?;
         self.enrollments
             .decide_pairing(id, decision, &admission, self.clock)
             .await
             .map_err(OwnerError::Enrollment)
     }
-    async fn admit(
+    pub(super) async fn admit(
         &self,
         session: &AuthenticatedSession,
         id: InvitationId,
@@ -191,10 +197,35 @@ impl PairingOwner<'_> {
             .await
             .map_err(OwnerError::Authorization)
     }
-    /// Auth's expiry, which changes nothing unless the record is due.
-    fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
-        self.enrollments
+    /// Auth's expiry, which changes nothing unless the record is due. An
+    /// enrollment it ends after staging has its receiver settled here, by the
+    /// path that ended it (design row A13); if that cannot complete now, the
+    /// record keeps `cleanup_pending` for the next path or reconciliation.
+    async fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
+        let record = self
+            .enrollments
             .expire_pairing_if_due(id, self.clock)
-            .map_err(OwnerError::Enrollment)
+            .map_err(OwnerError::Enrollment)?;
+        if !record.cleanup_pending() {
+            return Ok(record);
+        }
+        match (SettleCleanup {
+            enrollments: self.enrollments,
+            receivers: self.receivers,
+            clock: self.clock,
+        })
+        .execute(id)
+        .await
+        {
+            Ok(settled) => Ok(settled),
+            // Cleanup may have got partway (a receiver remembered) before
+            // failing: answer with the record as it now stands (row A15).
+            Err(error) => {
+                tracing::warn!(invitation = ?id, ?error, "device pairing cleanup left pending");
+                self.enrollments
+                    .read_pairing(id)
+                    .map_err(OwnerError::Enrollment)
+            }
+        }
     }
 }

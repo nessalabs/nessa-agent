@@ -36,7 +36,7 @@ use nessa_server::{
 use serde_json::{json, Value};
 use std::{
     net::{SocketAddr, TcpStream},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
 };
 
 struct NoAgents;
@@ -242,7 +242,8 @@ async fn owner_route_refuses_a_member_before_disclosure() {
 }
 
 /// Row O4: approval names the exact claimed key; another key is a conflict
-/// that changes nothing. Deny of a claimed enrollment ends it as the owner's.
+/// that changes nothing, and the claimed key is carried through to Active
+/// (slice 2b). Deny of a claimed enrollment ends it as the owner's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_route_approve_exact_claim_before_effect() {
     let fixture = Fixture::new().await;
@@ -304,12 +305,16 @@ async fn owner_route_approve_exact_claim_before_effect() {
                 "pairing.approve",
                 json!({"invitationId": id, "deviceKey": key}),
             );
-            assert_eq!(approved["phase"], "approved");
+            assert!(approved.get("activationStopped").is_none(), "{approved}");
+            let approved = approved["status"].clone();
+            // Approval carries the exact key through to an issued credential
+            // and its paired receiver (slice 2b, rows A1, A2).
+            assert_eq!(approved["phase"], "active");
             assert_eq!(approved["claimedDeviceKey"], json!(key));
-            assert!(
-                approved.get("credentialId").is_none(),
-                "approval issues nothing"
-            );
+            assert!(approved["credentialId"].is_string());
+            assert!(approved["receiver"]["receiverId"].is_string());
+            assert_eq!(approved["receiver"]["accessEpoch"], 1);
+            assert_eq!(approved["cleanupPending"], false);
         });
         client.shutdown().await;
     }
@@ -447,4 +452,57 @@ async fn owner_route_without_native_pairing_is_not_configured() {
         }
     });
     assert!(fixture.registry.pending_pairings().unwrap().is_empty());
+}
+
+/// Row A11: approval's typed stop reaches the wire, `retryable` for a
+/// receiver whose answer was lost (approving again then reaches active) and
+/// `permanent` for a receiver no longer holding the pairing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_route_reports_activation_stops_on_the_wire() {
+    for retryable in [true, false] {
+        let (fixture, receivers) = crate::activation::fixture().await;
+        let address = serve(&fixture, true).await;
+        let (native, stop, listener, _) = fixture.listener().await;
+        let token = fixture.owner_token.clone();
+        let created =
+            blocking(|| ProductClient::connect(address, &token).ok("pairing.create", json!({})));
+        let id = invitation(&created["status"]);
+        let (_, store) = pending(fixture.directory.path(), "client");
+        let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+        let code = ManualCode::parse(created["code"].as_str().unwrap().as_bytes()).unwrap();
+        tokio::time::timeout(
+            WAIT,
+            client.enroll(TcpStream::connect(native).unwrap(), code, OsEntropy),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        if retryable {
+            receivers.lose_pair_answer.store(true, Ordering::SeqCst);
+        } else {
+            receivers.revoke_after_pair.store(true, Ordering::SeqCst);
+        }
+        blocking(|| {
+            let mut owner = ProductClient::connect(address, &token);
+            let key =
+                owner.ok("pairing.status", json!({"invitationId": id}))["claimedDeviceKey"].clone();
+            let approve = json!({"invitationId": id, "deviceKey": key});
+            let stopped = owner.ok("pairing.approve", approve.clone());
+            assert_eq!(stopped["status"]["phase"], "staging", "{stopped}");
+            assert_eq!(
+                stopped["activationStopped"],
+                if retryable { "retryable" } else { "permanent" }
+            );
+            let again = owner.ok("pairing.approve", approve);
+            if retryable {
+                assert_eq!(again["status"]["phase"], "active", "{again}");
+                assert!(again.get("activationStopped").is_none());
+            } else {
+                assert_eq!(again["activationStopped"], "permanent", "{again}");
+            }
+        });
+        client.shutdown().await;
+        stop.send(()).unwrap();
+        listener.await.unwrap().unwrap();
+    }
 }

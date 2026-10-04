@@ -138,6 +138,9 @@ pub(super) enum WireStatus<'a> {
     Active {
         consent: WireConsent<'a>,
         credential: Cow<'a, str>,
+        receiver: Cow<'a, str>,
+        #[serde(rename = "accessEpoch")]
+        access_epoch: u64,
     },
     Terminal {
         consent: WireConsent<'a>,
@@ -183,10 +186,15 @@ impl WireStatus<'_> {
             Self::Active {
                 consent,
                 credential,
+                receiver,
+                access_epoch,
             } => NativePairingStatus::Active {
                 consent: consent.into_domain()?,
                 credential: CredentialId::new(credential.into_owned())
                     .map_err(|_| NativeWireError::Invalid)?,
+                receiver: ResourceId::new(receiver.into_owned())
+                    .map_err(|_| NativeWireError::Invalid)?,
+                access_epoch,
             },
             Self::Terminal { consent, cause } => NativePairingStatus::Terminal {
                 consent: consent.into_domain()?,

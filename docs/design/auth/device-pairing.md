@@ -1760,8 +1760,8 @@ The owner routes and startup composition rows are implemented by
 
 The owner product methods on the authenticated `/session` socket, and the
 startup composition that mounts the B1 native listener when it is configured.
-Enrollment still ends at **Approved**: approval records consent and nothing
-else. Receiver staging, Active and credential publication (P19–P25, O5, O6) are
+In this slice enrollment still ended at **Approved**: approval recorded consent
+and nothing else; slice 2b carries it to Active. Receiver staging, Active and credential publication (P19–P25, O5, O6) are
 the next slice, so `pairing.approve` in this slice is
 `OwnerDecision::Approve` alone, and no record can reach Staging, Active or a
 cleanup-pending Terminal yet.
@@ -1784,7 +1784,7 @@ the route parses, asks, and maps the record it gets back.
 | `pairing.create` | `{}` | `PairingCreateResult {code, status}`; `code` is the grouped display form, shown once |
 | `pairing.pending` | `{}` | `PairingPendingResult {items: PairingOwnerStatus[]}` |
 | `pairing.status` | `PairingInvitationParams {invitationId}` | `PairingOwnerStatus` |
-| `pairing.approve` | `PairingApproveParams {invitationId, deviceKey}` | `PairingOwnerStatus` |
+| `pairing.approve` | `PairingApproveParams {invitationId, deviceKey}` | `PairingApproveResult {status: PairingOwnerStatus, activationStopped?}` (slice 2b; in 2a it was `PairingOwnerStatus`) |
 | `pairing.deny` | `PairingInvitationParams` | `PairingOwnerStatus` |
 | `pairing.cancel` | `PairingInvitationParams` | `PairingOwnerStatus` |
 
@@ -1840,7 +1840,7 @@ TLS 1.3 raw-public-key profile.
 | S4 | Key file absent, enrollment history present | Startup fails with `RunError::Native` before either socket is bound; nothing is regenerated or erased. Which typed cause depends on what else is missing: the key file alone gone while its publication audit remains is `Identity(PrivateState(Corrupt))` (the private state contradicts itself); the whole `native-pairing/` directory gone is `Identity(Registry(GatewayKeyHistoryExists))` (the registry's history refuses a first publication). Both are permanent (row S16). | `native_startup_history_without_key_refuses_before_bind` (both cases) |
 | S5 | Key present, its audit outcome unfinished | Auth's `restore_gateway_key` reconciles it; composition only propagates a failure as `RunError::Native`. | Auth's own restore tests; composition adds no rule here |
 | S6 | Restart with an Available invitation | `GatewayPairing::open` (B1) ends it Restarted by System before serving; the key file is byte-identical. | `native_restart_ends_available_and_keeps_the_key`; B1 `native_restart_ends_available_setup_and_preserves_key` |
-| S7, S8 | Terminal cleanup-pending at startup | Not reachable: no record reaches Staging in this slice. Slice 2b. | — |
+| S7, S8 | Terminal cleanup-pending at startup | Not reachable in this slice; implemented by [slice 2b](#activation-and-credential-delivery-slice-2b). | — |
 | S9 | Claimed or Approved retained across restart | B1: preserved, never auto-approved or activated. | B1 `native_restart_expires_due_claimed_enrollments` |
 | S10 | Preparation succeeds, native bind fails | Typed `RunError::Native(Bind)`; the browser listener is dropped unserved; key and history are untouched. | `native_bind_failure_preserves_key_and_history` |
 | S11 | Expiry or owner decision while serving | B1 and Auth decide; the route maps the record. | B1 rows P06, S11 |
@@ -1859,7 +1859,7 @@ TLS 1.3 raw-public-key profile.
 | O7 | Deny or cancel arrives with other owner work in flight | Classified as socket controls (`ResponseClass::Control`, `controls` capacity), so ordinary requests cannot crowd them out; the decision itself is Auth's, which keeps the first terminal cause. | `pairing_deny_and_cancel_are_controls`; Auth's terminal-cause tests |
 | O8 | The socket goes after admission | The route runs on the socket's detached request task (existing behaviour), and `GatewayPairing` keeps its own create worker through commit (B1 P77). | B1 `native_create_observer_loss_keeps_original_owner_until_drain` |
 | W1 | Malformed params: unknown field, wrong array length, non-empty params for create or pending | `invalid_request` from the generated DTO (`deny_unknown_fields`, fixed arrays) before `GatewayPairing` is asked. | `owner_route_refuses_malformed_params_before_the_store` |
-| O5, O6, O9 | Activation, receiver admission, revocation of an Active key | Slice 2b. `credential.revoke` is unchanged. | — |
+| O5, O6, O9 | Activation, receiver admission, revocation of an Active key | Implemented by [slice 2b](#activation-and-credential-delivery-slice-2b) (rows A1–A9). `credential.revoke` is unchanged. | — |
 
 ### Open items found while mounting
 
@@ -1869,6 +1869,8 @@ TLS 1.3 raw-public-key profile.
 
 ### What slice 2b needs from this one
 
+Done in [slice 2b](#activation-and-credential-delivery-slice-2b):
+
 - `pairing.approve` must go on to `stage_pairing`, receiver dispatch, and
   `publish_pairing` with the original stage capability, returning the
   intermediate phase on a physical failure (O5, O6, P19–P25).
@@ -1876,3 +1878,147 @@ TLS 1.3 raw-public-key profile.
   shutdown D5 reconciliation after the native and product drains.
 - The native client needs the issued credential delivered on its pinned status
   (B1 ends at Approved).
+
+## Activation and credential delivery (slice 2b)
+
+### What this slice is
+
+`pairing.approve` now carries the exact claimed key through to an issued
+device credential, and the device's pinned status delivers it. An enrollment
+that ends after it was staged has its receiver settled, lookup only, at once
+when nothing else holds its stage, before the native bind on startup, and
+after the native and owner drains on shutdown.
+
+```text
+pairing.approve --> decide(Approve) --> stage_pairing --> acquire_stage (lease held)
+                --> receivers.pair --> remember_receiver --> receivers.current
+                --> publish_pairing --> Active
+deny/cancel, startup, shutdown --> SettleCleanup: acquire_stage --> lookup only
+                --> remember + fence + finish_cleanup, or finish_no_receiver
+device status (pinned) --> ReadDevicePairing --> Active {credential, receiver, current epoch}
+client --> save_credential (replaces pending, one publication)
+```
+
+Arrows are calls, in order. Auth decides every enrollment transition and owns
+the credential; `LocalReceiverAuthority` owns receivers and their journal. The
+server's `device_pairing/application` reaches the receiver authority through
+its own `PairingReceivers` port; `device_pairing/infrastructure/receivers.rs`
+adapts the conversation context's authority to it. Composition opens one
+receiver authority when agents or native pairing are configured and gives the
+same instance to both.
+
+### Owners
+
+```text
+Auth enrollment: Approved --stage--> Staging --receiver--> Staging(+receiver)
+                 --publish--> Active
+                 Staging/Active --end--> Terminal(cleanup pending)
+                 --fence or no-receiver--> Terminal(cleaned)
+Receiver journal: (none) --pair, principal=owner--> active --revoke, system--> inactive
+Device store:    pending --save_credential--> credential
+Stage lease:     held from acquire_stage until the activation or cleanup ends
+```
+
+Arrows are causal handoffs between separate owners. The stage lease is a
+physical exclusion, not an enrollment state.
+
+### Decisions
+
+- **Approval answers the record as it stands, with a typed stop.** If a step
+  after the decision does not complete, `pairing.approve` returns
+  `PairingApproveResult {status, activationStopped?}` rather than an error:
+  the record (phase `approved`, `staging`, or `terminal` if it ended
+  meanwhile) and, when activation stopped short of Active, whether approving
+  again can finish it (`retryable`: storage, receiver or worker unavailable, a
+  stage another approval holds, a stale revision) or cannot (`permanent`: the
+  receiver is no longer the paired one, the owner no longer holds the grant,
+  a conflicting record; cancel and pair again). The warn log names the
+  invitation and the typed `ActivationError`. The decision is committed and
+  is not rolled back; a retry continues from the record's stage with the same
+  credential identity and correlation. An expired owner session or inactive
+  membership is retryable: it clears by signing in again or an admin
+  re-enabling the membership, then approving again. A registry refusal only
+  recurs when it names the record's own state (conflict, ineligible, wrong
+  actor, expired, exhausted attempts, stale generation) or a capacity limit
+  (credential capacity and revision/history limits never free up on these
+  paths: revoked credentials stay; physical stage overlap is the separate
+  retryable `StageOccupied`). `Invalid`, which is also what a clock behind the
+  record or an expired owner credential returns, clears: it is retryable.
+- **One classifier says whether a failure will recur.** `device_pairing::
+  application::recurrence` decides it per store, receiver and authorization
+  failure. `ActivationError::retryable` (approve's `activationStopped`) and
+  `CleanupError::recurs` (startup's restart policy, S8/S16) both derive from
+  it, so the wire and the relaunch decision cannot disagree.
+- **Receiver correlation.** The pair is requested by the owner principal with
+  request text `pairing-stage-<stage request hex>`; the fence by the system
+  with `pairing-fence-<stage request hex>`. One stage names one receipt, so a
+  retry finds it.
+- **`receiver` and `cleanupPending` in `PairingOwnerStatus`** (flagged by 2a)
+  stay projections of the record: `receiver` is the original pair receipt and
+  its epoch, `cleanupPending` is `PairingRecord::cleanup_pending`. The owner's
+  status is enrollment history; the current epoch is not owner status.
+- **One rule says a receiver still holds its pairing.** The conversation
+  domain's `PairedReceiver` (receiver, credential, organization, owner, paired
+  epoch) admits a current binding only when it is active, names the same
+  receiver, credential, organization and owner at the paired epoch or later;
+  the receiver authority adds that the credential was not revoked on that
+  receiver since the pair (no intervening fence, even if regranted back).
+  Activation's pre-publication check (P46), the device's Active status and
+  the system fence all ask this one rule (`PairedReceiver::admits`,
+  `PairedReceiver::fence`); `ReceiverTransition::apply` still replays any
+  persisted system revoke.
+- **The device's Active status carries the current epoch.** Its `receiver` is
+  the record's paired receiver and `accessEpoch` is that receiver's epoch as
+  the receiver authority reports it when the status is read, because the
+  device needs the current one to read. A receiver that no longer holds the
+  pairing refuses the status rather than delivering another receiver's or an
+  inactive epoch.
+- **An authenticated Terminal status ends the device's record.** When the
+  pinned status for its own enrollment reads Terminal, the client removes its
+  pending record or credential (`end_enrollment`) before returning the
+  status, which is the trusted end signal a cache owner acts on (P29). The
+  device can then enroll again. Timeouts, refusals and unclaimed attempts
+  change nothing.
+- **The device keeps one enrollment record.** `FilePairingState` keeps a
+  single `client-enrollment` file holding either the pending record or the
+  issued credential (key, gateway pin, correlation, credential id, receiver
+  id). `save_credential` replaces the pending record in one publication; no
+  state holds both or neither. The epoch is not stored: it is read fresh.
+- **Product drain for D5 is the gateway's owner-command drain.** Every owner
+  command holds slice 2a's `OwnerLease` from admission until its worker
+  returns, so shutdown waits for an approval's receiver work; this slice adds
+  no drain of its own. Section 9's general product request
+  drain (D1–D3) stays separate; reconciliation does not depend on it because
+  the stage lease already excludes a concurrent dispatch.
+- **Generation replacement (P24) is not reachable**: this profile has one
+  consent generation and no replacement operation.
+
+### Ordering table
+
+| Row | Event or ordering | Result | Test |
+| --- | --- | --- | --- |
+| A1 (P19, O5) | Owner approves the exact claimed key of a Claimed record | Decision, then a fresh admission, then `stage_pairing` reserves the server-minted credential id and stage correlation before any receiver effect. The reserved credential cannot authenticate. | `approval_stages_pairs_and_publishes_a_device_credential` |
+| A2 (P20) | Receiver pair succeeds and the current receiver is still the paired one | `remember_receiver`, current-receiver read, fresh admission, `publish_pairing`: Active with credential and receiver. The device verifier accepts the key for that credential, scoped to `conversation.read`. | `approval_stages_pairs_and_publishes_a_device_credential` |
+| A3 (P21) | Receiver answers with another credential, correlation or generation | Auth's `remember_receiver` refuses; the record stays Staging with no receiver and no credential; approval answers `staging` | `receiver_result_must_match_the_stage` |
+| A4 (P22, O5) | Receiver pair committed, its answer lost; owner approves again (also after a gateway restart) | The same stage correlation returns the original pair receipt: one receiver, epoch 1, no second credential; the retry publishes Active | `approval_retry_rejoins_the_original_receiver`; `pair_retry_returns_the_original_receipt_and_fence_is_exact` |
+| A5 (O6, P46) | The paired receiver is revoked before the publication read; or revoked, regranted to another credential, revoked and regranted back before it | No publication: the record stays Staging, approval answers `staging` with `activationStopped: permanent`, the credential is never published | `revoked_receiver_before_publication_stays_staging`; `intervening_fence_refuses_publication_even_when_regranted_back` |
+| A6 (P25) | Device's Active status reply lost; it asks again; a policy change advances the receiver's epoch; another key asks | Same credential and receiver, no new issuance; the epoch is the receiver's current one (2 after the policy change, while the record keeps 1); another device key asking for the Active enrollment is refused (`WrongActor`) and its reply carries no credential | `approval_stages_pairs_and_publishes_a_device_credential`; `another_key_cannot_read_an_active_enrollment` |
+| A11 | Activation stops short of Active | `PairingApproveResult.activationStopped` is `retryable` for an unavailable receiver (approve again then reaches Active) or an expired owner session or inactive membership (cleared by signing in again or an admin re-enabling the membership), and `permanent` for a receiver no longer current; the warn log names the invitation. Approve's classification and startup's restart policy agree for every failure | `approval_reports_whether_a_stop_is_retryable`; `owner_route_reports_activation_stops_on_the_wire`; `one_classifier_decides_retry_and_relaunch` |
+| A15 | A read's or expiry's cleanup gets partway (receiver remembered) and then fails (fence unavailable) | The read still answers, with the record as it now stands (receiver shown, `cleanupPending` true), re-read after the failed cleanup | `a_read_answers_with_the_record_as_cleanup_left_it` |
+| A16 | Device's pinned status shows its own attempt is no longer pending: Unclaimed (Failed or Superseded), whether or not the invitation has ended, e.g. its handshake dropped and another device then claimed the invitation | The client removes its pending record (`end_enrollment`) before returning the status; the person enters a code again, and `enroll` with a fresh key reserves a new attempt (the same code works while its invitation is still Available). Only a Pending attempt keeps the record. `retry` reads the original status itself and keeps the record for its new attempt on the same invitation | `dropped_attempt_then_another_claim_lets_the_device_enroll_again`; `native_claim_losing_to_expiry_is_settled_and_recoverable`; `native_client_observer_loss_keeps_pending_save_and_operation_owned` (retry) |
+| A12 (P25, F5) | Device asks status of an Active enrollment whose receiver no longer holds the pairing (another receiver reported, or inactive) | Refused (`Receiver(NotPaired)`), no epoch delivered | `active_status_refuses_a_receiver_that_no_longer_holds_the_pairing` |
+| A13 (P06, P23) | A Staging enrollment reaches its expiry and an owner read or the device's status expires it; or any owner read or device status meets a record with cleanup owed (a revoked credential's, a failed earlier cleanup) | Expiry ends it Expired by the system; the owner path's expiry step and the device status settle the receiver at once (lookup only), so `cleanupPending` is false without waiting for a restart. If it cannot complete now (stage held, receiver unavailable) the record keeps the obligation and the read still answers | `expired_staging_is_settled_by_the_path_that_expires_it`; `revoked_active_receiver_is_fenced_by_the_next_read`; `a_read_answers_with_the_record_as_cleanup_left_it`; `mounted_gateway_issues_a_device_credential_and_revokes_it` (no read after revocation, so S7/D5 alone settle it) |
+| A14 (H3) | Device's pinned status reads Terminal for its enrollment (credential revoked, denied, cancelled, expired) | The client removes its credential or pending record before returning the status; a new enrollment is then admitted | `terminal_status_ends_the_device_record_and_allows_a_new_enrollment`; `ended_enrollment_is_removed_exactly` (Auth) |
+| A7 (P23) | Owner cancels a Staging enrollment, with and without a remembered receiver | Terminal Cancelled by the owner; remembered receiver: system fence then `finish_cleanup`; none: lookup finds no receipt, `finish_no_receiver`. `cleanupPending` false; the first cause and initiator stay | `cancel_during_staging_settles_the_exact_receiver` |
+| A8 (P23, P48) | Cancel arrives while the activation holds the stage lease | Cancel answers Terminal with `cleanupPending` true (`StageOccupied`); the activation, still holding the lease, remembers its late receiver and fences it; the record ends cleaned | `cancel_during_activation_is_settled_by_the_activation` |
+| A9 (P34, O9) | Owner revokes the Active device credential with `credential.revoke` | Auth ends the enrollment Terminal(CredentialRevoked) by the owner with cleanup pending; the device verifier refuses at once; the receiver is fenced by the next owner read or device status (A13), startup (S7) or stop (D5), whichever comes first; the device's status reads Terminal and removes its credential (A14) | `mounted_gateway_issues_a_device_credential_and_revokes_it`; `revoked_active_receiver_is_fenced_by_the_next_read` |
+| A10 | Device receives Active | The client saves the credential, replacing its pending record in one publication, before returning the status. A failed save keeps the pending record and the next status delivers again; another credential conflicts; a new enrollment is refused (`Enrolled`) | `issued_credential_replaces_pending_once_and_reopens` (Auth); `device_keeps_the_issued_credential_and_clears_pending` |
+| S7 | Startup with a Terminal cleanup-pending enrollment, no live dispatch (the previous process was killed) | `native_pairing::prepare` runs `reconcile_cleanup` before it returns, so before the native bind: lookup only; a receipt is remembered and fenced, no receipt completes without a receiver. Nothing pairs | `startup_settles_ended_enrollments_before_serving`; `mounted_gateway_issues_a_device_credential_and_revokes_it` (killed process, restart) |
+| S8 | Startup cleanup cannot complete (receiver authority unavailable) | `reconcile_cleanup` returns `Cleanup(..)`, which `prepare` returns as `RunError::Native(Open(..))`; nothing is bound; the record keeps its cause and `cleanupPending`. A receiver failure is `CleanupError::Receiver` on both the lookup and the fence path. Restart policy (S16): `CleanupError::recurs` (the one classifier) — a receiver missing, conflicting, exhausted or no longer paired, a registry refusal naming the record's own state or a capacity limit, a missing record or corrupt/conflicting private state is `Restart::Pointless`; an unavailable receiver or a clock behind the record (`Invalid`) stays `Worthwhile` | `startup_settles_ended_enrollments_before_serving`; `a_registry_this_build_cannot_read_is_not_worth_starting_for_again`, `a_failure_that_can_clear_on_its_own_is_still_retried` (cleanup cases in both) |
+| D5 | Shutdown with an ended enrollment pending cleanup | `RunningNative::join`: listener drain, then `GatewayPairing::shutdown` closes owner admission (`ShuttingDown`, slice 2a's `OwnerAdmission`) and waits for every admitted owner command, an approval's receiver work included; then `reconcile_cleanup` settles it and the report is confirmed | `shutdown_settles_ended_enrollments_after_the_drains`; `mounted_gateway_issues_a_device_credential_and_revokes_it` (second device) |
+| D6 | Shutdown reconciliation cannot complete | `NativeShutdownFailure::Cleanup`; the record keeps `cleanupPending` and its first cause. A faulted listener (drain unknown) returns its `ListenerFault` without reconciling | `shutdown_settles_ended_enrollments_after_the_drains`; `faulted_listener_join_reports_the_fault_without_reconciling` |
+| E1 | Composed `nessa server`: owner creates, device enrolls, owner approves, device status, revoke | Device status Active with credential, receiver and epoch; client holds the credential; the gateway's registry authenticates the device key as that credential scoped to `conversation.read` and its receiver is active; after `credential.revoke` the device reads Terminal, authentication refuses and the receiver is fenced | `mounted_gateway_issues_a_device_credential_and_revokes_it` |
+
+Not in this slice: protected product reads over the native channel with this
+credential and two-device convergence (slice 3); section 9's general product
+request drain; periodic maintenance (M1–M12).

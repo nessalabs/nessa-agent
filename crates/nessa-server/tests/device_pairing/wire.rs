@@ -69,6 +69,23 @@ fn transition(
     record.transition(event, actor, at).unwrap().after().clone()
 }
 
+/// The receiver epoch a test's Active status reports as current; deliberately
+/// not the epoch the record's pair receipt holds.
+const CURRENT_EPOCH: u64 = 3;
+/// The projection the status query returns for `record`.
+fn projected(record: PairingRecord) -> DevicePairingStatus {
+    if record.phase() == PairingPhase::Active {
+        DevicePairingStatus::Active {
+            record: Box::new(record),
+            access_epoch: CURRENT_EPOCH,
+        }
+    } else {
+        DevicePairingStatus::Claimed(Box::new(record))
+    }
+}
+fn active_record() -> PairingRecord {
+    claimed_records("gateway", "org", "gateway").remove(3)
+}
 fn claimed_records(audience: &str, organization: &str, resource: &str) -> Vec<PairingRecord> {
     let device = DeviceKey::new([4; DeviceKey::LENGTH]);
     let owner = PairingInitiator::Principal(PrincipalId::new("owner").unwrap());
@@ -171,11 +188,7 @@ fn current_enrollment_messages_preserve_their_representation() {
     ));
     for record in claimed_records("gateway", "org", "gateway") {
         let consent = DisclosedConsent::from_intent(public(), record.intent()).unwrap();
-        let bytes = encode_status(
-            public(),
-            &DevicePairingStatus::Claimed(Box::new(record.clone())),
-        )
-        .unwrap();
+        let bytes = encode_status(public(), &projected(record.clone())).unwrap();
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         let phase = match record.phase() {
             PairingPhase::Claimed => "claimed",
@@ -196,6 +209,8 @@ fn current_enrollment_messages_preserve_their_representation() {
             PairingPhase::Active => NativePairingStatus::Active {
                 consent: Box::new(consent),
                 credential: record.credential().unwrap().clone(),
+                receiver: record.receiver_binding().unwrap().0.clone(),
+                access_epoch: CURRENT_EPOCH,
             },
             PairingPhase::Terminal => NativePairingStatus::Terminal {
                 consent: Box::new(consent),
@@ -208,11 +223,7 @@ fn current_enrollment_messages_preserve_their_representation() {
     // Escaping and maximum valid domain metadata remain representable.
     let escaped = "\\\"".repeat(MAX_IDENTIFIER_BYTES / 2);
     for record in claimed_records(&escaped, &escaped, &escaped) {
-        let bytes = encode_status(
-            public(),
-            &DevicePairingStatus::Claimed(Box::new(record.clone())),
-        )
-        .unwrap();
+        let bytes = encode_status(public(), &projected(record.clone())).unwrap();
         assert!(bytes.len() <= MAX_ENROLLMENT_ENVELOPE_BYTES);
         assert_eq!(
             status(&bytes).consent(),
@@ -367,10 +378,8 @@ fn enrollment_syntax_is_strict_and_domain_values_are_validated() {
     );
 
     let approved = claimed_records("gateway", "org", "gateway").remove(1);
-    let good: Value = serde_json::from_slice(
-        &encode_status(public(), &DevicePairingStatus::Claimed(Box::new(approved))).unwrap(),
-    )
-    .unwrap();
+    let good: Value =
+        serde_json::from_slice(&encode_status(public(), &projected(approved)).unwrap()).unwrap();
     for field in ["status", "consent"] {
         let mut extra = good.clone();
         if field == "status" {
@@ -419,15 +428,45 @@ fn enrollment_syntax_is_strict_and_domain_values_are_validated() {
         }
     }
     let active = claimed_records("gateway", "org", "gateway").remove(3);
-    let mut value: Value = serde_json::from_slice(
-        &encode_status(public(), &DevicePairingStatus::Claimed(Box::new(active))).unwrap(),
-    )
-    .unwrap();
-    value["status"]["credential"] = json!("");
-    assert_eq!(
-        decode_reply(&serde_json::to_vec(&value).unwrap()).unwrap_err(),
-        NativeWireError::Invalid
-    );
+    let value: Value =
+        serde_json::from_slice(&encode_status(public(), &projected(active)).unwrap()).unwrap();
+    for (field, invalid) in [
+        ("credential", json!("")),
+        ("receiver", json!("")),
+        ("accessEpoch", json!(-1)),
+    ] {
+        let mut invalid_value = value.clone();
+        invalid_value["status"][field] = invalid;
+        assert_eq!(
+            decode_reply(&serde_json::to_vec(&invalid_value).unwrap()).unwrap_err(),
+            NativeWireError::Invalid
+        );
+    }
+    // The current epoch is the one the status carries, not the record's
+    // original pair receipt.
+    assert_eq!(value["status"]["accessEpoch"], json!(CURRENT_EPOCH));
+    assert_ne!(active_record().receiver_binding().unwrap().1, CURRENT_EPOCH);
+}
+
+/// An Active status carries the current epoch, and only an Active status does:
+/// the projection and the record's phase must agree before anything is encoded.
+#[test]
+fn only_an_active_record_carries_a_current_epoch() {
+    for record in claimed_records("gateway", "org", "gateway") {
+        let active = record.phase() == PairingPhase::Active;
+        let mismatched = if active {
+            DevicePairingStatus::Claimed(Box::new(record))
+        } else {
+            DevicePairingStatus::Active {
+                record: Box::new(record),
+                access_epoch: CURRENT_EPOCH,
+            }
+        };
+        assert_eq!(
+            encode_status(public(), &mismatched).unwrap_err(),
+            NativeWireError::Invalid
+        );
+    }
 }
 
 #[test]
@@ -553,11 +592,7 @@ fn unclaimed_projection_preserves_outcome_and_cause_without_private_scope() {
 fn canonical_status_refuses_foreign_operation_before_encoding() {
     let original = public();
     for record in claimed_records("gateway", "org", "gateway") {
-        encode_status(
-            original,
-            &DevicePairingStatus::Claimed(Box::new(record.clone())),
-        )
-        .unwrap();
+        encode_status(original, &projected(record.clone())).unwrap();
         for foreign in [
             PublicIntent::new(
                 InvitationId::new([9; InvitationId::LENGTH]),
@@ -594,20 +629,14 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
             .unwrap(),
         ] {
             assert_eq!(
-                encode_status(
-                    foreign,
-                    &DevicePairingStatus::Claimed(Box::new(record.clone()))
-                ),
+                encode_status(foreign, &projected(record.clone())),
                 Err(NativeWireError::Correlation(PairingError::Conflict))
             );
         }
     }
     let initial = initial_record("gateway", "org", "gateway");
     assert_eq!(
-        encode_status(
-            original,
-            &DevicePairingStatus::Claimed(Box::new(initial.clone()))
-        ),
+        encode_status(original, &projected(initial.clone())),
         Err(NativeWireError::Correlation(PairingError::Conflict))
     );
     let terminal = transition(
@@ -617,7 +646,7 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
         1,
     );
     assert_eq!(
-        encode_status(original, &DevicePairingStatus::Claimed(Box::new(terminal))),
+        encode_status(original, &projected(terminal)),
         Err(NativeWireError::Correlation(PairingError::Conflict))
     );
 }
@@ -626,9 +655,7 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
 fn received_status_cannot_replace_prior_scope() {
     let approved = claimed_records("gateway", "org", "gateway").remove(1);
     let prior = DisclosedConsent::from_intent(public(), approved.intent()).unwrap();
-    let incoming = status(
-        &encode_status(public(), &DevicePairingStatus::Claimed(Box::new(approved))).unwrap(),
-    );
+    let incoming = status(&encode_status(public(), &projected(approved)).unwrap());
     incoming.correlate(public(), None).unwrap();
     incoming.correlate(public(), Some(&prior)).unwrap();
     let foreign_attempt = public().with_attempt(AttemptId::new([9; AttemptId::LENGTH]));
@@ -641,9 +668,7 @@ fn received_status_cannot_replace_prior_scope() {
         claimed_records("gateway", "other-org", "gateway").remove(1),
         claimed_records("gateway", "org", "other-resource").remove(1),
     ] {
-        let replaced = status(
-            &encode_status(public(), &DevicePairingStatus::Claimed(Box::new(record))).unwrap(),
-        );
+        let replaced = status(&encode_status(public(), &projected(record)).unwrap());
         assert_eq!(
             replaced.correlate(public(), Some(&prior)),
             Err(NativeWireError::Correlation(PairingError::Conflict))

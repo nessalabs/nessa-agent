@@ -17,7 +17,16 @@ pub enum DevicePairingStatus {
         /// Original invitation terminal cause, if it has ended.
         terminal: Option<TerminalCause>,
     },
-    /// Immutable record belonging to this claimed attempt.
-    /// Active is historical completion; it does not authorize a product request.
+    /// Immutable record belonging to this claimed attempt, in any claimed
+    /// phase but Active.
     Claimed(Box<PairingRecord>),
+    /// The claimed attempt's record is Active: the credential it issued, with
+    /// its receiver's epoch as the receiver authority reports it now.
+    /// Active is historical completion; it does not authorize a product request.
+    Active {
+        /// The Active record.
+        record: Box<PairingRecord>,
+        /// The paired receiver's current access epoch.
+        access_epoch: u64,
+    },
 }

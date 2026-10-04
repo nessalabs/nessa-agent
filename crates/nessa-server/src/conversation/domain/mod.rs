@@ -14,7 +14,8 @@ mod value_objects;
 pub use catalogue_identity::conversation_catalogue_stream;
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
-    ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
+    PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,
+    ReceiverTransitionError,
 };
 pub use value_objects::{
     ConversationApprovalMode, ConversationDeletion, ConversationId, ConversationModelId,

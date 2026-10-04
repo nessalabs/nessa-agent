@@ -25,9 +25,14 @@ use nessa_auth::{
 };
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
-    device_pairing::infrastructure::{
-        restore_gateway_identity, GatewayPairing, NativeEnrollmentConnections,
-        NativeEnrollmentListener, PairingRuntimeDependencies, TcpEnrollmentAccept,
+    conversation::infrastructure::LocalReceiverAuthority,
+    device_pairing::{
+        application::PairingReceivers,
+        infrastructure::{
+            restore_gateway_identity, ConversationReceivers, GatewayPairing,
+            NativeEnrollmentConnections, NativeEnrollmentListener, PairingRuntimeDependencies,
+            TcpEnrollmentAccept,
+        },
     },
 };
 use std::{
@@ -88,6 +93,8 @@ pub fn pending(parent: &Path, name: &str) -> (PathBuf, Arc<FilePairingState>) {
 pub struct Fixture {
     pub directory: TempDir,
     pub registry: Arc<LocalCredentialStore>,
+    /// The real receiver authority the gateway pairs and fences receivers in.
+    pub receivers: Arc<LocalReceiverAuthority>,
     pub session: AuthenticatedSession,
     /// The owner's bearer credential, for authenticating a product socket.
     pub owner_token: String,
@@ -99,22 +106,30 @@ impl Fixture {
         Self::with_read(true).await
     }
     pub async fn with_read(read: bool) -> Self {
-        Self::build(read, OWNER_EXPIRES_S, |registry| registry).await
+        Self::build(read, OWNER_EXPIRES_S, |registry| registry, real_receivers).await
     }
     /// The owner's credential expires at 500 s, before an invitation created now.
     pub async fn short_lived_owner() -> Self {
-        Self::build(true, 500, |registry| registry).await
+        Self::build(true, 500, |registry| registry, real_receivers).await
     }
     /// A fixture whose runtime reaches the registry through `enrollments`.
     pub async fn with_store(
         enrollments: impl FnOnce(Arc<LocalCredentialStore>) -> Arc<dyn PairingStore>,
     ) -> Self {
-        Self::build(true, OWNER_EXPIRES_S, enrollments).await
+        Self::build(true, OWNER_EXPIRES_S, enrollments, real_receivers).await
+    }
+    /// A fixture whose runtime reaches the real receiver authority through
+    /// `receivers`.
+    pub async fn with_receivers(
+        receivers: impl FnOnce(Arc<LocalReceiverAuthority>) -> Arc<dyn PairingReceivers>,
+    ) -> Self {
+        Self::build(true, OWNER_EXPIRES_S, |registry| registry, receivers).await
     }
     async fn build(
         read: bool,
         owner_expires_s: u64,
         enrollments: impl FnOnce(Arc<LocalCredentialStore>) -> Arc<dyn PairingStore>,
+        receivers: impl FnOnce(Arc<LocalReceiverAuthority>) -> Arc<dyn PairingReceivers>,
     ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let registry = Arc::new(
@@ -174,11 +189,13 @@ impl Fixture {
             ResourceId::new("gateway").unwrap(),
         );
         let time = Arc::new(GatewayTime(AtomicU64::new(NOW_MS)));
+        let authority = receiver_authority(directory.path());
         let gateway = Arc::new(
             GatewayPairing::open(PairingRuntimeDependencies {
                 enrollments: enrollments(registry.clone()),
                 access: registry.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+                receivers: receivers(authority.clone()),
                 clock: time.clone(),
                 gateway: resource,
                 key_store: keys,
@@ -189,6 +206,7 @@ impl Fixture {
         Self {
             directory,
             registry,
+            receivers: authority,
             session,
             owner_token,
             gateway,
@@ -201,6 +219,7 @@ impl Fixture {
         let Self {
             directory,
             registry,
+            receivers,
             session,
             owner_token,
             gateway,
@@ -208,6 +227,7 @@ impl Fixture {
         } = self;
         drop(gateway);
         drop(registry);
+        drop(receivers);
         #[cfg(unix)]
         let parent = directory.path().canonicalize().unwrap();
         #[cfg(not(unix))]
@@ -227,11 +247,13 @@ impl Fixture {
             ResourceId::new("gateway").unwrap(),
         );
 
+        let authority = receiver_authority(directory.path());
         let gateway = Arc::new(
             GatewayPairing::open(PairingRuntimeDependencies {
                 enrollments: registry.clone(),
                 access: registry.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+                receivers: Arc::new(ConversationReceivers::new(authority.clone())),
                 clock: time.clone(),
                 gateway: resource,
                 key_store: keys,
@@ -242,6 +264,7 @@ impl Fixture {
         Self {
             directory,
             registry,
+            receivers: authority,
             session,
             owner_token,
             gateway,
@@ -273,6 +296,22 @@ impl Fixture {
         ));
         (address, stop, task, connections)
     }
+}
+
+/// The fixture's receiver-access store, opened as composition opens it.
+pub fn receiver_authority(parent: &Path) -> Arc<LocalReceiverAuthority> {
+    let root = private_root(parent, "conversations");
+    Arc::new(
+        LocalReceiverAuthority::open(
+            &root.join("receiver-access.sqlite3"),
+            "policy",
+            Arc::new(Time),
+        )
+        .unwrap(),
+    )
+}
+fn real_receivers(authority: Arc<LocalReceiverAuthority>) -> Arc<dyn PairingReceivers> {
+    Arc::new(ConversationReceivers::new(authority))
 }
 
 pub fn sockets() -> (TcpStream, TcpStream) {
