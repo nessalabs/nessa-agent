@@ -82,7 +82,8 @@ export function boundedName(value: unknown, max: number): value is string {
   )
 }
 
-function object(value: unknown, keys: readonly string[], what: string) {
+/** A plain object holding no field but `keys`. */
+export function object(value: unknown, keys: readonly string[], what: string) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error(`Invalid ${what}`)
   if (Object.keys(value).some((key) => !keys.includes(key)))
@@ -149,7 +150,8 @@ export function mcpCallToolResult(value: unknown): McpCallToolResult {
   return { resultJson }
 }
 
-function csp(value: unknown): McpUiCsp {
+/** An app's CSP as the schema bounds it: each list of origins within its count and byte bounds. */
+export function csp(value: unknown): McpUiCsp {
   const item = object(value, cspKeys, "app CSP")
   const lists = cspKeys.map((key) => {
     const list = item[key]
@@ -170,7 +172,8 @@ function csp(value: unknown): McpUiCsp {
   return { connectDomains, resourceDomains, frameDomains, baseUriDomains }
 }
 
-function permissions(value: unknown): McpUiPermissions {
+/** What an app asked of the host: every permission a boolean. */
+export function permissions(value: unknown): McpUiPermissions {
   const item = object(value, permissionKeys, "app permissions")
   for (const key of permissionKeys)
     if (typeof item[key] !== "boolean") throw new Error(`Invalid app permission ${key}`)

@@ -167,6 +167,37 @@ export {
   type McpResourceDescription,
 } from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
+export {
+  mayManageMcpServers,
+  type McpServersApi,
+} from "./presentation/mcp-servers-api.js"
+export {
+  NessaMcpServersError,
+  type McpServersMethod,
+  type McpServersRefusal,
+} from "./application/mcp-servers-error.js"
+export {
+  McpServerKind,
+  McpServerProblemCode,
+  McpServersErrorCode,
+  McpServersInspectCut,
+  mcpServerInspect,
+} from "./generated/product.js"
+export type {
+  McpInspectedTool,
+  McpInspectedUi,
+  McpServerEnvEntry,
+  McpServerInput,
+  McpServerListEntry,
+  McpServersAuditUnavailableDetails,
+  McpServersInspectResult,
+  McpServersInvalidDetails,
+  McpServersListResult,
+  McpServersRemoveParams,
+  McpServersRevisionConflictDetails,
+  McpServersSaveParams,
+  McpServersWriteResult,
+} from "./generated/product.js"
 export { NessaRequestTooLargeError } from "./application/request-too-large-error.js"
 export {
   NessaMcpResourceError,
