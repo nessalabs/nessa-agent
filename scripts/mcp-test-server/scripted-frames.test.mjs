@@ -5,10 +5,13 @@
  * answers what the SDK checks.
  */
 import { strict as assert } from "node:assert"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { describe, it } from "node:test"
 
 import {
   AGENTS,
+  CLAUDE_CALL_ID,
   callFrames,
   configOptions,
   harnessInfo,
@@ -25,6 +28,7 @@ import {
   unreplayable,
   withAt,
 } from "./scripted-frames.mjs"
+import { repoRoot } from "./local-gateway.mjs"
 import { TOOLS } from "./server.mjs"
 
 const result = TOOLS.review_rows.call({})
@@ -340,5 +344,19 @@ describe("the handshake", () => {
     const claude = setOption("claude", values, "effort", "high")
     assert.equal(configOptions("claude", claude).at(-1).category, "thought_level")
     assert.equal(setOption("claude", values, "reasoning_effort", "high"), null)
+  })
+})
+
+describe("CLAUDE_CALL_ID", () => {
+  it("is the SDK's CALL_ID, where the gateway's stand-in reads a forwarded call's id", () => {
+    const file = "crates/nessa-sdk/src/infrastructure/mcp/stand_in.rs"
+    const source = readFileSync(join(repoRoot, file), "utf8")
+    const sdk = source.match(/^const CALL_ID: &str = "([^"]*)";$/m)
+    assert.ok(sdk, `${file} declares no \`const CALL_ID: &str = "...";\``)
+    assert.equal(
+      CLAUDE_CALL_ID,
+      sdk[1],
+      `scripted-frames.mjs's CLAUDE_CALL_ID is "${CLAUDE_CALL_ID}", but ${file}'s CALL_ID is "${sdk[1]}"`,
+    )
   })
 })

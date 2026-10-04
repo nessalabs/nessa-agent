@@ -6,7 +6,7 @@
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
 import { dirname, join } from "node:path"
-import { existsSync, mkdtempSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { createInterface } from "node:readline"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -14,6 +14,7 @@ import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { exited } from "./local-gateway.mjs"
+import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const mcptest = {
@@ -176,10 +177,13 @@ test("claude: the model from session/new, and the recorded four frames", async (
  * The test server as `mcptest`, answering as `server.mjs` does, that also
  * writes the params of each `tools/call` it receives, one JSON line each, to a
  * file: `calls()` reads them back. Like `server.mjs`, it exits when its input
- * closes, so an agent killed after the test leaves it nothing to run on.
+ * closes, so an agent killed after the test leaves it nothing to run on; the
+ * file's directory is removed after the test.
  */
-function recordingCalls() {
-  const callsFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "calls")
+function recordingCalls(t) {
+  const dir = mkdtempSync(join(tmpdir(), "scripted-agent-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const callsFile = join(dir, "calls")
   const server = JSON.stringify(join(here, "server.mjs"))
   const script = `const { answer } = await import(${server})
 const { appendFileSync } = await import("node:fs")
@@ -200,8 +204,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
 }
 
-test("claude: the tools/call names the call in _meta, by the frames' toolCallId", async () => {
-  const recorder = recordingCalls()
+test("claude: the tools/call names the call in _meta, by the frames' toolCallId", async (t) => {
+  const recorder = recordingCalls(t)
   const agent = start("claude")
   const opened = await agent.request("session/new", {
     cwd: here,
@@ -220,13 +224,13 @@ test("claude: the tools/call names the call in _meta, by the frames' toolCallId"
   const calls = recorder.calls()
   assert.equal(calls.length, 1)
   assert.equal(calls[0].name, "review_rows")
-  assert.equal(calls[0]._meta["claudecode/toolUseId"], [...ids][0])
+  assert.equal(calls[0]._meta?.[CLAUDE_CALL_ID], [...ids][0])
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })
 
-test("codex: the tools/call carries no _meta", async () => {
-  const recorder = recordingCalls()
+test('codex: the tools/call names no call id (no _meta["claudecode/toolUseId"])', async (t) => {
+  const recorder = recordingCalls(t)
   const agent = start("codex", codexEnv)
   const opened = await agent.request("session/new", {
     cwd: here,
@@ -240,7 +244,7 @@ test("codex: the tools/call carries no _meta", async () => {
   const calls = recorder.calls()
   assert.equal(calls.length, 1)
   assert.equal(calls[0].name, "review_rows")
-  assert.equal(Object.hasOwn(calls[0], "_meta"), false)
+  assert.equal(calls[0]._meta?.[CLAUDE_CALL_ID], undefined)
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })
@@ -297,12 +301,14 @@ test("a call the server refuses fails the turn, and nothing is reported", async 
 test("a stand-in that never answers initialize fails session/new within the deadline, and is stopped", async (t) => {
   // It says nothing, and its stdio is the agent's: it writes its pid where
   // the test can see whether it is still running.
-  const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
+  const pidDir = mkdtempSync(join(tmpdir(), "scripted-agent-"))
+  const pidFile = join(pidDir, "pid")
   const silent = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000)`
   // Stopped after the test whatever it saw, so a failure here hangs nothing.
   t.after(() => {
     const left = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null
     if (left !== null && alive(left)) process.kill(left, "SIGKILL")
+    rmSync(pidDir, { recursive: true, force: true })
   })
   const agent = start("codex", codexEnv)
   const started = Date.now()
@@ -372,7 +378,8 @@ test("an agent not named, or with no tool to call, exits 2 saying how to run it"
  * input closes (as `server.mjs` does not), and writes its pid: what is
  * stopped is then the agent's doing. Returns its `session/new` entry,
  * `pid()`, `termed()` (whether it was sent SIGTERM, with `ignoresTerm`), and
- * `heirPid()` (with `heir`); both are killed after the test whatever happened.
+ * `heirPid()` (with `heir`); both are killed after the test whatever happened,
+ * and then the directory of their files is removed.
  */
 function lingering(
   t,
@@ -387,7 +394,8 @@ function lingering(
     name = "lingering",
   } = {},
 ) {
-  const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
+  const pidDir = mkdtempSync(join(tmpdir(), "scripted-agent-"))
+  const pidFile = join(pidDir, "pid")
   // `answers(method)`: whether it answers; `refuses(method)`: with an error;
   // `exits(method)`: by exiting instead; `delayMs`: after how long;
   // `deafAfterInitialize`: it stops reading its input once it has answered
@@ -423,6 +431,7 @@ setInterval(() => {}, 1000)`
   t.after(() => {
     for (const p of [pid(), heirPid()])
       if (p !== null && alive(p)) process.kill(p, "SIGKILL")
+    rmSync(pidDir, { recursive: true, force: true })
   })
   return { server: { ...mcptest, name, args: ["-e", script] }, pid, termed, heirPid }
 }

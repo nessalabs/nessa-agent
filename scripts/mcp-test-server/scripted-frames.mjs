@@ -22,6 +22,14 @@ import { TOOLS } from "./server.mjs"
 /** The harnesses a scripted agent can stand in for. */
 export const AGENTS = ["codex", "claude"]
 
+/**
+ * Where Claude's harness names a forwarded call in its `tools/call` params'
+ * `_meta`: the call's ACP `toolCallId`. The SDK's `CALL_ID` (`stand_in.rs`) is
+ * the copy that matters, as the gateway's stand-in reads it; the test holds
+ * this one to it, naming both values when they differ.
+ */
+export const CLAUDE_CALL_ID = "claudecode/toolUseId"
+
 /** The recorded call every reported call is shaped as. Every call replayed takes its arguments (`recordedArguments`). */
 export const RECORDED_TOOL = "show_chart"
 

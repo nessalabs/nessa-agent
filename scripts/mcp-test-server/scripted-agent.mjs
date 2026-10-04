@@ -30,10 +30,11 @@
  * harness puts the call's ACP `toolCallId` in its params'
  * `_meta["claudecode/toolUseId"]`, and the gateway's stand-in keeps the
  * result's `structuredContent` under that id for the SDK to attach to the call
- * (the SDK's `CALL_ID` in `stand_in.rs`, and its `forwarded.rs` tests). Codex's
- * harness names none, so its call carries no `_meta`. This is the one value
- * the replay takes from the real harness's MCP side, since the recordings
- * hold only the ACP frames.
+ * (the SDK's `CALL_ID` in `stand_in.rs`, and its `forwarded.rs` tests; here
+ * `CLAUDE_CALL_ID`). Codex's harness names no call id (no
+ * `_meta["claudecode/toolUseId"]`), so its call is sent with no `_meta`. This
+ * is the one value the replay takes from the real harness's MCP side, since
+ * the recordings hold only the ACP frames.
  */
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -41,6 +42,7 @@ import { createInterface } from "node:readline"
 
 import {
   AGENTS,
+  CLAUDE_CALL_ID,
   callFrames,
   configOptions,
   initialOptions,
@@ -50,12 +52,6 @@ import {
   setOption,
 } from "./scripted-frames.mjs"
 import { SERVER } from "./local-gateway.mjs"
-
-/**
- * Where Claude's harness names a forwarded call in its `tools/call` params'
- * `_meta`: the call's ACP `toolCallId` (the SDK's `CALL_ID`, `stand_in.rs`).
- */
-const CLAUDE_CALL_ID = "claudecode/toolUseId"
 
 /** How long an MCP request waits for its stand-in's answer. */
 const MCP_DEADLINE_MS = 10_000
@@ -278,7 +274,10 @@ const handlers = {
       session.prompt = null
     }
     // Cancelled while the call was in flight: the turn ends so, and reports
-    // nothing (the recordings hold no cancelled call).
+    // nothing (the recordings hold no cancelled call). The stand-in may still
+    // keep the call's result under its id, unreported, and the SDK's bound of
+    // 32 kept results drops it (docs/design/mcp-connections.md, Forwarded
+    // results, S9).
     if (prompt.cancelled) return { stopReason: "cancelled" }
     const update = (update) =>
       send({ method: "session/update", params: { sessionId, update } })
