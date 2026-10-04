@@ -285,12 +285,12 @@ mod tests {
             assert_eq!(relaunch == Restart::Worthwhile, retry, "{error:?}");
             assert_eq!(retry, !error.recurs(), "{error:?}");
         }
-        // A clock behind the record (Invalid) and freed capacity clear on
-        // their own; the record's own state refuses again.
+        // A clock behind the record (Invalid) clears on its own; capacity and
+        // the record's own state refuse again.
         for (error, recurs) in [
             (PairingError::Invalid, false),
-            (PairingError::Capacity, false),
-            (PairingError::AvailableSlotOccupied, false),
+            (PairingError::Capacity, true),
+            (PairingError::AvailableSlotOccupied, true),
             (PairingError::Conflict, true),
             (PairingError::Ineligible, true),
             (PairingError::StaleGeneration, true),

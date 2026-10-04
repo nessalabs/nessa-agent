@@ -25,17 +25,18 @@ pub fn store_error_recurs(error: PairingStoreError) -> bool {
             | PairingError::WrongActor
             | PairingError::Expired
             | PairingError::AttemptsExhausted
-            | PairingError::StaleGeneration,
+            | PairingError::StaleGeneration
+            // Where approval and cleanup meet them, credential capacity and
+            // revision/history limits never free up: revoked credentials stay.
+            | PairingError::Capacity
+            | PairingError::AvailableSlotOccupied,
         )
         | PairingStoreError::PrivateState(
             PrivateStateError::Corrupt | PrivateStateError::Conflict,
         ) => true,
-        // Capacity and an occupied slot clear when another enrollment ends;
-        // `Invalid` is also a clock behind the record (reset before NTP),
-        // which clears on its own.
-        PairingStoreError::Domain(
-            PairingError::Capacity | PairingError::AvailableSlotOccupied | PairingError::Invalid,
-        )
+        // `Invalid` is also a clock behind the record (reset before NTP) or an
+        // expired owner credential, both of which clear.
+        PairingStoreError::Domain(PairingError::Invalid)
         | PairingStoreError::StageOccupied
         | PairingStoreError::WorkerFault(_)
         | PairingStoreError::StaleRevision
