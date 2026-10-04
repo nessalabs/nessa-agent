@@ -138,14 +138,16 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   what a mount gives the model, in place of what it gave; an update with
   neither part, or only an empty text, clears it. The next message admitted
   into the conversation while nothing runs and no input waits — the
-  person's or an app's — carries every context held, ahead of its text, and
-  they are let go of once the agent has saved that message. If its turn then
-  fails they are lost, and the app may give them again. A message queued
+  person's or an app's — takes every context held and carries them ahead of
+  its text: taken, they are no longer held. If that message is then refused,
+  or its turn fails, they are lost, and the app may give them again. A
+  message queued
   behind a running turn, or steered into one, carries none and leaves them
   held. A conversation's updates are taken one at a time, each on record
   before it is held; the structured content is held exactly as given. They
   are not part of the transcript. A release of the mount, or the end of the
-  opening, drops a context unsent. The schema states its bounds
+  opening, drops a context still held unsent; one a message took goes with
+  that message. The schema states its bounds
   (`McpUpdateModelContextParams`): a part past its own is `invalid_request`,
   refused before anything is recorded, as every schema bound of both
   methods is; both parts together past what one context holds are
