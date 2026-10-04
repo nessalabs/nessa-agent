@@ -65,7 +65,7 @@ Accepted decisions: separate producer-local ceilings of 64, distinct SDK and ser
 
 ## 298B: authorized live hints over the product socket
 
-Status: in review on the PR branch `claude/298-live-hints`; not merged. This slice delivers the producer's notices to an authenticated product connection and proves replay-to-live catch-up across separate gateway and receiver processes with the existing example client. It does not make the example client watch on its own (it is still explicitly driven, one pass per command), add a phone cache or UI (#261), schedule weak links (#262), or pair devices (#263–#265). The producer sections above keep owning commit notifications; this slice changes no storage, writer or registry code. Issue #298 and #277 stay open.
+Status: merged (#455). This slice delivers the producer's notices to an authenticated product connection and proves replay-to-live catch-up across separate gateway and receiver processes with the existing example client. It does not make the example client watch on its own (298C below adds that), add a phone cache or UI (#261), schedule weak links (#262), or pair devices (#263–#265). The producer sections above keep owning commit notifications; this slice changes no storage, writer or registry code. Issue #298 and #277 stay open.
 
 ```mermaid
 sequenceDiagram
@@ -103,7 +103,7 @@ Three requests and two events on the existing authenticated connection, all owne
 | `conversation.changed` | `{watchId}` only: no head, cursor, incarnation, content, permission or freshness |
 | `conversation.watchEnded` | `{watchId, reason: closed \| notification_failed}`: the producer ended; it proves neither freshness nor lost permission |
 
-`x-changeWatchLimits` publishes the limits: 64 watch owners across the gateway, 8 per principal, and per connection 1 record target and 1 catalogue target. The generator refuses a missing, non-positive or unknown limit, or a principal limit above the gateway's, before writing anything. It emits `MAX_GLOBAL_CHANGE_WATCHES`, `MAX_PRINCIPAL_CHANGE_WATCHES`, `MAX_CONNECTION_RECORD_WATCHES`, `MAX_CONNECTION_CATALOGUE_WATCHES`, their sum `MAX_CONNECTION_CHANGE_WATCHES`, `MAX_CHANGE_WATCH_ID_BYTES` and the TypeScript equivalents (G1). The server reads these constants and has no hand-written per-kind rule. The per-principal limit of 8 is a new policy number chosen for this slice; it needs the owner's agreement. A watch identity is `<connection namespace UUID>-<counter>`: the namespace comes from the injected `WatchNamespaces` port (`UuidWatchNamespaces` in production), the counter advances only when a producer registration is actually installed and never wraps. An identity is meaningless on any other connection, including a reconnect of the same receiver.
+`x-changeWatchLimits` publishes the limits: 64 watch owners across the gateway, 8 per principal, and per connection 1 record target and 1 catalogue target. The generator refuses a missing, non-positive or unknown limit, or a principal limit above the gateway's, before writing anything. It emits `MAX_GLOBAL_CHANGE_WATCHES`, `MAX_PRINCIPAL_CHANGE_WATCHES`, `MAX_CONNECTION_RECORD_WATCHES`, `MAX_CONNECTION_CATALOGUE_WATCHES`, their sum `MAX_CONNECTION_CHANGE_WATCHES`, `MAX_CHANGE_WATCH_ID_BYTES` and the TypeScript equivalents (G1). The server reads these constants and has no hand-written per-kind rule. The per-principal limit of 8 is a policy number chosen for this slice and accepted by the owner (298C plan, 2026-10-03). A watch identity is `<connection namespace UUID>-<counter>`: the namespace comes from the injected `WatchNamespaces` port (`UuidWatchNamespaces` in production), the counter advances only when a producer registration is actually installed and never wraps. An identity is meaningless on any other connection, including a reconnect of the same receiver.
 
 ### Owners
 
@@ -166,6 +166,9 @@ One row is a state and the event or ordering that reaches it. Every row names th
 | L5 | Replay, then live passes, compared with a fresh full replay | The same folded `show` view and progress | `online::…` (L5) |
 | E1 | Events after authentication | Watch events continue the socket's one event sequence after `session.challenge` (seq 1), so the first watch event is seq 2 | `watches::real_commit_waits_for_physical_ack_then_emits_only_opaque_watch_identity` |
 | L7 | Gateway asleep (process gone) | The receiver's check fails explicitly; its saved view is still readable and unchanged | `online::…` (L7) |
+| L8 | Two paired devices watch the same conversation on one gateway; live commits, no gateway restart | Both receive each hint and run one pass per commit; their `show` output (downloaded, applied and fact counts, and the folded view) equals each other's and a fresh replay's; no duplicate or missing record | `online::online_two_devices_follow_live_hints_and_converge` (steps 4, 5, 7) |
+| L9 | The example client's own `watch` registers, then a commit lands while its recheck pass is reading the head | The recheck pass already holds the commit, and the hint for it arrives during that pass and causes exactly one further pass (rows O1, W4, W6) | `online::online_two_devices_follow_live_hints_and_converge` (step 3) |
+| L10 | Loopback timing from a durable commit acknowledgement to the pass line that holds it, on both devices | One machine-readable line `{"measurement":"commitAckToVisibleMs","transport":"loopback",…,"p50","p95","max"}` from 20 samples, each stamped when the test process receives the pass line and measured from when it reads the gateway's durable `DONE commit`; the line names the build profile. A measurement of the composition fixture, not a pass/fail bound | `online::online_two_devices_follow_live_hints_and_converge` (step 10) |
 | C1 | Client: malformed binding or identity on any watch call | Refused before the existing dispatcher sends | `change-watch-api.test.ts` (*refuses malformed receiver/epoch*, *refuses invalid binding on either target kind*, *refuses malformed unwatch identity*) |
 | C2 | Client: an event carrying progress or authority, an inherited `watchId`, or a foreign echoed identity | Rejected by the closed generated shape and own-property reads | `change-watch-validate.test.ts` (all), `change-watch-api.test.ts` (*rejects inherited identity…*, *does not let a foreign echoed ID confirm removal*) |
 | C3 | Client: public `NessaClient` watch calls and events | They go through the existing managed session and event dispatcher; a closed session refuses with no replayed registration | `nessa-client.test.ts` (*routes public watch calls and opaque events through the existing session*), `change-watch-api.test.ts` (*preserves a refusal without retry or registration resurrection*) |
@@ -173,8 +176,60 @@ One row is a state and the event or ordering that reaches it. Every row names th
 
 What the receiver does after a hint — re-read from its checkpoint — is the existing example client's pass. `online::online_replay_then_live_hints_converge_with_a_fresh_replay` drives that pass in a separate process after each hint it receives. Because the producer is process-local, the gateway commits in its own process (`live` mode in `tests/composition/read_only_online/fixtures/gateway.rs`). A commit made through another process or adapter produces no hint, which is why the receiver's recheck from its checkpoint is the recovery path.
 
+### 298C: the example client follows hints
+
+The Rust example client gains one bounded command, `watch PROFILE CONVERSATION PAGES MAX_PASSES`, so a separate-process test can drive "register a watch, take hints, re-read from the durable checkpoint" with the real client, on two paired devices at once. It is deliberately minimal: a real phone client is built separately. No stop seam, no reconnect, no timestamps on its lines, no catalogue watch.
+
+```mermaid
+sequenceDiagram
+    participant Client as watch (example client)
+    participant Gateway as Gateway (one native connection)
+    Client->>Gateway: pinned status, then connect and discovery (as sync-records)
+    Client->>Gateway: conversation.watchRecords
+    Gateway-->>Client: {watchId}
+    Note over Client: line "registered"
+    Client->>Gateway: recheck pass from the durable checkpoint
+    Gateway-->>Client: conversation.changed (read inside the pass: one dirty bit)
+    Note over Client: line "pass", then "hint" duringPass
+    loop until MAX_PASSES, idle, or the connection ends
+        Client->>Gateway: wait for a hint (one operation, ordinary deadline)
+        Gateway-->>Client: conversation.changed
+        Client->>Gateway: pass from the durable checkpoint
+    end
+    Note over Client: line "ended" with its reason
+```
+
+Every step is one operation on the one connection the example already owns (`Session`): registration, each wait for a hint, and each pass. Hints that arrive while a registration or pass waits for its response are kept in the session's `WatchInbox` (one dirty bit, plus the watch's end reason) and never count toward the per-operation unexpected-event capacity. A watch event naming any other identity is a protocol failure, because identities are minted per connection (row U2). stdout carries one JSON object per line: `registered`, `pass` (its `report` is the same object `sync-records` writes, `enrollment` and `recheck` included), `hint` and a final `ended`; a refusal before registration (rows W1, W16) is instead the one object `sync-records` writes for it. Exit status is 0 only when the run ends `passesExhausted` or `idle` (owner's decision).
+
+Placement: the loop is `read_only_sync/application/watch.rs` over two ports (`WatchSession`, `WatchEvents`); `Session::{watch_records, wait_hint}` and the inbox are in `infrastructure/gateway/session.rs`; the lines are `entrypoint/watch.rs`; `composition/read_only_example/online.rs` adapts the connection, driver and cache to the session port and runs the PC5 status recheck.
+
+`app::` is `crates/nessa-server/tests/read_only_sync/application/watch.rs`, `session::` is `…/tests/read_only_sync/gateway/session/watch.rs`, `args::` is `…/tests/read_only_sync/entrypoint/arguments.rs`, `device::` is `…/tests/read_only_sync/application/device.rs`, and `online::` is `tests/composition/read_only_online.rs`.
+
+| # | State / event / ordering | Result | Tests |
+|---|---|---|---|
+| W1 | Start: profile, credential and pinned status (device-pairing PC1–PC4); status not Active, or unreadable because the gateway is gone | Refused before any connection or cache open, with the same output `sync-records` gives; exit 1 | `online::online_unusable_enrollment_does_not_open_cache`, `online::online_two_devices_follow_live_hints_and_converge` (step 9) |
+| W2 | Active; connect; discovery reads the actual scope; the cache opens; `watchRecords` is admitted | `registered {watchId, connectionOperation, enrollment}`; nothing is read beyond the acknowledgement. An acknowledged identity outside the published contract (`MAX_CHANGE_WATCH_ID_BYTES` and the generated `CHANGE_WATCH_ID_PATTERN`) is `GatewayError::Protocol` before any `registered` line | `session::watch_registration_decodes_the_generated_result`, `session::watch_registration_refuses_an_identity_outside_the_published_pattern`, `online::…converge` (step 2) |
+| W3 | Registration refused: `watch_capacity`, `watch_duplicate`, `temporarily_unavailable`, or an authority code | `ended {registrationRefused, cause}` before any pass. Authority codes (`unauthorized`, `forbidden`, `wrong_receiver`, `stale_epoch`, the same set as record reads) ask pinned status once (PC5) and report it as `recheck`; exit 1 | `session::watch_refusals_keep_the_typed_code`, `app::registration_refusal_ends_before_any_pass`, `device::only_authority_refusals_ask_status_again` |
+| W4 | Acknowledged: the recheck pass runs first, unconditionally, from the durable checkpoint | `pass {trigger: recheck}` precedes any `hint` line, even when a hint is already in the inbox; a commit between acknowledgement and recheck is caught by that pass and also hinted (O1) | `app::first_pass_is_the_recheck_even_with_a_dirty_inbox`, `online::…converge` (step 3) |
+| W5 | Waiting; a hint arrives | `hint {duringPass: false}`, then one `pass {trigger: hint}` | `app::hint_while_waiting_starts_one_pass`, `online::…converge` (step 5) |
+| W6 | One or many hints during a registration or pass, including in the same read as the response | One dirty bit; after the pass line, `hint {duringPass: true}` once, then exactly one more pass. Hints never count toward the event capacity | `session::hints_during_an_rpc_set_one_dirty_bit_and_do_not_count_as_events`, `online::…converge` (step 3) |
+| W7 | A pass ends incomplete (the `PAGES` budget) without failure | The next pass starts at once with `trigger: incomplete`; confirmed progress is kept | `app::incomplete_pass_continues_without_waiting` |
+| W8 | A pass fails with an authority refusal | PC5 once; `ended {unauthorized, cause, recheck}`; exit 1 | `app::authority_failure_ends_unauthorized` |
+| W9 | A pass or registration fails on transport, timeout or protocol; a pass cannot begin; or a pass fails with no gateway cause (a cache or driver refusal) | `ended {unavailable, cause}`, or `ended {passFailed}` whose cause is in that pass's report; a pass that could not begin read nothing and writes no `pass` line; the saved view is unchanged; exit 1 | `app::transport_or_cache_failure_ends_the_watch`, `app::pass_that_cannot_begin_ends_without_a_pass_line` |
+| W10 | `conversation.watchEnded {closed \| notification_failed}` while waiting or during a pass | `ended {watchEnded, cause}` after any running pass finishes; exit 1 | `session::watch_ended_is_kept_in_the_inbox`, `app::watch_ended_stops_after_the_running_pass` |
+| W11 | The gateway closes the connection (revocation A2/A3, shutdown H1, deadline B3, process gone), waiting or mid-RPC: always `Closed(None)` on the native profile, whether the platform reports a clean end of stream or a reset or abort (Windows) | `ended {connectionClosed}` with no recheck and no claim about why; the next command's pinned status says (Terminal, Active or unreadable); exit 1 | `session::peer_close_during_wait_is_closed_none`, `deadline_stream::peer_reset_or_abort_is_an_untyped_close_and_other_errors_stay_transport`, `app::connection_close_ends_without_recheck`, `online::…converge` (steps 8, 9) |
+| W12 | A wait reaches the ordinary operation deadline with nothing read | `ended {idle}`; exit 0 | `app::idle_wait_ends_cleanly` |
+| W13 | `MAX_PASSES` reached (the recheck counts; `0` is an argument error) | `ended {passesExhausted}`; exit 0; the connection drops, releasing the watch (S1) | `args::watch_requires_a_positive_pass_count`, `app::pass_budget_ends_cleanly`, `online::…converge` |
+| W14 | A stdout write fails | The loop stops at that line; committed cache effects are not repeated; exit 1 | `app::output_failure_stops_the_watch` |
+| W15 | A watch event for an identity this connection did not mint, before any registration, or a response while nothing is pending | `GatewayError::Protocol` / `Correlation`; `ended {unavailable}` | `session::foreign_watch_id_and_stray_response_are_protocol_failures` |
+| W16 | Active and connected, but discovery is refused or the cache cannot be opened | Before `registered`: the one object `sync-records` writes for that refusal (`discoveryFailure`, with `recheck` after an authority refusal; or `cacheRefusal`), with no `kind` and no `ended` line; no cache is created by a discovery refusal; exit 1 | `online::online_watch_precondition_refusals_use_the_records_output` |
+| W17 | A pass is answered `source_preparing` (the gateway's cold-read work budget ran out; its preparation progress is kept) | The attempt fails but the connection stays open (`source_preparing` is the one typed refusal that keeps the session); the attempt's `pass` line, then the same pass again at once on the same session with `trigger: preparing`, not counted toward `MAX_PASSES`, up to `PREPARING_ATTEMPTS` (4) attempts; an attempt that succeeds continues as any pass does. Still preparing after the last attempt: `ended {unavailable, cause: record/source_preparing}`; exit 1 | `app::preparing_pass_is_retried_until_it_succeeds`, `app::preparing_beyond_the_attempt_bound_ends_unavailable`, `gateway::session::preparing_fails_the_operation_and_keeps_the_session_for_the_next` |
+
+`online::online_two_devices_follow_live_hints_and_converge` is the client acceptance (rows L8–L10 above); `online::online_replay_then_live_hints_converge_with_a_fresh_replay` stays as the wire acceptance with the probe client. The fixture gateway's `live` mode pairs a second device, and its `hold` and `release` actions make the L9 race deterministic: `hold` arms a `HeadHold` gate (`tests/composition/read_only_online/fixtures/gateway.rs`) that parks the second head read from then on (a `watch`'s discovery reads the first, its recheck pass the second); the test commits while that read is parked, then `release` lets it answer, so the recheck pass reads a head that already holds the commit. No timing is involved.
+
 ### Remaining for #298 and #277
 
-- The example client watching continuously: holding a connection, scheduling passes from hints, keeping finite-pass lifetimes, and presenting stale or unavailable status continuously while the gateway sleeps. This slice drives one pass per hint from the test; a single pass against a sleeping gateway already fails explicitly and keeps the saved view (row L7).
-- Two-device convergence and #277's assembled fold equality beyond the single-conversation `show` comparison here; and that a copied fact never dispatches an agent action.
+- A long-lived client: the example's `watch` (298C) is a bounded run with no reconnect, stop signal or continuous status presentation; a real phone client owns that lifecycle.
+- #277's assembled fold equality beyond the single-conversation `show` comparison (two devices converge, row L8); and that a copied fact never dispatches an agent action.
+- Weak-link shaping, a real `nessa server` measurement and catalogue watching from the example client (#262).
 - Hosted platform checks.

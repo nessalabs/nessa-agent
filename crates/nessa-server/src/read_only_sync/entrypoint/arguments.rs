@@ -4,9 +4,10 @@ use crate::read_only_sync::domain::CacheReset;
 use nessa_sync::replication::catalogue::EntryKey;
 use nessa_sync::replication::domain::{Id, Scope};
 use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync watch PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
 
 pub(crate) enum Command {
     Local(LocalCommand),
@@ -28,6 +29,14 @@ pub(crate) enum Command {
     Catalogue {
         profile: PathBuf,
         pages: usize,
+    },
+    /// Follow one conversation's live hints on one connection, for at most
+    /// `max_passes` passes, the recheck pass included.
+    Watch {
+        profile: PathBuf,
+        conversation: ConversationId,
+        pages: usize,
+        max_passes: NonZeroUsize,
     },
 }
 
@@ -92,6 +101,16 @@ pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
                 conversation: ConversationId::new(conversation)
                     .map_err(|_| CommandError::Identity)?,
                 pages: 0,
+            })
+        }
+        [name, profile, conversation, pages, passes] if name == "watch" => {
+            return Ok(Command::Watch {
+                profile: profile.into(),
+                conversation: ConversationId::new(conversation)
+                    .map_err(|_| CommandError::Identity)?,
+                pages: page_count(pages)?,
+                max_passes: NonZeroUsize::new(page_count(passes)?)
+                    .ok_or(CommandError::Arguments)?,
             })
         }
         [name, profile, pages] if name == "sync-catalogue" => {

@@ -1500,7 +1500,11 @@ bounded private profile and opens the device's private enrollment state; its
 `device.rs` child pairs and reads the pinned enrollment status. Its `online.rs`
 child admits each run by that status, composes the protected native session's
 facades and the private cache after actual authenticated discovery; the
-existing finite drivers own work.
+existing finite drivers own work. For `watch` it also adapts that connection,
+driver and cache to the session port of `application/watch.rs`, the bounded
+loop of one record watch, whose hints the session keeps in its inbox
+(`infrastructure/gateway/session.rs`) and whose lines `entrypoint/watch.rs`
+writes.
 The `read_only_sync/entrypoint/`
 owns argument parsing and JSON output; its `online.rs` presents separate captured
 checks, confirmed durable progress, transport and core/cache refusal evidence; `online/causes.rs` owns their sanitized
@@ -1520,7 +1524,8 @@ process, restart, output loss and authority-order evidence lives under
 `tests/composition/read_only_online.rs`, with canonical gateway provisioning and
 client/encoder support in its `read_only_online/fixtures/` children. Pure parser
 and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`,
-the status decision's under `tests/read_only_sync/application/`, and the
+the status decision's and the watch loop's under `tests/read_only_sync/application/`,
+the session's watch evidence in `tests/read_only_sync/gateway/session/watch.rs`, and the
 code-line reader's in `tests/composition/read_only_device.rs`.
 `examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
 against a real `nessa server` and real client processes and reports timings and
@@ -1535,6 +1540,7 @@ then carries their outcomes through conversation/storage, MCP and the native joi
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
 `tests/composition/watch_shutdown.rs`, using the watch fixture in
-`tests/product/socket/watches.rs`. The separate-process replay-to-live test is in
+`tests/product/socket/watches.rs`. The separate-process replay-to-live tests, with
+the probe client and with the example's own `watch` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.
