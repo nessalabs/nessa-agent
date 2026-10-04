@@ -6,7 +6,9 @@ use crate::mcp_servers::application::{
     McpServerAuditPhase, McpServerAuditRecord, McpServerInitiator, McpServerSettings,
     ServerInspector, StoreLock,
 };
-use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
+use crate::mcp_servers::domain::{
+    ConfigurationKey, ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME,
+};
 use crate::mcp_servers::infrastructure::{
     ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers,
 };
@@ -31,8 +33,9 @@ use tokio::sync::{watch, Semaphore};
 /// gateway starts with.
 pub(crate) const UNPARSEABLE: &str = "refused-by-the-runtime-configuration";
 
-/// `config.json` in memory, with its lock, and publishing that can be made
-/// to fail.
+/// `config.json` in memory, with its lock, publishing that can be made to
+/// fail, and an edit made outside the lock once the next read has been
+/// answered.
 #[derive(Default)]
 pub(crate) struct MemoryFiles {
     pub(crate) bytes: Mutex<Option<Vec<u8>>>,
@@ -40,6 +43,13 @@ pub(crate) struct MemoryFiles {
     pub(crate) fail_publish: AtomicBool,
     pub(crate) publishes: AtomicUsize,
     pub(crate) locks: AtomicUsize,
+    /// The file another writer, ignoring the lock, leaves just after the
+    /// next read: taken by that read.
+    pub(crate) after_next_read: Mutex<Option<Vec<u8>>>,
+    /// Set as a publish starts; a publish then waits for a message on
+    /// `publish_gate`, when one is given.
+    pub(crate) publishing: AtomicBool,
+    pub(crate) publish_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 impl MemoryFiles {
     pub(crate) fn holding(document: Value) -> Arc<Self> {
@@ -69,14 +79,21 @@ impl Drop for Held {
 
 impl ConfigFiles for MemoryFiles {
     fn read(&self, limit: usize) -> io::Result<Option<Vec<u8>>> {
-        Ok(self
-            .bytes
-            .lock()
-            .unwrap()
+        let mut bytes = self.bytes.lock().unwrap();
+        let read = bytes
             .as_ref()
-            .map(|bytes| bytes[..bytes.len().min(limit + 1)].to_vec()))
+            .map(|bytes| bytes[..bytes.len().min(limit + 1)].to_vec());
+        if let Some(edited) = self.after_next_read.lock().unwrap().take() {
+            *bytes = Some(edited);
+        }
+        Ok(read)
     }
     fn publish(&self, bytes: &[u8]) -> io::Result<()> {
+        self.publishing.store(true, Ordering::SeqCst);
+        let gate = self.publish_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            let _ = gate.recv();
+        }
         if self.fail_publish.load(Ordering::SeqCst) {
             return Err(io::Error::other("publish refused"));
         }
@@ -230,6 +247,11 @@ pub(crate) fn initiator() -> McpServerInitiator {
     }
 }
 
+/// The key the test settings' revisions are keyed with.
+pub(crate) fn key() -> ConfigurationKey {
+    ConfigurationKey::new([7; 32])
+}
+
 /// The settings over `files` and `audit`, with the managed server, and the
 /// live set they replace (holding what `files` stores at the start).
 pub(crate) fn settings_over(
@@ -247,6 +269,32 @@ pub(crate) fn inspected_over(
     clock: Arc<dyn Clock>,
     inspector: Arc<dyn ServerInspector>,
 ) -> (McpServerSettings, McpServers) {
+    started_with(files, audit, clock, inspector, &[managed()])
+}
+
+/// The settings of a gateway that started with `startup` configured — the
+/// managed server among them, or not — over `files`, on a leaping clock.
+pub(crate) fn settings_started_with(
+    files: Arc<MemoryFiles>,
+    audit: Arc<RecordingAudit>,
+    startup: &[ConfiguredMcpServer],
+) -> (McpServerSettings, McpServers) {
+    started_with(
+        files,
+        audit,
+        Arc::new(LeapingClock::default()),
+        Arc::new(ScriptedInspector::default()),
+        startup,
+    )
+}
+
+fn started_with(
+    files: Arc<MemoryFiles>,
+    audit: Arc<RecordingAudit>,
+    clock: Arc<dyn Clock>,
+    inspector: Arc<dyn ServerInspector>,
+    startup: &[ConfiguredMcpServer],
+) -> (McpServerSettings, McpServers) {
     let store = ConfigJsonStore::new(
         files.clone(),
         ConfigCheck {
@@ -261,8 +309,9 @@ pub(crate) fn inspected_over(
             ("workspace".to_owned(), json!("/w")),
         ]),
         clock,
+        key(),
     );
-    let launches = LaunchSettings::new(&[managed()], std::env::temp_dir(), BTreeMap::new());
+    let launches = LaunchSettings::new(startup, std::env::temp_dir(), BTreeMap::new());
     let servers = McpServers::new(
         launches.launch_set(&[]).unwrap(),
         Arc::new(RuntimeClock::new()),

@@ -142,17 +142,27 @@ async fn i1_a_missing_command_fails_to_start() {
 }
 
 /// I2: a server that never answers `initialize` is timed out at the
-/// deadline on the injected clock, and its process group is killed.
+/// deadline on the injected clock, and its process group is killed: the
+/// server and the child it started.
 #[tokio::test]
 async fn i2_a_server_that_never_initializes_times_out_and_its_group_is_killed() {
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("pid");
-    let server = fixture(&["--silent", "--pid-file", pid_file.to_str().unwrap()]);
+    let child_pid_file = directory.path().join("child");
+    let server = fixture(&[
+        "--silent",
+        "--child",
+        "--pid-file",
+        pid_file.to_str().unwrap(),
+        "--child-pid-file",
+        child_pid_file.to_str().unwrap(),
+    ]);
     let clock = Arc::new(ManualClock::default());
     let inspector = inspector(clock.clone());
     let inspecting = tokio::spawn(async move { inspector.inspect(&server, BOUNDS).await });
     let pid = pid_in(&pid_file).await;
-    assert!(alive(pid));
+    let child = pid_in(&child_pid_file).await;
+    assert!(alive(pid) && alive(child));
     // Not before the deadline.
     clock.advance(BOUNDS.deadline - Duration::from_millis(1));
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -165,6 +175,54 @@ async fn i2_a_server_that_never_initializes_times_out_and_its_group_is_killed() 
         .expect("timed out at the injected deadline");
     assert_eq!(answered.unwrap(), Err(InspectFailure::TimedOut));
     gone(pid).await;
+    gone(child).await;
+}
+
+/// A server that answers `initialize`, then never answers `tools/list` and
+/// ignores its stdin closing, is killed with its group at the deadline: the
+/// inspection answers — and its slot frees — within a small real margin of
+/// the deadline, not after the SDK's grace for a server asked to exit.
+#[tokio::test]
+async fn a_server_that_hangs_after_initialize_is_killed_at_the_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("pid");
+    let child_pid_file = directory.path().join("child");
+    let listed_file = directory.path().join("listed");
+    let server = fixture(&[
+        "--silent-on-list",
+        "--ignore-eof",
+        "--child",
+        "--pid-file",
+        pid_file.to_str().unwrap(),
+        "--child-pid-file",
+        child_pid_file.to_str().unwrap(),
+        "--listed-file",
+        listed_file.to_str().unwrap(),
+    ]);
+    let clock = Arc::new(ManualClock::default());
+    let inspector = inspector(clock.clone());
+    let inspecting = tokio::spawn(async move { inspector.inspect(&server, BOUNDS).await });
+    let pid = pid_in(&pid_file).await;
+    let child = pid_in(&child_pid_file).await;
+    // Past the handshake: the list has been asked, and is not answered.
+    let started = std::time::Instant::now();
+    while !listed_file.exists() {
+        assert!(started.elapsed() < Duration::from_secs(5), "never listed");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!inspecting.is_finished());
+    clock.advance(BOUNDS.deadline);
+    let at_deadline = std::time::Instant::now();
+    let answered = tokio::time::timeout(Duration::from_secs(5), inspecting)
+        .await
+        .expect("answered after the deadline");
+    assert_eq!(answered.unwrap(), Err(InspectFailure::TimedOut));
+    // Well inside the SDK's two-second grace for a server whose stdin closed.
+    let margin = at_deadline.elapsed();
+    assert!(margin < Duration::from_millis(1000), "{margin:?}");
+    // Killed, not asked: the server ignores its stdin closing.
+    gone(pid).await;
+    gone(child).await;
 }
 
 /// I3: a server that exits while its tools are listed is gone.

@@ -5,10 +5,11 @@
 //! An entry is `{name, command, args?, enabled?, env?}`. One without
 //! `enabled` is on, and one without `env` has no variables of its own: that
 //! is the current contract's default, not a reading of an older shape.
-use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer};
+use crate::mcp_servers::domain::{
+    stored_revision, ConfigurationKey, ConfiguredMcpServer, StdioServer,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Deserialize, Serialize)]
@@ -74,10 +75,11 @@ pub(crate) fn block(servers: &[ConfiguredMcpServer]) -> Option<Value> {
     serde_json::to_value(stored).ok()
 }
 
-/// The revision of a stored block: a digest of its JSON, an absent block
-/// being `[]`. Nothing beside the block is persisted for it.
-pub(crate) fn revision(block: Option<&Value>) -> String {
+/// The revision of a stored block: a digest of its JSON keyed with this
+/// process's `key` ([`stored_revision`]), an absent block being `[]`.
+/// Nothing beside the block is persisted for it.
+pub(crate) fn revision(key: &ConfigurationKey, block: Option<&Value>) -> String {
     let empty = Value::Array(Vec::new());
     let bytes = serde_json::to_vec(block.unwrap_or(&empty)).unwrap_or_default();
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    stored_revision(key, &bytes)
 }

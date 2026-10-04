@@ -9,6 +9,22 @@ use super::{build::launch_configuration, AgentRuntime, AgentsConfig};
 use crate::composition::agent_budgets;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use nessa_sdk::application::agent_execution::providers::UserImageSource;
+use nessa_sdk::application::agent_execution::{
+    agents::AgentFuture,
+    executions::{ExecutionAudit, ExecutionAuditRecord},
+    providers::{
+        AgentProvider, ProviderOpenRequest, ProviderSessionDeleter, ProviderSessionDeletion,
+    },
+};
+use nessa_sdk::application::dto::{ModalitiesDto, ModelMetadataDto};
+use nessa_sdk::domain::{
+    agent_execution::sessions::ExecutionSessionId, common::value_objects::TokenLimits,
+    model_metadata::entities::ModelMetadata,
+};
+use nessa_sdk::infrastructure::{
+    acp::sessions::{McpServerList, StandInSessions},
+    claude_acp::sessions::ClaudeAcpProvider,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     ffi::OsString,
@@ -224,5 +240,124 @@ fn the_launch_configuration_carries_the_agents_grants() {
     assert_eq!(
         opened.environment(),
         [("NESSA_MCP_SESSION".to_owned(), "token".to_owned())]
+    );
+}
+
+/// What the live set holds now: empty until a test saves a server into it.
+#[derive(Default)]
+struct LiveSet(std::sync::Mutex<Vec<nessa_sdk::infrastructure::acp::sessions::StdioMcpServer>>);
+impl nessa_sdk::infrastructure::acp::sessions::McpServerSource for LiveSet {
+    fn servers(&self) -> Vec<nessa_sdk::infrastructure::acp::sessions::StdioMcpServer> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+struct AcceptingAudit;
+impl ExecutionAudit for AcceptingAudit {
+    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn anthropic_model() -> ModelMetadata {
+    let text = ModalitiesDto {
+        text: true,
+        image: false,
+        audio: false,
+    };
+    ModelMetadata::try_from(ModelMetadataDto {
+        provider: "anthropic".into(),
+        model_id: "exact-fixture-model".into(),
+        display_name: "Fixture".into(),
+        input: text,
+        image_input: None,
+        output: text,
+        tool_use: true,
+        reasoning: None,
+        fast_mode: false,
+        max_context_window_tokens: 1000,
+        max_output_tokens: 200,
+        knowledge_cutoff: "2026-01".into(),
+        documentation_url: "https://example.com".into(),
+    })
+    .unwrap()
+}
+
+/// MCP servers are tools: a runtime with tools off is given none — and no
+/// grants for them — whatever the live set holds, where one with tools on is
+/// given the live set's stand-ins. So a server saved after the agent was
+/// composed cannot break its opens or its deletes, which the SDK refuses
+/// with servers and no tools: both go ahead against real ACP fixtures (the
+/// SDK's), the open's harness asserting it was handed no server.
+#[tokio::test]
+async fn a_tools_disabled_agent_opens_and_deletes_with_a_server_saved() {
+    let live = Arc::new(LiveSet::default());
+    let mut config = agents_config();
+    config.mcp_stand_ins = McpServerList::read_from(live.clone());
+    config.stand_ins = StandInSessions::granted_by(Arc::new(OneVariable));
+    let disabled = AgentRuntime {
+        tools_enabled: false,
+        ..runtime()
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../nessa-sdk/tests/infrastructure/acp/contracts/fixtures");
+    // Composed before anything is saved, as the gateway composes it.
+    let composed = |handler: &str, arguments: &[&str]| {
+        let mut acp = launch_configuration(
+            &config,
+            &disabled,
+            workspace.path().to_owned(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            None,
+        );
+        acp.executable = ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3"));
+        acp.arguments = std::iter::once(fixtures.join(handler).into_os_string())
+            .chain(arguments.iter().map(OsString::from))
+            .collect();
+        ClaudeAcpProvider::new(
+            acp,
+            &anthropic_model(),
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(AcceptingAudit),
+        )
+        .expect("composed with tools off")
+    };
+    let opening = composed("claude_acp_test_handler.py", &["questions-disabled"]);
+    let session = ExecutionSessionId::new("provider-session-7").unwrap();
+    let deleting = composed(
+        "session_delete_test_handler.py",
+        &["advertised", "claude", session.as_str(), "1"],
+    );
+    // Then a server is saved into the live set.
+    live.0
+        .lock()
+        .unwrap()
+        .push(nessa_sdk::infrastructure::acp::sessions::StdioMcpServer {
+            name: "saved".into(),
+            command: PathBuf::from("/usr/bin/python3"),
+            args: vec!["/saved.py".into()],
+        });
+    let enabled = launch_configuration(
+        &config,
+        &runtime(),
+        PathBuf::from("/workspace"),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
+    );
+    assert_eq!(enabled.mcp_servers.current().len(), 1);
+    let opened = opening
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .expect("opened with a server saved");
+    // Its harness was handed no server: the fixture refuses a `session/new`
+    // that carries one. Dropped, the binding stops its process.
+    assert!(!opened.session.id().as_str().is_empty());
+    drop(opened);
+    assert_eq!(
+        deleting.delete_session(session).await.unwrap(),
+        ProviderSessionDeletion::Deleted
     );
 }

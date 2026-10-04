@@ -89,12 +89,11 @@ fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
 /// The configured MCP server and tool a harness tool name names, or `None`.
 ///
 /// The harness names an MCP tool `mcp__<server>__<tool>`. A configured server
-/// name cannot hold `__` (`AcpConfig::validate`) but may end in `_`, so the name
-/// alone does not always say where the server ends. The
-/// configured servers do: a name is split at the one configured prefix it
-/// starts with. Where two configured prefixes both fit (`a` and `a_` for
-/// `mcp__a___c`), the call is left without an identity rather than given a
-/// guessed one — its tool row and text result are unchanged. The tool part is
+/// name holds no `__` and neither starts nor ends with `_`
+/// (`StdioMcpServer::problem`), so at most one configured prefix fits a name;
+/// it is split at that prefix. Were two to fit, the call would be left without
+/// an identity rather than given a guessed one — its tool row and text result
+/// unchanged. The tool part is
 /// the harness's spelling, in which every character outside `[A-Za-z0-9_-]`
 /// has become `_`.
 fn mcp_tool(name: &str, mcp_prefixes: &[String]) -> Option<McpTool> {

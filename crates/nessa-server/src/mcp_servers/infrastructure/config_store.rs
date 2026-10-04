@@ -5,6 +5,7 @@
 //! ConfigJsonStore ──read / publish / try_lock──▶ ConfigFiles (OsConfigFiles: the file, its lock)
 //!                 ──check──────────────────────▶ the runtime configuration's own parse and bound
 //!                 ──now / sleep_until──────────▶ Clock (the lock's bounded wait)
+//!                 ──stored_revision────────────▶ ConfigurationKey (this process's, the stand-ins' too)
 //! ```
 //!
 //! Arrows are calls. A configuration that does not pass the check, before or
@@ -21,7 +22,7 @@ use super::stored_servers::{block, parse_block, revision};
 use crate::mcp_servers::application::{
     McpServerStore, StoreError, StoreFuture, StoreLock, StoredServers,
 };
-use crate::mcp_servers::domain::ConfiguredMcpServer;
+use crate::mcp_servers::domain::{ConfigurationKey, ConfiguredMcpServer};
 use nessa_sdk::infrastructure::clock::Clock;
 use serde_json::{Map, Value};
 use std::{io, sync::Arc, time::Duration};
@@ -64,6 +65,9 @@ pub struct ConfigJsonStore {
     agents: Map<String, Value>,
     /// What the lock's bounded wait is measured on.
     clock: Arc<dyn Clock>,
+    /// What each revision is keyed with: the process's one key, which the
+    /// stand-ins' digests are keyed with too.
+    key: ConfigurationKey,
 }
 
 impl ConfigJsonStore {
@@ -72,12 +76,14 @@ impl ConfigJsonStore {
         check: ConfigCheck,
         agents: Map<String, Value>,
         clock: Arc<dyn Clock>,
+        key: ConfigurationKey,
     ) -> Self {
         Self {
             files,
             check,
             agents,
             clock,
+            key,
         }
     }
 
@@ -141,15 +147,21 @@ impl McpServerStore for ConfigJsonStore {
             None => Vec::new(),
         };
         Ok(StoredServers {
-            revision: revision(stored),
+            revision: revision(&self.key, stored),
             servers,
         })
     }
 
-    fn write(&self, servers: &[ConfiguredMcpServer]) -> Result<String, StoreError> {
+    fn write(&self, expected: &str, servers: &[ConfiguredMcpServer]) -> Result<String, StoreError> {
         let mut document = self.document()?;
+        // What is stored now is what the edit was made to, or the edit is
+        // stale: something wrote outside the lock since the read.
+        let current = revision(&self.key, stored_block(&document));
+        if current != expected {
+            return Err(StoreError::RevisionConflict { revision: current });
+        }
         let written = block(servers).ok_or(StoreError::ConfigInvalid)?;
-        let new_revision = revision(Some(&written));
+        let new_revision = revision(&self.key, Some(&written));
         let agents = document
             .entry("agents")
             .or_insert_with(|| Value::Object(self.agents.clone()));

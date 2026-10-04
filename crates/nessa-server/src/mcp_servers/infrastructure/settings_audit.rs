@@ -33,8 +33,20 @@ impl DurableMcpServerAudit {
     }
 }
 
+/// A revision, its names, and the change's target there: what it is
+/// started with and its variables' names, never their values.
 fn names(names: &ServerNames) -> Value {
-    json!({"revision": names.revision, "names": names.names})
+    json!({
+        "revision": names.revision,
+        "names": names.names,
+        "target": names.target.as_ref().map(|target| json!({
+            "name": target.name,
+            "command": target.command.to_string_lossy(),
+            "args": target.args,
+            "enabled": target.enabled,
+            "envNames": target.env_names,
+        })),
+    })
 }
 
 /// `record` as stored, without its identity and observation time.

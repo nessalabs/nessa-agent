@@ -211,6 +211,24 @@ fn an_invalid_or_repeated_configuration_is_refused() {
     assert_eq!(names, ["one"]);
 }
 
+/// A harness names a tool `mcp__<server>__<tool>`: a server name that starts
+/// or ends with `_` runs into a separator (`a_` and `a` would both fit
+/// `mcp__a___c`), so it is refused as `__` inside one is; `_` within is a
+/// name.
+#[test]
+fn a_server_name_may_not_start_or_end_with_an_underscore() {
+    for name in ["_a", "a_", "_", "a__b"] {
+        assert_eq!(
+            launch(name).problem(),
+            Some(McpServerProblem::Name),
+            "{name}"
+        );
+    }
+    for name in ["a_b", "a-", "-a", "a"] {
+        assert_eq!(launch(name).problem(), None, "{name}");
+    }
+}
+
 fn configured(servers: &McpServers) -> Vec<String> {
     servers
         .configured()
@@ -253,6 +271,35 @@ async fn a_replacement_once_stopping_is_refused_and_launches_nothing() {
         servers.replace(vec![launch("other")]),
         Err(McpError::Stopped)
     );
+    assert_eq!(configured(&servers), ["fixture"]);
+    assert_eq!(launcher.launches(), 0);
+}
+
+/// #391 S14, the ordering: a replacement that arrives while `stop` holds the
+/// live lock waits for it, and once `stop` has set `stopping` under that lock
+/// and let it go, the replacement sees the stop: refused, and the set kept.
+/// The lock is held here exactly as `stop` holds it, so the replacement is
+/// made to contend rather than hoped to.
+#[test]
+fn a_replacement_contending_with_a_stop_that_holds_the_lock_sees_the_stop() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let live = servers.inner.live.lock().unwrap();
+    let (started, contending) = std::sync::mpsc::channel();
+    let replacing = std::thread::spawn({
+        let servers = servers.clone();
+        move || {
+            started.send(()).unwrap();
+            servers.replace(vec![launch("other")])
+        }
+    });
+    contending.recv().unwrap();
+    // It is waiting on the lock, not finished: real time, generously, for a
+    // replacement that does not wait to show that it did not.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!replacing.is_finished(), "the replacement did not wait");
+    servers.inner.stopping.send_replace(true);
+    drop(live);
+    assert_eq!(replacing.join().unwrap(), Err(McpError::Stopped));
     assert_eq!(configured(&servers), ["fixture"]);
     assert_eq!(launcher.launches(), 0);
 }

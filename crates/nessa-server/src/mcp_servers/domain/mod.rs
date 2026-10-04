@@ -17,6 +17,6 @@ pub use configured_server::{
 pub use resource_ticket::{resource_ticket, ResourceTicketDigest};
 pub use session_token::{session_token, TokenDigest};
 pub use stand_in::{
-    admit, configuration_digest, relay_arguments, ConfigurationKey, StandInRefusal,
-    RELAY_SUBCOMMAND,
+    admit, configuration_digest, relay_arguments, stored_revision, ConfigurationKey,
+    StandInRefusal, RELAY_SUBCOMMAND,
 };

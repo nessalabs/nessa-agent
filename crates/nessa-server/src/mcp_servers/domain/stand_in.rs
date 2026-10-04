@@ -23,12 +23,14 @@ pub enum StandInRefusal {
     Unavailable,
 }
 
-/// The secret a gateway process keys every [`configuration_digest`] with:
-/// minted once per process, held only in its memory, and never written down.
-/// A stand-in's arguments, which other users can see in a process list, then
-/// say nothing about the configuration they stand for — not a variable's
-/// value, nor anything to test a guessed value against
-/// (`a_stand_ins_arguments_reveal_nothing_about_a_variables_value`).
+/// The secret a gateway process keys every [`configuration_digest`] and
+/// [`stored_revision`] with: minted once per process, held only in its
+/// memory, and never written down. A stand-in's arguments, which other users
+/// can see in a process list, and the stored servers' revision, which
+/// `mcpServers.list` answers, then say nothing about the configuration they
+/// stand for — not a variable's value, nor anything to test a guessed value
+/// against (`a_stand_ins_arguments_reveal_nothing_about_a_variables_value`,
+/// `the_revision_is_keyed_and_changes_with_a_variables_value`).
 ///
 /// `Debug` never prints it.
 #[derive(Clone)]
@@ -57,7 +59,7 @@ pub fn configuration_digest(
     args: &[String],
     environment: &BTreeMap<OsString, OsString>,
 ) -> String {
-    let mut hash = Hmac::<Sha256>::new_from_slice(&key.0).expect("HMAC takes a key of any length");
+    let mut hash = keyed(key);
     let mut field = |bytes: &[u8]| {
         hash.update(&(bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
@@ -72,6 +74,24 @@ pub fn configuration_digest(
         field(name.as_encoded_bytes());
         field(value.as_encoded_bytes());
     }
+    finished(hash)
+}
+
+/// The revision of the stored servers whose block serialises to `block`,
+/// keyed with this process's `key` (HMAC-SHA256), so another run of the
+/// gateway gives another revision for the same block — which costs a caller
+/// holding one from before a restart one conflict.
+pub fn stored_revision(key: &ConfigurationKey, block: &[u8]) -> String {
+    let mut hash = keyed(key);
+    hash.update(block);
+    finished(hash)
+}
+
+fn keyed(key: &ConfigurationKey) -> Hmac<Sha256> {
+    Hmac::<Sha256>::new_from_slice(&key.0).expect("HMAC takes a key of any length")
+}
+
+fn finished(hash: Hmac<Sha256>) -> String {
     let digest: String = hash
         .finalize()
         .into_bytes()

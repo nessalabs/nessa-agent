@@ -5,16 +5,22 @@
 //!
 //! ```text
 //! edit    ─▶ audit requested ─▶ store.lock (bounded wait) ─▶ read ─▶ revision? ─▶ ServerEdit::apply
-//!         ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (parse, bound, publish)
+//!         ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (revision again, parse, bound, publish)
 //!         ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
 //! inspect ─▶ a slot (or busy) ─▶ read ─▶ the stored server ─▶ audit requested
 //!         ─▶ ServerInspector::inspect (deadline, caps; stopped after) ─▶ audit outcome
 //! ```
 //!
 //! Arrows are order. The lock is held from the read to the replacement, so
-//! two changes publish and replace in the same order. A publish that lands
-//! while the gateway stops answers success with the live set not replaced:
-//! the file is the gateway's, and the next start reads it
+//! two changes publish and replace in the same order. It travels into each
+//! blocking read and write and back out of it, so a change whose caller goes
+//! away mid-step still holds it until that step has finished: nothing is
+//! written outside it
+//! (`a_caller_gone_mid_write_leaves_the_lock_held_until_the_write_ends`). The write checks the revision of what it re-reads, so
+//! an edit made outside the lock after the read is a conflict, not lost
+//! (`a_change_made_outside_the_lock_after_the_read_is_a_conflict`). A publish
+//! that lands while the gateway stops answers success with the live set not
+//! replaced: the file is the gateway's, and the next start reads it
 //! (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
 //!
 //! An inspection is audited because it runs an executable the admin chose,
@@ -24,10 +30,10 @@
 //! unreadable configuration. When its first record cannot be written,
 //! nothing is started.
 use super::ports::{
-    AuditUnavailable, InspectBounds, InspectFailure, Inspection, LiveServerSet, McpServerAction,
-    McpServerAudit, McpServerAuditPhase, McpServerAuditRecord, McpServerChangeRequest,
-    McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
-    ServerProblem, StoreError, StoredServers,
+    AuditUnavailable, AuditedServer, InspectBounds, InspectFailure, Inspection, LiveServerSet,
+    McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+    McpServerChangeRequest, McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector,
+    ServerNames, ServerProblem, StoreError, StoreLock, StoredServers,
 };
 use crate::mcp_servers::domain::{
     ConfiguredMcpServer, EditRefusal, ServerEdit, StdioServer, MANAGED_SERVER_NAME,
@@ -92,7 +98,8 @@ pub enum McpServerSettingsError {
     ConfigTooLarge,
     StorageUnavailable,
     /// A record could not be made durable. `applied` says whether the change
-    /// was published (and the live set replaced) all the same; `cause` is
+    /// was published all the same — the live set may not have been replaced
+    /// if the gateway is stopping; `cause` is
     /// what it would have been answered otherwise — the refusal or failure
     /// that stopped it — so neither cause is lost
     /// (`s7_an_unwritable_outcome_after_a_publish_says_it_applied`). Never
@@ -146,6 +153,7 @@ impl From<StoreError> for McpServerSettingsError {
             StoreError::ConfigInvalid => Self::ConfigInvalid,
             StoreError::ConfigTooLarge => Self::ConfigTooLarge,
             StoreError::Busy => Self::Busy,
+            StoreError::RevisionConflict { revision } => Self::RevisionConflict { revision },
             StoreError::Unavailable => Self::StorageUnavailable,
         }
     }
@@ -204,11 +212,14 @@ impl McpServerSettings {
                 managed: false,
             })
             .collect();
+        // As the gateway started with it, on or off, with its variables'
+        // names: what counts towards the bound, whatever the file says now
+        // (`a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off`).
         if let Some(managed) = self.live.managed() {
             servers.push(ListedServer {
-                server: managed,
-                env_names: Vec::new(),
-                enabled: true,
+                env_names: managed.env_names(),
+                enabled: managed.enabled,
+                server: managed.server,
                 managed: true,
             });
         }
@@ -246,7 +257,12 @@ impl McpServerSettings {
             },
             revision: revision.clone(),
             env_names: match &edit {
-                ServerEdit::Save(save) => save.env.iter().map(|(name, _)| name.clone()).collect(),
+                ServerEdit::Save(save) => {
+                    let mut names: Vec<String> =
+                        save.env.iter().map(|(name, _)| name.clone()).collect();
+                    names.sort();
+                    names
+                }
                 ServerEdit::Remove { .. } => Vec::new(),
             },
             enabled: match &edit {
@@ -402,13 +418,17 @@ impl McpServerSettings {
             .await
             .map_err(|error| (error.into(), None))?;
         let store = self.store.clone();
-        let stored = blocking(move || store.read())
+        // The lock goes into the read and comes back out of it.
+        let (stored, lock) = blocking(move || (store.read(), lock))
             .await
-            .unwrap_or(Err(StoreError::Unavailable))
-            .map_err(|error| (error.into(), None))?;
-        let before = names(&stored.revision, &stored.servers);
-        let result = self.publish(revision, edit, stored).await;
-        drop(lock);
+            .ok_or((McpServerSettingsError::StorageUnavailable, None))?;
+        let stored = stored.map_err(|error| (error.into(), None))?;
+        let before_target = match edit {
+            ServerEdit::Save(save) => save.previous_name.as_deref().unwrap_or(edit.target()),
+            ServerEdit::Remove { name } => name,
+        };
+        let before = names(&stored.revision, &stored.servers, Some(before_target));
+        let result = self.publish(revision, edit, stored, lock).await;
         match result {
             Ok((after, live_set_replaced)) => Ok(Change {
                 before,
@@ -419,11 +439,14 @@ impl McpServerSettings {
         }
     }
 
+    /// Edit `stored`, write it, and replace the live set, under `lock`,
+    /// which is let go once the live set is replaced or the change refused.
     async fn publish(
         &self,
         revision: &str,
         edit: &ServerEdit,
         stored: StoredServers,
+        lock: StoreLock,
     ) -> Result<(ServerNames, bool), McpServerSettingsError> {
         if stored.revision != revision {
             return Err(McpServerSettingsError::RevisionConflict {
@@ -449,16 +472,25 @@ impl McpServerSettings {
         }
         let store = self.store.clone();
         let written = edited.clone();
-        let after = blocking(move || store.write(&written))
+        let expected = stored.revision;
+        // The lock goes into the write and comes back out of it: a caller
+        // gone mid-write leaves it held until the write has finished.
+        let (after, lock) = blocking(move || (store.write(&expected, &written), lock))
             .await
-            .unwrap_or(Err(StoreError::Unavailable))?;
+            .ok_or(McpServerSettingsError::StorageUnavailable)?;
+        let after = after?;
         // Published: the live set follows, under the same lock. Refused only
         // once the gateway is stopping: the change still answers success,
         // its outcome record says the live set was not replaced, and the
         // next start reads the file
         // (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
         let live_set_replaced = self.live.replace(&edited).is_ok();
-        Ok((names(&after, &edited), live_set_replaced))
+        drop(lock);
+        let after_target = match edit {
+            ServerEdit::Save(save) => Some(save.server.name.as_str()),
+            ServerEdit::Remove { .. } => None,
+        };
+        Ok((names(&after, &edited, after_target), live_set_replaced))
     }
 
     async fn record(&self, record: McpServerAuditRecord) -> Result<(), AuditUnavailable> {
@@ -469,13 +501,17 @@ impl McpServerSettings {
     }
 }
 
-fn names(revision: &str, servers: &[ConfiguredMcpServer]) -> ServerNames {
+/// `servers` at `revision`, and the one stored as `target`, if any.
+fn names(revision: &str, servers: &[ConfiguredMcpServer], target: Option<&str>) -> ServerNames {
     ServerNames {
         revision: revision.to_owned(),
         names: servers
             .iter()
             .map(|each| each.server.name.clone())
             .collect(),
+        target: target
+            .and_then(|name| servers.iter().find(|each| each.server.name == name))
+            .map(|each| Box::new(AuditedServer::of(each))),
     }
 }
 

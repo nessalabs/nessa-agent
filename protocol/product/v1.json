@@ -2360,7 +2360,7 @@
         "envNames": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "The names of the variables it is given over the gateway's own, in order. Never their values."
+          "description": "The names of the variables it is given over the gateway's own, sorted by name. Never their values."
         },
         "enabled": {
           "type": "boolean",
@@ -2431,7 +2431,7 @@
         "env": {
           "type": "array",
           "items": { "$ref": "#/$defs/McpServerEnvEntry" },
-          "description": "Every variable it is given over the gateway's own, in order; a stored variable left out is removed."
+          "description": "Every variable it is given over the gateway's own, each name once; they are stored, and listed, sorted by name whatever order they are given in. A stored variable left out is removed."
         },
         "enabled": {
           "type": "boolean",
@@ -2539,7 +2539,7 @@
       "properties": {
         "applied": {
           "type": "boolean",
-          "description": "For mcpServers.save and mcpServers.remove: whether the change was published and the live set replaced all the same. For mcpServers.inspect: whether the server was started."
+          "description": "For mcpServers.save and mcpServers.remove: whether the change was published all the same; the live set may not have been replaced if the gateway is stopping. For mcpServers.inspect: whether the server was started."
         },
         "code": {
           "$ref": "#/$defs/McpServersErrorCode",

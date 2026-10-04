@@ -2635,6 +2635,46 @@ mod tests {
         assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
     }
 
+    /// I5 at the edge: an answer of exactly the frame's 65536 bytes is sent
+    /// whole and complete; one byte more loses its last tool and says
+    /// `cut: "bytes"`.
+    #[test]
+    fn i5_the_frame_bound_holds_at_exactly_its_edge() {
+        use crate::mcp_servers::application::{InspectedTool, Inspection};
+        let limit = crate::protocol::MAX_PAYLOAD_BYTES as usize;
+        let tool = |name: String| InspectedTool {
+            name,
+            read_only_hint: None,
+            destructive_hint: None,
+            ui: None,
+        };
+        let answered = |padding: usize| {
+            let inspection = Inspection {
+                tools: vec![tool("first".into()), tool("p".repeat(padding))],
+                cut: None,
+            };
+            let message = super::super::mcp_servers::fitted("id", inspection);
+            let length = message.to_wire_text().unwrap().len();
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            (length, response.payload.unwrap())
+        };
+        // The frame grows a byte for each byte of an ASCII name.
+        let (small, _) = answered(1);
+        let edge = 1 + limit - small;
+        let (length, payload) = answered(edge);
+        assert_eq!(length, limit);
+        assert_eq!(payload["complete"], true);
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
+        let (length, payload) = answered(edge + 1);
+        assert!(length <= limit, "{length}");
+        assert_eq!(payload["complete"], false);
+        assert_eq!(payload["cut"], "bytes");
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["tools"][0]["name"], "first");
+    }
+
     struct UnavailablePolicy;
     impl PolicyEvaluator for UnavailablePolicy {
         fn evaluate(

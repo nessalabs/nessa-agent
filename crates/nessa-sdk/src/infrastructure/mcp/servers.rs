@@ -125,21 +125,22 @@ impl McpServerLaunch {
 /// refuses new ones, and every later replacement.
 #[derive(Clone)]
 pub struct McpServers {
-    inner: Arc<Inner>,
+    /// Visible to this module's tests, which hold `live` as `stop` does.
+    pub(super) inner: Arc<Inner>,
 }
 
-struct Inner {
+pub(super) struct Inner {
     /// The configured set now, by name. Swapped whole by `replace`, under
     /// `live`'s lock, so a replacement and a stop are ordered.
     launches: RwLock<Arc<BTreeMap<String, McpServerLaunch>>>,
     clock: Arc<dyn Clock>,
     launcher: Arc<dyn Launcher>,
     /// Set once, by `stop`; what an opening races.
-    stopping: watch::Sender<bool>,
+    pub(super) stopping: watch::Sender<bool>,
     /// The sessions open now. A session is registered under this lock only
     /// while `stopping` is unset, and `stop` sets it and takes them under the
     /// same lock, so no session opens after a stop has looked.
-    live: Mutex<Live>,
+    pub(super) live: Mutex<Live>,
 }
 
 /// Whose a session is: the SDK session (a conversation's) its harness was
@@ -237,7 +238,7 @@ impl std::fmt::Debug for McpOwner {
 }
 
 #[derive(Default)]
-struct Live {
+pub(super) struct Live {
     next: u64,
     sessions: BTreeMap<u64, Weak<Session>>,
 }

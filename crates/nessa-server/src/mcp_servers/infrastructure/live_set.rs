@@ -7,6 +7,14 @@
 //! ConfiguredMcpServer ──LaunchSettings::launch_set──▶ McpServerLaunch ──▶ McpServers::replace
 //!                                                       └ McpServerLaunch::problem_in (the SDK's rules)
 //! ```
+//!
+//! The managed server (`nessa`) is the one the gateway started with: the
+//! desktop's bundled one, or — on a gateway without the desktop — the one
+//! stored under that name at startup, turned on or off. It is checked and
+//! counted with the stored servers whether on or off, as a stored server is,
+//! and launched only when on; no edit names it, and a stored entry under its
+//! name is never launched in its place
+//! (`a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off`).
 use crate::mcp_servers::application::{LiveServerSet, LiveSetKept, ServerProblem};
 use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
 use nessa_sdk::infrastructure::{
@@ -24,25 +32,33 @@ pub fn sdk_server(server: &StdioServer) -> StdioMcpServer {
     }
 }
 
-fn server(sdk: &StdioMcpServer) -> StdioServer {
-    StdioServer {
-        name: sdk.name.clone(),
-        command: sdk.command.clone(),
-        args: sdk.args.clone(),
-    }
-}
-
 /// How this gateway launches a configured server, and the server Nessa
 /// manages, as composition settled them.
-#[derive(Clone, Debug)]
+///
+/// `Debug` names the managed server and the base environment's variables,
+/// never a value (`launch_settings_print_names_never_values`).
+#[derive(Clone)]
 pub struct LaunchSettings {
-    /// The managed server's launch ([`MANAGED_SERVER_NAME`]), when this
-    /// gateway has one. It is not stored by any edit, and a stored entry
-    /// under its name is left out in its favour.
-    managed: Option<McpServerLaunch>,
+    /// The managed server ([`MANAGED_SERVER_NAME`]) as the gateway started
+    /// with it, on or off, when it has one. It is not stored by any edit,
+    /// and a stored entry under its name is left out in its favour.
+    managed: Option<ConfiguredMcpServer>,
     working_directory: PathBuf,
     /// The gateway's base environment for every server (`server_environment`).
     environment: BTreeMap<OsString, OsString>,
+}
+
+impl std::fmt::Debug for LaunchSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchSettings")
+            .field(
+                "managed",
+                &self.managed.as_ref().map(|managed| &managed.server.name),
+            )
+            .field("working_directory", &self.working_directory)
+            .field("environment", &self.environment.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl LaunchSettings {
@@ -54,16 +70,11 @@ impl LaunchSettings {
         working_directory: PathBuf,
         environment: BTreeMap<OsString, OsString>,
     ) -> Self {
-        let mut settings = Self {
-            managed: None,
+        Self {
+            managed: configured.iter().find(|server| server.managed()).cloned(),
             working_directory,
             environment,
-        };
-        settings.managed = configured
-            .iter()
-            .find(|server| server.managed() && server.enabled)
-            .map(|server| settings.launch(server));
-        settings
+        }
     }
 
     /// `server` as launched: in the working directory, with the base
@@ -82,37 +93,37 @@ impl LaunchSettings {
     }
 
     /// The live set for `stored`: the managed server, then each stored server
-    /// that is on and not under the managed name.
+    /// not under the managed name — those that are on.
     ///
     /// # Errors
     ///
     /// The first [`McpServerProblem`] of every stored server — on or off —
-    /// with the managed one, as one set ([`McpServerLaunch::problem_in`]): a
-    /// server turned off is still checked, and still counts.
+    /// with the managed one, on or off, as one set
+    /// ([`McpServerLaunch::problem_in`]): a server turned off is still
+    /// checked, and still counts.
     pub fn launch_set(
         &self,
         stored: &[ConfiguredMcpServer],
     ) -> Result<Vec<McpServerLaunch>, McpServerProblem> {
-        let user = stored
-            .iter()
-            .filter(|server| server.server.name != MANAGED_SERVER_NAME);
-        let every: Vec<McpServerLaunch> = self
+        let every: Vec<&ConfiguredMcpServer> = self
             .managed
             .iter()
-            .cloned()
-            .chain(user.clone().map(|server| self.launch(server)))
+            .chain(
+                stored
+                    .iter()
+                    .filter(|server| server.server.name != MANAGED_SERVER_NAME),
+            )
             .collect();
-        if let Some(problem) = McpServerLaunch::problem_in(&every) {
+        let launches: Vec<McpServerLaunch> =
+            every.iter().map(|server| self.launch(server)).collect();
+        if let Some(problem) = McpServerLaunch::problem_in(&launches) {
             return Err(problem);
         }
-        Ok(self
-            .managed
+        Ok(every
             .iter()
-            .cloned()
-            .chain(
-                user.filter(|server| server.enabled)
-                    .map(|server| self.launch(server)),
-            )
+            .zip(launches)
+            .filter(|(server, _)| server.enabled)
+            .map(|(_, launch)| launch)
             .collect())
     }
 }
@@ -131,11 +142,8 @@ impl LiveMcpServers {
 }
 
 impl LiveServerSet for LiveMcpServers {
-    fn managed(&self) -> Option<StdioServer> {
-        self.launches
-            .managed
-            .as_ref()
-            .map(|launch| server(&launch.server))
+    fn managed(&self) -> Option<ConfiguredMcpServer> {
+        self.launches.managed.clone()
     }
 
     fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {

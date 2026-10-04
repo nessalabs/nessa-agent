@@ -919,7 +919,7 @@ export interface McpServerListEntry {
   command: string
   /** The arguments it is started with, in order. */
   args: string[]
-  /** The names of the variables it is given over the gateway's own, in order. Never their values. */
+  /** The names of the variables it is given over the gateway's own, sorted by name. Never their values. */
   envNames: string[]
   /** Whether new conversations are given it. A server turned off stays configured. */
   enabled: boolean
@@ -950,7 +950,7 @@ export interface McpServerInput {
   command: string
   /** Its arguments, in order. Never put credentials here; use env. */
   args: string[]
-  /** Every variable it is given over the gateway's own, in order; a stored variable left out is removed. */
+  /** Every variable it is given over the gateway's own, each name once; they are stored, and listed, sorted by name whatever order they are given in. A stored variable left out is removed. */
   env: McpServerEnvEntry[]
   /** Whether new conversations are given it. */
   enabled: boolean
@@ -1005,7 +1005,7 @@ export interface McpServersRevisionConflictDetails {
 }
 /** Attached to a refusal coded audit_unavailable from an mcpServers method. Nothing is rolled back; mcpServers.list shows where things stand. */
 export interface McpServersAuditUnavailableDetails {
-  /** For mcpServers.save and mcpServers.remove: whether the change was published and the live set replaced all the same. For mcpServers.inspect: whether the server was started. */
+  /** For mcpServers.save and mcpServers.remove: whether the change was published all the same; the live set may not have been replaced if the gateway is stopping. For mcpServers.inspect: whether the server was started. */
   applied: boolean
   /** What the request would have been answered had its record been written: the refusal or failure that stopped it. Absent when nothing stopped it, or when the first record could not be written and nothing was done. Never audit_unavailable. */
   code?: McpServersErrorCode

@@ -5,24 +5,29 @@
 //! publish. And `inspect` (rows I6 and I7, and its audit, here; I1–I4
 //! against real server processes beside the inspector, I5 at the socket).
 use super::{
-    EditProblem, InspectCut, InspectFailure, InspectedTool, Inspection, McpServerAction,
-    McpServerAuditPhase, McpServerOutcome, McpServerSettingsError, ServerNames, ServerProblem,
-    INSPECT_BOUNDS,
+    AuditedServer, EditProblem, InspectCut, InspectFailure, InspectedTool, Inspection,
+    McpServerAction, McpServerAuditPhase, McpServerOutcome, McpServerSettingsError, ServerNames,
+    ServerProblem, INSPECT_BOUNDS,
 };
-use crate::mcp_servers::domain::{ConfiguredMcpServer, ServerEdit, ServerSave, StdioServer};
+use crate::mcp_servers::domain::{
+    stored_revision, ConfigurationKey, ConfiguredMcpServer, ServerEdit, ServerSave, StdioServer,
+};
 use crate::mcp_servers::infrastructure::settings_test_support::{
-    config, entry, initiator, inspected_over, live, managed, server, settings_for, settings_over,
-    LeapingClock, MemoryFiles, RecordingAudit, ScriptedInspector, UNPARSEABLE,
+    config, entry, initiator, inspected_over, key, live, managed, server, settings_for,
+    settings_over, settings_started_with, LeapingClock, MemoryFiles, RecordingAudit,
+    ScriptedInspector, UNPARSEABLE,
 };
 use crate::mcp_servers::infrastructure::{sdk_server, LaunchSettings};
 use nessa_sdk::infrastructure::{
     acp::sessions::MAX_MCP_SERVERS, clock::RuntimeClock, mcp::MCP_SESSION_VARIABLE,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
     sync::{atomic::Ordering, Arc},
+    time::Duration,
 };
 
 fn save(name: &str) -> ServerEdit {
@@ -47,6 +52,18 @@ fn save_with(
 
 fn remove(name: &str) -> ServerEdit {
     ServerEdit::Remove { name: name.into() }
+}
+
+/// [`server`]`(name)` as a record names it.
+fn audited(name: &str, enabled: bool, env_names: &[&str]) -> Box<AuditedServer> {
+    let server = server(name);
+    Box::new(AuditedServer {
+        name: server.name,
+        command: server.command,
+        args: server.args,
+        enabled,
+        env_names: env_names.iter().map(|name| (*name).to_owned()).collect(),
+    })
 }
 
 /// The stored servers' names in `files`.
@@ -110,10 +127,12 @@ async fn a_save_is_published_then_replaces_the_live_set_and_is_audited_both_side
             before: ServerNames {
                 revision: before.revision,
                 names: vec!["a".into()],
+                target: None,
             },
             after: ServerNames {
                 revision: after,
                 names: vec!["a".into(), "b".into()],
+                target: Some(audited("b", true, &["API_TOKEN"])),
             },
             live_set_replaced: true,
         }
@@ -167,6 +186,7 @@ async fn s2_a_stale_revision_is_refused_with_the_current_one_and_nothing_is_writ
             before: Some(ServerNames {
                 revision: current,
                 names: vec!["a".into()],
+                target: None,
             }),
         }
     );
@@ -339,10 +359,12 @@ async fn a_publish_during_stop_answers_success_and_leaves_the_live_set() {
             before: ServerNames {
                 revision: before,
                 names: vec![],
+                target: None,
             },
             after: ServerNames {
                 revision: after,
                 names: vec!["a".into()],
+                target: Some(audited("a", true, &[])),
             },
             live_set_replaced: false,
         }
@@ -683,6 +705,227 @@ async fn the_revision_is_the_stored_blocks_digest() {
     assert_eq!(revision(other).await, base);
     assert_ne!(revision(config(vec![entry("b")])).await, base);
     assert_eq!(revision(json!({})).await, revision(config(vec![])).await);
+}
+
+/// The revision is keyed with the process's key: it changes when only a
+/// variable's value does, yet is not the unkeyed digest of the block — so it
+/// gives nothing to test a guessed value against — and another key (another
+/// run of the gateway) gives another revision for the same block.
+#[tokio::test]
+async fn the_revision_is_keyed_and_changes_with_a_variables_value() {
+    let with_value = |value: &str| {
+        let mut stored = entry("a");
+        stored["env"] = json!({"TOKEN": value});
+        MemoryFiles::holding(config(vec![stored]))
+    };
+    let files = with_value("one");
+    let (settings, _) = settings_for(files.clone(), Arc::new(RecordingAudit::default()));
+    let one = settings.list().await.unwrap().revision;
+    let (settings, _) = settings_for(with_value("two"), Arc::new(RecordingAudit::default()));
+    assert_ne!(settings.list().await.unwrap().revision, one);
+    let block = serde_json::to_vec(&files.document()["agents"]["mcpServers"]).unwrap();
+    let unkeyed = format!("{:x}", Sha256::digest(&block));
+    assert!(!one.contains(&unkeyed), "{one}");
+    assert_eq!(one, stored_revision(&key(), &block));
+    assert_ne!(
+        stored_revision(&ConfigurationKey::new([8; 32]), &block),
+        one
+    );
+}
+
+/// The record of each applied change names its target before and after —
+/// command, arguments, whether it is on, and its variables' names, never a
+/// value: a rename (before under the old name), turning it off, adding one,
+/// and removing one.
+#[tokio::test]
+async fn the_audit_records_the_targets_before_and_after_on_save_rename_disable_and_remove() {
+    let mut stored = entry("a");
+    stored["env"] = json!({"TOKEN": "secret-a"});
+    let files = MemoryFiles::holding(config(vec![stored]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, _) = settings_for(files, audit.clone());
+    let targets = |audit: &RecordingAudit| match audit.records().last().map(|r| r.phase.clone()) {
+        Some(McpServerAuditPhase::Outcome(McpServerOutcome::Applied { before, after, .. })) => {
+            (before.target, after.target)
+        }
+        other => panic!("not applied: {other:?}"),
+    };
+    let revision = settings.list().await.unwrap().revision;
+    let revision = settings
+        .edit(
+            initiator(),
+            revision,
+            save_with(
+                "b",
+                Some("a"),
+                vec![("TOKEN", None), ("NEW", Some("secret-new"))],
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        targets(&audit),
+        (
+            Some(audited("a", true, &["TOKEN"])),
+            Some(audited("b", true, &["NEW", "TOKEN"]))
+        )
+    );
+    // The request names the variables sorted by name, as they are stored,
+    // whatever order they were given in.
+    assert_eq!(audit.records()[0].request.env_names, ["NEW", "TOKEN"]);
+    let off = ServerEdit::Save(ServerSave {
+        previous_name: None,
+        server: server("b"),
+        env: vec![("TOKEN".into(), None), ("NEW".into(), None)],
+        enabled: false,
+    });
+    let revision = settings.edit(initiator(), revision, off).await.unwrap();
+    assert_eq!(
+        targets(&audit),
+        (
+            Some(audited("b", true, &["NEW", "TOKEN"])),
+            Some(audited("b", false, &["NEW", "TOKEN"]))
+        )
+    );
+    let revision = settings
+        .edit(initiator(), revision, save("c"))
+        .await
+        .unwrap();
+    assert_eq!(targets(&audit), (None, Some(audited("c", true, &[]))));
+    settings
+        .edit(initiator(), revision, remove("b"))
+        .await
+        .unwrap();
+    assert_eq!(
+        targets(&audit),
+        (Some(audited("b", false, &["NEW", "TOKEN"])), None)
+    );
+    assert!(!format!("{:?}", audit.records()).contains("secret"));
+}
+
+/// An edit made to the file outside the lock, after the change read it and
+/// before it writes, is not overwritten: the write re-reads, finds another
+/// revision, and refuses `revision_conflict` with it; nothing is written and
+/// the live set is kept.
+#[tokio::test]
+async fn a_change_made_outside_the_lock_after_the_read_is_a_conflict() {
+    let files = MemoryFiles::holding(config(vec![entry("a")]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, servers) = settings_for(files.clone(), audit.clone());
+    let revision = settings.list().await.unwrap().revision;
+    let elsewhere = serde_json::to_vec(&config(vec![entry("a"), entry("x")])).unwrap();
+    *files.after_next_read.lock().unwrap() = Some(elsewhere.clone());
+    let refused = settings.edit(initiator(), revision, save("b")).await;
+    let current = settings.list().await.unwrap().revision;
+    assert_eq!(
+        refused,
+        Err(McpServerSettingsError::RevisionConflict { revision: current })
+    );
+    assert_eq!(files.current(), Some(elsewhere));
+    assert_eq!(files.publishes.load(Ordering::SeqCst), 0);
+    assert_eq!(live(&servers), ["nessa"]);
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Refused {
+            reason: "revision_conflict",
+            ..
+        }
+    ));
+}
+
+/// A change whose caller goes away while its write is under way keeps the
+/// lock until that write has finished: the lock goes into the blocking write
+/// and comes back out of it, so nothing is ever written outside it.
+#[tokio::test]
+async fn a_caller_gone_mid_write_leaves_the_lock_held_until_the_write_ends() {
+    let files = MemoryFiles::holding(config(vec![]));
+    let (settings, _) = settings_for(files.clone(), Arc::new(RecordingAudit::default()));
+    let settings = Arc::new(settings);
+    let revision = settings.list().await.unwrap().revision;
+    let (release, gate) = std::sync::mpsc::channel();
+    *files.publish_gate.lock().unwrap() = Some(gate);
+    let editing = tokio::spawn({
+        let settings = settings.clone();
+        async move { settings.edit(initiator(), revision, save("a")).await }
+    });
+    let started = std::time::Instant::now();
+    while !files.publishing.load(Ordering::SeqCst) {
+        assert!(started.elapsed() < Duration::from_secs(5), "never wrote");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    editing.abort();
+    assert!(editing.await.unwrap_err().is_cancelled());
+    assert!(
+        files.held.load(Ordering::SeqCst),
+        "the lock was let go while the write was under way"
+    );
+    release.send(()).unwrap();
+    let started = std::time::Instant::now();
+    while files.held.load(Ordering::SeqCst) {
+        assert!(started.elapsed() < Duration::from_secs(5), "never let go");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(stored(&files), ["a"]);
+}
+
+/// On a gateway without the desktop, a `nessa` stored at startup is the
+/// managed server, on or off: listed once, managed, with its own `enabled`
+/// and variable names; counted towards the bound either way; launched only
+/// when on.
+#[tokio::test]
+async fn a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off() {
+    for enabled in [true, false] {
+        let mut stored_nessa = entry("nessa");
+        stored_nessa["enabled"] = json!(enabled);
+        stored_nessa["env"] = json!({"TOKEN": "secret"});
+        let mut stored = vec![stored_nessa];
+        stored.extend((0..MAX_MCP_SERVERS - 1).map(|index| entry(&format!("s{index}"))));
+        let files = MemoryFiles::holding(config(stored));
+        let startup = ConfiguredMcpServer {
+            server: server("nessa"),
+            enabled,
+            env: BTreeMap::from([("TOKEN".to_owned(), "secret".to_owned())]),
+        };
+        let (settings, servers) =
+            settings_started_with(files, Arc::new(RecordingAudit::default()), &[startup]);
+        let list = settings.list().await.unwrap();
+        assert_eq!(list.servers.len(), MAX_MCP_SERVERS, "{enabled}");
+        let nessa: Vec<_> = list
+            .servers
+            .iter()
+            .filter(|row| row.server.name == "nessa")
+            .collect();
+        assert_eq!(nessa.len(), 1, "{enabled}");
+        assert!(nessa[0].managed);
+        assert_eq!(nessa[0].enabled, enabled);
+        assert_eq!(nessa[0].env_names, ["TOKEN"]);
+        assert!(!format!("{list:?}").contains("secret"));
+        assert_eq!(live(&servers).contains(&"nessa".to_owned()), enabled);
+        assert_eq!(
+            settings
+                .edit(initiator(), list.revision, save("one-more"))
+                .await,
+            Err(McpServerSettingsError::Invalid(EditProblem::Server(
+                ServerProblem::TooMany
+            ))),
+            "{enabled}"
+        );
+    }
+}
+
+/// `LaunchSettings` names the managed server and the base environment's
+/// variables, never a value.
+#[test]
+fn launch_settings_print_names_never_values() {
+    let mut nessa = managed();
+    nessa.env = BTreeMap::from([("M".to_owned(), "managed-secret".to_owned())]);
+    let base = BTreeMap::from([(OsString::from("HOME"), OsString::from("/home/secret-home"))]);
+    let printed = format!("{:?}", LaunchSettings::new(&[nessa], "/w".into(), base));
+    assert!(
+        printed.contains("HOME") && printed.contains("nessa"),
+        "{printed}"
+    );
+    assert!(!printed.contains("secret"), "{printed}");
 }
 
 /// A server's environment is the gateway's base with its own variables over

@@ -2,9 +2,9 @@
 //! and its lock, the live set it is launched as, a way to start one server
 //! once and look at it, and somewhere durable to record each change and
 //! each inspection.
-use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer};
+use crate::mcp_servers::domain::ConfiguredMcpServer;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 
 /// The stored servers, as one read sees them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub struct StoredServers {
 }
 
 /// Why the stored servers could not be read or written.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreError {
     /// The configuration does not parse, as it is or as it would be written.
     /// It is never repaired
@@ -26,6 +26,10 @@ pub enum StoreError {
     ConfigTooLarge,
     /// Another holder kept the lock past the store's bounded wait.
     Busy,
+    /// The stored block is not at the revision a write names: something
+    /// changed it outside the lock since it was read. This carries the
+    /// revision stored now.
+    RevisionConflict { revision: String },
     /// It could not be read, locked or published.
     Unavailable,
 }
@@ -47,10 +51,13 @@ pub trait McpServerStore: Send + Sync {
     /// The servers stored now.
     fn read(&self) -> Result<StoredServers, StoreError>;
     /// Store `servers` in place of the stored block, leaving the rest of the
-    /// configuration as it is, and answer the new revision. Made only under
-    /// the lock ([`Self::try_lock`]); the stored configuration is unchanged on
-    /// every error.
-    fn write(&self, servers: &[ConfiguredMcpServer]) -> Result<String, StoreError>;
+    /// configuration as it is, and answer the new revision — when the block
+    /// it reads now is still at `revision`, and
+    /// [`StoreError::RevisionConflict`] when it is not
+    /// (`a_change_made_outside_the_lock_after_the_read_is_a_conflict`). Made
+    /// only under the lock ([`Self::lock`]); the stored configuration is
+    /// unchanged on every error.
+    fn write(&self, revision: &str, servers: &[ConfiguredMcpServer]) -> Result<String, StoreError>;
 }
 
 /// Why a list of servers cannot be the live set: the SDK's rules for a
@@ -76,8 +83,9 @@ pub struct LiveSetKept;
 /// The live set the stored servers are launched as, with the server Nessa
 /// manages beside them.
 pub trait LiveServerSet: Send + Sync {
-    /// The managed server, when this gateway has one.
-    fn managed(&self) -> Option<StdioServer>;
+    /// The managed server as this gateway started with it — turned on or
+    /// off, with its own variables — when it has one.
+    fn managed(&self) -> Option<ConfiguredMcpServer>;
     /// Why `stored` — every server, on or off, with the managed one — cannot
     /// be launched as one set, or `None` when it can.
     fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem>;
@@ -124,7 +132,8 @@ pub struct McpServerChangeRequest {
     pub previous_name: Option<String>,
     /// The revision the caller named.
     pub revision: String,
-    /// For a save: its variables' names, in order, and whether it is on.
+    /// For a save: its variables' names, sorted by name, and whether it is
+    /// on.
     pub env_names: Vec<String>,
     pub enabled: Option<bool>,
 }
@@ -182,11 +191,42 @@ pub enum McpServerOutcome {
     },
 }
 
-/// A revision and the server names stored at it.
+/// A revision, the server names stored at it, and the server the change
+/// names as it was stored there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerNames {
     pub revision: String,
     pub names: Vec<String>,
+    /// The change's target at this revision: before a change, the server
+    /// under its previous name for a rename, else under its name; after
+    /// one, the server under its name. `None` where none is stored — before
+    /// an add, after a remove, and for an inspection
+    /// (`the_audit_records_the_targets_before_and_after_on_save_rename_disable_and_remove`).
+    pub target: Option<Box<AuditedServer>>,
+}
+
+/// A stored server as a record names it: everything it is started with but
+/// its variables' values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditedServer {
+    pub name: String,
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub enabled: bool,
+    /// Its variables' names, sorted by name; never their values.
+    pub env_names: Vec<String>,
+}
+impl AuditedServer {
+    /// `server` as a record names it.
+    pub fn of(server: &ConfiguredMcpServer) -> Self {
+        Self {
+            name: server.server.name.clone(),
+            command: server.server.command.clone(),
+            args: server.server.args.clone(),
+            enabled: server.enabled,
+            env_names: server.env_names(),
+        }
+    }
 }
 
 /// The record could not be made durable.

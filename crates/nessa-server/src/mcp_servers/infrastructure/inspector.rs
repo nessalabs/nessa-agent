@@ -10,10 +10,13 @@
 //! ```
 //!
 //! Arrows are calls, in order. One deadline on the injected clock covers the
-//! launch, the handshake and every read; past it the reading is dropped,
-//! which kills the process group at once
-//! (`i2_a_server_that_never_initializes_times_out_and_its_group_is_killed`).
-//! Whatever ends the reading, the session is closed before the answer.
+//! launch, the handshake and every read. Past it — while opening or while
+//! reading — the session is dropped, which kills the process group at once
+//! rather than waiting out the SDK's grace for a server whose stdin closed
+//! (`i2_a_server_that_never_initializes_times_out_and_its_group_is_killed`,
+//! `a_server_that_hangs_after_initialize_is_killed_at_the_deadline`). Any
+//! other end of the reading closes the session gracefully. Either way the
+//! server is stopped before the answer.
 use super::live_set::LaunchSettings;
 use crate::mcp_servers::application::{
     InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectedTool, InspectedUi,
@@ -60,7 +63,11 @@ impl ServerInspector for McpServerInspector {
                 read = read(&session, bounds) => read,
                 () = self.clock.sleep_until(deadline) => Err(InspectFailure::TimedOut),
             };
-            session.close().await;
+            match read {
+                // Out of time: the last clone dropped kills the group now.
+                Err(InspectFailure::TimedOut) => drop(session),
+                _ => session.close().await,
+            }
             read
         })
     }

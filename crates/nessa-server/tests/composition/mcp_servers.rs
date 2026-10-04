@@ -677,6 +677,21 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         applied["transition"]["before"]["names"],
         serde_json::json!([])
     );
+    // The target as stored after, with its variables' names; none before.
+    assert_eq!(
+        applied["transition"]["after"]["target"],
+        serde_json::json!({
+            "name": "mcptest",
+            "command": "/usr/bin/python3",
+            "args": ["/s.mjs"],
+            "enabled": true,
+            "envNames": ["API_TOKEN"],
+        })
+    );
+    assert_eq!(
+        applied["transition"]["before"]["target"],
+        serde_json::Value::Null
+    );
     let requested = records
         .iter()
         .find(|record| {
@@ -727,4 +742,185 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         assert_eq!(record["initiator"]["principalId"], "principal");
         assert!(!record.to_string().contains("secret-value"), "{record}");
     }
+}
+
+/// A namespace whose `config.json` holds `bytes`, and the MCP composition of
+/// a gateway in it, with no server configured.
+async fn composed_in(
+    bytes: &[u8],
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    super::McpComposition,
+    AgentsConfig,
+) {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let namespace = root.path().join("namespace");
+    nessa_local_storage::create_directory(&namespace).unwrap();
+    let config_path = namespace.join("config.json");
+    nessa_local_storage::open(&config_path, nessa_local_storage::OpenMode::CreateNew)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
+    let mut config = agents(vec![]);
+    let composed = compose(
+        &mut config,
+        &namespace.join("mcp").join("relay.sock"),
+        Path::new("/nessa"),
+        BTreeMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("composed");
+    (root, config_path, composed, config)
+}
+
+fn caller() -> crate::mcp_servers::application::McpServerInitiator {
+    crate::mcp_servers::application::McpServerInitiator {
+        organization_id: "organization".into(),
+        principal_id: "principal".into(),
+        credential_id: "credential".into(),
+    }
+}
+
+fn saved(name: &str, args: Vec<String>) -> crate::mcp_servers::domain::ServerEdit {
+    crate::mcp_servers::domain::ServerEdit::Save(crate::mcp_servers::domain::ServerSave {
+        previous_name: None,
+        server: StdioServer {
+            name: name.into(),
+            command: "/usr/bin/python3".into(),
+            args,
+        },
+        env: vec![],
+        enabled: true,
+    })
+}
+
+/// S3 on the real lock: two gateways' settings over one `config.json` — two
+/// stores, each with its own `OsConfigFiles` and so its own `flock` — save
+/// at one revision at once. The lock serialises them: one wins, the other is
+/// refused with the winner's revision, and the file holds the winner alone.
+#[tokio::test]
+async fn s3_two_saves_at_one_revision_over_the_real_lock_are_serialised() {
+    use super::settings;
+    use crate::mcp_servers::application::McpServerSettingsError;
+    let (root, config_path, composed, config) =
+        composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
+    let first = settings(
+        &composed,
+        &config,
+        config_path.clone(),
+        root.path().join("audit-1"),
+    )
+    .unwrap();
+    let second = settings(
+        &composed,
+        &config,
+        config_path.clone(),
+        root.path().join("audit-2"),
+    )
+    .unwrap();
+    let revision = first.list().await.unwrap().revision;
+    let (a, b) = tokio::join!(
+        first.edit(caller(), revision.clone(), saved("a", vec!["/a.py".into()])),
+        second.edit(caller(), revision.clone(), saved("b", vec!["/b.py".into()])),
+    );
+    let (won, lost, winner) = match (a, b) {
+        (Ok(won), Err(lost)) => (won, lost, "a"),
+        (Err(lost), Ok(won)) => (won, lost, "b"),
+        other => panic!("one save wins: {other:?}"),
+    };
+    assert_eq!(
+        lost,
+        McpServerSettingsError::RevisionConflict {
+            revision: won.clone()
+        }
+    );
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    let names: Vec<_> = stored["agents"]["mcpServers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, [winner]);
+    assert_eq!(second.list().await.unwrap().revision, won);
+}
+
+/// The configuration's 64 KiB bound (`MAX_CONFIG_BYTES`) at its edge, on the
+/// real file and the runtime configuration's own check: a file of exactly
+/// 65536 bytes is read and one byte more is `config_too_large`; a save whose
+/// result is exactly 65536 bytes is published and one a byte longer is
+/// refused, the file unchanged.
+#[tokio::test]
+async fn the_configuration_bound_holds_at_exactly_its_edge() {
+    use super::super::runtime_config::MAX_CONFIG_BYTES;
+    use super::settings;
+    use crate::mcp_servers::application::McpServerSettingsError;
+    assert_eq!(MAX_CONFIG_BYTES, 65_536);
+    let padded = |size: usize| {
+        let head = br#"{"session":{"writeTimeoutMs":75}"#;
+        let mut bytes = head.to_vec();
+        bytes.resize(size - 1, b' ');
+        bytes.push(b'}');
+        bytes
+    };
+    for (size, readable) in [(MAX_CONFIG_BYTES, true), (MAX_CONFIG_BYTES + 1, false)] {
+        let (root, config_path, composed, config) = composed_in(&padded(size)).await;
+        assert_eq!(
+            std::fs::metadata(&config_path).unwrap().len() as usize,
+            size
+        );
+        let settings =
+            settings(&composed, &config, config_path, root.path().join("audit")).unwrap();
+        let listed = settings.list().await;
+        assert_eq!(
+            listed.is_ok(),
+            readable,
+            "{size}: {:?}",
+            listed.as_ref().err()
+        );
+        if !readable {
+            assert_eq!(listed, Err(McpServerSettingsError::ConfigTooLarge));
+        }
+    }
+    // A write: measure one save, then make the next land exactly on the
+    // edge. Eight long arguments (each at most 8192 bytes) and a last one
+    // whose length is the one that moves.
+    let (root, config_path, composed, config) =
+        composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
+    let settings = settings(
+        &composed,
+        &config,
+        config_path.clone(),
+        root.path().join("audit"),
+    )
+    .unwrap();
+    let size = || std::fs::metadata(&config_path).unwrap().len() as usize;
+    let args = |last: usize| {
+        let mut args = vec!["x".repeat(7600); 8];
+        args.push("y".repeat(last));
+        args
+    };
+    let revision = settings.list().await.unwrap().revision;
+    let revision = settings
+        .edit(caller(), revision, saved("a", args(1000)))
+        .await
+        .unwrap();
+    let edge = 1000 + MAX_CONFIG_BYTES - size();
+    let revision = settings
+        .edit(caller(), revision, saved("a", args(edge)))
+        .await
+        .unwrap();
+    assert_eq!(size(), MAX_CONFIG_BYTES);
+    let at_edge = std::fs::read(&config_path).unwrap();
+    assert_eq!(
+        settings
+            .edit(caller(), revision, saved("a", args(edge + 1)))
+            .await,
+        Err(McpServerSettingsError::ConfigTooLarge)
+    );
+    assert_eq!(std::fs::read(&config_path).unwrap(), at_edge);
 }

@@ -13,7 +13,7 @@
 //!
 //! Arrows are what each is built from. The digest is keyed with a secret
 //! minted for this process ([`ConfigurationKey`]), which the stand-ins and
-//! the relay share. On Unix the relay is composed even
+//! the relay share, and the stored servers' revision with it. On Unix the relay is composed even
 //! with no server configured, so a set replaced later reaches the next open.
 //! A relay socket that cannot be bound leaves MCP servers off for this run,
 //! logged: an agent is never handed a server directly instead, because then
@@ -59,6 +59,9 @@ pub(super) struct McpComposition {
     pub(super) launches: LaunchSettings,
     pub(super) relay: Arc<Relay>,
     pub(super) listener: BoundRelay,
+    /// This process's key for configuration digests: the stand-ins' and the
+    /// relay's, and the stored servers' revision ([`settings`]).
+    pub(super) key: ConfigurationKey,
     /// The MCP App resources held behind tickets: the conversation service
     /// issues and releases on it, `GET /mcp-resources` redeems on it
     /// (`ProductRouteState::with_resource_tickets`), and the server lifecycle
@@ -247,7 +250,8 @@ pub(super) async fn compose(
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
-        relay: Arc::new(Relay::new(servers.clone(), grants, key)),
+        relay: Arc::new(Relay::new(servers.clone(), grants, key.clone())),
+        key,
         servers,
         launches,
         listener,
@@ -297,6 +301,7 @@ pub(super) fn settings(
         },
         block,
         Arc::new(RuntimeClock::new()),
+        mcp.key.clone(),
     );
     let audit = DurableMcpServerAudit::new(audit, Arc::new(super::local_auth::SystemClock))
         .map_err(|_| RunError::Agent("the MCP server audit could not be opened".into()))?;

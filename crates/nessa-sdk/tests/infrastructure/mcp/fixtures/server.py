@@ -9,10 +9,13 @@ kill it; with --child it starts a child process of its own (`where` names it),
 which stopping it has to stop too.
 
 For a host's inspection of a server: --silent never answers anything;
+--silent-on-list answers `initialize` and never answers `tools/list`,
+writing PATH once asked when --listed-file PATH is given;
 --exit-on-list exits when its tools are listed; --pages N lists one tool
 per page over N pages; --apps N lists N tools, each with an MCP App of its
-own (ui://fixture/app-<i>.html, asking for a CSP and the camera); and
---pid-file PATH writes the process id to PATH once started.
+own (ui://fixture/app-<i>.html, asking for a CSP and the camera);
+--pid-file PATH writes the process id to PATH once started; and
+--child-pid-file PATH writes the --child's process id to PATH.
 """
 import json
 import os
@@ -34,6 +37,9 @@ def option(name):
 if option("--pid-file"):
     with open(option("--pid-file"), "w") as pid_file:
         pid_file.write(str(os.getpid()))
+if child and option("--child-pid-file"):
+    with open(option("--child-pid-file"), "w") as child_pid_file:
+        child_pid_file.write(str(child.pid))
 PAGES = int(option("--pages") or 0)
 APPS = int(option("--apps") or 0)
 
@@ -106,6 +112,11 @@ for line in sys.stdin:
         continue
     message = json.loads(line)
     if "id" not in message or "method" not in message:
+        continue
+    if message["method"] == "tools/list" and "--silent-on-list" in sys.argv:
+        if option("--listed-file"):
+            with open(option("--listed-file"), "w") as listed_file:
+                listed_file.write("asked")
         continue
     result = answer(message)
     if result is None:

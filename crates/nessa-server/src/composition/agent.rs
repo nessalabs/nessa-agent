@@ -934,7 +934,9 @@ pub(super) mod build {
             common::value_objects::TokenLimits,
         },
         infrastructure::{
-            acp::sessions::AcpConfig, clock::RuntimeClock, codex_acp::sessions::CodexAcpProvider,
+            acp::sessions::{AcpConfig, McpServerList, StandInSessions},
+            clock::RuntimeClock,
+            codex_acp::sessions::CodexAcpProvider,
             opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
@@ -1027,8 +1029,20 @@ pub(super) mod build {
             credential_environment,
             workspace,
             tools_enabled: runtime.tools_enabled,
-            mcp_servers: config.mcp_stand_ins.clone(),
-            stand_ins: config.stand_ins.clone(),
+            // MCP servers are tools: a runtime with tools off is given none,
+            // so a server saved later cannot break its opens or deletes,
+            // which the SDK refuses with servers and no tools
+            // (`a_tools_disabled_agent_opens_and_deletes_with_a_server_saved`).
+            mcp_servers: if runtime.tools_enabled {
+                config.mcp_stand_ins.clone()
+            } else {
+                McpServerList::none()
+            },
+            stand_ins: if runtime.tools_enabled {
+                config.stand_ins.clone()
+            } else {
+                StandInSessions::none()
+            },
             permissions: PermissionOfferPolicy::once_only(),
             // All four from protocol/defaults/agent-startup-budgets.json,
             // which the client compiles in too: a client that gives up before

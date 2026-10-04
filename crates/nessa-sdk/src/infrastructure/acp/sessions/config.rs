@@ -33,13 +33,17 @@ pub struct StdioMcpServer {
 impl StdioMcpServer {
     /// Why this server cannot be launched as configured, or `None` when it
     /// can: a name of ASCII letters, digits, `-` and `_`, 1–64 bytes, without
-    /// `__` (a harness joins server and tool with it); an absolute UTF-8
+    /// `__` and neither starting nor ending with `_` (a harness names a tool
+    /// `mcp__<server>__<tool>`, so the server's name must not run into the
+    /// separators on either side); an absolute UTF-8
     /// executable; at most 64 arguments of at most 8192 bytes, none holding
     /// NUL. The rules for one server; [`Self::problem_in`] adds the set's.
     pub fn problem(&self) -> Option<McpServerProblem> {
         if self.name.is_empty()
             || self.name.len() > 64
             || self.name.contains("__")
+            || self.name.starts_with('_')
+            || self.name.ends_with('_')
             || !self
                 .name
                 .bytes()
@@ -105,8 +109,8 @@ pub enum McpServerProblem {
         /// The name configured twice.
         name: String,
     },
-    /// The name is empty, longer than 64 bytes, holds `__`, or holds anything
-    /// but ASCII letters, digits, `-` and `_`.
+    /// The name is empty, longer than 64 bytes, holds `__`, starts or ends
+    /// with `_`, or holds anything but ASCII letters, digits, `-` and `_`.
     Name,
     /// The executable is not an absolute UTF-8 path.
     Command,
