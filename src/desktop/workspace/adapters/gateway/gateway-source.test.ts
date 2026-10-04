@@ -2057,4 +2057,27 @@ describe("an app's review is read after its turn ended (#436)", () => {
     expect(readsOf("a")).toBe(2)
     answer.resolve("done")
   })
+
+  it("P2 (reconnect): a call that spans a reconnect keeps its conversation read each round, and not at rest once it settles", async () => {
+    const { gateway, source, updates, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(2)
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    gateway.setState({ status: "connected" })
+    expect(updates).toContainEqual({ kind: "resync" })
+    // The reconnect does not end the call: it is still read each round.
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(4)
+    answer.resolve("done")
+    await call
+    // The last read showed no review: at rest again (P1).
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(4)
+  })
 })

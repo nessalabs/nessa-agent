@@ -44,7 +44,11 @@ Checks, per engine and layout (--only <names> to pick):
 }
 
 // What page.evaluate is handed: plain strings (`css` holds functions, #441).
-const card = { card: css.approvalCard, head: css.approvalHead }
+const card = {
+  card: css.approvalCard,
+  head: css.approvalHead,
+  headWords: css.approvalHeadWords,
+}
 
 // The source polls each second (`defaultGatewayTiming.pollMs`): two and a
 // half rounds would show a read that should not happen.
@@ -219,9 +223,7 @@ const checks = {
             const box = element.getBoundingClientRect()
             const inner =
               box.right - (parseFloat(getComputedStyle(element).paddingRight) || 0)
-            const words = element
-              .querySelector(`${sel.head} span`)
-              .getBoundingClientRect()
+            const words = element.querySelector(sel.headWords).getBoundingClientRect()
             return {
               card: Math.round(box.width),
               headPastCard: Math.max(0, Math.round(words.right - inner)),

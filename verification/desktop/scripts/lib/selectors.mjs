@@ -111,6 +111,7 @@ export const css = {
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
   approvalHead: ".workspace-approval-head", // class: who asks, and what
+  approvalHeadWords: ".workspace-approval-head-words", // class: the head's words, without its icon
 
   // Agents overview (always offered: the sidebar's entry and ⌘0)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"

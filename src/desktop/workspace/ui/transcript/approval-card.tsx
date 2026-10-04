@@ -38,7 +38,9 @@ export const ApprovalCard = memo(function ApprovalCard({
     >
       <div className="workspace-approval-head">
         <DesktopIcon name="needsYou" />
-        <span>{approvalHead(approval.origin, agentName(agentOf(model)))}</span>
+        <span className="workspace-approval-head-words">
+          {approvalHead(approval.origin, agentName(agentOf(model)))}
+        </span>
       </div>
       <ApprovalCommand command={approval.command} />
       <p className="workspace-approval-reason">{approval.reason}</p>
