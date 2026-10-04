@@ -30,6 +30,7 @@ use tokio::{sync::Notify, time::timeout};
 
 struct Probe {
     open_error: Mutex<Option<AgentError>>,
+    open_gate: Mutex<Option<oneshot::Receiver<()>>>,
     fail_close: AtomicBool,
     cleanup_report: Mutex<Option<CleanupReport>>,
     contradictory: bool,
@@ -72,6 +73,10 @@ impl AgentProvider for ProbeFactory {
     }
     fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            let gate = self.backend.open_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.await.unwrap();
+            }
             if let Some(error) = self.backend.open_error.lock().unwrap().take() {
                 return Err(ProviderOpenError::no_resources(error));
             }
@@ -291,6 +296,7 @@ fn probe_factory(contradictory: bool) -> (ProbeFactory, Arc<Probe>) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let backend = Arc::new(Probe {
         open_error: Mutex::new(None),
+        open_gate: Mutex::new(None),
         fail_close: AtomicBool::new(false),
         cleanup_report: Mutex::new(None),
         contradictory,

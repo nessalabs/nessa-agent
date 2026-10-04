@@ -612,14 +612,21 @@ fn panicking_payload_close_waiter_does_not_abort_the_runtime() {
 #[ignore = "run in a child process by panicking_payload_close_waiter_does_not_abort_the_runtime"]
 fn double_fault_close_waiter_child() {
     multi_thread_child_runtime().block_on(async {
-        let (agent, _backend, _storage) = probe(false).await;
+        let (agent, backend, _storage) = probe(false).await;
+        // On worker threads the spawned close could finish before the first
+        // poll; holding the provider close keeps it running until the
+        // caller's waker is registered.
+        let (release, gate) = oneshot::channel();
+        *backend.close_gate.lock().unwrap() = Some(gate);
         let (caller, notification) = caller_wake(Fault::PanicWithPanickingPayload);
         let mut closing: Pin<Box<dyn Future<Output = _> + Send + '_>> =
             Box::pin(agent.close(actor()));
         register(&mut closing, Waker::from(caller.clone()));
+        release.send(()).unwrap();
         timeout(BOUND, notification).await.unwrap().unwrap();
         assert_eq!(caller.calls.load(Ordering::SeqCst), 1);
         assert!(timeout(BOUND, closing).await.unwrap().is_ok());
+        assert!(backend.close_gate.lock().unwrap().is_none(), "close held");
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
             timeout(BOUND, agent.invoke(input("after"), actor()))
@@ -644,18 +651,25 @@ fn twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime() {
 #[ignore = "run in a child process by twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime"]
 fn triple_fault_attachment_waiter_child() {
     multi_thread_child_runtime().block_on(async {
-        let (agent, _backend, _storage) = probe(false).await;
+        let (agent, backend, _storage) = probe(false).await;
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
         let authorization = agent
             .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
             .unwrap();
+        // On worker threads the attachment task could finish before the
+        // first poll; holding the provider open keeps it running until the
+        // caller's waker is registered.
+        let (release, gate) = oneshot::channel();
+        *backend.open_gate.lock().unwrap() = Some(gate);
         let (caller, notification) = caller_wake(Fault::PanicWithTwicePanickingPayload);
         let mut attaching: Pin<Box<dyn Future<Output = _> + Send>> =
             Box::pin(agent.start_attachment(authorization).unwrap().wait());
         register(&mut attaching, Waker::from(caller.clone()));
+        release.send(()).unwrap();
         timeout(BOUND, notification).await.unwrap().unwrap();
         assert_eq!(caller.calls.load(Ordering::SeqCst), 1);
         assert_eq!(timeout(BOUND, attaching).await.unwrap(), Ok(()));
+        assert!(backend.open_gate.lock().unwrap().is_none(), "open held");
         assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
         assert_eq!(
             timeout(BOUND, agent.invoke(input("after"), actor()))
