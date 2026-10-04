@@ -1,7 +1,8 @@
 /**
  * Driving and reading the workspace: pane rects and order, opening panes
  * beside through the quick switcher (the same in both layouts), the side
- * columns, and the drop zone the drag announces.
+ * columns, the drop zone the drag announces, whether one rect is inside
+ * another, and a model module's rule or value read in the page.
  */
 import { CannotRun } from "./cli.mjs"
 import { css, keys, names, preferenceEvents, storage } from "./selectors.mjs"
@@ -364,14 +365,33 @@ export async function recordFrames(page) {
 }
 
 /**
- * Calls a model rule in the page (`modules`): the owner's own function, so a
- * script never keeps a copy of it. Needs the dev server, which serves the
- * source; a production build has no module to import.
+ * Whether rect `inner` lies inside rect `outer` on each of `sides` (all four
+ * unless said), to half a pixel: subpixel layout is not a failure.
  */
-export async function modelRule(page, module, name, ...args) {
+export function inside(inner, outer, sides = ["left", "top", "right", "bottom"]) {
+  const holds = {
+    left: inner.left >= outer.left - 0.5,
+    top: inner.top >= outer.top - 0.5,
+    right: inner.right <= outer.right + 0.5,
+    bottom: inner.bottom <= outer.bottom + 0.5,
+  }
+  return sides.every((side) => holds[side])
+}
+
+/**
+ * Reads `name` from a model module in the page (`modules`): the owner's own
+ * export, so a script never keeps a copy of it. With `args`, `name` is a
+ * function and its answer is returned; without, the export itself (a plain
+ * value). Needs the dev server, which serves the source; a production build
+ * has no module to import, and that is "could not run".
+ */
+async function fromModel(page, module, name, args) {
   try {
     return await page.evaluate(
-      async ([path, fn, list]) => (await import(path))[fn](...list),
+      async ([path, key, list]) => {
+        const exported = (await import(path))[key]
+        return list === null ? exported : exported(...list)
+      },
       [module, name, args],
     )
   } catch (error) {
@@ -380,3 +400,10 @@ export async function modelRule(page, module, name, ...args) {
     )
   }
 }
+
+/** Calls a model rule in the page (`fromModel`). */
+export const modelRule = (page, module, name, ...args) =>
+  fromModel(page, module, name, args)
+
+/** Reads a model value in the page (`fromModel`), such as a table of numbers. */
+export const modelValue = (page, module, name) => fromModel(page, module, name, null)

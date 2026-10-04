@@ -50,6 +50,7 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
+  message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user or agent
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
@@ -74,6 +75,9 @@ export const css = {
   widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
+  workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
+  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
+  workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
@@ -213,6 +217,8 @@ export const safeAreaTokens = {
  */
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
+  /** The gateway source's poll and reconnect timing (`defaultGatewayTiming`). */
+  gatewaySource: "/src/desktop/workspace/adapters/gateway/gateway-source.ts",
   /** What a widget host says in each case (`hostLines`). */
   hostTable: "/src/desktop/widgets/model/host-table.ts",
 }

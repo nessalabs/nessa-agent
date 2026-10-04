@@ -287,46 +287,94 @@ fn handshake_correlated_passive_rpc_and_consumed_operation_outcome() {
     peer.join().unwrap();
 }
 #[test]
-fn preparing_and_wrong_correlation_close_connection_and_keep_one_first_cause() {
-    for expected in [
-        GatewayError::Record(RecordReadErrorCode::SourcePreparing),
-        GatewayError::Correlation,
-    ] {
-        let (endpoint, peer) = peer(move |socket| {
-            let read = request(socket);
-            let response = match expected {
-                GatewayError::Correlation => ResponseFrame::success("other", &json!({})).unwrap(),
-                _ => ResponseFrame::failure(
-                    &read.id,
-                    RecordReadErrorCode::SourcePreparing.as_str(),
-                    "temporary",
-                ),
-            };
-            send(socket, OutgoingMessage::Response(response));
-        });
-        let mut session = connect(&endpoint);
-        session.begin().unwrap();
+fn wrong_correlation_closes_connection_and_keeps_one_first_cause() {
+    let (endpoint, peer) = peer(move |socket| {
+        request(socket);
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::success("other", &json!({})).unwrap()),
+        );
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    for _ in 0..2 {
         assert_eq!(
             session.rpc(
                 product_method::CONVERSATION_RECORDS_HEAD,
                 &json!({}),
                 RpcKind::Record
             ),
-            Err(expected)
+            Err(GatewayError::Correlation)
         );
-        assert_eq!(
-            session.rpc(
-                product_method::CONVERSATION_RECORDS_HEAD,
-                &json!({}),
-                RpcKind::Record
-            ),
-            Err(expected)
-        );
-        assert_eq!(session.fail(GatewayError::Protocol), expected);
-        assert_eq!(session.finish().unwrap().failure, Some(expected));
-        drop(session);
-        peer.join().unwrap();
     }
+    assert_eq!(
+        session.fail(GatewayError::Protocol),
+        GatewayError::Correlation
+    );
+    assert_eq!(
+        session.finish().unwrap().failure,
+        Some(GatewayError::Correlation)
+    );
+    assert_eq!(session.begin(), Err(GatewayError::Transport));
+    drop(session);
+    peer.join().unwrap();
+}
+/// Row W17: `source_preparing` fails its operation with one first cause, but
+/// the connection stays usable, so the retried pass's next operation reaches
+/// the gateway on the same session.
+#[test]
+fn preparing_fails_the_operation_and_keeps_the_session_for_the_next() {
+    let preparing = GatewayError::Record(RecordReadErrorCode::SourcePreparing);
+    let (endpoint, peer) = peer(move |socket| {
+        let read = request(socket);
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::failure(
+                &read.id,
+                RecordReadErrorCode::SourcePreparing.as_str(),
+                "temporary",
+            )),
+        );
+        let read = request(socket);
+        assert_eq!(read.method, product_method::CONVERSATION_RECORDS_HEAD);
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(&read.id, &json!({"ok":"ready"})).unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&endpoint);
+    let first = session.begin().unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            session.rpc(
+                product_method::CONVERSATION_RECORDS_HEAD,
+                &json!({}),
+                RpcKind::Record
+            ),
+            Err(preparing)
+        );
+    }
+    assert_eq!(session.fail(preparing), preparing);
+    let outcome = session.finish().unwrap();
+    assert_eq!(outcome.operation, first);
+    assert_eq!(outcome.failure, Some(preparing));
+    let second = session.begin().unwrap();
+    assert_ne!(second, first);
+    assert_eq!(
+        session
+            .rpc(
+                product_method::CONVERSATION_RECORDS_HEAD,
+                &json!({}),
+                RpcKind::Record
+            )
+            .unwrap(),
+        json!({"ok":"ready"})
+    );
+    assert_eq!(session.finish().unwrap().failure, None);
+    drop(session);
+    peer.join().unwrap();
 }
 #[test]
 fn authorizer_calls_actual_head_each_time_and_returns_changed_actual_scope() {
@@ -944,3 +992,6 @@ fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
         peer.join().unwrap();
     }
 }
+
+#[path = "session/watch.rs"]
+mod watch;

@@ -7,6 +7,7 @@ import {
   permissionDecisions,
   parseRecording,
   toolFrames,
+  turnEnded,
   uiMentions,
   viewTools,
   givenServers,
@@ -358,4 +359,11 @@ test("the servers given to the harness are read from each session it opened", ()
     { direction: "to-agent", frame: { method: "session/new", params: {} } },
   ]
   assert.deepEqual(givenServers(records), [relay, relay])
+})
+
+test("a turn has ended when completed, failed or cancelled; unresolved, running and queued have not (#449)", () => {
+  for (const status of ["completed", "failed", "cancelled"])
+    assert.equal(turnEnded(status), true)
+  for (const status of ["unresolved", "running", "queued", "injected", undefined])
+    assert.equal(turnEnded(status), false)
 })

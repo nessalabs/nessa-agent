@@ -18,6 +18,19 @@ import {
   verdictOf,
 } from "./cli.mjs"
 
+// What `log` writes to stderr while `body` runs; stderr is put back after.
+const stderrOf = async (body) => {
+  const written = []
+  const write = process.stderr.write
+  process.stderr.write = (chunk) => (written.push(String(chunk)), true)
+  try {
+    await body()
+  } finally {
+    process.stderr.write = write
+  }
+  return written.join("")
+}
+
 const meta = {
   name: "check",
   options: { only: { type: "string" }, sizes: { type: "string", default: "1x1,2x2" } },
@@ -106,9 +119,14 @@ describe("attempt", () => {
 
   it("turns a timeout waiting on the product into a failure, not could-not-run", async () => {
     const rep = collect()
-    await attempt(rep, { name: "step" }, async () => {
-      throw new Error("Timeout 3000ms exceeded.\nwaiting for locator('.x')")
-    })
+    // Its stack goes to stderr (`resultOfThrown`); kept out of the test's output.
+    const written = await stderrOf(() =>
+      attempt(rep, { name: "step" }, async () => {
+        throw new Error("Timeout 3000ms exceeded.\nwaiting for locator('.x')")
+      }),
+    )
+    // Once, by `resultOfThrown` alone.
+    assert.equal(written.split("Error: Timeout 3000ms exceeded.").length - 1, 1)
     assert.equal(rep.results[0].cannotRun, false)
     assert.equal(rep.results[0].error, "Timeout 3000ms exceeded.")
     assert.equal(statusOf(rep.results), 1)
@@ -131,8 +149,34 @@ describe("attempt", () => {
     assert.deepEqual(rep.results[0], { name: "step", engine: "webkit", failures: ["x"] })
   })
 
-  it("reads an error that is not an Error", () => {
-    assert.equal(resultOfThrown({ name: "s" }, "plain").error, "plain")
+  it("reads an error that is not an Error", async () => {
+    let result
+    await stderrOf(() => (result = resultOfThrown({ name: "s" }, "plain")))
+    assert.equal(result.error, "plain")
+  })
+})
+
+describe("resultOfThrown", () => {
+  it("writes a fault's stack to stderr, as the result keeps only its first line", async () => {
+    const fault = new Error("broke\nsecond line")
+    let result
+    const written = await stderrOf(() => (result = resultOfThrown({ name: "s" }, fault)))
+    assert.equal(written, `${fault.stack}\n`)
+    assert.equal(result.error, "broke")
+  })
+
+  it("writes nothing for could-not-run, which is not a fault", async () => {
+    const written = await stderrOf(() =>
+      resultOfThrown({ name: "s" }, new CannotRun("no server")),
+    )
+    assert.equal(written, "")
+  })
+
+  it("writes the message of a thrown object that has no stack", async () => {
+    const written = await stderrOf(() =>
+      resultOfThrown({ name: "s" }, { message: "obj" }),
+    )
+    assert.equal(written, "obj\n")
   })
 })
 

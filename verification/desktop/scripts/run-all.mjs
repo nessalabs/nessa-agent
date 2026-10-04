@@ -33,6 +33,7 @@ const functional = [
   "safe-area",
   "committed-transcript",
   "load-fallback",
+  "gateway-states",
   "widgets",
   "mcp-apps",
   "app-review",

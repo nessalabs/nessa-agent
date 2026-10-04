@@ -1,9 +1,11 @@
 /**
- * Reading a real gateway's conversation view for `mcp-apps-gateway.mjs`:
- * which harness permission its setup answers, and which of the app's reviews
- * a step's own action opened. Pure, so both are tested without a gateway.
+ * Reading a real gateway's conversation view for `mcp-apps-gateway.mjs` and
+ * `gateway-window.mjs`: which harness permission its setup answers, which of
+ * the app's reviews a step's own action opened, and what a text-only turn
+ * said. Pure, so each is tested without a gateway.
  */
 import { permissionKey } from "../../../../scripts/mcp-test-server/evidence.mjs"
+import { CannotRun } from "./cli.mjs"
 
 export { permissionKey }
 
@@ -92,12 +94,40 @@ export const stillPending = (reviews, review) =>
   reviews.some((each) => permissionKey(each) === permissionKey(review))
 
 /**
- * Whether setup's turn, read as `status`, has ended: completed, failed or
- * cancelled. Any other status is not an end there, and runs into setup's own
- * 300 s limit, which says what it last read. `unresolved` in particular: setup
- * reads the turn it has just sent, never a restored one, and a read while a
- * committed snapshot replaces the view can show that live turn as unresolved
- * before it reads running or ended again (#448).
+ * Text the window draws as itself: letters, digits, whitespace and plain
+ * punctuation. What `inlineRuns` (`model/transcript.ts`) draws otherwise —
+ * `` `code` `` and `**strong**` — is outside it, as is anything else.
  */
-export const setupTurnEnded = (status) =>
-  ["completed", "failed", "cancelled"].includes(status)
+const plain = /^[\p{L}\p{N}\s.,:;!?'’"()-]*$/u
+
+/**
+ * What the view's last turn said, `{ user, reply }` with whitespace folded as
+ * the check reads the page's — when its reply is text-only: every part a text
+ * part (no tool, no local notice), and both texts plain. Only then does the
+ * window draw each as its text alone, the reply's parts one after another
+ * (`transcriptFrom` in `gateway-views.ts`, `message.tsx`, `RichText`). A
+ * thought part is left out, as `transcriptFrom` leaves it out: the window
+ * does not draw it. Any other turn, and an empty reply or none, is "could not
+ * run": the check cannot say what the window should draw for it.
+ */
+export function lastTurn(view) {
+  const turn = view.messages.at(-1)
+  if (!turn) throw new CannotRun("the conversation holds no turn")
+  const fold = (text) => text.replace(/\s+/g, " ").trim()
+  const drawn = turn.parts.filter((part) => part.kind !== "thought")
+  const others = drawn.filter((part) => part.kind !== "text").map((part) => part.kind)
+  const user = fold(turn.userText)
+  const reply = fold(drawn.map((part) => part.text ?? "").join(""))
+  if (others.length > 0)
+    throw new CannotRun(`the reply is not text-only: it has ${others.join(", ")} parts`)
+  if (reply === "") throw new CannotRun("the reply is empty")
+  for (const [who, text] of [
+    ["person's message", user],
+    ["reply", reply],
+  ])
+    if (!plain.test(text))
+      throw new CannotRun(
+        `the ${who} ${JSON.stringify(text.slice(0, 200))} is not plain text`,
+      )
+  return { user, reply }
+}

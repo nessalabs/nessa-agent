@@ -8,7 +8,7 @@
  * it resolves with is handed to `body` as `target`, and its `close` runs
  * at the end whatever happened.
  */
-import { CannotRun, cli, log, report, resultOfThrown } from "./cli.mjs"
+import { cli, report, resultOfThrown } from "./cli.mjs"
 import { target } from "./server.mjs"
 
 export async function main(meta, body, resolve = target) {
@@ -22,7 +22,6 @@ export async function main(meta, body, resolve = target) {
   } catch (error) {
     // What was collected before it stays; the error is one more result.
     rep.add(resultOfThrown({ name: meta.name }, error))
-    if (!(error instanceof CannotRun)) log(error.stack)
   } finally {
     status = rep.finish({ target: page ? { url: page.url, mode: page.mode } : undefined })
     await page?.close()

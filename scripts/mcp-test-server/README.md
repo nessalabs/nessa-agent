@@ -29,7 +29,8 @@ recording can be compared with another.
 | `model_only_chart` | a text block | a tool hidden from apps that declares a UI (the chart's) |
 
 The review app's own calls are what the desktop's real-gateway check
-(`verification/desktop/scripts/mcp-apps-gateway.mjs`) reads in the window.
+(`verification/desktop/scripts/mcp-apps-gateway.mjs`, on
+`verification/desktop/scripts/lib/gateway-stack.mjs`) reads in the window.
 
 Arguments outside a tool's schema return an `isError` result and are never
 echoed back. The server's tests are `server.test.mjs`, and the local

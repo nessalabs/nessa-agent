@@ -19,8 +19,9 @@ use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
 
 struct RefusedOutput;
 impl Write for RefusedOutput {
@@ -67,6 +68,61 @@ pub(crate) fn command(args: Vec<String>, lose: bool) -> (bool, Option<Value>) {
         eprintln!("client stderr: {}", String::from_utf8_lossy(&output.stderr));
     }
     (output.status.success(), stdout)
+}
+/// A running `watch` command: its stdout lines as they arrive, each stamped
+/// with the moment this process received it.
+pub(crate) struct WatchChild {
+    child: Child,
+    lines: Receiver<(Value, Instant)>,
+}
+impl WatchChild {
+    pub(crate) fn spawn(args: Vec<String>) -> Self {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", CLIENT, "--nocapture"])
+            .env(
+                "NESSA_ONLINE_COMMAND",
+                serde_json::to_string(&args).unwrap(),
+            )
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = io::BufReader::new(child.stdout.take().unwrap());
+        let (sender, lines) = channel();
+        std::thread::spawn(move || {
+            for line in io::BufRead::lines(stdout) {
+                let Ok(line) = line else { return };
+                if line.starts_with('{') {
+                    let stamped = (serde_json::from_str(&line).unwrap(), Instant::now());
+                    if sender.send(stamped).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        Self { child, lines }
+    }
+    /// The next line and when it arrived, waiting at most 30 s.
+    pub(crate) fn next_line(&mut self) -> (Value, Instant) {
+        self.lines
+            .recv_timeout(Duration::from_secs(30))
+            .expect("watch line within 30 s")
+    }
+    /// Every line it writes until it exits, and whether it succeeded.
+    pub(crate) fn finish(mut self) -> (Vec<Value>, bool) {
+        let succeeded = self.child.wait().unwrap().success();
+        let lines = self.lines.iter().map(|(line, _)| line).collect();
+        (lines, succeeded)
+    }
+    /// Whether the command exited successfully, once it has ended.
+    pub(crate) fn succeeded(mut self) -> bool {
+        self.child.wait().unwrap().success()
+    }
+}
+impl Drop for WatchChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 // Boundary probes use the same real paired device and generated request encoder,
 // on a protected native connection of their own.

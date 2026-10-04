@@ -88,12 +88,23 @@ export async function openPage(browser, o) {
     [storage.layout]: o.layout ?? "columns",
     ...(o.prefs ?? {}),
   }
-  await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
-  for (const script of o.initScripts ?? []) {
-    if (Array.isArray(script)) await context.addInitScript(script[0], script[1])
-    else await context.addInitScript(script)
+  let page
+  try {
+    await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
+    for (const script of o.initScripts ?? []) {
+      if (Array.isArray(script)) await context.addInitScript(script[0], script[1])
+      else await context.addInitScript(script)
+    }
+    // What a check sets up before the page loads, such as a socket it
+    // answers or the clock it holds.
+    await o.beforeLoad?.(context)
+    page = await context.newPage()
+  } catch (error) {
+    // The setup's error is the one reported: a close that fails too is
+    // swallowed, so it cannot take its place.
+    await context.close().catch(() => {})
+    throw error
   }
-  const page = await context.newPage()
   const errors = []
   const harmless = []
   page.on("pageerror", (error) => {
@@ -119,7 +130,7 @@ export async function openPage(browser, o) {
       timeout: o.readyTimeout ?? 30_000,
     })
   } catch (error) {
-    await context.close()
+    await context.close().catch(() => {})
     throw new CannotRun(
       `the desktop page did not render ${o.readySelector ?? css.anyReady} at ${o.url}: ${error.message.split("\n")[0]}` +
         (errors.length ? `\n  page errors: ${errors.join("; ")}` : ""),
@@ -142,7 +153,7 @@ export async function openPage(browser, o) {
       { timeout: o.readyTimeout ?? 30_000, polling: "raf" },
     )
   } catch (error) {
-    await context.close()
+    await context.close().catch(() => {})
     throw new CannotRun(
       `the desktop page never settled at ${o.url}: ${error.message.split("\n")[0]}`,
     )
