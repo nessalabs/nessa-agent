@@ -1,14 +1,15 @@
 /**
  * A real gateway for a live check: provisioned in a temporary `ci` namespace
  * of its own, with one agent runtime and the test MCP server configured as
- * `mcptest` (or the servers it is given), started on 127.0.0.1, and stopped and removed again — its owner
- * token with it. `live-check.mjs` and the desktop's real-gateway check
- * (`verification/desktop/scripts/mcp-apps-gateway.mjs`) both start theirs
- * here.
+ * `mcptest` (or the servers it is given), started on 127.0.0.1, and stopped
+ * and removed again — its owner token with it. `live-check.mjs` and the
+ * desktop's real-gateway checks (`verification/desktop/scripts/lib/gateway-stack.mjs`)
+ * start theirs here.
  *
- * It uses whatever sign-in the agent already has on this machine and writes
- * no credential of its own beyond the gateway's owner token, which stays in
- * the temporary directory and is never printed.
+ * It uses whatever sign-in the agent already has on this machine, or, started
+ * `signedOut`, none at all (`signedOutEnvironment`). It writes no credential
+ * of its own beyond the gateway's owner token, which stays in the temporary
+ * directory and is never printed.
  */
 import { spawn, spawnSync } from "node:child_process"
 import {
@@ -31,6 +32,13 @@ export const SERVER = "mcptest"
 /** The test MCP server itself. */
 export const serverScript = join(here, "server.mjs")
 
+/** The model each agent runs in a check against a local gateway, by agent. */
+export const MODELS = {
+  claude: "claude-sonnet-5",
+  codex: "gpt-5.6-terra",
+  opencode: "opencode/nemotron-3-ultra-free",
+}
+
 /**
  * How to start `agent`'s harness: its argv, the model it runs, and a
  * directory to put first on its `PATH` (or `null`). `MCP_LIVE_HARNESSES`
@@ -51,7 +59,7 @@ export function agentCommand(agent) {
           process.execPath,
           entry("claude-acp", "@agentclientprotocol/claude-agent-acp/dist/index.js"),
         ],
-        model: "claude-sonnet-5",
+        model: MODELS.claude,
         path: null,
       }
     case "codex":
@@ -60,7 +68,7 @@ export function agentCommand(agent) {
           process.execPath,
           entry("codex-acp", "@agentclientprotocol/codex-acp/dist/index.js"),
         ],
-        model: "gpt-5.6-terra",
+        model: MODELS.codex,
         path: join(harnesses, "codex-acp", "node_modules", ".bin"),
       }
     case "opencode": {
@@ -69,12 +77,36 @@ export function agentCommand(agent) {
         throw new Error("set MCP_LIVE_OPENCODE to an Opencode 1.18.31 binary")
       return {
         argv: [binary, "acp"],
-        model: "opencode/nemotron-3-ultra-free",
+        model: MODELS.opencode,
         path: null,
       }
     }
     default:
       throw new Error(`unknown agent ${agent}`)
+  }
+}
+
+/**
+ * What a signed-out gateway is started with, over `NESSA_*`: this process's
+ * `PATH` (`path` first, when given), `TMPDIR` and `RUST_LOG`, and a `HOME` of
+ * its own under `directory`, so neither a credential variable nor a sign-in
+ * kept under the real home reaches it or the agent it starts. Built from
+ * what it needs rather than by removing the credentials it might find.
+ * `ANTHROPIC_API_KEY` is a placeholder: with no credential in the
+ * environment, the gateway reads Claude's from the login keychain
+ * (`crates/nessa-server/src/agents/infrastructure/agent_credentials.rs`).
+ */
+export function signedOutEnvironment(directory, path) {
+  const kept = Object.fromEntries(
+    ["TMPDIR", "RUST_LOG"]
+      .filter((name) => process.env[name] !== undefined)
+      .map((name) => [name, process.env[name]]),
+  )
+  return {
+    ...kept,
+    PATH: path ? `${path}:${process.env.PATH}` : process.env.PATH,
+    HOME: join(directory, "home"),
+    ANTHROPIC_API_KEY: "signed-out-gateway-placeholder",
   }
 }
 
@@ -104,6 +136,8 @@ export async function exited(child, ms) {
  *   as `agents.mcpServers` holds them; by default `mcptest` alone, started as
  *   `o.mcpServer` says. `[]` starts it with none (the desktop's Settings check,
  *   `verification/desktop/scripts/mcp-servers-gateway.mjs`, adds its own).
+ * @param {boolean} [o.signedOut] start the gateway with no sign-in to hand an
+ *   agent (`signedOutEnvironment`), for an agent that needs none
  * @returns the gateway: `{ directory, token, url, log, server, stop }`. `token`
  *   is the owner token file's path; `log()` the gateway's output so far; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
@@ -142,13 +176,18 @@ export async function startLocalGateway(o) {
   try {
     const workspace = join(directory, "workspace")
     mkdirSync(workspace)
+    if (o.signedOut) mkdirSync(join(directory, "home"))
     const env = {
-      ...process.env,
+      ...(o.signedOut
+        ? signedOutEnvironment(directory, o.path)
+        : {
+            ...process.env,
+            ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
+          }),
       NESSA_STAGE: "ci",
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: o.instance,
-      ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
     }
     const token = join(directory, "owner.token")
     const init = spawnSync(

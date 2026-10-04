@@ -2378,7 +2378,8 @@ mod tests {
                 json!({"revision": kept["revision"],
                     "server": input(json!([{"name": "NEVER", "value": null}]))}),
                 json!({"code": "mcp_servers_invalid",
-                    "details": {"problem": "environment_value_missing", "name": "NEVER"}}),
+                    "details": {"problem": "environment_value_missing", "server": "mcptest",
+                        "name": "NEVER"}}),
             ),
             (
                 "mcpServers.remove",
@@ -2448,6 +2449,46 @@ mod tests {
             (
                 false,
                 json!({"code": "audit_unavailable", "details": {"applied": true}})
+            )
+        );
+        // An entry added to the file by hand that breaks a rule is named,
+        // whichever server the save was about.
+        let mut hand_added = files.document();
+        hand_added["agents"]["mcpServers"] = json!([
+            {"name": "hand-added", "command": "relative/server", "args": []}
+        ]);
+        *files.bytes.lock().unwrap() = Some(serde_json::to_vec(&hand_added).unwrap());
+        audit
+            .fail_outcome
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let listed = list(&state).await;
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": listed["revision"], "server": input(json!([]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "command", "server": "hand-added"}})
+            )
+        );
+        // Once shutdown has begun, a change is not admitted.
+        state.close_mcp_server_admission();
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": listed["revision"], "name": "hand-added"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_stopping", "details": null})
             )
         );
     }
@@ -2543,6 +2584,10 @@ mod tests {
             (
                 InspectFailure::Malformed,
                 json!({"code": "mcp_server_malformed", "details": null}),
+            ),
+            (
+                InspectFailure::Stopping,
+                json!({"code": "mcp_servers_stopping", "details": null}),
             ),
             (
                 InspectFailure::RemoteError {

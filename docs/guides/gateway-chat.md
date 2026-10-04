@@ -180,16 +180,23 @@ An `mcpServers` entry may also carry `"enabled": false`, which keeps it
 configured but gives it to no new conversation, and `"env": {"NAME": "value"}`,
 variables it is given over the gateway's own (its value wins;
 `NESSA_MCP_SESSION` is reserved). An entry without them is on with no
-variables of its own. A caller holding `credential.manage` can list and change
+variables of its own. A server's name is 1–64 ASCII letters, digits, `-` and
+`_`, without `__` and — stricter than before — not starting or ending with
+`_`, since a harness names its tools `mcp__<server>__<tool>`; a configuration
+with such a name now fails startup, naming the server. A caller holding
+`credential.manage` can list and change
 the servers on a running gateway with `mcpServers.list`, `mcpServers.save` and
 `mcpServers.remove`: each change rewrites the whole of `config.json` under
 `config.json.lock` — the gateway owns the file, so its layout and key order
 after a write are the gateway's — is audited under
 `conversations/audit/mcp-servers`, and reaches the next conversation without
-a restart. Editing a server's variables alone is a change like any other: a
+a restart. `mcpServers.list` reads the file, so a hand edit to it is listed
+at once but reaches new conversations only at the next save or remove, or the
+next start. Editing a server's variables alone is a change like any other: a
 conversation still running the old one is refused it and starts a new
-session. A change that lands while the gateway stops is kept in the file and
-read at the next start. `mcpServers.inspect` starts a saved server once,
+session. A change or inspection already under way when the gateway begins
+to stop finishes and is recorded before the MCP servers stop; one asked for
+after that is refused `mcp_servers_stopping`. `mcpServers.inspect` starts a saved server once,
 outside any conversation, lists its tools with their hints and each MCP App's
 CSP and permissions, then stops it; it is bounded in time and size, runs at
 most two at a time, and is audited, because it runs the server's executable

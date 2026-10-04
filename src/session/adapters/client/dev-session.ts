@@ -27,6 +27,16 @@ export class SessionHealthError extends Error {
   }
 }
 
+/**
+ * What a failed session attempt failed on: the health probe's own failure
+ * when connecting succeeded and the probe did not (`SessionHealthError`), and
+ * otherwise the failure itself. The one place the probe's wrapper is opened,
+ * for every rule that asks why an attempt failed.
+ */
+export function attemptFailure(error: unknown): unknown {
+  return error instanceof SessionHealthError ? error.cause : error
+}
+
 export type ConnectDevSessionDeps = {
   connect?: typeof NessaClient.connect
   credentialSource?: CredentialSource

@@ -26,6 +26,7 @@ verification/
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
+      app-review/           real window over a fake gateway whose app's call asks for a review
     scripts/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
@@ -35,27 +36,33 @@ verification/
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
       safe-area.mjs         nothing painted under the window controls, per frame
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
+      gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
+      gateway-window.mjs    the desktop app's window over a real gateway (#419): its handshake, a conversation, a live turn (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths and Integrations narrow, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
+      app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
-      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in)
+      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, toggle, rename, narrow, conflict, remove, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
         cli.mjs             options, stderr diagnostics, JSON result, exit status
-        server.mjs          reuse/start the dev server, or build + preview production
+        server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors
-        workspace.mjs       open panes, read pane rects and focus, lift a pane
+        workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
-        apps.mjs            an MCP App's documents, read through Playwright's frames
+        apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
+        apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         settings.mjs        Settings › Integrations reached, and its fit measured at a width (responsive.mjs, mcp-servers-gateway.mjs)
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
-        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs: setup's one admitted call, the review a step opened
-        gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table)
+        gateway-stack.mjs   a real gateway, the dev server before it and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
+        fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
+        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened, what a text-only turn said
+        gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
 ```
 
 When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a

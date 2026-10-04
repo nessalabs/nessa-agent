@@ -77,10 +77,13 @@ impl McpServerLaunch {
                         && !name.starts_with(|c: char| c.is_ascii_digit())
                         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 }) else {
-                    return Some(McpServerProblem::EnvironmentName);
+                    return Some(McpServerProblem::EnvironmentName {
+                        server: self.server.name.clone(),
+                    });
                 };
                 if name == MCP_SESSION_VARIABLE {
                     return Some(McpServerProblem::ReservedEnvironmentName {
+                        server: self.server.name.clone(),
                         name: name.to_owned(),
                     });
                 }
@@ -88,6 +91,7 @@ impl McpServerLaunch {
                     .as_encoded_bytes()
                     .contains(&0)
                     .then(|| McpServerProblem::EnvironmentValue {
+                        server: self.server.name.clone(),
                         name: name.to_owned(),
                     })
             })

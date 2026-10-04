@@ -49,10 +49,14 @@ impl StdioMcpServer {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         {
-            return Some(McpServerProblem::Name);
+            return Some(McpServerProblem::Name {
+                server: self.name.clone(),
+            });
         }
         if !self.command.is_absolute() || self.command.to_str().is_none() {
-            return Some(McpServerProblem::Command);
+            return Some(McpServerProblem::Command {
+                server: self.name.clone(),
+            });
         }
         if self.args.len() > 64
             || self
@@ -60,7 +64,9 @@ impl StdioMcpServer {
                 .iter()
                 .any(|arg| arg.len() > 8192 || arg.contains('\0'))
         {
-            return Some(McpServerProblem::Arguments);
+            return Some(McpServerProblem::Arguments {
+                server: self.name.clone(),
+            });
         }
         None
     }
@@ -82,7 +88,7 @@ impl StdioMcpServer {
         servers.into_iter().find_map(|server| {
             server.problem().or_else(|| {
                 (!names.insert(&server.name)).then(|| McpServerProblem::DuplicateName {
-                    name: server.name.clone(),
+                    server: server.name.clone(),
                 })
             })
         })
@@ -107,28 +113,44 @@ pub enum McpServerProblem {
     /// Two servers are configured under this name.
     DuplicateName {
         /// The name configured twice.
-        name: String,
+        server: String,
     },
     /// The name is empty, longer than 64 bytes, holds `__`, starts or ends
     /// with `_`, or holds anything but ASCII letters, digits, `-` and `_`.
-    Name,
+    Name {
+        /// The name as it is configured.
+        server: String,
+    },
     /// The executable is not an absolute UTF-8 path.
-    Command,
+    Command {
+        /// The server's name.
+        server: String,
+    },
     /// More than 64 arguments, or one longer than 8192 bytes or holding NUL.
-    Arguments,
+    Arguments {
+        /// The server's name.
+        server: String,
+    },
     /// An environment variable's name is empty, longer than 256 bytes, starts
     /// with a digit, or holds anything but ASCII letters, digits and `_`.
-    EnvironmentName,
+    EnvironmentName {
+        /// The server's name; the variable's is not UTF-8 or not one to print.
+        server: String,
+    },
     /// An environment variable's name is one a server may not be given:
     /// [`MCP_SESSION_VARIABLE`](crate::infrastructure::mcp::MCP_SESSION_VARIABLE),
     /// which carries a host's session token to its stand-ins.
     ReservedEnvironmentName {
+        /// The server's name.
+        server: String,
         /// The reserved name.
         name: String,
     },
     /// An environment variable's value holds NUL, which no process can be
     /// given.
     EnvironmentValue {
+        /// The server's name.
+        server: String,
         /// The variable's name; never its value.
         name: String,
     },
@@ -137,21 +159,29 @@ impl fmt::Display for McpServerProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooMany => write!(f, "at most {MAX_MCP_SERVERS} MCP servers"),
-            Self::DuplicateName { name } => {
-                write!(f, "two MCP servers are configured as {name:?}")
+            Self::DuplicateName { server } => {
+                write!(f, "two MCP servers are configured as {server:?}")
             }
-            Self::Name => f.write_str("invalid MCP server name"),
-            Self::Command => {
-                f.write_str("an MCP server's executable must be an absolute UTF-8 path")
+            Self::Name { server } => write!(f, "invalid MCP server name {server:?}"),
+            Self::Command { server } => write!(
+                f,
+                "the MCP server {server:?}'s executable must be an absolute UTF-8 path"
+            ),
+            Self::Arguments { server } => {
+                write!(f, "invalid arguments for the MCP server {server:?}")
             }
-            Self::Arguments => f.write_str("invalid MCP server arguments"),
-            Self::EnvironmentName => f.write_str("invalid MCP server environment variable name"),
-            Self::ReservedEnvironmentName { name } => {
-                write!(f, "{name} is reserved and cannot be given to an MCP server")
-            }
-            Self::EnvironmentValue { name } => {
-                write!(f, "the MCP server environment variable {name} holds NUL")
-            }
+            Self::EnvironmentName { server } => write!(
+                f,
+                "invalid environment variable name for the MCP server {server:?}"
+            ),
+            Self::ReservedEnvironmentName { server, name } => write!(
+                f,
+                "{name} is reserved and cannot be given to the MCP server {server:?}"
+            ),
+            Self::EnvironmentValue { server, name } => write!(
+                f,
+                "the environment variable {name} of the MCP server {server:?} holds NUL"
+            ),
         }
     }
 }

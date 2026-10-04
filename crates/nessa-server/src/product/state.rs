@@ -83,7 +83,8 @@ pub struct ProductRouteState {
     /// What `mcpServers.list`, `.save`, `.remove` and `.inspect` manage;
     /// `None` where this gateway holds no live MCP server set — not Unix, no
     /// agents configured, or MCP off this run because its relay socket could
-    /// not be bound — which they answer `mcp_servers_not_configured`.
+    /// not be bound, a path was not UTF-8 or no key for its digests could be
+    /// drawn — which they answer `mcp_servers_not_configured`.
     pub(crate) mcp_server_settings: Option<Arc<McpServerSettings>>,
     /// Owner pairing commands, composed only when `config.json` names a native
     /// listen address. `None` answers every pairing method
@@ -147,6 +148,16 @@ impl ProductRouteState {
     /// Normal host cleanup consumes this before polling reader or watch drain.
     pub(crate) fn close_watch_admission(&self) {
         self.change_watches.close();
+    }
+
+    /// Admit no more `mcpServers.save`, `.remove` or `.inspect`: each later
+    /// one answers `mcp_servers_stopping`. Those admitted run on; the
+    /// server lifecycle waits for them before the MCP servers stop
+    /// ([`McpServerSettings::shutdown`]).
+    pub(crate) fn close_mcp_server_admission(&self) {
+        if let Some(settings) = &self.mcp_server_settings {
+            settings.close();
+        }
     }
 
     /// Join the distinct actual watch resource after closing admission/connection interest.

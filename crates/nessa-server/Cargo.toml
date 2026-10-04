@@ -60,6 +60,11 @@ tar = "0.4"
 # Parsing a pinned archive URL, rather than matching on its spelling.
 url = "2"
 
+# Already built for cedar-policy. The example client refuses an acknowledged
+# watch identity outside the schema-published pattern; tests match minted
+# identities against the same pattern.
+regex = "1"
+
 [target.'cfg(unix)'.dependencies]
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
@@ -78,9 +83,6 @@ tempfile = "3"
 # Only to build the private key material a test record store double returns;
 # already in the build graph through nessa-auth.
 zeroize = "=1.9.0"
-# Already built for cedar-policy; tests match minted watch identities against
-# the schema-published pattern.
-regex = "1"
 tokio = { version = "1", features = ["test-util", "io-util"] }
 # Only to build the pixels a substitute system decoder hands back. The image
 # library this workspace already compiles; nothing new is built.

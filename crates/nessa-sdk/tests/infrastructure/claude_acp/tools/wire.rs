@@ -559,6 +559,9 @@ fn recorded_claude_mcp_calls_name_their_server_and_keep_their_text() {
     for (name, frames) in recorded["calls"].as_object().unwrap() {
         for frame in frames.as_array().unwrap() {
             let update = super::tool_call(frame, &mut names, &configured).unwrap();
+            // One call's frames are updates to one call: the gateway draws
+            // them as one part (`nessa-server` `tool_parts.rs`).
+            assert_eq!(update.id().as_str(), frames[0]["toolCallId"], "{name}");
             // Every frame names the tool, so every frame carries the same identity.
             let identity = update.mcp_tool().map(|tool| (tool.server(), tool.tool()));
             match name.strip_prefix("mcp__mcptest__") {

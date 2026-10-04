@@ -398,10 +398,19 @@ The right toggle exits this mode and closes the panel.
 
 The workspace layouts read the desktop store, a projection of one
 `WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
-when the window is given a way to connect — today a browser preview opened
-with `?gateway` — and the in-memory sample otherwise, which is what the
-desktop app's own window still shows until its host hands it a gateway
-credential. The pane arrangement is not kept between launches (the chosen
+when the window is given a way to connect, and the in-memory sample
+otherwise (`model/workspace-backend.ts`). The desktop app's own window
+connects to the local gateway under the panel's surface credential (#419):
+the host serves it the endpoint and the credential over IPC once the gateway
+the host started at launch is ready, and refuses it before then — it reads the
+gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
+after a failed connect it waits five poll rounds before it tries again, unless
+a person asks. A
+browser preview opened with `?gateway` connects over the session its origin
+signed in to. Only a browser page without `?gateway` — the verification
+fixtures — shows the sample. A window that cannot read the gateway says why
+(signed out, or no answer) rather than showing anything in its place. The
+pane arrangement is not kept between launches (the chosen
 layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
@@ -409,8 +418,8 @@ entries, and `pnpm app` runs both windows.
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. The workspace's content is the sample
-unless the page is opened with `?gateway` (above), and layout persistence is not
+window with the panel. The native minimum width is 800px. In a browser the workspace's content is the
+sample unless the page is opened with `?gateway` (above), and layout persistence is not
 implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
@@ -433,10 +442,10 @@ opinion rather than the product's.
 | `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the agent credential writer and audit, the independent `CredentialSaveTargets` authority derived from the durable namespace, the gateway, the release source — and the bundle every command and menu is given. Before correlation allocation, intent audit, or keychain effect, the save use case compares every field of the writer's claimed target with that canonical authority. Nothing below composition reaches back for a dependency. |
 | `updater.rs` | Whether a newer Nessa is published and installing it. `ReleaseSource`, `CheckOutcome`, `Installer` and `Restarter` are its ports; the decisions are pure and tested, and the module header states which adapters are not. |
 | `attachments/` | Choosing files to attach, and reading the ones that turn out to be images. Four ports, because they are four different outside things: `FilePicker` is the OS dialog, `ChosenFiles` is the filesystem (a chosen file's kind, length and bytes, which fail the same ways at the same moment), `AttachmentTickets` is the desk that mints and spends the one-shot tickets — the operating system's randomness and clock, and the port that carries the rule that a page cannot name a path — and `ContentTypes` is the platform's type database — Launch Services on macOS, shared-mime-info on Linux, nothing elsewhere — so a `.ico` or `.svgz` is recognised as an image without this app keeping a list of formats. That answer goes where a dropped file's `type` goes, which is what keeps one file from taking two routes. Anything that is not a regular file is refused before it is opened, and both the look and the read have deadlines on their own threads, so a FIFO or a stalled mount cannot wedge the panel. A read is authorised by a one-shot ticket the picker minted, never by a path the page names. The page calls `choose_attachment_files` and `read_attachment_bytes`; the host calls the dialog plugin, so `capabilities/` grants the webview nothing. |
-| `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
+| `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the panel, setup and the desktop window may ask (`GatewayReader`); the desktop window only once the gateway is ready. |
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
-| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads reconcile the complete service again while concurrent callers share one attempt. Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. Recovery settles an unfinished attempt without replaying its commands: the journal lists the steps still to settle, and each native adapter records fresh state, adopts only an exact planned target, and closes anything else as failed, keeping unresolved a namespace it does not own or an effect it cannot recognise, and, until a later attempt, one whose launchd state or journal delivery is unavailable. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
+| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads from a bundled surface reconcile the complete service again while concurrent callers share one attempt, and the desktop window's loads only read a `ready` startup (`GatewayReader`, #419). Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. Recovery settles an unfinished attempt without replaying its commands: the journal lists the steps still to settle, and each native adapter records fresh state, adopts only an exact planned target, and closes anything else as failed, keeping unresolved a namespace it does not own or an effect it cannot recognise, and, until a later attempt, one whose launchd state or journal delivery is unavailable. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
 | `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. Beside the app's origins it allows the frame an MCP App is drawn in — the sandbox proxy's scheme and its `about:srcdoc` — and says what that route opens. |
 | `app_sandbox.rs` | The MCP Apps sandbox proxy (ADR 344, #349) on the `nessa-sandbox` scheme (`http://nessa-sandbox.localhost` on Windows): an origin that is never the window's, serving `GET /proxy.html` and nothing else. The window's CSP names it in `frame-src`; `links.rs` lets it load in a frame. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
@@ -903,7 +912,14 @@ committed state. Only auth mutations serialize; network writes share no admissio
 only liveness, without product state.
 
 The panel authenticates using its distinct private surface credential loaded by
-the native host. The SDK supports injected credential storage and a Node file
+the native host; the desktop window connects under the same credential and
+client id (`nessa-panel`), served once the gateway is ready (#419). The
+gateway cannot tell the two windows apart: each authenticates as client
+`nessa-panel` and is answered as principal `surface:nessa-panel`, which
+`gateway-window.mjs`'s handshake checks (W4′) assert of every handshake the
+window makes, and `session.authenticate` has no field for the surface kind the
+client is given (`SessionAuthenticateParams`, generated in
+`packages/nessa-client/src/generated/product.ts`; #447). The SDK supports injected credential storage and a Node file
 source. Composition loads namespace `config.json` and injects registry limits
 and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the

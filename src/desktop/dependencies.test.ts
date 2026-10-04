@@ -7,7 +7,7 @@
  * real servers' apps are registered as the views name them.
  */
 import type { McpAppsApi, McpServersApi, ProductSessionReady } from "@nessa/client"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
 import {
   appPluginId,
@@ -16,7 +16,7 @@ import {
   samplePluginId,
   WidgetRegistryError,
 } from "./widgets"
-import { fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
+import { deferred, fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
 import { fakeSource } from "./workspace/testing"
 
 /** What a fake client holds for Settings' servers: nothing these tests ask of it. */
@@ -141,6 +141,40 @@ describe("the window's widget plugins", () => {
     expect(drawn.connects()).toBe(1)
   })
 
+  it("make an app's tool call through the source, which reads its conversation until the call is answered (#436)", async () => {
+    vi.useFakeTimers()
+    try {
+      const drawn = gatewayWithApp()
+      const { workspace, widgets } = createDesktopDependencies({
+        gateway: drawn.connect,
+        apps: { sandbox: undefined, platform: "web" },
+      })
+      await workspace.transcript(conversation)
+      const stop = workspace.subscribe(() => {})
+      const plugin = widgets.plugin(appPluginId("mcptest"))
+      if (plugin?.kind !== "app") throw new Error("no app plugin")
+      const app = { executionId: "run", toolId: "call-1", instanceId: "mount" }
+      // At rest, the conversation is not read again.
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(drawn.reads()).toBe(1)
+      const call = plugin.ports.server.callTool(
+        { sessionId: conversation, server: "mcptest", app },
+        "app_delete_row",
+        {},
+      )
+      await vi.advanceTimersByTimeAsync(3_000)
+      const whileAsked = drawn.reads()
+      expect(whileAsked).toBeGreaterThan(1)
+      drawn.called.resolve({ resultJson: '{"content":[]}' })
+      await call
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(drawn.reads()).toBe(whileAsked)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("leave the fixture app out beside a gateway, whose servers' apps it could stand in for", () => {
     const { widgets } = createDesktopDependencies({
       gateway: gatewayWithApp().connect,
@@ -180,16 +214,21 @@ function gatewayWithApp() {
     }),
   )
   const released: unknown[][] = []
+  // Each tool call waits until the test answers it.
+  const called = deferred<unknown>()
   const mcpApps = {
     releaseApp: (...args: unknown[]) => {
       released.push(args)
       return Promise.resolve()
     },
+    callTool: () => called.promise,
   } as unknown as McpAppsApi
   const { client } = gateway
   let connects = 0
   return {
     released,
+    called,
+    reads: () => gateway.count("read"),
     connects: () => connects,
     connect: () => {
       connects++

@@ -240,6 +240,21 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("accepts a tool call as one part and rejects a second part for it", () => {
+    const value = view()
+    expect(conversationView(value, "conversation").messages[1]!.parts).toHaveLength(1)
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "tool",
+      text: "",
+      toolId: "tool",
+      noticeId: "",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a tool call part",
+    )
+  })
+
   it("rejects a local notice identity outside the SDK sequence range", () => {
     const value = view()
     value.messages[1]!.parts.push({
@@ -343,10 +358,44 @@ describe("conversation view agreement", () => {
       { kind: "plugin" },
       { kind: "app" },
       { kind: "app", server: "charts" },
+      { kind: "app", tool: "delete_rows" },
+      { kind: "app", server: "", tool: "delete_rows" },
+      { kind: "app", server: "charts", tool: "" },
       { kind: "harness", tool: "delete_rows" },
       { kind: "app", server: "charts", tool: "delete_rows", extra: true },
     ])
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
+  })
+
+  it("refuses an app's review that names a tool other than the one it reviews", () => {
+    const withTools = (tool: string, toolName: string) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName,
+            argumentsJson: "{}",
+            origin: { kind: "app", server: "charts", tool },
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    expect(() =>
+      conversationView(withTools("app_delete_rows", "app_delete_rows"), "conversation"),
+    ).not.toThrow()
+    for (const [tool, toolName] of [
+      ["app_delete_row", "app_delete_rows"],
+      ["App_Delete_Rows", "app_delete_rows"],
+    ])
+      expect(() => conversationView(withTools(tool, toolName), "conversation")).toThrow(
+        "An app's review names a tool other than the one it reviews",
+      )
   })
 
   it("reads what each permission option decides, and refuses an option that does not say", () => {

@@ -30,9 +30,10 @@ use nessa_sdk::infrastructure::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-/// Inspections on the live set's SDK client — registered there, so a
-/// gateway stopping ends one under way — launched as the live set launches
-/// a server, with deadlines on `clock`.
+/// Inspections on the live set's SDK client — registered there, so the
+/// client stopping ends one under way, though the gateway waits for them
+/// first — launched as the live set launches a server, with deadlines on
+/// `clock`.
 pub struct McpServerInspector {
     servers: McpServers,
     launches: LaunchSettings,
@@ -56,7 +57,7 @@ impl ServerInspector for McpServerInspector {
             let deadline = self.clock.now() + bounds.deadline;
             // Dropped at the deadline, the opening kills what it launched.
             let session = tokio::select! {
-                opened = self.servers.open_once(&launch) => opened.map_err(failure)?,
+                opened = self.servers.open_once(&launch) => opened.map_err(opening)?,
                 () = self.clock.sleep_until(deadline) => return Err(InspectFailure::TimedOut),
             };
             let read = tokio::select! {
@@ -125,7 +126,22 @@ async fn ui(
     Ok(Some(inspected))
 }
 
-/// The SDK's error as an inspection's failure.
+/// The SDK's error from opening the session as an inspection's failure:
+/// stopped there is the SDK refusing to start the server because the
+/// gateway is stopping — not started, and not the server gone
+/// (`an_inspection_once_the_servers_stop_is_refused_as_stopping_and_starts_nothing`).
+/// The SDK answers stopped too for a stop that lands mid-handshake, after
+/// the launch; this gateway never does that while an inspection runs,
+/// because shutdown waits for admitted inspections before the servers stop
+/// (`McpServerSettings::shutdown`).
+fn opening(error: McpError) -> InspectFailure {
+    match error {
+        McpError::Stopped => InspectFailure::Stopping,
+        other => failure(other),
+    }
+}
+
+/// The SDK's error as an inspection's failure, once the session is open.
 fn failure(error: McpError) -> InspectFailure {
     match error {
         McpError::Start(_) | McpError::InvalidConfiguration(_) => InspectFailure::StartFailed,
@@ -135,8 +151,9 @@ fn failure(error: McpError) -> InspectFailure {
         | McpError::Malformed(_)
         | McpError::TooLarge(_)
         | McpError::NotAnApp => InspectFailure::Malformed,
-        // The server or its session ended — on its own, or with the gateway
-        // stopping — or the SDK refused what an inspection never asks.
+        // The server or its session ended — on its own, or, once open, with
+        // the gateway stopping — or the SDK refused what an inspection never
+        // asks.
         McpError::ServerGone
         | McpError::Closed
         | McpError::Stopped

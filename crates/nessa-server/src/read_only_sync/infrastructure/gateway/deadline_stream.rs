@@ -106,9 +106,17 @@ impl Drop for DeadlineStream {
     }
 }
 
+/// The one classification of a physical I/O error. The peer ending the
+/// connection is an untyped close (row W11) however the platform reports it:
+/// a clean end of stream on one, a reset or abort (`WSAECONNRESET`,
+/// `WSAECONNABORTED`) on Windows.
 pub(super) fn io_cause(error: &Error) -> GatewayError {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => GatewayError::TimedOut,
+        ErrorKind::UnexpectedEof
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::BrokenPipe => GatewayError::Closed(None),
         _ => GatewayError::Transport,
     }
 }

@@ -207,8 +207,10 @@ fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
         McpServerSettingsError::StorageUnavailable => {
             McpServersErrorCode::McpServersStorageUnavailable
         }
+        McpServerSettingsError::Stopping => McpServersErrorCode::McpServersStopping,
         McpServerSettingsError::AuditUnavailable { .. } => McpServersErrorCode::AuditUnavailable,
         McpServerSettingsError::Inspect(failure) => match failure {
+            InspectFailure::Stopping => McpServersErrorCode::McpServersStopping,
             InspectFailure::StartFailed => McpServersErrorCode::McpServerStartFailed,
             InspectFailure::TimedOut => McpServersErrorCode::McpServerTimedOut,
             InspectFailure::Gone => McpServersErrorCode::McpServerGone,
@@ -221,10 +223,7 @@ fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
 fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
     let code = code(&error);
     let details = match error {
-        McpServerSettingsError::Invalid(problem) => {
-            let (problem, name) = problem_code(problem);
-            serde_json::to_value(McpServersInvalidDetails { problem, name })
-        }
+        McpServerSettingsError::Invalid(problem) => serde_json::to_value(problem_details(problem)),
         McpServerSettingsError::RevisionConflict { revision } => {
             serde_json::to_value(McpServersRevisionConflictDetails { revision })
         }
@@ -251,6 +250,7 @@ fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
         | McpServerSettingsError::ConfigInvalid
         | McpServerSettingsError::ConfigTooLarge
         | McpServerSettingsError::StorageUnavailable
+        | McpServerSettingsError::Stopping
         | McpServerSettingsError::Inspect(_) => return failure(request_id, code.as_str()),
     };
     failure_with_details(
@@ -260,30 +260,51 @@ fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
     )
 }
 
-/// A problem on the wire, with the name it is about, never a value.
-fn problem_code(problem: EditProblem) -> (McpServerProblemCode, Option<String>) {
-    match problem {
+/// A problem on the wire: the server it is about, when it is about one —
+/// a hand-added entry among them — and the variable, when one; never a
+/// value.
+fn problem_details(problem: EditProblem) -> McpServersInvalidDetails {
+    let (problem, server, name) = match problem {
         EditProblem::Server(problem) => match problem {
-            ServerProblem::TooMany => (McpServerProblemCode::TooMany, None),
-            ServerProblem::DuplicateName { name } => {
-                (McpServerProblemCode::DuplicateName, Some(name))
+            ServerProblem::TooMany => (McpServerProblemCode::TooMany, None, None),
+            ServerProblem::DuplicateName { server } => {
+                (McpServerProblemCode::DuplicateName, Some(server), None)
             }
-            ServerProblem::Name => (McpServerProblemCode::Name, None),
-            ServerProblem::Command => (McpServerProblemCode::Command, None),
-            ServerProblem::Arguments => (McpServerProblemCode::Arguments, None),
-            ServerProblem::EnvironmentName => (McpServerProblemCode::EnvironmentName, None),
-            ServerProblem::ReservedEnvironmentName { name } => {
-                (McpServerProblemCode::ReservedEnvironmentName, Some(name))
+            ServerProblem::Name { server } => (McpServerProblemCode::Name, Some(server), None),
+            ServerProblem::Command { server } => {
+                (McpServerProblemCode::Command, Some(server), None)
             }
-            ServerProblem::EnvironmentValue { name } => {
-                (McpServerProblemCode::EnvironmentValue, Some(name))
+            ServerProblem::Arguments { server } => {
+                (McpServerProblemCode::Arguments, Some(server), None)
             }
+            ServerProblem::EnvironmentName { server } => {
+                (McpServerProblemCode::EnvironmentName, Some(server), None)
+            }
+            ServerProblem::ReservedEnvironmentName { server, name } => (
+                McpServerProblemCode::ReservedEnvironmentName,
+                Some(server),
+                Some(name),
+            ),
+            ServerProblem::EnvironmentValue { server, name } => (
+                McpServerProblemCode::EnvironmentValue,
+                Some(server),
+                Some(name),
+            ),
         },
-        EditProblem::EnvironmentValueMissing { name } => {
-            (McpServerProblemCode::EnvironmentValueMissing, Some(name))
-        }
-        EditProblem::EnvironmentNameRepeated { name } => {
-            (McpServerProblemCode::EnvironmentNameRepeated, Some(name))
-        }
+        EditProblem::EnvironmentValueMissing { server, name } => (
+            McpServerProblemCode::EnvironmentValueMissing,
+            Some(server),
+            Some(name),
+        ),
+        EditProblem::EnvironmentNameRepeated { server, name } => (
+            McpServerProblemCode::EnvironmentNameRepeated,
+            Some(server),
+            Some(name),
+        ),
+    };
+    McpServersInvalidDetails {
+        problem,
+        server,
+        name,
     }
 }

@@ -1,8 +1,10 @@
 /**
  * The page under test: an explicit --url, the Vite dev server (reused when
- * it already answers on 127.0.0.1:1438, started otherwise), or a production
- * build previewed on a free port. The performance budget is stated for a
- * production build, so perf numbers from dev are indicative only.
+ * it already answers on 127.0.0.1:1438, started otherwise, and warmed either
+ * way), or a
+ * production build previewed on a free port. The performance budget is
+ * stated for a production build, so perf numbers from dev are indicative
+ * only.
  */
 import { spawn } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -47,6 +49,46 @@ export function freePort() {
   })
 }
 
+/**
+ * Has the dev server at `url` transform the page's module graph before any
+ * page asks for it: the page's module scripts, then every module they import
+ * by path, as Vite serves them. A cold server otherwise does that work inside
+ * the first page's ready wait. Best effort and bounded: a module that does not
+ * answer is left for the page to ask for, and a page that never renders is
+ * still the page's ready wait's to say — this decides nothing.
+ */
+async function warm(url, ms = 120_000) {
+  const started = Date.now()
+  const until = started + ms
+  const origin = new URL(url).origin
+  const seen = new Set()
+  const fetchText = async (path) => {
+    try {
+      const response = await fetch(new URL(path, origin), {
+        signal: AbortSignal.timeout(Math.max(1, until - Date.now())),
+      })
+      return response.ok ? await response.text() : ""
+    } catch {
+      return ""
+    }
+  }
+  // What a module, or the page, names by an absolute path: Vite rewrites
+  // every import, relative or bare, to one.
+  const named = (text) =>
+    [
+      ...text.matchAll(/\bsrc="(\/[^"]+)"/g),
+      ...text.matchAll(/(?:\bfrom|\bimport)\s*\(?\s*["'](\/[^"']+)["']/g),
+    ].map((match) => match[1])
+  let next = named(await fetchText(new URL(url).pathname))
+  while (next.length > 0 && Date.now() < until) {
+    const fresh = [...new Set(next)].filter((path) => !seen.has(path))
+    fresh.forEach((path) => seen.add(path))
+    next = []
+    for (const text of await Promise.all(fresh.map(fetchText))) next.push(...named(text))
+  }
+  log(`warmed ${seen.size} modules in ${Date.now() - started} ms`)
+}
+
 /** Runs a child with its output kept off stdout; the tail is kept for errors. */
 function child(command, args, options, env = process.env) {
   const proc = spawn(command, args, {
@@ -81,19 +123,29 @@ function exited(proc) {
  */
 export async function startDevServer(options, env) {
   const port = await freePort()
+  log(`starting a dev server of its own on port ${port}…`)
+  return devServer(port, options, { ...process.env, ...env })
+}
+
+/**
+ * Starts the Vite dev server on `port` and resolves once it answers and has
+ * been warmed (`warm`): every dev server a check starts is started here.
+ * Returns `{ url, close }`.
+ */
+async function devServer(port, options, env = process.env) {
   const url = `http://127.0.0.1:${port}/desktop.html`
-  log(`starting a dev server of its own at ${url}…`)
   const proc = child(
     vite,
     ["--host", "127.0.0.1", "--port", String(port), "--strictPort"],
     options,
-    { ...process.env, ...env },
+    env,
   )
   if (!(await waitFor(url, 60_000, proc))) {
     proc.kill()
     await exited(proc)
     throw new CannotRun(`dev server did not answer at ${url}\n${proc.tail()}`)
   }
+  await warm(url)
   return {
     url,
     close: async () => {
@@ -113,26 +165,14 @@ export async function target(options) {
   if (options.mode === "dev") {
     if (await answers(devUrl)) {
       log(`using the running dev server at ${devUrl}`)
+      // Warmed as one this call starts is: a server nobody has loaded a page
+      // from yet is as cold, and on a warm one this is quick.
+      await warm(devUrl)
       return { url: devUrl, mode: "dev", close: async () => {} }
     }
     log("starting the dev server (pnpm desktop:dev)…")
-    const proc = child(
-      vite,
-      ["--host", "127.0.0.1", "--port", "1438", "--strictPort"],
-      options,
-    )
-    if (!(await waitFor(devUrl, 60_000, proc))) {
-      proc.kill()
-      throw new CannotRun(`dev server did not answer at ${devUrl}\n${proc.tail()}`)
-    }
-    return {
-      url: devUrl,
-      mode: "dev",
-      close: async () => {
-        proc.kill()
-        await exited(proc)
-      },
-    }
+    const dev = await devServer(new URL(devUrl).port, options)
+    return { url: dev.url, mode: "dev", close: dev.close }
   }
 
   if (options.mode === "prod") {

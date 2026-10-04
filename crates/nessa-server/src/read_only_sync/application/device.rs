@@ -14,7 +14,9 @@
 //! holds. A refusal, a timeout, a closed connection or an unreadable status
 //! ends nothing and purges nothing (design rows PC2–PC5).
 use super::{CacheError, GatewayError};
-use crate::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
+use crate::product_contract::generated::{
+    CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
+};
 use nessa_auth::{
     application::pairing::{
         ClientPendingStore, DeviceCredential, PendingEnrollment, PrivateKeyMaterial,
@@ -153,6 +155,12 @@ pub(crate) fn asks_status(error: GatewayError) -> bool {
                     | CatalogueReadErrorCode::Forbidden
                     | CatalogueReadErrorCode::WrongReceiver
                     | CatalogueReadErrorCode::StaleEpoch
+            )
+            | GatewayError::Watch(
+                ChangeWatchErrorCode::Unauthorized
+                    | ChangeWatchErrorCode::Forbidden
+                    | ChangeWatchErrorCode::WrongReceiver
+                    | ChangeWatchErrorCode::StaleEpoch
             )
     )
 }

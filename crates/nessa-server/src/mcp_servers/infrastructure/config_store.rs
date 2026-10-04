@@ -16,8 +16,9 @@
 //!
 //! A write re-serialises the whole file from its parsed value: the gateway
 //! owns `config.json`, so after a write its layout and key order are the
-//! gateway's, and everything outside `agents.mcpServers` keeps its value,
-//! not its spelling (`a_save_is_published_then_replaces_the_live_set_and_is_audited_both_sides`).
+//! gateway's — pretty-printed, or compact when only that fits the 64 KiB
+//! bound, which is on the bytes written — and everything outside
+//! `agents.mcpServers` keeps its value, not its spelling (`a_save_is_published_then_replaces_the_live_set_and_is_audited_both_sides`).
 use super::stored_servers::{block, parse_block, revision};
 use crate::mcp_servers::application::{
     McpServerStore, StoreError, StoreFuture, StoreLock, StoredServers,
@@ -104,6 +105,20 @@ impl ConfigJsonStore {
         }
     }
 
+    /// `document` as it is written: pretty-printed, or compact when only
+    /// that fits the bound — the bound is on the bytes written, so a file
+    /// read within it, made no larger, is written within it, and a remove
+    /// can always shrink it (`a_result_that_fits_only_compact_is_written_compact`).
+    fn serialised(&self, document: &Value) -> Result<Vec<u8>, StoreError> {
+        let mut bytes =
+            serde_json::to_vec_pretty(document).map_err(|_| StoreError::ConfigInvalid)?;
+        if bytes.len() + 1 > self.check.limit {
+            bytes = serde_json::to_vec(document).map_err(|_| StoreError::ConfigInvalid)?;
+        }
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+
     fn checked(&self, bytes: &[u8]) -> Result<(), StoreError> {
         if bytes.len() > self.check.limit {
             return Err(StoreError::ConfigTooLarge);
@@ -121,6 +136,10 @@ fn stored_block(document: &Map<String, Value>) -> Option<&Value> {
 }
 
 impl McpServerStore for ConfigJsonStore {
+    fn lock_wait(&self) -> Duration {
+        LOCK_WAIT
+    }
+
     fn lock(&self) -> StoreFuture<'_, StoreLock> {
         Box::pin(async move {
             let deadline = self.clock.now() + LOCK_WAIT;
@@ -169,9 +188,7 @@ impl McpServerStore for ConfigJsonStore {
             return Err(StoreError::ConfigInvalid);
         };
         agents.insert("mcpServers".into(), written);
-        let mut bytes = serde_json::to_vec_pretty(&Value::Object(document))
-            .map_err(|_| StoreError::ConfigInvalid)?;
-        bytes.push(b'\n');
+        let bytes = self.serialised(&Value::Object(document))?;
         self.checked(&bytes)?;
         self.files
             .publish(&bytes)

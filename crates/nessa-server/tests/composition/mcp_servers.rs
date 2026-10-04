@@ -17,6 +17,7 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 fn server(name: &str, args: &[&str]) -> StdioMcpServer {
@@ -358,19 +359,39 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
     assert!(opened(&config).is_empty());
 }
 
+/// Startup refuses servers that cannot be launched as configured, and the
+/// error names the server — an entry added to `config.json` by hand among
+/// them — whatever its problem.
 #[tokio::test]
-async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error() {
-    let mut config = agents(vec![server("a__b", &[])]);
-    assert!(matches!(
-        compose(
+async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming_the_server() {
+    let mut relative = server("hand-added", &[]);
+    relative.command = "relative/server".into();
+    for (configured, variable, named) in [
+        (server("a__b", &[]), None, "\"a__b\""),
+        (relative, None, "\"hand-added\""),
+        (server("hand-env", &[]), Some("1BAD"), "\"hand-env\""),
+    ] {
+        let mut config = agents(vec![server("ok", &[]), configured]);
+        if let Some(variable) = variable {
+            config.mcp_servers[1]
+                .env
+                .insert(variable.into(), "value".into());
+        }
+        let refused = compose(
             &mut config,
             &std::env::temp_dir(),
             Path::new("/nessa"),
-            BTreeMap::new()
+            BTreeMap::new(),
         )
-        .await,
-        Err(crate::core::RunError::Agent(_))
-    ));
+        .await;
+        match refused {
+            Err(crate::core::RunError::Agent(message)) => {
+                assert!(message.contains(named), "{message}")
+            }
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("{named} was composed"),
+        }
+    }
 }
 
 /// A hello for the server `name` with the digest `configuration`, naming
@@ -698,9 +719,16 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
             record["phase"] == "requested" && record["operationId"] == applied["operationId"]
         })
         .expect("its requested record");
+    // The server asked for: what it would be started with.
     assert_eq!(
-        requested["transition"]["envNames"],
-        serde_json::json!(["API_TOKEN"])
+        requested["transition"]["server"],
+        serde_json::json!({
+            "name": "mcptest",
+            "command": "/usr/bin/python3",
+            "args": ["/s.mjs"],
+            "enabled": true,
+            "envNames": ["API_TOKEN"],
+        })
     );
     // An inspection of the stored server — whose script is not there, so
     // its process ends at once — leaves its two records too, naming the
@@ -728,7 +756,11 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         .expect("its requested record");
     assert_eq!(requested["transition"]["revision"], revision);
     assert_eq!(
-        requested["transition"]["envNames"],
+        requested["transition"]["server"]["command"],
+        "/usr/bin/python3"
+    );
+    assert_eq!(
+        requested["transition"]["server"]["envNames"],
         serde_json::json!(["API_TOKEN"])
     );
     let outcome = inspected
@@ -797,40 +829,130 @@ fn saved(name: &str, args: Vec<String>) -> crate::mcp_servers::domain::ServerEdi
     })
 }
 
+/// The real file and its lock, with each read counted and the next publish
+/// held until it is let go.
+struct Held {
+    files: crate::mcp_servers::infrastructure::OsConfigFiles,
+    reads: std::sync::atomic::AtomicUsize,
+    publishing: std::sync::atomic::AtomicBool,
+    gate: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+impl Held {
+    fn new(path: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            files: crate::mcp_servers::infrastructure::OsConfigFiles::new(path),
+            reads: Default::default(),
+            publishing: Default::default(),
+            gate: Default::default(),
+        })
+    }
+}
+impl crate::mcp_servers::infrastructure::ConfigFiles for Held {
+    fn read(&self, limit: usize) -> std::io::Result<Option<Vec<u8>>> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.files.read(limit)
+    }
+    fn publish(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.publishing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            let _ = gate.recv();
+        }
+        self.files.publish(bytes)
+    }
+    fn try_lock(&self) -> std::io::Result<Option<crate::mcp_servers::application::StoreLock>> {
+        self.files.try_lock()
+    }
+}
+
+/// Wait, five real seconds at most, until `done`.
+async fn within(what: &str, done: impl Fn() -> bool) {
+    let started = std::time::Instant::now();
+    while !done() {
+        assert!(started.elapsed() < Duration::from_secs(5), "never: {what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// `task`'s answer, within ten real seconds: a test fails rather than hangs.
+async fn joined<T>(task: tokio::task::JoinHandle<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("answered in time")
+        .unwrap()
+}
+
 /// S3 on the real lock: two gateways' settings over one `config.json` — two
 /// stores, each with its own `OsConfigFiles` and so its own `flock` — save
-/// at one revision at once. The lock serialises them: one wins, the other is
-/// refused with the winner's revision, and the file holds the winner alone.
+/// at one revision at once. Writer A is held between its re-read and its
+/// publish; B, waiting on the `flock`, reads nothing until A has published,
+/// then is refused with A's revision, and the file holds A's server alone.
+/// Without the lock, B would read the old revision in that window and both
+/// would publish.
 #[tokio::test]
 async fn s3_two_saves_at_one_revision_over_the_real_lock_are_serialised() {
-    use super::settings;
+    use super::settings_over;
     use crate::mcp_servers::application::McpServerSettingsError;
+    use std::sync::atomic::Ordering;
     let (root, config_path, composed, config) =
         composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
-    let first = settings(
-        &composed,
-        &config,
-        config_path.clone(),
-        root.path().join("audit-1"),
-    )
-    .unwrap();
-    let second = settings(
-        &composed,
-        &config,
-        config_path.clone(),
-        root.path().join("audit-2"),
-    )
-    .unwrap();
-    let revision = first.list().await.unwrap().revision;
-    let (a, b) = tokio::join!(
-        first.edit(caller(), revision.clone(), saved("a", vec!["/a.py".into()])),
-        second.edit(caller(), revision.clone(), saved("b", vec!["/b.py".into()])),
+    let a_files = Held::new(config_path.clone());
+    let b_files = Held::new(config_path.clone());
+    let first = Arc::new(
+        settings_over(
+            &composed,
+            &config,
+            a_files.clone(),
+            root.path().join("audit-1"),
+        )
+        .unwrap(),
     );
-    let (won, lost, winner) = match (a, b) {
-        (Ok(won), Err(lost)) => (won, lost, "a"),
-        (Err(lost), Ok(won)) => (won, lost, "b"),
-        other => panic!("one save wins: {other:?}"),
-    };
+    let second = Arc::new(
+        settings_over(
+            &composed,
+            &config,
+            b_files.clone(),
+            root.path().join("audit-2"),
+        )
+        .unwrap(),
+    );
+    let revision = first.list().await.unwrap().revision;
+    let (release, gate) = std::sync::mpsc::channel();
+    *a_files.gate.lock().unwrap() = Some(gate);
+    let a = tokio::spawn({
+        let first = first.clone();
+        let revision = revision.clone();
+        async move {
+            first
+                .edit(caller(), revision, saved("a", vec!["/a.py".into()]))
+                .await
+        }
+    });
+    within("A reaches its publish", || {
+        a_files.publishing.load(Ordering::SeqCst)
+    })
+    .await;
+    let b_reads = b_files.reads.load(Ordering::SeqCst);
+    let b = tokio::spawn({
+        let second = second.clone();
+        let revision = revision.clone();
+        async move {
+            second
+                .edit(caller(), revision, saved("b", vec!["/b.py".into()]))
+                .await
+        }
+    });
+    // Real time, well inside the lock's two-second wait.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        b_files.reads.load(Ordering::SeqCst),
+        b_reads,
+        "B read while A held the flock between its re-read and its publish"
+    );
+    release.send(()).unwrap();
+    let won = joined(a).await.unwrap();
+    let lost = joined(b).await.unwrap_err();
     assert_eq!(
         lost,
         McpServerSettingsError::RevisionConflict {
@@ -845,15 +967,18 @@ async fn s3_two_saves_at_one_revision_over_the_real_lock_are_serialised() {
         .iter()
         .map(|entry| entry["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(names, [winner]);
+    assert_eq!(names, ["a"]);
     assert_eq!(second.list().await.unwrap().revision, won);
 }
 
 /// The configuration's 64 KiB bound (`MAX_CONFIG_BYTES`) at its edge, on the
 /// real file and the runtime configuration's own check: a file of exactly
-/// 65536 bytes is read and one byte more is `config_too_large`; a save whose
-/// result is exactly 65536 bytes is published and one a byte longer is
-/// refused, the file unchanged.
+/// 65536 bytes is read and one byte more is `config_too_large`. The bound is
+/// on the bytes written: a result exactly 65536 bytes pretty-printed is
+/// published so; one a byte longer pretty, but within the bound compact, is
+/// published compact; one exactly 65536 bytes compact is published, and one
+/// a byte longer refused, the file unchanged. At that edge a remove still
+/// publishes, compact, though the rest pretty-printed would not fit.
 #[tokio::test]
 async fn the_configuration_bound_holds_at_exactly_its_edge() {
     use super::super::runtime_config::MAX_CONFIG_BYTES;
@@ -888,7 +1013,7 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     }
     // A write: measure one save, then make the next land exactly on the
     // edge. Eight long arguments (each at most 8192 bytes) and a last one
-    // whose length is the one that moves.
+    // whose length is the one that moves; and a small server beside it.
     let (root, config_path, composed, config) =
         composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
     let settings = settings(
@@ -899,6 +1024,8 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     )
     .unwrap();
     let size = || std::fs::metadata(&config_path).unwrap().len() as usize;
+    let file = || std::fs::read(&config_path).unwrap();
+    let compact = |bytes: &[u8]| !bytes[..bytes.len() - 1].contains(&b'\n');
     let args = |last: usize| {
         let mut args = vec!["x".repeat(7600); 8];
         args.push("y".repeat(last));
@@ -906,21 +1033,59 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     };
     let revision = settings.list().await.unwrap().revision;
     let revision = settings
+        .edit(caller(), revision, saved("b", vec!["/b.py".into()]))
+        .await
+        .unwrap();
+    let revision = settings
         .edit(caller(), revision, saved("a", args(1000)))
         .await
         .unwrap();
+    // Pretty-printed, exactly at the edge.
     let edge = 1000 + MAX_CONFIG_BYTES - size();
     let revision = settings
         .edit(caller(), revision, saved("a", args(edge)))
         .await
         .unwrap();
     assert_eq!(size(), MAX_CONFIG_BYTES);
-    let at_edge = std::fs::read(&config_path).unwrap();
+    assert!(!compact(&file()));
+    // A byte past it pretty-printed: written compact, within the bound.
+    let revision = settings
+        .edit(caller(), revision, saved("a", args(edge + 1)))
+        .await
+        .unwrap();
+    assert!(compact(&file()));
+    assert!(size() < MAX_CONFIG_BYTES);
+    // Compact, exactly at the edge; then a byte past it is refused.
+    let compact_edge = edge + 1 + MAX_CONFIG_BYTES - size();
+    let revision = settings
+        .edit(caller(), revision, saved("a", args(compact_edge)))
+        .await
+        .unwrap();
+    assert_eq!(size(), MAX_CONFIG_BYTES);
+    assert!(compact(&file()));
+    let at_edge = file();
     assert_eq!(
         settings
-            .edit(caller(), revision, saved("a", args(edge + 1)))
+            .edit(
+                caller(),
+                revision.clone(),
+                saved("a", args(compact_edge + 1))
+            )
             .await,
         Err(McpServerSettingsError::ConfigTooLarge)
     );
-    assert_eq!(std::fs::read(&config_path).unwrap(), at_edge);
+    assert_eq!(file(), at_edge);
+    // A remove shrinks it: what is left would not fit pretty-printed, and
+    // is written compact.
+    let rest: serde_json::Value = serde_json::from_slice(&at_edge).unwrap();
+    let mut rest = rest;
+    rest["agents"]["mcpServers"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|entry| entry["name"] != "b");
+    assert!(serde_json::to_vec_pretty(&rest).unwrap().len() + 1 > MAX_CONFIG_BYTES);
+    let removed = crate::mcp_servers::domain::ServerEdit::Remove { name: "b".into() };
+    settings.edit(caller(), revision, removed).await.unwrap();
+    assert!(compact(&file()));
+    assert!(size() < MAX_CONFIG_BYTES);
 }

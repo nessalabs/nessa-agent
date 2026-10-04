@@ -48,6 +48,9 @@ pub trait McpServerStore: Send + Sync {
     /// store's clock for another holder to let it go; [`StoreError::Busy`]
     /// past that.
     fn lock(&self) -> StoreFuture<'_, StoreLock>;
+    /// How long [`Self::lock`] waits at most: what bounds a shutdown's wait
+    /// for a change under way.
+    fn lock_wait(&self) -> Duration;
     /// The servers stored now.
     fn read(&self) -> Result<StoredServers, StoreError>;
     /// Store `servers` in place of the stored block, leaving the rest of the
@@ -61,18 +64,19 @@ pub trait McpServerStore: Send + Sync {
 }
 
 /// Why a list of servers cannot be the live set: the SDK's rules for a
-/// server and a set, as the live set port reports them. No variant carries a
-/// variable's value.
+/// server and a set, as the live set port reports them. Each problem about
+/// one server names it (`server`), so an entry added by hand is named too;
+/// `name` is a variable's name. No variant carries a variable's value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerProblem {
     TooMany,
-    DuplicateName { name: String },
-    Name,
-    Command,
-    Arguments,
-    EnvironmentName,
-    ReservedEnvironmentName { name: String },
-    EnvironmentValue { name: String },
+    DuplicateName { server: String },
+    Name { server: String },
+    Command { server: String },
+    Arguments { server: String },
+    EnvironmentName { server: String },
+    ReservedEnvironmentName { server: String, name: String },
+    EnvironmentValue { server: String, name: String },
 }
 
 /// The live set was kept as it was: the gateway is stopping, or the SDK
@@ -121,21 +125,24 @@ pub struct McpServerInitiator {
     pub credential_id: String,
 }
 
-/// A change as it was asked for.
+/// A change, or an inspection, as it was asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpServerChangeRequest {
-    /// `save` or `remove`.
+    /// `save`, `remove` or `inspect`.
     pub action: McpServerAction,
-    /// The name stored or removed.
+    /// The name stored, removed or inspected.
     pub target: String,
     /// The name it was stored under, for a rename.
     pub previous_name: Option<String>,
-    /// The revision the caller named.
+    /// The revision the caller named; for an inspection, the one its server
+    /// was read at.
     pub revision: String,
-    /// For a save: its variables' names, sorted by name, and whether it is
-    /// on.
-    pub env_names: Vec<String>,
-    pub enabled: Option<bool>,
+    /// For a save, the server asked for — its executable and arguments, on
+    /// or off, its variables' names — so a refused save still names what
+    /// was asked; for an inspection, the server as stored, which ran;
+    /// `None` for a remove
+    /// (`a_refused_save_still_records_the_executable_it_asked_for`).
+    pub server: Option<Box<AuditedServer>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,11 +297,15 @@ pub struct InspectedUi {
     pub permissions: UiPermissions,
 }
 
-/// Why an inspection read nothing. The server was stopped on each.
+/// Why an inspection read nothing. The server is not running after any of
+/// them: stopped, or never started.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InspectFailure {
     /// Its process could not be launched.
     StartFailed,
+    /// It was not started: the gateway is stopping, and the SDK refused to
+    /// launch it.
+    Stopping,
     /// It did not finish within the deadline, or a request's own budget.
     TimedOut,
     /// It ended, or its session was closed, before it answered.
@@ -308,7 +319,7 @@ pub enum InspectFailure {
 impl InspectFailure {
     /// Whether the server's process was started before this.
     pub fn started(&self) -> bool {
-        !matches!(self, Self::StartFailed)
+        !matches!(self, Self::StartFailed | Self::Stopping)
     }
 }
 

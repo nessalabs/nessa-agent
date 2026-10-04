@@ -685,6 +685,9 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
         let mut named = Vec::new();
         for frame in frames.as_array().unwrap() {
             let update = tool_call(frame, &mut tools).unwrap();
+            // One call's frames are updates to one call: the gateway draws
+            // them as one part (`nessa-server` `tool_parts.rs`).
+            assert_eq!(update.id().as_str(), frames[0]["toolCallId"], "{tool}");
             if let Some(identity) = update.mcp_tool() {
                 named.push((identity.server().to_owned(), identity.tool().to_owned()));
             }

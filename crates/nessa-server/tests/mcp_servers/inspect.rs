@@ -141,6 +141,30 @@ async fn i1_a_missing_command_fails_to_start() {
     );
 }
 
+/// Round 2, item 1: once the servers are stopping, the SDK refuses to start
+/// the server: `stopping`, not started — never `gone` — and nothing is
+/// launched.
+#[tokio::test]
+async fn an_inspection_once_the_servers_stop_is_refused_as_stopping_and_starts_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("pid");
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let launches = LaunchSettings::new(&[], std::env::temp_dir(), BTreeMap::new());
+    let inspector =
+        McpServerInspector::new(servers.clone(), launches, Arc::new(RuntimeClock::new()));
+    servers.stop().await;
+    let failure = inspector
+        .inspect(
+            &fixture(&["--pid-file", pid_file.to_str().unwrap()]),
+            BOUNDS,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure, InspectFailure::Stopping);
+    assert!(!failure.started());
+    assert!(!pid_file.exists(), "a server was launched");
+}
+
 /// I2: a server that never answers `initialize` is timed out at the
 /// deadline on the injected clock, and its process group is killed: the
 /// server and the child it started.

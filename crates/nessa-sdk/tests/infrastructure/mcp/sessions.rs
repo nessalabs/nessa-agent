@@ -195,12 +195,13 @@ fn an_invalid_or_repeated_configuration_is_refused() {
     let repeated = vec![launch("same"), launch("same")];
     assert!(matches!(
         McpServers::with_launcher(repeated, clock.clone(), launcher.clone()),
-        Err(McpError::InvalidConfiguration(McpServerProblem::DuplicateName { name }))
-            if name == "same"
+        Err(McpError::InvalidConfiguration(McpServerProblem::DuplicateName { server }))
+            if server == "same"
     ));
     assert!(matches!(
         McpServers::with_launcher(vec![launch("a__b")], clock.clone(), launcher.clone()),
-        Err(McpError::InvalidConfiguration(McpServerProblem::Name))
+        Err(McpError::InvalidConfiguration(McpServerProblem::Name { server }))
+            if server == "a__b"
     ));
     let servers = McpServers::with_launcher(vec![launch("one")], clock, launcher).unwrap();
     let names: Vec<_> = servers
@@ -220,13 +221,59 @@ fn a_server_name_may_not_start_or_end_with_an_underscore() {
     for name in ["_a", "a_", "_", "a__b"] {
         assert_eq!(
             launch(name).problem(),
-            Some(McpServerProblem::Name),
+            Some(McpServerProblem::Name {
+                server: name.into()
+            }),
             "{name}"
         );
     }
     for name in ["a_b", "a-", "-a", "a"] {
         assert_eq!(launch(name).problem(), None, "{name}");
     }
+}
+
+/// #391 PR 2 round 2, item 5: every problem about one server names that
+/// server — in the value and in what it prints — so an entry added to the
+/// configuration by hand is named when it is refused, at startup and on the
+/// wire.
+#[test]
+fn every_problem_about_one_server_names_it() {
+    let with = |change: fn(&mut McpServerLaunch)| {
+        let mut launch = launch("hand-added");
+        change(&mut launch);
+        launch.problem().expect("refused")
+    };
+    let server = || "hand-added".to_owned();
+    for (problem, expected) in [
+        (
+            with(|launch| launch.server.command = "relative".into()),
+            McpServerProblem::Command { server: server() },
+        ),
+        (
+            with(|launch| launch.server.args = vec!["a\0b".into()]),
+            McpServerProblem::Arguments { server: server() },
+        ),
+        (
+            with(|launch| {
+                launch.environment.insert("1A".into(), "v".into());
+            }),
+            McpServerProblem::EnvironmentName { server: server() },
+        ),
+        (
+            with(|launch| {
+                launch.environment.insert("KEY".into(), "a\0b".into());
+            }),
+            McpServerProblem::EnvironmentValue {
+                server: server(),
+                name: "KEY".into(),
+            },
+        ),
+    ] {
+        assert_eq!(problem, expected);
+        assert!(problem.to_string().contains("\"hand-added\""), "{problem}");
+    }
+    let named = launch("hand_").problem().unwrap();
+    assert!(named.to_string().contains("\"hand_\""), "{named}");
 }
 
 fn configured(servers: &McpServers) -> Vec<String> {
@@ -275,33 +322,52 @@ async fn a_replacement_once_stopping_is_refused_and_launches_nothing() {
     assert_eq!(launcher.launches(), 0);
 }
 
-/// #391 S14, the ordering: a replacement that arrives while `stop` holds the
-/// live lock waits for it, and once `stop` has set `stopping` under that lock
-/// and let it go, the replacement sees the stop: refused, and the set kept.
-/// The lock is held here exactly as `stop` holds it, so the replacement is
-/// made to contend rather than hoped to.
+/// #391 S14, the ordering, with the real `stop`: a replacement and a stop
+/// contend for the live lock — both made to wait on it, the replacement
+/// first — and whichever takes it first, the replacement's answer agrees
+/// with the set: it landed, before the stop looked, and the set is the new
+/// one; or it saw the stop, was refused, and the set is kept. Once the stop
+/// has run, a replacement is refused. Real time, generously, for a
+/// replacement or a stop that does not wait to show that it did not.
 #[test]
-fn a_replacement_contending_with_a_stop_that_holds_the_lock_sees_the_stop() {
-    let (servers, launcher, _) = servers(Behaviour::default());
-    let live = servers.inner.live.lock().unwrap();
-    let (started, contending) = std::sync::mpsc::channel();
-    let replacing = std::thread::spawn({
-        let servers = servers.clone();
-        move || {
-            started.send(()).unwrap();
-            servers.replace(vec![launch("other")])
+fn a_replacement_contending_with_the_real_stop_agrees_with_the_set() {
+    for _ in 0..20 {
+        let (servers, launcher, _) = servers(Behaviour::default());
+        let live = servers.inner.live.lock().unwrap();
+        let replacing = std::thread::spawn({
+            let servers = servers.clone();
+            move || servers.replace(vec![launch("other")])
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!replacing.is_finished(), "the replacement did not wait");
+        let stopping = std::thread::spawn({
+            let servers = servers.clone();
+            move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(servers.stop())
+            }
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!stopping.is_finished(), "the stop did not wait");
+        drop(live);
+        let answer = replacing.join().unwrap();
+        stopping.join().unwrap();
+        match answer {
+            Ok(()) => assert_eq!(configured(&servers), ["other"]),
+            Err(error) => {
+                assert_eq!(error, McpError::Stopped);
+                assert_eq!(configured(&servers), ["fixture"]);
+            }
         }
-    });
-    contending.recv().unwrap();
-    // It is waiting on the lock, not finished: real time, generously, for a
-    // replacement that does not wait to show that it did not.
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(!replacing.is_finished(), "the replacement did not wait");
-    servers.inner.stopping.send_replace(true);
-    drop(live);
-    assert_eq!(replacing.join().unwrap(), Err(McpError::Stopped));
-    assert_eq!(configured(&servers), ["fixture"]);
-    assert_eq!(launcher.launches(), 0);
+        assert_eq!(
+            servers.replace(vec![launch("later")]),
+            Err(McpError::Stopped)
+        );
+        assert_eq!(launcher.launches(), 0);
+    }
 }
 
 #[test]
@@ -311,7 +377,7 @@ fn an_invalid_replacement_is_refused_and_keeps_the_set() {
         servers.replace(vec![launch("same"), launch("same")]),
         Err(McpError::InvalidConfiguration(
             McpServerProblem::DuplicateName {
-                name: "same".into()
+                server: "same".into()
             }
         ))
     );
@@ -363,28 +429,34 @@ fn the_sets_count_and_each_servers_environment_are_checked_by_one_owner() {
     for name in ["", "1A", "A-B", "A=B", "Ä", &"N".repeat(257)] {
         assert_eq!(
             with_environment("s", &[(name, b"value")]).problem(),
-            Some(McpServerProblem::EnvironmentName),
+            Some(McpServerProblem::EnvironmentName { server: "s".into() }),
             "{name:?}"
         );
     }
     assert_eq!(
         with_environment("s", &[(MCP_SESSION_VARIABLE, b"token")]).problem(),
         Some(McpServerProblem::ReservedEnvironmentName {
+            server: "s".into(),
             name: MCP_SESSION_VARIABLE.into()
         })
     );
     assert_eq!(
         with_environment("s", &[("KEY", b"a\0b")]).problem(),
-        Some(McpServerProblem::EnvironmentValue { name: "KEY".into() })
+        Some(McpServerProblem::EnvironmentValue {
+            server: "s".into(),
+            name: "KEY".into()
+        })
     );
     // A server's own rules come first, and a set's rules see every launch's.
     assert_eq!(
         with_environment("a__b", &[("", b"")]).problem(),
-        Some(McpServerProblem::Name)
+        Some(McpServerProblem::Name {
+            server: "a__b".into()
+        })
     );
     assert_eq!(
         problem(&[launch("ok"), with_environment("s", &[("1", b"")])]),
-        Some(McpServerProblem::EnvironmentName)
+        Some(McpServerProblem::EnvironmentName { server: "s".into() })
     );
 }
 
@@ -798,7 +870,9 @@ async fn a_session_opened_once_belongs_to_no_conversation_and_stops_with_the_ser
     let (servers, launcher, _) = servers(Behaviour::default());
     assert!(matches!(
         servers.open_once(&launch("a__b")).await,
-        Err(McpError::InvalidConfiguration(McpServerProblem::Name))
+        Err(McpError::InvalidConfiguration(
+            McpServerProblem::Name { .. }
+        ))
     ));
     assert_eq!(launcher.launches(), 0);
     // Not in the live set, and opened all the same.
