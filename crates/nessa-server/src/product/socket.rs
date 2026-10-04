@@ -2,6 +2,7 @@ use super::change_watch::{
     ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::record_read::refusal_code;
 use super::state::ProductRouteState;
 use super::wire::ready_frame;
 use crate::browser_session::application::{
@@ -40,7 +41,7 @@ use nessa_protocol::product::generated::{
     PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
-use nessa_protocol::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
+use nessa_protocol::product_contract::generated::SessionCloseReason;
 use nessa_protocol::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
@@ -939,7 +940,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = RecordReadErrorCode::from(access_refusal(error));
+    let code = refusal_code(access_refusal(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -2935,7 +2936,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.len() > MAX_PAYLOAD_BYTES as usize);
-        assert!(record.len() <= nessa_protocol::product::generated::MAX_RECORD_RESPONSE_BYTES);
+        assert!(record.len() <= MAX_RECORD_RESPONSE_BYTES);
 
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));

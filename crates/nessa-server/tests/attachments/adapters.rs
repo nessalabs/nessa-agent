@@ -19,6 +19,7 @@ use crate::{
     conversation_test_support::MemoryRepository,
 };
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_sdk::{
     application::agent_execution::providers::{UserImageError, UserImageSource},
     domain::{agent_execution::prompts::ImageReference, common::value_objects::ImageMediaType},
@@ -145,9 +146,8 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
                 "create".into(),
                 1,
                 AgentId::Claude,
-                nessa_protocol::conversation::domain::ConversationModelId::new("test-model")
-                    .unwrap(),
-                nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+                ConversationModelId::new("test-model").unwrap(),
+                ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )

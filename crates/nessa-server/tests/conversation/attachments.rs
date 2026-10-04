@@ -14,6 +14,7 @@ use crate::{
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::{ConversationAttachment, ConversationMessageStatus};
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
 use nessa_sdk::{
@@ -439,9 +440,8 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
                 "create-2".into(),
                 1,
                 AgentId::Claude,
-                nessa_protocol::conversation::domain::ConversationModelId::new("test-model")
-                    .unwrap(),
-                nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+                ConversationModelId::new("test-model").unwrap(),
+                ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )

@@ -23,7 +23,7 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
  * `nessa-protocol` is the contract both ends of a gateway connection share,
  * admitted on "no process state and no runtime of its own"
  * (crates/nessa-protocol/README.md, ADR 483). A server framework, an HTTP
- * client, a database, or an async TLS stack in its graph means something only
+ * client, an async TLS stack or a WebSocket library in its graph means something only
  * one end needs has been admitted. A database is not listed: `nessa-sdk`, which
  * the conversation read model needs for its record types, already carries
  * `rusqlite` for its own session storage.

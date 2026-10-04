@@ -22,6 +22,7 @@ use crate::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::ConversationListEntry;
 use nessa_protocol::{
     agents::AgentId,
@@ -222,8 +223,8 @@ async fn stored_put(
         "create".into(),
         at,
         AgentId::Claude,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     ConversationRepository::create(stored.store.as_ref(), record)
@@ -269,8 +270,8 @@ fn put(listing: &Listing, id: &ConversationId, organization: &str, principal: &s
         "create".into(),
         at,
         AgentId::Claude,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     listing
@@ -1274,8 +1275,8 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
             "create".into(),
             1,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test-model").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap()
     };

@@ -10,7 +10,7 @@ use crate::conversation::application::{
     RecordReadValue,
 };
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
-use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::{domain::ConversationId, read_scope::ReadRefusal};
 use nessa_protocol::product::passive_read::{decode_epoch, ReadEncodeError, ReadWireError};
 use nessa_protocol::product::record_read;
 
@@ -116,7 +116,7 @@ pub(crate) async fn dispatch(
 
 fn error_code(error: RecordReadError) -> RecordReadErrorCode {
     match error {
-        RecordReadError::Admission(refusal) => refusal.into(),
+        RecordReadError::Admission(refusal) => refusal_code(refusal),
         RecordReadError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         RecordReadError::IdentityChanged => RecordReadErrorCode::IdentityChanged,
         RecordReadError::HistoryPruned => RecordReadErrorCode::HistoryPruned,
@@ -141,5 +141,19 @@ fn wire_error_code(error: ReadWireError) -> RecordReadErrorCode {
         ReadWireError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         ReadWireError::InvalidPage => RecordReadErrorCode::Unverifiable,
         ReadWireError::ResponseTooLarge => RecordReadErrorCode::ResponseTooLarge,
+    }
+}
+
+/// The wire code a refused record read answers with. Record dispatch and
+/// socket admission both answer through it.
+pub(in crate::product) fn refusal_code(refusal: ReadRefusal) -> RecordReadErrorCode {
+    match refusal {
+        ReadRefusal::InvalidRequest => RecordReadErrorCode::InvalidRequest,
+        ReadRefusal::Unauthorized => RecordReadErrorCode::Unauthorized,
+        ReadRefusal::Forbidden => RecordReadErrorCode::Forbidden,
+        ReadRefusal::WrongOwner => RecordReadErrorCode::WrongOwner,
+        ReadRefusal::WrongReceiver => RecordReadErrorCode::WrongReceiver,
+        ReadRefusal::StaleEpoch => RecordReadErrorCode::StaleEpoch,
+        ReadRefusal::Unverifiable => RecordReadErrorCode::Unverifiable,
     }
 }

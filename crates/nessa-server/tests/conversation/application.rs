@@ -17,7 +17,9 @@ use crate::{
     },
 };
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
+use nessa_protocol::conversation::domain::ConversationModelId;
 use nessa_protocol::conversation::view::ConversationTranscriptState;
+use nessa_protocol::conversation::view::{ConversationApprovalModeChangeStatus, ConversationView};
 use nessa_protocol::conversation::view::{
     ConversationDisposition, ConversationLifecyclePhase, ConversationMessageStatus,
     ConversationStartupFailureCode,
@@ -354,7 +356,7 @@ async fn a_pending_recovery_view_keeps_the_committed_mode_separate_from_the_requ
     assert_eq!(status.requested_mode, "auto");
     assert!(matches!(
         status.status,
-        nessa_protocol::conversation::view::ConversationApprovalModeChangeStatus::RecoveryRequired
+        ConversationApprovalModeChangeStatus::RecoveryRequired
     ));
     assert!(records
         .pending_mode_change(&conversation_id)
@@ -834,7 +836,7 @@ async fn a_cold_open_recovers_an_unfinished_intent_from_the_committed_mode() {
             "create-mode-chat".into(),
             1_700_000_000_123,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
+            ConversationModelId::new("test").unwrap(),
             ConversationApprovalMode::Ask,
         )
         .unwrap(),
@@ -1067,7 +1069,7 @@ async fn lifecycle(
     service: &ConversationService,
     id: &ConversationId,
     phase: ConversationLifecyclePhase,
-) -> nessa_protocol::conversation::view::ConversationView {
+) -> ConversationView {
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let view = service
@@ -1653,8 +1655,8 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
             "create".into(),
             1_700_000_000_123,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -1849,8 +1851,8 @@ fn ownership_and_creation_context_are_domain_state() {
         "create".into(),
         1_700_000_000_123,
         AgentId::Claude,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     assert!(record.allows(
@@ -1876,8 +1878,8 @@ fn ownership_and_creation_context_are_domain_state() {
         "create".into(),
         1_700_000_000_123,
         AgentId::Claude,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .is_err());
 }
@@ -2112,8 +2114,8 @@ async fn first_read_caller_loss_cannot_leave_an_unstarted_shutdown_slot() {
             "create".into(),
             1_700_000_000_123,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -3653,8 +3655,8 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
             "create".into(),
             1_700_000_000_123,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );

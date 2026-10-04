@@ -1,7 +1,7 @@
 //! Pure native enrollment JSON codec. It performs no physical framing or IO.
 //! Domain constructors own identities, read class and consent correlation.
 //! Syntax and envelope bounds are exercised through the public codec in
-//! `tests/device_pairing/wire.rs`; the codec establishes no key proof or current authority.
+//! `tests/pairing/wire.rs`; the codec establishes no key proof or current authority.
 #![deny(missing_docs)]
 mod dto;
 use super::status::DevicePairingStatus;

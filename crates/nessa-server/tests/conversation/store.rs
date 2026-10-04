@@ -68,8 +68,8 @@ fn owned_by(id: &ConversationId, organization: &str, owner: &str, at: u64) -> Co
         "create".into(),
         at,
         AgentId::Claude,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap()
 }
@@ -88,8 +88,8 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
         request_id: "mode-1".into(),
         initiator_principal_id: PrincipalId::new("alice").unwrap(),
         initiator_surface_id: "panel".into(),
-        prior: nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
-        requested: nessa_protocol::conversation::domain::ConversationApprovalMode::Auto,
+        prior: ConversationApprovalMode::Ask,
+        requested: ConversationApprovalMode::Auto,
         state: ConversationModeRequestState::Pending,
         application: None,
         requested_at_ms: 2,
@@ -140,7 +140,7 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
             .unwrap()
             .unwrap()
             .approval_mode(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Auto
+        ConversationApprovalMode::Auto
     );
     assert_eq!(
         reopened
@@ -335,8 +335,8 @@ async fn ownership_is_create_once_and_survives_reopening() {
         "overwrite".into(),
         456,
         AgentId::Codex,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     let existing = store.create(impostor).await.unwrap();
@@ -422,8 +422,8 @@ async fn a_conversation_with_no_agent_is_never_created() {
         "create".into(),
         1,
         None,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     assert!(matches!(

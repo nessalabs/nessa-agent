@@ -13,6 +13,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::executions::{
@@ -781,18 +782,12 @@ impl ConversationAgentSource for ModeAgentSource {
         &'a self,
         agent: AgentId,
         model: &'a str,
-        mode: nessa_protocol::conversation::domain::ConversationApprovalMode,
+        mode: ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a> {
         let mode = match mode {
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask => {
-                ApprovalMode::Ask
-            }
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Auto => {
-                ApprovalMode::Auto
-            }
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Full => {
-                ApprovalMode::Full
-            }
+            ConversationApprovalMode::Ask => ApprovalMode::Ask,
+            ConversationApprovalMode::Auto => ApprovalMode::Auto,
+            ConversationApprovalMode::Full => ApprovalMode::Full,
         };
         let found = (agent == AgentId::Claude && model == "test").then(|| {
             let mode = if self.provider.force_ask_mode.load(Ordering::SeqCst) {

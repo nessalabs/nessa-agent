@@ -8,6 +8,7 @@ use super::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 
 fn deletion(request: &str) -> ConversationDeletion {
@@ -29,8 +30,8 @@ fn owned() -> Conversation {
         "create".into(),
         1,
         AgentId::Claude,
-        nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap()
 }
@@ -390,8 +391,8 @@ fn a_record_created_past_the_latest_time_is_refused() {
             "create".into(),
             at,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test-model").unwrap(),
+            ConversationApprovalMode::Ask,
         )
     };
     assert!(created(LATEST_TIME_MS).is_ok());

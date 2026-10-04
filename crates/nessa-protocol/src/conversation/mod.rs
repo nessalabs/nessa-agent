@@ -13,7 +13,7 @@
 //!   list shows, and the identity of an owner's catalogue.
 //! - `view`: the `conversation.read` shape, and `projection`, the one bounded
 //!   fold of committed SDK records into it. Live gateway reads and a device's
-//!   offline `show` both read through `projection`, so the two cannot differ.
+//!   offline `show` both read through `projection`.
 //! - `catalogue_metadata` and `catalogue_payload`: a catalogue entry's
 //!   metadata and its one stored representation, encoded and decoded together.
 //! - `read_scope`: the scope a passive read is admitted for, and the checks

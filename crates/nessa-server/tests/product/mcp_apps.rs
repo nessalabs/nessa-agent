@@ -1,6 +1,7 @@
 //! What an MCP App's wire commands take from the caller, and what a server's
 //! error becomes on the wire (#348).
 use super::{app, remote_message, McpAppReference};
+use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 
 fn reference(execution: &str, tool: &str, instance: &str) -> McpAppReference {
     McpAppReference {
@@ -133,9 +134,5 @@ fn the_largest_resource_the_gateway_reads_is_answered_within_one_message() {
     let request_id = "\u{1}".repeat(256);
     let message = super::super::socket::success(&request_id, &result);
     let text = message.to_wire_text().unwrap();
-    assert!(
-        text.len() <= nessa_protocol::protocol::MAX_PAYLOAD_BYTES as usize,
-        "{}",
-        text.len()
-    );
+    assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{}", text.len());
 }

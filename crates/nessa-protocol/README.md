@@ -54,5 +54,5 @@ layer may import `nessa_protocol::product_contract::…` but not
 | `src/conversation/domain/` | Conversation identity, model and approval choice, the summary a list shows, and catalogue identity. |
 | `src/conversation/view.rs`, `src/conversation/projection.rs` | The `conversation.read` shape and the one bounded projection of committed records into it, with its `McpToolUis` port (`tool_uis.rs`), asked by conversation; which SDK session that is stays the gateway's rule. |
 | `src/conversation/catalogue_metadata.rs`, `src/conversation/catalogue_payload.rs` | A catalogue entry's metadata and its one stored representation. |
-| `src/conversation/read_scope.rs` | The read scope a passive read is admitted for, the checks of a source scope against it (catalogue scope identity included), and the refusal's wire code. Which access errors become which refusal is the gateway's (`access_refusal`). |
+| `src/conversation/read_scope.rs` | The read scope a passive read is admitted for, the checks of a source scope against it (catalogue scope identity included). Which access errors become which refusal, and which wire code a refusal answers with, are the gateway's (`access_refusal`, `refusal_code`). |
 | `tests/` | Unit tests, mirroring `src/` and included with `#[path]`. |

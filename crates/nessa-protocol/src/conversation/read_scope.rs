@@ -2,7 +2,6 @@
 //! source scope against it. The gateway checks what it is asked against these;
 //! a device re-checks what the gateway answered against the same functions.
 use super::domain::{conversation_catalogue_schema, conversation_catalogue_stream, ConversationId};
-use crate::product_contract::generated::RecordReadErrorCode;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sync::replication::catalogue::CatalogueSourceError;
 use nessa_sync::replication::domain::{Id, Scope};
@@ -83,22 +82,6 @@ pub fn validate_catalogue_selector(
         return Err(ReadRefusal::WrongOwner);
     }
     validate_passive_read_selector(&admitted.receiver_id, admitted.access_epoch, scope)
-}
-
-/// The wire code a refused record read answers with: the one exhaustive
-/// conversion record dispatch and socket admission share.
-impl From<ReadRefusal> for RecordReadErrorCode {
-    fn from(refusal: ReadRefusal) -> Self {
-        match refusal {
-            ReadRefusal::InvalidRequest => Self::InvalidRequest,
-            ReadRefusal::Unauthorized => Self::Unauthorized,
-            ReadRefusal::Forbidden => Self::Forbidden,
-            ReadRefusal::WrongOwner => Self::WrongOwner,
-            ReadRefusal::WrongReceiver => Self::WrongReceiver,
-            ReadRefusal::StaleEpoch => Self::StaleEpoch,
-            ReadRefusal::Unverifiable => Self::Unverifiable,
-        }
-    }
 }
 
 /// Check that `scope` names the conversation catalogue schema and this

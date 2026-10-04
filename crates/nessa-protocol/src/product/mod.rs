@@ -14,8 +14,8 @@
 //!   ends of the handshake apply.
 //! - `passive_read` owns the shared passive read transport conversion and the
 //!   capped response encoder; `record_read` and `catalogue_read` are the two
-//!   codecs that consume it, each holding both directions so a gateway answer
-//!   and a client's reading of it cannot drift.
+//!   codecs that consume it, each holding both directions of the exchange in
+//!   one file.
 pub mod catalogue_read;
 pub mod generated;
 pub mod handshake;

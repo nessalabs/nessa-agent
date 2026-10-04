@@ -18,6 +18,7 @@ use crate::conversation_test_support::{
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit,
     RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::sessions::{
     SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
@@ -2226,8 +2227,8 @@ fn never_opened(fixture: &Deleting) -> ConversationId {
             "create".into(),
             1,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test-model").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -2791,8 +2792,8 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
             "create".into(),
             1,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test-model").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -2840,8 +2841,8 @@ async fn a_conversation_naming_an_unknown_agent_is_listed_and_deleted_but_not_op
             known.creation_action().into(),
             known.creation_requested_at_ms(),
             None,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap()
     };
@@ -2937,9 +2938,8 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
                 "create".into(),
                 1,
                 AgentId::Claude,
-                nessa_protocol::conversation::domain::ConversationModelId::new("test-model")
-                    .unwrap(),
-                nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+                ConversationModelId::new("test-model").unwrap(),
+                ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )
@@ -3917,8 +3917,8 @@ async fn a_conversation_nobody_can_ask_about_takes_no_agent_slot() {
             known.creation_action().into(),
             known.creation_requested_at_ms(),
             None,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap()
     };
@@ -4728,8 +4728,8 @@ async fn a_clock_stepped_back_since_creation_still_deletes() {
             "create".into(),
             created,
             AgentId::Claude,
-            nessa_protocol::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+            ConversationModelId::new("test-model").unwrap(),
+            ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );

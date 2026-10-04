@@ -483,7 +483,7 @@ fn payload(value: &CatalogueValue) -> Result<Vec<u8>, CatalogueSourceError> {
         conversation.approval_mode(),
         value.summary.clone(),
     )
-    .map_err(|_| CatalogueSourceError::Unavailable)?;
+    .expect("a Conversation's creation time is within LATEST_TIME_MS (a_record_created_past_the_latest_time_is_refused)");
     catalogue_payload::encode(&value.descriptor.key.id.to_string(), &metadata)
         .map_err(|_| CatalogueSourceError::Unavailable)
 }
