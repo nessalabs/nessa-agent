@@ -1,0 +1,26 @@
+[package]
+name = "nessa-client-core"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "Device-side enrollment and retained gateway sync"
+[dependencies]
+nessa-auth = { path = "../nessa-auth" }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-sdk = { path = "../nessa-sdk" }
+nessa-sync = { workspace = true }
+nessa-local-database = { path = "../nessa-local-database" }
+nessa-local-storage = { path = "../nessa-local-storage" }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "sync", "time", "net"] }
+tungstenite = "0.29"
+uuid = { version = "1", features = ["v4"] }
+[dev-dependencies]
+# Existing cache corruption and private-key fixtures need these test-only values.
+sha2 = "0.10"
+zeroize = "=1.9.0"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }

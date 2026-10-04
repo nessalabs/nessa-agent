@@ -99,5 +99,5 @@ fn read_private(path: &Path, maximum: usize) -> Result<Vec<u8>, ProfileError> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/composition/read_only_profile.rs"]
+#[path = "../../tests/composition/read_only_profile.rs"]
 mod tests;

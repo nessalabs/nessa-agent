@@ -1,6 +1,8 @@
 //! End-to-end check and timing of protected native sync, against a real
 //! `nessa server` and real `read_only_sync` client processes. Not run in CI.
 //!
+//! Build the client with `cargo build -p nessa-client-core --example read_only_sync`.
+//!
 //! ```text
 //! protected_sync_bench --nessa PATH --client PATH [--sizes 20,200,2000]
 //! ```

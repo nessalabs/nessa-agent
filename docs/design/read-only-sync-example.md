@@ -144,6 +144,10 @@ separately owned [device pairing work](https://github.com/nessalabs/nessa-agent/
 
 ## Owners and composition
 
+The device client lives in `crates/nessa-client-core/src/read_only_sync/`;
+`crates/nessa-client-core/src/composition/` wires the standalone example.
+The real paired gateway process tests stay in `crates/nessa-server/tests/composition/`.
+
 The sync core owns finite record/catalogue passes and response validation. The
 SDK owns physical fact validation, semantic reduction, checkpoints and read
 completeness/freshness. The gateway owns current authentication, grants and
@@ -323,8 +327,8 @@ Its transient read model asks existing product constructors; the cache stores on
 The standalone Cargo example's retained reads are:
 
 ```sh
-cargo run -p nessa-server --example read_only_sync -- list CACHE RECEIVER ORIGIN CATALOGUE
-cargo run -p nessa-server --example read_only_sync -- show CACHE RECEIVER ORIGIN CONVERSATION
+cargo run -p nessa-client-core --example read_only_sync -- list CACHE RECEIVER ORIGIN CATALOGUE
+cargo run -p nessa-client-core --example read_only_sync -- show CACHE RECEIVER ORIGIN CONVERSATION
 ```
 
 Use the issued receiver and actual gateway/catalogue identities saved by setup.
@@ -339,8 +343,8 @@ shared local-storage permissions contract.
 Local reset commands accept the complete admitted target and expected generation:
 
 ```sh
-cargo run -p nessa-server --example read_only_sync -- reset-records CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
-cargo run -p nessa-server --example read_only_sync -- reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
+cargo run -p nessa-client-core --example read_only_sync -- reset-records CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
+cargo run -p nessa-client-core --example read_only_sync -- reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
 ```
 
 Use the same operation and arguments for an exact retry after output loss. JSON
