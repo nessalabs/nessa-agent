@@ -3196,6 +3196,7 @@ dependencies = [
  "nessa-local-storage",
  "nessa-sdk",
  "nessa-sync",
+ "regex",
  "reqwest",
  "rustls",
  "security-framework",
@@ -3212,6 +3213,7 @@ dependencies = [
  "tungstenite",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

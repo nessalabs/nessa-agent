@@ -26,6 +26,7 @@ verification/
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
+      app-review/           real window over a fake gateway whose app's call asks for a review
     scripts/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
@@ -41,6 +42,7 @@ verification/
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
+      app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
       mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in)
       lib/
@@ -52,7 +54,8 @@ verification/
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
-        apps.mjs            an MCP App's documents, read through Playwright's frames
+        apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
+        apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-stack.mjs   a real gateway, the dev server before it and a client on it, for the real-gateway checks; the panel's credential; an agent turn sent and waited out
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers

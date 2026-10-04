@@ -1,11 +1,14 @@
 use super::generated::AgentsListResult;
+use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::{
     CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
-    ReceiverAuthority, RecordReadSource,
+    ReceiverAuthority, RecordReadSource, WatchCatalogue, WatchNamespaces, WatchRecords,
 };
+use crate::conversation::infrastructure::UuidWatchNamespaces;
+use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::mcp_servers::{entrypoint::http::ResourceRoute, infrastructure::ResourceTicketStore};
 use axum::extract::FromRef;
 use nessa_auth::{
@@ -35,6 +38,10 @@ pub struct ProductRouteState {
     /// Four physical record reads or pending record replies globally, kept
     /// separate from command and control admission.
     pub(crate) record_reads: Arc<Semaphore>,
+    pub(super) change_watches: Arc<WatchOwners>,
+    pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
+    pub(crate) catalogue_watches: Option<Arc<dyn WatchCatalogue>>,
+    pub(crate) watch_namespaces: Arc<dyn WatchNamespaces>,
     /// Beginning an upload has capacity of its own. It opens no provider, so it
     /// does not belong behind reads and opens; and it sweeps tickets, reads
     /// holds, and writes audit records, so it must never be what keeps a
@@ -70,6 +77,10 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    /// Owner pairing commands, composed only when `config.json` names a native
+    /// listen address. `None` answers every pairing method
+    /// `pairing_not_configured`.
+    pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
@@ -124,6 +135,19 @@ pub struct ProductDependencies {
 }
 
 impl ProductRouteState {
+    /// Close only watch admission; original admitted authority tasks keep their permits.
+    /// Normal host cleanup consumes this before polling reader or watch drain.
+    pub(crate) fn close_watch_admission(&self) {
+        self.change_watches.close();
+    }
+
+    /// Join the distinct actual watch resource after closing admission/connection interest.
+    /// The normal host report retains its returned first fault alongside reader outcomes.
+    pub(crate) async fn drain_watches(&self) -> Result<(), WatchTaskFault> {
+        self.close_watch_admission();
+        self.change_watches.drain().await
+    }
+
     /// Bind trusted gateway ownership and audience to an isolated dependency scope.
     pub fn new(
         gateway_id: ResourceId,
@@ -140,6 +164,13 @@ impl ProductRouteState {
             requests: Arc::new(Semaphore::new(128)),
             controls: Arc::new(Semaphore::new(32)),
             record_reads: Arc::new(Semaphore::new(4)),
+            change_watches: Arc::new(WatchOwners::new(
+                super::generated::MAX_GLOBAL_CHANGE_WATCHES,
+                super::generated::MAX_PRINCIPAL_CHANGE_WATCHES,
+            )),
+            record_watches: None,
+            catalogue_watches: None,
+            watch_namespaces: Arc::new(UuidWatchNamespaces),
             upload_begins: Arc::new(Semaphore::new(16)),
             deletions: Arc::new(Semaphore::new(8)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
@@ -149,6 +180,7 @@ impl ProductRouteState {
             clock: dependencies.clock,
             policy: dependencies.policy,
             admin: None,
+            pairing: None,
             conversations: None,
             passive_read: None,
             record_source: None,
@@ -182,6 +214,13 @@ impl ProductRouteState {
         self
     }
 
+    /// Register the owner pairing commands of this gateway's native enrollment
+    /// runtime. Without them the pairing methods answer `pairing_not_configured`.
+    pub fn with_pairing(mut self, pairing: Arc<PairingOwnerCommands>) -> Self {
+        self.pairing = Some(pairing);
+        self
+    }
+
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
         self.conversations = Some(service);
@@ -195,6 +234,23 @@ impl ProductRouteState {
         conversations: Arc<dyn ConversationRepository>,
     ) -> Self {
         self.passive_read = Some((receivers, conversations));
+        self
+    }
+
+    /// Compose the actual local producers alongside independently admitted readers.
+    pub fn with_change_watches(
+        mut self,
+        records: Arc<dyn WatchRecords>,
+        catalogue: Arc<dyn WatchCatalogue>,
+    ) -> Self {
+        self.record_watches = Some(records);
+        self.catalogue_watches = Some(catalogue);
+        self
+    }
+
+    /// Inject connection identity minting for host substitution and deterministic tests.
+    pub fn with_watch_namespaces(mut self, namespaces: Arc<dyn WatchNamespaces>) -> Self {
+        self.watch_namespaces = namespaces;
         self
     }
 

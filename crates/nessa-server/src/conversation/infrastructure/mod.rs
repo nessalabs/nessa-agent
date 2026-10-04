@@ -7,8 +7,11 @@
 //!
 //! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
 //! epochs and transition evidence in its own private SQLite dataset. It supplies
-//! passive admission; `exact_record_scope` combines its admitted receiver and
-//! epoch with the SDK source's physical identity before a bounded read.
+//! passive admission, and device pairing pairs a receiver with an issued device
+//! credential and fences it, as the system, once that enrollment has ended
+//! (`device_pairing::infrastructure::ConversationReceivers`).
+//! `exact_record_scope` combines its admitted receiver and epoch with the SDK
+//! source's physical identity before a bounded read.
 //! `record_read` checks that identity from metadata before worker creation,
 //! runs each SDK source on a tracked non-entered thread, and joins those threads
 //! before storage shutdown.
@@ -39,6 +42,8 @@
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
 //! by the conversation, the app's mount, the gateway's call id and the phase.
+mod change_watch;
+pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 mod catalogue_changes;
 mod receiver_authority;
 mod store;
@@ -88,3 +93,6 @@ pub use audit::DurableExecutionAudit;
 #[cfg(test)]
 #[path = "../../../tests/conversation/store.rs"]
 mod store_tests;
+
+#[cfg(test)]
+pub(crate) use record_read::TestReadGate;

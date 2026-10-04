@@ -287,6 +287,29 @@ test("pairing owner changes derive auth constants and published shape before dri
       publication.$defs.ManualCodeDisplay.maxLength,
       values.manualCodeBytes + 1,
     )
+    // The owner routes' schema takes the same widths, and their Rust fields
+    // name the owner's constant rather than a number.
+    const product = JSON.parse(
+      readFileSync(join(path, "protocol/product/v1.json"), "utf8"),
+    ).$defs
+    assert.equal(
+      product.PairingApproveParams.properties.invitationId.maxItems,
+      values.identityBytes,
+    )
+    assert.equal(
+      product.PairingApproveParams.properties.deviceKey.minItems,
+      values.deviceKeyBytes,
+    )
+    assert.equal(
+      product.PairingCreateResult.properties.code.maxLength,
+      values.manualCodeBytes + 1,
+    )
+    const routes = readFileSync(
+      join(path, "crates/nessa-server/src/product/generated.rs"),
+      "utf8",
+    )
+    assert.match(routes, /pub device_key: \[u8; DeviceKey::LENGTH\],/)
+    assert.match(routes, /pub invitation_id: \[u8; InvitationId::LENGTH\],/)
     assert.equal(generate(path, "generate-product-protocol", ["--check"]).status, 0)
     writeFileSync(
       join(path, "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs"),
@@ -312,3 +335,69 @@ test("invalid pairing publication refuses every output before writes", () =>
     )
     assert.match(refused.stderr, /Invalid pairing owner publication/)
   }))
+
+test("watch policy and identity publish the same schema owner to both languages", () =>
+  fixture((path) => {
+    const pattern = "^[a-z]+-[1-9][0-9]*$"
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema["x-changeWatchLimits"] = {
+        globalOwners: 17,
+        principalOwners: 5,
+        recordTargets: 3,
+        catalogueTargets: 2,
+      }
+      schema.$defs.ChangeWatchId.maxLength = 51
+      schema.$defs.ChangeWatchId.pattern = pattern
+    })
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const output = (name) => readFileSync(join(path, name), "utf8")
+    const ts = output("packages/nessa-client/src/generated/product.ts")
+    const rust = output("crates/nessa-server/src/product/generated.rs")
+    const outcomes = output("crates/nessa-server/src/product_contract/generated.rs")
+    assert.match(ts, /maxChangeWatchIdBytes = 51/)
+    assert.ok(ts.includes(`changeWatchIdPattern = ${JSON.stringify(pattern)}`))
+    assert.match(ts, /globalOwners: 17/)
+    assert.match(ts, /principalOwners: 5/)
+    assert.match(ts, /recordTargets: 3/)
+    assert.match(ts, /catalogueTargets: 2/)
+    assert.match(rust, /MAX_CHANGE_WATCH_ID_BYTES: usize = 51;/)
+    assert.ok(
+      rust.includes(`CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(pattern)};`),
+    )
+    assert.match(rust, /MAX_GLOBAL_CHANGE_WATCHES: usize = 17;/)
+    assert.match(rust, /MAX_PRINCIPAL_CHANGE_WATCHES: usize = 5;/)
+    assert.match(rust, /MAX_CONNECTION_RECORD_WATCHES: usize = 3;/)
+    assert.match(rust, /MAX_CONNECTION_CATALOGUE_WATCHES: usize = 2;/)
+    // Per-connection capacity is derived, never a second number to keep in step.
+    assert.match(rust, /MAX_CONNECTION_CHANGE_WATCHES: usize = 5;/)
+    assert.match(ts, /export type ChangeWatchId = string/)
+    assert.match(rust, /pub type ChangeWatchId = String;/)
+    assert.match(rust, /pub reason: ChangeWatchEndReason/)
+    assert.match(outcomes, /pub enum ChangeWatchEndReason/)
+    assert.doesNotMatch(outcomes, /impl ChangeWatchEndReason/)
+    assert.match(outcomes, /impl ChangeWatchErrorCode/)
+  }))
+
+for (const [name, value] of [
+  ["globalOwners", undefined],
+  ["globalOwners", 0],
+  ["globalOwners", "64"],
+  ["principalOwners", 65],
+  ["recordTargets", -1],
+  ["catalogueTargets", 1.5],
+  ["connectionTargets", 2],
+  ["unknownOwners", 1],
+])
+  test(`invalid watch ${name} ${value} preserves every unpublished artifact`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema["x-changeWatchLimits"][name] = value
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, /Invalid change watch limit/)
+    }))

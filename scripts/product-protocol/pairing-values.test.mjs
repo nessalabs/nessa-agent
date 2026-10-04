@@ -128,3 +128,26 @@ test("pairing array owner refuses inherited names at direct lookup", () => {
   }
   assert.equal(pairingArrayOwner({}), undefined)
 })
+
+test("a manual code node takes the owner's display length and refuses other forms", () => {
+  for (const manualCodeBytes of [8, 11]) {
+    const values = { identityBytes: 16, deviceKeyBytes: 32, manualCodeBytes }
+    const derived = derivePairingValues(
+      { code: { "x-pairing-manual-code": "display", minLength: 1 } },
+      values,
+    )
+    assert.equal(derived.schema.code.type, "string")
+    assert.equal(derived.schema.code.minLength, manualCodeBytes + 1)
+    assert.equal(derived.schema.code.maxLength, manualCodeBytes + 1)
+  }
+  for (const form of ["canonical", "toString", 1]) {
+    assert.throws(
+      () =>
+        derivePairingValues(
+          { code: { "x-pairing-manual-code": form } },
+          { identityBytes: 16, deviceKeyBytes: 32, manualCodeBytes: 8 },
+        ),
+      { message: `Unknown manual code form: ${form}` },
+    )
+  }
+})

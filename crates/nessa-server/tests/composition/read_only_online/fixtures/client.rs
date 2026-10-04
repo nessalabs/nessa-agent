@@ -2,20 +2,25 @@
 use super::super::super::super::profile::Profile;
 use super::CLIENT;
 use crate::composition::read_only_example;
+use crate::device_pairing::infrastructure::{
+    encode_frame,
+    wire::{encode_request as encode_envelope, NativePairingRequest},
+    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
+};
 use crate::product::generated::{
-    ProductClientMetadata, SessionAuthenticateParams, MAX_AUTH_CREDENTIAL_CHARACTERS,
-    PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
+    ProductClientMetadata, SessionAuthenticateParams, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use crate::product::passive_read::wire::encode_request;
+use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
+use nessa_auth::application::pairing::ClientPendingStore;
 use serde::Serialize;
 use serde_json::Value;
-use std::io::{self, ErrorKind, Result as IoResult, Write};
+use std::collections::VecDeque;
+use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{Message, WebSocket};
 
 struct RefusedOutput;
 impl Write for RefusedOutput {
@@ -32,10 +37,11 @@ fn client_child() {
         return;
     };
     let args: Vec<String> = serde_json::from_str(&args).unwrap();
+    let input = &mut io::stdin().lock();
     let result = if std::env::var_os("NESSA_ONLINE_LOSE_OUTPUT").is_some() {
-        read_only_example::execute(&args, &mut RefusedOutput)
+        read_only_example::execute(&args, input, &mut RefusedOutput)
     } else {
-        read_only_example::execute(&args, &mut io::stdout().lock())
+        read_only_example::execute(&args, input, &mut io::stdout().lock())
     };
     if let Err(error) = &result {
         eprintln!("command failure: {error:?}");
@@ -62,27 +68,54 @@ pub(crate) fn command(args: Vec<String>, lose: bool) -> (bool, Option<Value>) {
     }
     (output.status.success(), stdout)
 }
-// Boundary probes use the same real paired credential and generated request encoder.
+// Boundary probes use the same real paired device and generated request encoder,
+// on a protected native connection of their own.
 pub(crate) struct WireClient {
-    socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    transport: NativeTransport<TcpStream>,
+    frames: FrameReader,
     next: u64,
+    // Frames that arrived while a call waited for its own response, in order.
+    held: VecDeque<Frame>,
+}
+/// One frame as it arrived: its decoded text with the exact encoded length, or
+/// the end of the connection. A native close carries no reason.
+pub(crate) enum Frame {
+    Text { value: Value, bytes: usize },
+    Closed,
 }
 impl WireClient {
     pub(crate) fn connect(root: &Path) -> Self {
         let profile = Profile::load(&root.join("profile.json")).unwrap();
-        let endpoint = profile.endpoint().unwrap();
-        let credential = profile.credential(MAX_AUTH_CREDENTIAL_CHARACTERS).unwrap();
-        let (socket, _) =
-            tungstenite::connect(format!("{}/session", endpoint.web_socket_url())).unwrap();
-        if let MaybeTlsStream::Plain(stream) = socket.get_ref() {
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            stream
-                .set_write_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-        }
-        let mut client = Self { socket, next: 0 };
+        // The private state is held only while the credential is read, so the
+        // example's own commands can open it afterwards.
+        let saved = profile
+            .private_state()
+            .unwrap()
+            .load_credential()
+            .unwrap()
+            .unwrap();
+        let credential = saved.credential().as_str().to_owned();
+        let (key, pin, _) = saved.into_enrollment().into_parts();
+        let identity = NativeIdentity::restore(key).unwrap();
+        let socket = TcpStream::connect(profile.gateway).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let transport =
+            NativeTransport::connect(socket, &identity, GatewayTrust::Pinned(pin)).unwrap();
+        let mut selector = EnrollmentChannel::new(transport);
+        selector
+            .send_envelope(&encode_envelope(&NativePairingRequest::OpenProduct).unwrap())
+            .unwrap();
+        let mut client = Self {
+            transport: selector.into_transport(),
+            frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
+            next: 0,
+            held: VecDeque::new(),
+        };
         let challenge = client.value();
         let params = SessionAuthenticateParams {
             min_version: PRODUCT_VERSION,
@@ -94,28 +127,61 @@ impl WireClient {
             },
         };
         let ready = client.call(PRODUCT_HANDSHAKE_METHOD, &params);
-        assert_eq!(ready["ok"], true);
+        assert_eq!(ready["ok"], true, "{ready}");
         client
     }
     fn value(&mut self) -> Value {
-        for _ in 0..16 {
-            match self.socket.read().unwrap() {
-                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
-                Message::Ping(value) => self.socket.send(Message::Pong(value)).unwrap(),
-                _ => {}
+        match self.frame() {
+            Frame::Text { value, .. } => value,
+            Frame::Closed => panic!("the gateway closed the probe connection"),
+        }
+    }
+    /// The next frame in arrival order, held ones first.
+    pub(crate) fn frame(&mut self) -> Frame {
+        if let Some(frame) = self.held.pop_front() {
+            return frame;
+        }
+        self.read_frame()
+    }
+    fn read_frame(&mut self) -> Frame {
+        loop {
+            let buffer = self.frames.unfilled().unwrap();
+            let count = match self.transport.read(buffer) {
+                Ok(0) => return Frame::Closed,
+                Ok(count) => count,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::UnexpectedEof
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    return Frame::Closed
+                }
+                Err(error) => panic!("frame read failed: {error}"),
+            };
+            if let Some(body) = self.frames.filled(count).unwrap() {
+                return Frame::Text {
+                    value: serde_json::from_slice(&body).unwrap(),
+                    bytes: body.len(),
+                };
             }
         }
-        panic!("bounded fixture frame capacity");
     }
     pub(crate) fn call(&mut self, method: &str, params: &impl Serialize) -> Value {
         self.next += 1;
         let id = self.next.to_string();
         let text = encode_request(&id, method, params).unwrap();
-        self.socket.send(Message::Text(text.into())).unwrap();
+        let frame = encode_frame(MAX_PROTECTED_REQUEST_BYTES, text.as_bytes()).unwrap();
+        self.transport.write_all(&frame).unwrap();
+        self.transport.flush().unwrap();
         for _ in 0..16 {
-            let value = self.value();
-            if value["id"] == id {
-                return value;
+            let frame = self.read_frame();
+            match &frame {
+                Frame::Text { value, .. } if value["id"] == id => return value.clone(),
+                Frame::Text { .. } => self.held.push_back(frame),
+                Frame::Closed => panic!("the gateway closed the probe connection during a call"),
             }
         }
         panic!("bounded fixture response capacity");

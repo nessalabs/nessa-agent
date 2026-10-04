@@ -3,3 +3,6 @@
 mod operation;
 mod source;
 pub use source::NessaRecordReadSource;
+
+#[cfg(test)]
+pub(crate) use source::TestReadGate;

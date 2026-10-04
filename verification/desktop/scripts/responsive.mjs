@@ -102,6 +102,13 @@ import {
 const longTail =
   " --config=/Users/nessa/Library/Application-Support/nessa/releases/very/deep/path/release-signing-configuration.json"
 
+// The card's selectors, as page.evaluate can carry them: `css` holds functions (#441).
+const cardSelectors = {
+  approvalCard: css.approvalCard,
+  approvalActions: css.approvalActions,
+  approvalWord: css.approvalWord,
+}
+
 const shot = async (options, page, name, locator) => {
   if (!options.shots) return
   mkdirSync(options.shots, { recursive: true })
@@ -140,7 +147,7 @@ const checks = {
               words[words.length - 1].after(extra)
             }
           },
-          [css, width, long, longTail],
+          [cardSelectors, width, long, longTail],
         )
         // The container queries apply in the next frames' style and layout.
         await frames(page, 2)
@@ -166,7 +173,7 @@ const checks = {
               .map((b) => b.textContent.trim()),
             overflow: card.scrollWidth > card.clientWidth + 1,
           }
-        }, css)
+        }, cardSelectors)
         const tag = `${width}px${long ? " long" : ""}`
         seen.push({ width, long, ...r })
         if (r.broken.length)

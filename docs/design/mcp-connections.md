@@ -89,7 +89,9 @@ end of input (Nessa's own shell server) still does.
   falls too far behind to have them all, it is sent all three, which are
   idempotent; its other notifications (progress, logging) are not. A server's own requests are
   answered by the gateway: `ping` with `{}`, anything else with `-32601`,
-  since the gateway declared none of them.
+  since the gateway declared none of them. A `tools/call` answer's
+  `structuredContent` is kept for the call's tool call before the harness is
+  answered ([forwarded results](#forwarded-results), #435).
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
   `_meta.ui`: an optional `resourceUri` (a `ui://` URI) and `visibility`
   (`model`, `app`; both when absent, or when there is no `_meta.ui`), each
@@ -141,6 +143,7 @@ end of input (Nessa's own shell server) still does.
 | Change notices held for a stand-in or a session's list | 16 | the stand-in is sent all three `*/list_changed`; the list is read again |
 | Tool names whose visibility a session remembers | 4096 | only the names the list asked latest gave are kept (a list answered late cannot evict a later one's), then none if that list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
 | Live grants | one per open provider session | — |
+| Forwarded results a grant keeps | 32, each a call id of at most 256 bytes, the answering server's name (at most 64 bytes) and a result of at most 64 KiB (`MAX_STRUCTURED_RESULT_BYTES`) | the oldest is dropped; a larger result is kept as the "omitted: too large" text |
 | Sessions a grant remembers | its open ones, and those ended since its last opening | dropped as the next opens; all taken when it is revoked |
 | Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 
@@ -236,6 +239,63 @@ the bind fails and MCP servers are off for that run; once none does, a socket
 an earlier run left is replaced. A gateway executable or socket
 path that is not UTF-8 also leaves MCP servers off.
 
+### Forwarded results
+
+Claude's harness gives its model, and its ACP client, a result's
+`structuredContent` only as JSON text — in `content`, `rawOutput` and the
+PostToolUse frame's `toolResponse`, in place of the result's own text — so no
+ACP frame says which text was structured (ADR 344's observed table). The
+stand-in saw the object, and Claude's harness names the call it forwards
+(`_meta["claudecode/toolUseId"]`) by the id its ACP frames give it
+(`toolCallId`). Each grant (`McpOwner`) owns an
+`acp::sessions::ForwardedResults`; the grant the gateway gives the binding is
+the owner's own (`McpOwner::stand_in_grant`), so it cannot carry another
+owner's, and the ACP worker attaches each result to its call
+(`acp::sessions::forwarded::attach_forwarded`), from where it is saved and
+projected as any structured result is. A call reported `completed` was
+answered, and the stand-in keeps its result before giving it (S1's test holds
+the stand-in inside that write), so the result is there to take. A call
+reported `failed` takes nothing (W7). The pinned harness reports an MCP
+`tool_result` as `status: is_error ? "failed" : "completed"` (its
+`acp-agent.js`), and the recorded `always_fails` (an `isError` result) is
+`failed`; so an `isError` result's structured content is not attached, its
+text is. A call the harness cancels keeps nothing in the first place (S6).
+
+| # | Event | Effect |
+| --- | --- | --- |
+| S1 | a `tools/call` answered with a result holding `structuredContent`, `isError` or not, its request naming a call id | its JSON text kept under that id, before the answer is written |
+| S2 | as S1, past 64 KiB | the "omitted: too large" text kept, never cut JSON; at 64 KiB exactly, kept |
+| S3 | a result without `structuredContent`, or `null` | nothing |
+| S4 | a JSON-RPC error answer, or an answer too large for a frame (the harness gets `-32603`) | nothing |
+| S5 | no call id (Codex sends none), or one the ACP binding would not accept as a tool call's id (`acp::fields::identifier`, then `ToolCallId`: a string of at most 256 bytes, not empty or blank) | nothing |
+| S6 | the harness cancels the call while it waits, or after its answer is in but before the stand-in has answered it | nothing; whichever the stand-in reads first decides, so a result is kept exactly when the stand-in answers the call (an answer whose write then fails is kept, and waits to be dropped) |
+| S7 | a call to a hidden tool, refused and never forwarded | nothing |
+| S8 | an answer to any other method | nothing |
+| S9 | 32 results kept already | the oldest dropped: usually one never taken; a burst of more than 32 results ahead of one call's completed update drops that call's, which then shows its text alone (W3) |
+| S10 | an id kept again | the later result, once |
+| S11 | a stand-in of one grant keeps a result | no other grant sees it, the same conversation's included |
+| W1 | the call's `completed` update carrying content, naming an MCP tool, with a result kept | the result taken and appended after its content |
+| W2 | an update without content (the PostToolUse frame) or before the end | nothing taken: an update without content replaces none, and one before the end has no result yet |
+| W3 | nothing kept for the call: the tool returned no `structuredContent` | the update as it was: the text alone |
+| W4 | a second `completed` update of the call | nothing more: taken. Carrying content, it would replace the call's content in the view, the result with it; the pinned harness sends one `completed` update per call |
+| W5 | an update naming no MCP tool | nothing taken |
+| W6 | an open without a grant | the update as it was |
+| W7 | the call's `failed` update | nothing taken; the result waits to be dropped |
+| W8 | a `completed` update whose MCP tool names another server than the one that answered under its id | nothing taken: the result is kept with its server, and is not that call's |
+
+A result kept and never taken — a call its harness abandons or reports
+`failed` — waits until it is dropped (S9) or its grant is revoked. A process
+of the gateway's own user holding a live token (above) could keep a result
+under a call id it guesses — but only as the server its stand-in serves,
+so it attaches only to a call to that same server (W8). Keeping it replaces
+whatever was kept under that id (S10), whichever server kept it, so a guess
+can also make the real call show its text alone; such a process can already
+push every result out (S9), so it can lose an attachment, never forge one
+onto another server's call. An MCP App's own `tools/call` does not pass
+through a stand-in and keeps nothing. Appending a result counts toward the
+execution's retained tool bytes like any other content, as Codex's
+structured results already do.
+
 ## What one connection per harness session means
 
 - **Context fingerprint.** The SDK fingerprints what the harness is launched
@@ -295,7 +355,7 @@ Each row above has at least one test, named after it:
   revoked off any runtime killing at once, a grant revoked
   while its session opens refusing that opening, a grant revoked while its
   session closes leaving every close waiting for the stop, stop racing an
-  opening; a provider open holding its session's grant until it ends and
+  opening; forwarded results kept by the stand-in, S1–S8 and S11 (`forwarded.rs`); a provider open holding its session's grant until it ends and
   through a relaunch of its process, the open naming the manager's session, every
   `mcpServers` entry carrying the open's environment, and grants left out of
   the fingerprint.
@@ -309,7 +369,9 @@ Each row above has at least one test, named after it:
   lets through, the launch configuration carrying them, the view keyed by its
   conversation's session, hello refusals (no, forged, and revoked tokens among
   them, a forged one starting nothing), a
-  token mapping to its conversation while its grant lives, a revoked grant
+  token mapping to its conversation while its grant lives, an open's grant
+  holding the forwarded results of the owner its token resolves to and no
+  other open's, a revoked grant
   ending the sessions it opened, two conversations on one server and a
   resumed one each on sessions of their own, no token when the random source
   fails (its stand-ins refused), a hello's `Debug`
@@ -317,5 +379,10 @@ Each row above has at least one test, named after it:
   its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
   process group, a relay exiting when its server ends with its stdin still
   open, the view's `resourceUri` and revision, the schema bound.
+- SDK, ACP: the store's S9 and S10, and W1–W8
+  (`tests/infrastructure/acp/sessions/forwarded.rs`), and
+  Claude's recorded frames (`report_rows` completed, `always_fails` failed)
+  replayed through the worker with a grant holding a result for each
+  (`contracts/tools.rs`).
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.
 - Live: `scripts/mcp-test-server/live-check.mjs` with Claude and Codex.

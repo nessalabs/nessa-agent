@@ -17,10 +17,13 @@ mod causes;
 pub(crate) use causes::{cache_failure, gateway_failure};
 use causes::{catalogue_failure, core_failure};
 
+/// `device` carries the enrollment evidence the run was admitted under, and
+/// any recheck after a refusal; its fields join the report.
 pub(crate) fn write_records(
     attempt: &GatewayAttempt<Result<RecordRun, RecordDriverError>>,
     saved: Result<Option<(CachedProgress, CommittedStatus)>, CacheError>,
     cache_refusal: Option<CacheError>,
+    device: Value,
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
     let (check, work, cause, freshness_failure) = match &attempt.result {
@@ -62,7 +65,10 @@ pub(crate) fn write_records(
         && saved_ok
         && cache_refusal.is_none();
     write(
-        json!({"operation":"records","successful":successful,"connectionCheck":"performed","connectionOperation":attempt.outcome.operation.to_string(), "capturedCheck":check,"work":work,"durable":durable,"transportFailure":attempt.outcome.failure.map(gateway_failure),"driverFailure":cause,"cacheRefusal":cache_refusal.as_ref().map(cache_failure),"freshnessFailure":freshness_failure}),
+        joined(
+            json!({"operation":"records","successful":successful,"connectionCheck":"performed","connectionOperation":attempt.outcome.operation.to_string(), "capturedCheck":check,"work":work,"durable":durable,"transportFailure":attempt.outcome.failure.map(gateway_failure),"driverFailure":cause,"cacheRefusal":cache_refusal.as_ref().map(cache_failure),"freshnessFailure":freshness_failure}),
+            device,
+        ),
         output,
     )?;
     if successful {
@@ -75,6 +81,7 @@ pub(crate) fn write_catalogue(
     attempt: &GatewayAttempt<Result<CatalogueRun, CatalogueError>>,
     saved: Result<Option<CatalogueProgress>, CacheError>,
     cache_refusal: Option<CacheError>,
+    device: Value,
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
     let work = attempt
@@ -92,7 +99,10 @@ pub(crate) fn write_catalogue(
         && saved_ok
         && cache_refusal.is_none();
     write(
-        json!({"operation":"catalogue","successful":successful,"connectionCheck":"performed","connectionOperation":attempt.outcome.operation.to_string(),"work":work,"durable":durable,"transportFailure":attempt.outcome.failure.map(gateway_failure),"driverFailure":attempt.result.as_ref().and_then(|result|result.as_ref().err()).map(|error|json!({"owner":"core","cause":catalogue_failure(error)})),"cacheRefusal":cache_refusal.as_ref().map(cache_failure)}),
+        joined(
+            json!({"operation":"catalogue","successful":successful,"connectionCheck":"performed","connectionOperation":attempt.outcome.operation.to_string(),"work":work,"durable":durable,"transportFailure":attempt.outcome.failure.map(gateway_failure),"driverFailure":attempt.result.as_ref().and_then(|result|result.as_ref().err()).map(|error|json!({"owner":"core","cause":catalogue_failure(error)})),"cacheRefusal":cache_refusal.as_ref().map(cache_failure)}),
+            device,
+        ),
         output,
     )?;
     if successful {
@@ -100,6 +110,12 @@ pub(crate) fn write_catalogue(
     } else {
         Err(CommandError::OnlineRefused)
     }
+}
+fn joined(mut report: Value, device: Value) -> Value {
+    if let (Some(report), Value::Object(device)) = (report.as_object_mut(), device) {
+        report.extend(device);
+    }
+    report
 }
 pub(crate) fn write(value: Value, output: &mut dyn Write) -> Result<(), CommandError> {
     serde_json::to_writer(&mut *output, &value).map_err(|_| CommandError::Output)?;

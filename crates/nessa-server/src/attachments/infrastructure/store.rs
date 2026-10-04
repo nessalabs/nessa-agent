@@ -4,6 +4,7 @@
 //! <root>/incoming/.nessa-*.tmp                        transfers in progress
 //! <root>/blobs/<stored digest hex>                    bytes, once per digest
 //! <root>/holds/<sha256(organization)>/<conversation>/<stored digest hex>-<media type tag>.json
+//! <root>/holds/<sha256(organization)>/<conversation>/retired-<artifact id>.json
 //! ```
 //!
 //! Every name under the root is derived, never copied, from outside input: a
@@ -19,24 +20,29 @@
 //!
 //! A record is written `pending` and carries the generation of the write that
 //! made it. Nothing that asks what a conversation holds sees a pending record.
-//! Only the bearer of that generation's claim makes it `kept` or takes it
-//! back, so an upload undoes exactly its own write: never a later upload of
-//! the same file, never a record a release already removed. A release removes
-//! pending records too. A pending record a crash leaves behind stays invisible;
-//! it still protects its bytes, a later upload of the same file replaces it,
-//! and its conversation's next close removes it.
+//! A claim confirms a pending record or retires its own matching hold. Retirement
+//! preserves its identity, prior state and evidence. An archived Retired record
+//! is metadata only; the same stored bytes uploaded later have a fresh generation.
+//! `store/artifacts.rs` implements incremental exact-identity lookup and local
+//! manifest facts; `store/source.rs` performs bounded tracked local ranges.
+//! Protected transport and composed shutdown remain separate integration.
 //!
 //! One lock orders every change, so "publish these bytes and hold them" and
 //! "release these holds and remove bytes nothing holds" cannot interleave.
 //! Transfers are written outside it. File work runs on the blocking pool.
+mod artifacts;
+mod source;
+use source::SourceReads;
+
 use super::hold_record::{decode, encode, HoldRecord, RecordState};
 use crate::{
     attachments::{
         application::{
             AttachmentStore, Confirmation, Discard, HoldClaim, Kept, PortFuture, ReceivedBytes,
-            ReleaseReport, ReleasedHold, StagedUpload, StoreUnavailable,
+            ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
+            RevertCause, StagedUpload, StoreUnavailable,
         },
-        domain::{Attachment, Hold, HoldState},
+        domain::{ArtifactId, Attachment, Hold, RetiredFrom},
     },
     conversation::domain::ConversationId,
 };
@@ -48,7 +54,7 @@ use nessa_local_storage::{
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -68,11 +74,34 @@ const MAX_HOLD_BYTES: u64 = 16 * 1024;
 struct Files {
     root: PathBuf,
     changes: Mutex<()>,
+    #[cfg(test)]
+    publication_fault: Mutex<Option<PublicationFault>>,
+    #[cfg(test)]
+    before_source_sync: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    before_retention_scan: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+/// Facts from one scan; unreadability is not affirmative active ownership.
+struct Retention {
+    active: HashSet<String>,
+    unresolved: HashSet<String>,
+    retirements: Vec<RetiredHold>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationFault {
+    AfterPrimaryReplace,
+    AfterArchiveMove,
+    BeforeManifestSync,
+    BeforePendingDirectorySync,
 }
 
 /// Content-addressed attachment bytes with per-conversation holds, on local disk.
 pub struct LocalAttachmentStore {
     files: Arc<Files>,
+    source: SourceReads,
 }
 
 impl LocalAttachmentStore {
@@ -96,9 +125,16 @@ impl LocalAttachmentStore {
             }
         }
         Ok(Self {
+            source: SourceReads::new(),
             files: Arc::new(Files {
                 root,
                 changes: Mutex::new(()),
+                #[cfg(test)]
+                publication_fault: Mutex::new(None),
+                #[cfg(test)]
+                before_source_sync: Mutex::new(None),
+                #[cfg(test)]
+                before_retention_scan: Mutex::new(None),
             }),
         })
     }
@@ -172,6 +208,13 @@ fn path_of(hold: &Hold) -> PathBuf {
     )
 }
 
+fn archive_path(hold: &Hold, generation: &str) -> PathBuf {
+    hold_directory(hold.organization_id(), hold.conversation_id()).join(format!(
+        "retired-{}.json",
+        ArtifactId::from_generation(generation).as_str()
+    ))
+}
+
 /// The digest a record's name protects.
 fn protected_digest(name: &str) -> Option<&str> {
     let digest = name.strip_suffix(HOLD_SUFFIX)?.get(..DIGEST_HEX)?;
@@ -197,14 +240,25 @@ fn corrupt(what: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what)
 }
 
-fn hold_state(state: RecordState) -> HoldState {
+fn prior_state(state: &RecordState) -> RetiredFrom {
     match state {
-        RecordState::Pending => HoldState::Pending,
-        RecordState::Kept => HoldState::Held,
+        RecordState::Pending => RetiredFrom::Pending,
+        RecordState::Kept => RetiredFrom::Held,
+        RecordState::Retired { was, .. } => *was,
     }
 }
 
 impl Files {
+    #[cfg(test)]
+    fn fail_publication_at(&self, point: PublicationFault) -> io::Result<()> {
+        let mut fault = self.publication_fault.lock().unwrap();
+        if fault.take_if(|fault| *fault == point).is_some() {
+            Err(io::Error::other("injected publication failure"))
+        } else {
+            Ok(())
+        }
+    }
+
     fn lock(&self) -> io::Result<MutexGuard<'_, ()>> {
         self.changes
             .lock()
@@ -223,7 +277,18 @@ impl Files {
             return Err(corrupt("hold record is too large"));
         }
         let record = decode(&bytes).ok_or_else(|| corrupt("hold record is not valid"))?;
-        if path_of(&record.hold) != relative {
+        let expected = match &record.state {
+            RecordState::Retired { .. }
+                if relative
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("retired-")) =>
+            {
+                archive_path(&record.hold, &record.generation)
+            }
+            _ => path_of(&record.hold),
+        };
+        if expected != relative {
             return Err(corrupt("hold record describes another hold"));
         }
         Ok(Some(record))
@@ -237,6 +302,8 @@ impl Files {
             .write_all(&encode(hold, state, generation))?;
         file.as_file().sync_all()?;
         file.persist_beneath(&path_of(hold))?;
+        #[cfg(test)]
+        self.fail_publication_at(PublicationFault::AfterPrimaryReplace)?;
         // The record's own directory, then each new name above it.
         sync_directory_beneath(&self.root, &directory)?;
         if let Some(organization) = directory.parent() {
@@ -262,60 +329,130 @@ impl Files {
             .transpose()
     }
 
-    /// Every stored digest some record still names, pending or kept, read from
-    /// names alone so an unreadable record still protects its bytes.
-    fn referenced(&self) -> io::Result<HashSet<String>> {
-        let mut digests = HashSet::new();
+    /// Pending/Kept records retain their named digest. An unreadable primary
+    /// retains it conservatively; validated durable retirement relinquishes it.
+    fn referenced(
+        &self,
+        release_target: Option<(&OrganizationId, &ConversationId)>,
+    ) -> io::Result<Retention> {
+        #[cfg(test)]
+        if let Some(before_scan) = self.before_retention_scan.lock().unwrap().take() {
+            before_scan();
+        }
+        let mut retention = Retention {
+            active: HashSet::new(),
+            unresolved: HashSet::new(),
+            retirements: Vec::new(),
+        };
         for organization in directories(&self.root.join(HOLDS))? {
             for conversation in directories(&organization)? {
-                for entry in fs::read_dir(conversation)? {
-                    if let Some(digest) = entry?.file_name().to_str().and_then(protected_digest) {
-                        digests.insert(digest.to_owned());
+                // One sync covers every entry in the directory, so the first
+                // Retired record confirms the publication of all of them.
+                let mut synced = false;
+                for entry in fs::read_dir(&conversation)? {
+                    let name = entry?.file_name();
+                    if let Some(digest) = name.to_str().and_then(protected_digest) {
+                        let relative = conversation
+                            .strip_prefix(&self.root)
+                            .map_err(|_| corrupt("hold directory escaped root"))?
+                            .join(&name);
+                        // Corruption still protects its filename's digest. Only
+                        // a validated Retired record relinquishes retention.
+                        match self.read_record(&relative) {
+                            Ok(Some(HoldRecord {
+                                hold,
+                                state: RecordState::Retired { was, evidence },
+                                ..
+                            })) => {
+                                // Exclusion also confirms any prior uncertain
+                                // release publication before bytes can be purged.
+                                if !synced {
+                                    sync_directory_beneath(
+                                        &self.root,
+                                        relative
+                                            .parent()
+                                            .ok_or_else(|| corrupt("hold has no directory"))?,
+                                    )?;
+                                    synced = true;
+                                }
+                                if release_target.is_some_and(|(organization, conversation)| {
+                                    hold.organization_id() == organization
+                                        && hold.conversation_id() == conversation
+                                }) {
+                                    retention.retirements.push(
+                                        RetiredHold::new(hold, was, evidence)
+                                            .ok_or_else(|| corrupt("contradictory retirement"))?,
+                                    );
+                                }
+                            }
+                            Ok(Some(_)) => {
+                                retention.active.insert(digest.to_owned());
+                            }
+                            Ok(None) | Err(_) => {
+                                retention.unresolved.insert(digest.to_owned());
+                            }
+                        }
                     }
                 }
             }
         }
-        Ok(digests)
+        Ok(retention)
     }
 
-    /// Remove bytes that no record in `referenced` names. `Ok(true)` when
-    /// bytes were removed, `Ok(false)` when they are still held or were
-    /// already gone.
-    fn remove_unheld(
-        &self,
-        digest: Sha256Digest,
-        referenced: &HashSet<String>,
-    ) -> io::Result<bool> {
-        if referenced.contains(&digest.to_hex()) {
+    /// Remove bytes proved unheld by the scan. Unresolved candidate retention
+    /// refuses cleanup independently of any active reference. `Ok(true)` means
+    /// removed; `Ok(false)` means validated retention or bytes already absent.
+    fn remove_unheld(&self, digest: Sha256Digest, retention: &Retention) -> io::Result<bool> {
+        let named = digest.to_hex();
+        if retention.unresolved.contains(&named) {
+            return Err(corrupt("candidate blob retention is unresolved"));
+        }
+        if retention.active.contains(&named) {
             return Ok(false);
         }
         Ok(not_found(self.remove(&blob_path(digest)))?.is_some())
     }
 
-    /// The saved records of one conversation: each one's path, and the record
-    /// when it could be read.
-    fn conversation_records(
+    /// Visit primary records one at a time. Artifact reads retain only one
+    /// decoded record; release keeps its existing report collection.
+    fn visit_primary_records(
         &self,
         organization_id: &OrganizationId,
         conversation_id: &ConversationId,
-    ) -> io::Result<Vec<(PathBuf, io::Result<HoldRecord>)>> {
+        mut visit: impl FnMut(&Path, io::Result<HoldRecord>) -> io::Result<()>,
+    ) -> io::Result<()> {
         let directory = hold_directory(organization_id, conversation_id);
         let absolute = self.root.join(&directory);
         if not_found(verify_directory(&absolute))?.is_none() {
-            return Ok(Vec::new());
+            return Ok(());
         }
-        let mut records = Vec::new();
         for entry in fs::read_dir(absolute)? {
             let name = entry?.file_name();
-            let Some(name) = name.to_str().filter(|name| name.ends_with(HOLD_SUFFIX)) else {
+            let Some(name) = name
+                .to_str()
+                .filter(|name| name.ends_with(HOLD_SUFFIX) && !name.starts_with("retired-"))
+            else {
                 continue;
             };
             let relative = directory.join(name);
             let record = self
                 .read_record(&relative)
                 .and_then(|record| record.ok_or_else(|| corrupt("hold record vanished")));
-            records.push((relative, record));
+            visit(&relative, record)?;
         }
+        Ok(())
+    }
+
+    fn conversation_records(
+        &self,
+        organization: &OrganizationId,
+        conversation: &ConversationId,
+    ) -> io::Result<Vec<(PathBuf, io::Result<HoldRecord>)>> {
+        let mut records = Vec::new();
+        self.visit_primary_records(organization, conversation, |path, record| {
+            records.push((path.to_owned(), record));
+            Ok(())
+        })?;
         Ok(records)
     }
 
@@ -344,6 +481,18 @@ impl Files {
     fn keep(&self, file: PrivateTempFile, hold: &Hold) -> io::Result<Kept> {
         let _changes = self.lock()?;
         let existing = self.read_record(&path_of(hold))?;
+        if let Some(record) = &existing {
+            if matches!(&record.state, RecordState::Retired { .. }) {
+                self.archive(record)?;
+            }
+        }
+        let directory = hold_directory(hold.organization_id(), hold.conversation_id());
+        create_directory_beneath(&self.root, &directory)?;
+        #[cfg(test)]
+        self.fail_publication_at(PublicationFault::BeforePendingDirectorySync)?;
+        // A preceding archive rename can be visible after an uncertain sync,
+        // with no primary name left. Confirm that metadata before a new Pending.
+        sync_directory_beneath(&self.root, &directory)?;
         self.publish(file, hold.stored())?;
         if let Some(HoldRecord {
             hold: kept,
@@ -365,6 +514,27 @@ impl Files {
         // Nothing, or a pending record: another upload's, whose claim stops
         // matching here, or one a crash left behind.
         let generation = Uuid::new_v4().to_string();
+        let id = ArtifactId::from_generation(&generation);
+        let mut collides = self
+            .read_record(&archive_path(hold, &generation))?
+            .is_some();
+        self.visit_primary_records(
+            hold.organization_id(),
+            hold.conversation_id(),
+            |_, record| {
+                // Existing corrupt unrelated holds remain protected; they cannot
+                // grant a parsed identity or prevent an unrelated new upload.
+                if let Ok(record) = record {
+                    collides |= ArtifactId::from_generation(&record.generation) == id;
+                }
+                Ok(())
+            },
+        )?;
+        if collides {
+            return Err(corrupt(
+                "new hold generation conflicts with a saved registration",
+            ));
+        }
         if let Err(error) = self.write_record(hold, RecordState::Pending, &generation) {
             // A record that did get written stays pending, which nothing can
             // use. Take back what can be: this write's record, and bytes
@@ -380,20 +550,32 @@ impl Files {
     fn discard_generation(&self, hold: &Hold, generation: &str) {
         let mine = matches!(
             self.read_record(&path_of(hold)),
-            Ok(Some(record)) if record.generation == generation
+            Ok(Some(record)) if record.generation == generation && record.state == RecordState::Pending
         );
         if mine {
             let _ = self.remove(&path_of(hold));
         }
-        if let Ok(referenced) = self.referenced() {
-            let _ = self.remove_unheld(hold.stored().digest(), &referenced);
+        if let Ok(retention) = self.referenced(None) {
+            let _ = self.remove_unheld(hold.stored().digest(), &retention);
         }
     }
 
     fn confirm(&self, hold: &Hold, claim: &HoldClaim) -> io::Result<Confirmation> {
         let _changes = self.lock()?;
+        // Retired claims have their own exact archive name. Unrelated corrupt
+        // primary records must not prevent this hold's confirmation.
+        if self
+            .read_record(&archive_path(hold, claim.as_str()))?
+            .is_some()
+        {
+            return Ok(Confirmation::Gone);
+        }
         match self.read_record(&path_of(hold))? {
-            None => Ok(Confirmation::Gone),
+            None
+            | Some(HoldRecord {
+                state: RecordState::Retired { .. },
+                ..
+            }) => Ok(Confirmation::Gone),
             Some(record) if record.state == RecordState::Kept => {
                 Ok(if record.generation == claim.as_str() {
                     Confirmation::Confirmed
@@ -411,13 +593,36 @@ impl Files {
         }
     }
 
-    fn discard(&self, hold: &Hold, claim: &HoldClaim) -> io::Result<Discard> {
+    fn discard(&self, hold: &Hold, claim: &HoldClaim, cause: RevertCause) -> io::Result<Discard> {
         let _changes = self.lock()?;
         match self.read_record(&path_of(hold))? {
-            Some(record) if record.generation == claim.as_str() => {
-                self.remove(&path_of(hold))?;
-                self.remove_unheld(hold.stored().digest(), &self.referenced()?)?;
-                Ok(Discard::Discarded)
+            Some(record)
+                if record.generation == claim.as_str()
+                    && record.hold == *hold
+                    && !matches!(&record.state, RecordState::Retired { .. }) =>
+            {
+                let was = prior_state(&record.state);
+                self.write_record(
+                    &record.hold,
+                    RecordState::Retired {
+                        was,
+                        evidence: RetirementEvidence::RevertedUpload {
+                            cause,
+                            caller: record.hold.uploaded_by().clone(),
+                        },
+                    },
+                    &record.generation,
+                )?;
+                match self
+                    .referenced(None)
+                    .and_then(|retention| self.remove_unheld(hold.stored().digest(), &retention))
+                {
+                    Ok(_) => Ok(Discard::Discarded { was }),
+                    Err(error) => {
+                        tracing::error!(%error, "retired attachment blob cleanup did not complete");
+                        Ok(Discard::CleanupIncomplete { was })
+                    }
+                }
             }
             _ => Ok(Discard::NotMine),
         }
@@ -427,35 +632,74 @@ impl Files {
         &self,
         organization_id: &OrganizationId,
         conversation_id: &ConversationId,
+        evidence: &ReleaseEvidence,
     ) -> io::Result<ReleaseReport> {
         let _changes = self.lock()?;
         let mut report = ReleaseReport::default();
         for (path, record) in self.conversation_records(organization_id, conversation_id)? {
-            // A record that cannot be read is not erased: its bytes stay
-            // protected by its name, and the failure is reported.
-            match record.and_then(|record| self.remove(&path).map(|()| record)) {
-                Ok(record) => report.released.push(ReleasedHold {
-                    hold: record.hold,
-                    was: hold_state(record.state),
-                }),
+            let retired = record.and_then(|record| {
+                let (was, original) = match &record.state {
+                    RecordState::Retired { was, evidence } => {
+                        sync_directory_beneath(
+                            &self.root,
+                            path.parent()
+                                .ok_or_else(|| corrupt("hold has no directory"))?,
+                        )?;
+                        (*was, evidence.clone())
+                    }
+                    state => {
+                        let was = prior_state(state);
+                        let original = RetirementEvidence::Release(evidence.clone());
+                        self.write_record(
+                            &record.hold,
+                            RecordState::Retired {
+                                was,
+                                evidence: original.clone(),
+                            },
+                            &record.generation,
+                        )?;
+                        (was, original)
+                    }
+                };
+                RetiredHold::new(record.hold, was, original).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "contradictory retirement")
+                })
+            });
+            match retired {
+                Ok(retired) => report.retired.push(retired),
                 Err(error) => {
                     tracing::error!(path = %path.display(), %error, "hold was not released");
                     report.failures += 1;
                 }
             }
         }
-        // Bytes go only after every hold of this conversation is gone, and
-        // what is still held anywhere is read once for all of them.
-        let mut considered = HashSet::new();
-        match self.referenced() {
-            Ok(referenced) => {
-                for released in &report.released {
-                    let digest = released.hold.stored().digest();
-                    if !considered.insert(digest) {
-                        continue;
+        // The scan confirms saved retirements after all attempts, including a
+        // replacement whose earlier acknowledgement failed. It owns retention
+        // and the selected target's original report contributors together.
+        match self.referenced(Some((organization_id, conversation_id))) {
+            Ok(mut retention) => {
+                // A later conservative read failure cannot erase a retirement
+                // already confirmed by this operation. The scan adds facts it
+                // confirmed, while its reference set independently gates cleanup.
+                for retired in retention.retirements.drain(..) {
+                    if !report.retired.contains(&retired) {
+                        report.retired.push(retired);
                     }
-                    match self.remove_unheld(digest, &referenced) {
-                        Ok(true) => report.removed.push(released.hold.clone()),
+                }
+                let mut by_digest: HashMap<_, Vec<_>> = HashMap::new();
+                for retired in &report.retired {
+                    by_digest
+                        .entry(retired.hold().stored().digest())
+                        .or_default()
+                        .push(retired.clone());
+                }
+                for (digest, retirements) in by_digest {
+                    let Some(removed) = RemovedBlob::new(retirements) else {
+                        report.failures += 1;
+                        continue;
+                    };
+                    match self.remove_unheld(digest, &retention) {
+                        Ok(true) => report.removed.push(removed),
                         Ok(false) => {}
                         Err(error) => {
                             tracing::error!(%digest, %error, "unheld attachment bytes were not removed");
@@ -569,18 +813,28 @@ impl AttachmentStore for LocalAttachmentStore {
         &'a self,
         hold: &'a Hold,
         claim: &'a HoldClaim,
+        cause: RevertCause,
     ) -> PortFuture<'a, Discard, StoreUnavailable> {
         let (hold, claim) = (hold.clone(), claim.clone());
-        Box::pin(self.blocking(move |files| files.discard(&hold, &claim)))
+        Box::pin(self.blocking(move |files| files.discard(&hold, &claim, cause)))
     }
 
     fn release<'a>(
         &'a self,
         organization_id: &'a OrganizationId,
         conversation_id: &'a ConversationId,
+        evidence: &'a ReleaseEvidence,
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable> {
-        let (organization_id, conversation_id) = (organization_id.clone(), conversation_id.clone());
-        Box::pin(self.blocking(move |files| files.release(&organization_id, &conversation_id)))
+        let (organization_id, conversation_id, evidence) = (
+            organization_id.clone(),
+            conversation_id.clone(),
+            evidence.clone(),
+        );
+        Box::pin(
+            self.blocking(move |files| {
+                files.release(&organization_id, &conversation_id, &evidence)
+            }),
+        )
     }
 
     fn read(

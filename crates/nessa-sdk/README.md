@@ -193,7 +193,9 @@ automatic session storage, hooks, invocation, and UI integration.
   and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
-  `permissions` attribution and answer/cancellation evidence, and `tools` the original review input. The controller
+  `permissions` attribution and answer/cancellation evidence, and `tools` the original review input.
+  The private `caller_wake` module keeps a panic from a caller's `Waker` inside
+  the public Agent waits listed in [Caller wakers](docs/agent_execution/lifecycle.md#caller-wakers). The controller
   pairs input with accepted requests, bounds retention, and projects domain state.
   No provider JSON or process handles enter this layer. See the
   [execution guides](docs/agent_execution/README.md) for the current contracts.

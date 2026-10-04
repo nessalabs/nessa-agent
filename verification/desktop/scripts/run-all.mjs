@@ -36,6 +36,7 @@ const functional = [
   "gateway-states",
   "widgets",
   "mcp-apps",
+  "app-review",
 ]
 
 const options = cli({

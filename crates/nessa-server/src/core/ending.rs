@@ -219,6 +219,26 @@ mod tests {
         );
     }
 
+    /// Design row S2: a refused `config.json` stops a managed service and names
+    /// the `configuration` reason in the startup-failure record.
+    #[test]
+    fn invalid_runtime_configuration_stops_the_service_and_says_why() {
+        let home = tempfile::tempdir().expect("temporary directory");
+        let error = RunError::RuntimeConfig("unknown field `tls`".into());
+        assert_eq!(
+            failed(&error, &managed(home.path())),
+            Ending {
+                status: 0,
+                recorded: true
+            }
+        );
+        let written: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(home.path().join("logs").join(RECORD)).expect("record"),
+        )
+        .expect("record is JSON");
+        assert_eq!(written["reason"], "configuration");
+    }
+
     /// Exiting zero is only for the service launchd supervises. A `nessa`
     /// command someone typed reports the same failure with the code the shared
     /// table gives it, or a script and a supervisor read the failure as a

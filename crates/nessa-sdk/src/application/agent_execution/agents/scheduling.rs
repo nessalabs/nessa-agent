@@ -8,6 +8,7 @@ use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
 use super::{Agent, AgentError, AttachmentPhase, AttachmentRequest};
 use crate::application::agent_execution::{
+    caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
         ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord, QueueOrderRecord,
         QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode,
@@ -161,20 +162,31 @@ impl QueuedInvocation {
     /// persistence, and explicit session-close failures. Closed can indicate local
     /// cancellation or provider disconnection; it does not confirm external cleanup.
     /// SubmissionUnresolved means the runner vanished without settlement.
+    ///
     /// Publication retires this receipt's original accepted-work owner and its
     /// invocation slot, as coordinated by the queue runner and Pending publisher.
     /// Independent work can still make a direct invocation Busy; the receipt does
     /// not establish universal admission readiness or confirmed provider cleanup.
-    pub async fn wait(mut self) -> Result<ExecutionOutcome, AgentError> {
-        loop {
-            if let Some(result) = self.result.borrow_and_update().clone() {
-                return result;
+    ///
+    /// A panic raised by the polling task's `Waker` when the result is published
+    /// stays with this wait: it is logged, that one wake is lost, and the result
+    /// stays retained for the next poll. The publisher, other waiters on the same
+    /// receipt, and other queued work are unaffected. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md for what is not contained.
+    pub async fn wait(self) -> Result<ExecutionOutcome, AgentError> {
+        let Self { id, mut result } = self;
+        contain_caller_wake(CallerWaiter::Receipt(id), async move {
+            loop {
+                if let Some(settled) = result.borrow_and_update().clone() {
+                    return settled;
+                }
+                result
+                    .changed()
+                    .await
+                    .map_err(|_| AgentError::SubmissionUnresolved)?;
             }
-            self.result
-                .changed()
-                .await
-                .map_err(|_| AgentError::SubmissionUnresolved)?;
-        }
+        })
+        .await
     }
 }
 
@@ -393,6 +405,10 @@ impl Agent {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn enqueue(
         &self,
         input: ExecutionRequest,
@@ -406,6 +422,10 @@ impl Agent {
     /// of ordinary queued inputs. Steering inputs preserve their own FIFO order.
     /// This explicit boundary operation does not interrupt or inject into a turn.
     /// WorkStatus and failure guarantees are the same as [`Self::enqueue`].
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn enqueue_steering(
         &self,
         input: ExecutionRequest,
@@ -417,16 +437,25 @@ impl Agent {
 
     /// Copy pending IDs in dispatch order under the scheduler's admission lock.
     /// Running/injected/removed inputs are excluded; the copy grants no authority.
+    ///
+    /// Waiting for the scheduler lock registers the polling task's `Waker`
+    /// with it. A panic from that waker when another task releases the lock
+    /// is logged and does not fail that task. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn queued_ids(&self) -> Vec<ExecutionId> {
-        self.inner
-            .scheduler
-            .lock()
-            .await
-            .queue
-            .pending()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
+        let waiter = CallerWaiter::QueuedIds(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, async {
+            self.inner
+                .scheduler
+                .lock()
+                .await
+                .queue
+                .pending()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .await
     }
     /// Atomically replace the complete pending order requested by verified `actor`.
     /// Steering retains priority; identities, requests, receipts and kinds remain
@@ -464,44 +493,51 @@ impl Agent {
     /// }
     /// # Ok(()) }
     /// ```
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn reorder_queued(
         &self,
         order: Vec<ExecutionId>,
         actor: ActionContext,
     ) -> Result<QueueReorder, AgentError> {
         let agent = self.clone();
-        tokio::spawn(async move {
-            // Reorders serialize with each other while the scheduler remains
-            // available to dispatch, cancellation, and close during audit I/O.
-            let _reorder = agent.inner.reorder.lock().await;
-            let change = match QueueOrderChange::new(
-                agent.inner.scheduler.lock().await.queue.pending(),
-                order.clone(),
-            ) {
-                Ok(change) => change,
-                Err(QueueOrderError::QueueChanged) => return Ok(QueueReorder::QueueChanged),
-                Err(QueueOrderError::PriorityConflict) => {
-                    return Ok(QueueReorder::PriorityConflict)
+        let waiter = CallerWaiter::QueueReorder(self.inner.manager.id().clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move {
+                // Reorders serialize with each other while the scheduler remains
+                // available to dispatch, cancellation, and close during audit I/O.
+                let _reorder = agent.inner.reorder.lock().await;
+                let change = match QueueOrderChange::new(
+                    agent.inner.scheduler.lock().await.queue.pending(),
+                    order.clone(),
+                ) {
+                    Ok(change) => change,
+                    Err(QueueOrderError::QueueChanged) => return Ok(QueueReorder::QueueChanged),
+                    Err(QueueOrderError::PriorityConflict) => {
+                        return Ok(QueueReorder::PriorityConflict)
+                    }
+                    Err(error) => {
+                        return Err(AgentError::InvalidInput(format!(
+                            "invalid queue order: {error:?}"
+                        )))
+                    }
+                };
+                let unchanged = change.is_unchanged();
+                if !unchanged {
+                    agent
+                        .inner
+                        .manager
+                        .check_queue_reorder_capacity()
+                        .await
+                        .map_err(AgentError::Storage)?;
                 }
-                Err(error) => {
-                    return Err(AgentError::InvalidInput(format!(
-                        "invalid queue order: {error:?}"
-                    )))
-                }
-            };
-            let unchanged = change.is_unchanged();
-            if !unchanged {
-                agent
-                    .inner
-                    .manager
-                    .check_queue_reorder_capacity()
-                    .await
-                    .map_err(AgentError::Storage)?;
-            }
-            let notice = agent.inner.lifecycle.close_notice();
-            if !unchanged {
-                let mut close = notice.clone();
-                let audit = agent
+                let notice = agent.inner.lifecycle.close_notice();
+                if !unchanged {
+                    let mut close = notice.clone();
+                    let audit = agent
                     .catch_scheduling_panic(async {
                         tokio::select! { biased;
                             _ = close.changed() => Err(AgentError::Closed),
@@ -518,39 +554,41 @@ impl Agent {
                         }
                     })
                     .await;
-                match audit {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => return Err(error),
-                    Err(()) => {
-                        agent.recover_scheduling_panic(None, &notice).await?;
-                        return Err(AgentError::SubmissionUnresolved);
+                    match audit {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => return Err(error),
+                        Err(()) => {
+                            agent.recover_scheduling_panic(None, &notice).await?;
+                            return Err(AgentError::SubmissionUnresolved);
+                        }
                     }
-                }
-                let mut scheduler = agent.inner.scheduler.lock().await;
-                // One budget for the whole phase that holds the scheduler, so
-                // retention and its persistence cannot compose into a longer
-                // block against dispatch, withdrawal, or teardown.
-                let deadline = Instant::now() + QUEUE_REORDER_AUDIT_TIMEOUT;
-                let current = match QueueOrderChange::new(scheduler.queue.pending(), order) {
-                    Ok(current) => current,
-                    Err(QueueOrderError::PriorityConflict) => {
-                        return Ok(QueueReorder::PriorityConflict)
+                    let mut scheduler = agent.inner.scheduler.lock().await;
+                    // One budget for the whole phase that holds the scheduler, so
+                    // retention and its persistence cannot compose into a longer
+                    // block against dispatch, withdrawal, or teardown.
+                    let deadline = Instant::now() + QUEUE_REORDER_AUDIT_TIMEOUT;
+                    let current = match QueueOrderChange::new(scheduler.queue.pending(), order) {
+                        Ok(current) => current,
+                        Err(QueueOrderError::PriorityConflict) => {
+                            return Ok(QueueReorder::PriorityConflict)
+                        }
+                        Err(QueueOrderError::QueueChanged) => {
+                            return Ok(QueueReorder::QueueChanged)
+                        }
+                        Err(error) => {
+                            return Err(AgentError::InvalidInput(format!(
+                                "invalid queue order: {error:?}"
+                            )))
+                        }
+                    };
+                    if current != change {
+                        return Ok(QueueReorder::QueueChanged);
                     }
-                    Err(QueueOrderError::QueueChanged) => return Ok(QueueReorder::QueueChanged),
-                    Err(error) => {
-                        return Err(AgentError::InvalidInput(format!(
-                            "invalid queue order: {error:?}"
-                        )))
-                    }
-                };
-                if current != change {
-                    return Ok(QueueReorder::QueueChanged);
-                }
-                // Changing the live order and retaining that change are one
-                // transition. Waiting for evidence ownership happens before
-                // either effect, so an interruption here leaves the queue and
-                // its history agreeing on the order dispatch will replay.
-                let retained = agent
+                    // Changing the live order and retaining that change are one
+                    // transition. Waiting for evidence ownership happens before
+                    // either effect, so an interruption here leaves the queue and
+                    // its history agreeing on the order dispatch will replay.
+                    let retained = agent
                     .catch_scheduling_panic(async {
                         let mut close = notice.clone();
                         tokio::select! { biased;
@@ -577,14 +615,41 @@ impl Agent {
                         }
                     })
                     .await;
-                match retained {
-                    Ok(result) => result?,
-                    Err(()) => {
-                        drop(scheduler);
-                        agent.recover_scheduling_panic(None, &notice).await?;
-                        return Err(AgentError::SubmissionUnresolved);
+                    match retained {
+                        Ok(result) => result?,
+                        Err(()) => {
+                            drop(scheduler);
+                            agent.recover_scheduling_panic(None, &notice).await?;
+                            return Err(AgentError::SubmissionUnresolved);
+                        }
                     }
+                    let saved = agent
+                        .catch_scheduling_panic(async {
+                            let mut close = notice.clone();
+                            tokio::select! { biased;
+                                _ = close.changed() => Err(StorageError::Io(
+                                    "queue reorder persistence interrupted by close".into(),
+                                )),
+                                result = agent.inner.manager.flush_observed() => result,
+                                _ = sleep_until(deadline) => Err(StorageError::Io(
+                                    "queue reorder persistence timed out".into(),
+                                )),
+                            }
+                        })
+                        .await;
+                    return match saved {
+                        Ok(result) => {
+                            result.map_err(AgentError::Storage)?;
+                            Ok(QueueReorder::Applied)
+                        }
+                        Err(()) => {
+                            drop(scheduler);
+                            agent.recover_scheduling_panic(None, &notice).await?;
+                            Err(AgentError::SubmissionUnresolved)
+                        }
+                    };
                 }
+                let scheduler = agent.inner.scheduler.lock().await;
                 let saved = agent
                     .catch_scheduling_panic(async {
                         let mut close = notice.clone();
@@ -593,51 +658,25 @@ impl Agent {
                                 "queue reorder persistence interrupted by close".into(),
                             )),
                             result = agent.inner.manager.flush_observed() => result,
-                            _ = sleep_until(deadline) => Err(StorageError::Io(
+                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
                                 "queue reorder persistence timed out".into(),
                             )),
                         }
                     })
                     .await;
-                return match saved {
+                match saved {
                     Ok(result) => {
                         result.map_err(AgentError::Storage)?;
-                        Ok(QueueReorder::Applied)
+                        Ok(QueueReorder::Unchanged)
                     }
                     Err(()) => {
                         drop(scheduler);
                         agent.recover_scheduling_panic(None, &notice).await?;
                         Err(AgentError::SubmissionUnresolved)
                     }
-                };
-            }
-            let scheduler = agent.inner.scheduler.lock().await;
-            let saved = agent
-                .catch_scheduling_panic(async {
-                    let mut close = notice.clone();
-                    tokio::select! { biased;
-                        _ = close.changed() => Err(StorageError::Io(
-                            "queue reorder persistence interrupted by close".into(),
-                        )),
-                        result = agent.inner.manager.flush_observed() => result,
-                        _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
-                            "queue reorder persistence timed out".into(),
-                        )),
-                    }
-                })
-                .await;
-            match saved {
-                Ok(result) => {
-                    result.map_err(AgentError::Storage)?;
-                    Ok(QueueReorder::Unchanged)
                 }
-                Err(()) => {
-                    drop(scheduler);
-                    agent.recover_scheduling_panic(None, &notice).await?;
-                    Err(AgentError::SubmissionUnresolved)
-                }
-            }
-        })
+            }),
+        )
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
     }
@@ -648,75 +687,86 @@ impl Agent {
     /// Already injected/dispatched inputs return NotPending and cannot be unsent.
     /// Storage failure still removes the input and reports the failed audit write.
     /// Once polled, removal is supervised even if the caller stops waiting.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn remove_queued(
         &self,
         id: ExecutionId,
         actor: ActionContext,
     ) -> Result<QueueRemoval, AgentError> {
         let agent = self.clone();
-        tokio::spawn(async move {
-            let mut scheduler = agent.inner.scheduler.lock().await;
-            let Some(_) = scheduler.queue.remove(&id) else {
-                return Ok(QueueRemoval::NotPending);
-            };
-            let pending = scheduler.pending.remove(&id).expect("admitted queue input");
-            let close_notice = agent.inner.lifecycle.close_notice();
-            // The removed input still owns its receipt and work permit while
-            // persistence runs. A save panic must not drop that ownership.
-            let saved = agent
-                .catch_scheduling_panic(async {
-                    let saved = agent
-                        .inner
-                        .manager
-                        .record_scheduling_with_queue(
-                            pending.index,
-                            event(
-                                pending.kind,
-                                pending.target.clone(),
-                                Some(InvocationStage::Queued),
-                                InvocationStage::Cancelled,
-                                SchedulingCause::Withdrawn,
-                                Some(actor),
+        let waiter = CallerWaiter::QueueRemoval(id.clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move {
+                let mut scheduler = agent.inner.scheduler.lock().await;
+                let Some(_) = scheduler.queue.remove(&id) else {
+                    return Ok(QueueRemoval::NotPending);
+                };
+                let pending = scheduler.pending.remove(&id).expect("admitted queue input");
+                let close_notice = agent.inner.lifecycle.close_notice();
+                // The removed input still owns its receipt and work permit while
+                // persistence runs. A save panic must not drop that ownership.
+                let saved = agent
+                    .catch_scheduling_panic(async {
+                        let saved = agent
+                            .inner
+                            .manager
+                            .record_scheduling_with_queue(
+                                pending.index,
+                                event(
+                                    pending.kind,
+                                    pending.target.clone(),
+                                    Some(InvocationStage::Queued),
+                                    InvocationStage::Cancelled,
+                                    SchedulingCause::Withdrawn,
+                                    Some(actor),
+                                ),
+                                Some(QueueMutation::Removed {
+                                    id: id.clone(),
+                                    cause: QueueRemovalCause::Withdrawn,
+                                }),
+                            )
+                            .await;
+                        match saved {
+                            Ok(()) => None,
+                            Err(error) => Some(
+                                agent
+                                    .inner
+                                    .manager
+                                    .settle_submission(
+                                        pending.index,
+                                        Err(AgentError::Storage(error)),
+                                    )
+                                    .await
+                                    .expect_err("failed withdrawal evidence"),
                             ),
-                            Some(QueueMutation::Removed {
-                                id: id.clone(),
-                                cause: QueueRemovalCause::Withdrawn,
-                            }),
-                        )
-                        .await;
-                    match saved {
-                        Ok(()) => None,
-                        Err(error) => Some(
+                        }
+                    })
+                    .await;
+                let failure = match saved {
+                    Ok(failure) => failure,
+                    Err(()) => {
+                        // Recovery also owns other queued inputs. Release this lock
+                        // before joining cleanup and retaining the withdrawal error.
+                        drop(scheduler);
+                        Some(
                             agent
-                                .inner
-                                .manager
-                                .settle_submission(pending.index, Err(AgentError::Storage(error)))
+                                .recover_scheduling_panic(Some(&id), &close_notice)
                                 .await
-                                .expect_err("failed withdrawal evidence"),
-                        ),
+                                .expect_err("withdrawal save panicked"),
+                        )
                     }
-                })
-                .await;
-            let failure = match saved {
-                Ok(failure) => failure,
-                Err(()) => {
-                    // Recovery also owns other queued inputs. Release this lock
-                    // before joining cleanup and retaining the withdrawal error.
-                    drop(scheduler);
-                    Some(
-                        agent
-                            .recover_scheduling_panic(Some(&id), &close_notice)
-                            .await
-                            .expect_err("withdrawal save panicked"),
-                    )
+                };
+                pending.publish(Err(failure.clone().unwrap_or(AgentError::Closed)));
+                if let Some(error) = failure {
+                    return Err(error);
                 }
-            };
-            pending.publish(Err(failure.clone().unwrap_or(AgentError::Closed)));
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            Ok(QueueRemoval::Removed)
-        })
+                Ok(QueueRemoval::Removed)
+            }),
+        )
         .await
         .map_err(|_| AgentError::Closed)?
     }
@@ -728,9 +778,13 @@ impl Agent {
         kind: InvocationKind,
     ) -> Result<QueueAdmission, AgentError> {
         let agent = self.clone();
-        tokio::spawn(async move { agent.accept_work(input, actor, kind).await })
-            .await
-            .map_err(|_| AgentError::SubmissionUnresolved)?
+        let waiter = CallerWaiter::Admission(input.execution_id.clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move { agent.accept_work(input, actor, kind).await }),
+        )
+        .await
+        .map_err(|_| AgentError::SubmissionUnresolved)?
     }
 
     async fn accept_work(
@@ -1310,39 +1364,47 @@ impl Agent {
     /// Identical retries recover the original injection acknowledgement, queued
     /// receipt, or error; they never inject a second time. Conflicting retries return
     /// SubmissionConflict; unresolved restored delivery returns SubmissionUnresolved.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn steer(
         &self,
         input: ExecutionRequest,
         actor: ActionContext,
     ) -> Result<SteeringDelivery, AgentError> {
         let agent = self.clone();
-        tokio::spawn(async move {
-            let id = input.execution_id.clone();
-            let close_notice = agent.inner.lifecycle.close_notice();
-            let mut work_owner = None;
-            match agent
-                .catch_scheduling_panic(agent.deliver_steering(input, actor, &mut work_owner))
-                .await
-            {
-                Ok(delivery) => delivery,
-                Err(()) => {
-                    let error = agent
-                        .recover_scheduling_panic(Some(&id), &close_notice)
-                        .await
-                        .expect_err("panic recovery retains failure");
-                    if agent.inner.manager.scheduling_metadata(&id).await.is_some() {
-                        agent
-                            .inner
-                            .scheduler
-                            .lock()
+        let waiter = CallerWaiter::Steering(input.execution_id.clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move {
+                let id = input.execution_id.clone();
+                let close_notice = agent.inner.lifecycle.close_notice();
+                let mut work_owner = None;
+                match agent
+                    .catch_scheduling_panic(agent.deliver_steering(input, actor, &mut work_owner))
+                    .await
+                {
+                    Ok(delivery) => delivery,
+                    Err(()) => {
+                        let error = agent
+                            .recover_scheduling_panic(Some(&id), &close_notice)
                             .await
-                            .receipts
-                            .insert(id, SubmissionReceipt::Steering(Err(error.clone())));
+                            .expect_err("panic recovery retains failure");
+                        if agent.inner.manager.scheduling_metadata(&id).await.is_some() {
+                            agent
+                                .inner
+                                .scheduler
+                                .lock()
+                                .await
+                                .receipts
+                                .insert(id, SubmissionReceipt::Steering(Err(error.clone())));
+                        }
+                        Err(error)
                     }
-                    Err(error)
                 }
-            }
-        })
+            }),
+        )
         .await
         .map_err(|_| AgentError::Closed)?
     }
@@ -2179,31 +2241,35 @@ impl Agent {
         actor: ActionContext,
     ) -> Result<CloseOutcome, AgentError> {
         let agent = self.clone();
-        tokio::spawn(async move {
-            let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor));
-            let (cause, actor) = match &attempt.request {
-                SessionCloseRequest::Explicit(actor) => {
-                    (SchedulingCause::SessionClosed, Some(actor.clone()))
+        let waiter = CallerWaiter::Close(self.inner.manager.id().clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move {
+                let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor));
+                let (cause, actor) = match &attempt.request {
+                    SessionCloseRequest::Explicit(actor) => {
+                        (SchedulingCause::SessionClosed, Some(actor.clone()))
+                    }
+                    _ => (SchedulingCause::RunnerStopped, None),
+                };
+                let mut scheduler = agent.inner.scheduler.lock().await;
+                let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
+                drop(scheduler);
+                let _invocation = agent.inner.invocation.lock().await;
+                agent.inner.manager.await_admission_writes().await;
+                agent.inner.lifecycle.wait_for_work().await;
+                let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
+                let cleanup = cleanup.into_result();
+                match saved {
+                    Ok(()) => cleanup,
+                    Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
+                        error,
+                        cleanup_result: Box::new(cleanup),
+                    }),
+                    Err(error) => Err(error),
                 }
-                _ => (SchedulingCause::RunnerStopped, None),
-            };
-            let mut scheduler = agent.inner.scheduler.lock().await;
-            let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
-            drop(scheduler);
-            let _invocation = agent.inner.invocation.lock().await;
-            agent.inner.manager.await_admission_writes().await;
-            agent.inner.lifecycle.wait_for_work().await;
-            let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
-            let cleanup = cleanup.into_result();
-            match saved {
-                Ok(()) => cleanup,
-                Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
-                    error,
-                    cleanup_result: Box::new(cleanup),
-                }),
-                Err(error) => Err(error),
-            }
-        })
+            }),
+        )
         .await
         .map_err(|_| AgentError::Closed)?
     }

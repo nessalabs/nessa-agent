@@ -2355,3 +2355,357 @@ describe("MCP Apps (#384)", () => {
     await expect(source.connected()).rejects.toMatchObject({ reason: "unavailable" })
   })
 })
+
+describe("an app's review is read after its turn ended (#436)", () => {
+  // The rows of the state table on #436: P1–P9.
+  const ended = { ...running(), status: "completed" as const }
+  const appReview = permission({
+    permissionId: "app-1",
+    title: "An app asks to run app_delete_row on mcptest",
+    toolName: "app_delete_row",
+    origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+    options: [
+      { id: "allow", label: "Allow", effect: "allow" },
+      { id: "deny", label: "Deny", effect: "deny" },
+    ],
+  })
+
+  /** A conversation whose turn has ended, read once and followed: no list row will move again. */
+  async function idle(ids: readonly string[] = ["a"], setup = started()) {
+    for (const id of ids) {
+      setup.gateway.rows.set(id, row(id))
+      setup.gateway.views.set(id, view(id, { revision: "1", messages: [ended] }))
+    }
+    await setup.source.index()
+    for (const id of ids) await setup.source.transcript(id)
+    setup.follow()
+    const readsOf = (id: string) =>
+      setup.gateway.calls.filter((call) => call.method === "read" && call.args[0] === id)
+        .length
+    return { ...setup, readsOf }
+  }
+
+  it("P1: with no app call, an idle conversation whose row is unchanged is not read again", async () => {
+    const { readsOf, advance } = await idle()
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(1)
+  })
+
+  it("P2, P3: while an app's call is unanswered its conversation is read each round, and the review it opens is shown as the app's", async () => {
+    const { gateway, source, updates, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs)
+    // P2: read, though the row did not move.
+    expect(readsOf("a")).toBe(2)
+    // P3: the gateway opens the app's review; the next round reads it.
+    gateway.views.set(
+      "a",
+      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+    )
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(3)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({
+        sessionId: "a",
+        approval: {
+          id: approvalId(appReview),
+          command: "app_delete_row {}",
+          reason: "An app asks to run app_delete_row on mcptest",
+          origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+        },
+      }),
+    })
+    expect(updates).toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "a", status: "needs-you" }),
+    })
+    answer.resolve("answered")
+    // The call settles as the app's own call did.
+    expect(await call).toBe("answered")
+  })
+
+  it("P4: the person's answer to an app's review goes to the gateway by the option's effect, then the conversation is read", async () => {
+    const { gateway, source, updates, advance } = await idle()
+    const answer = deferred<string>()
+    void source.appCall("a", () => answer.promise)
+    gateway.views.set(
+      "a",
+      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+    )
+    await advance(timing.pollMs)
+    gateway.once("answer", async (normal) => {
+      gateway.views.set("a", view("a", { revision: "3", messages: [ended] }))
+      answer.resolve("allowed")
+      return normal()
+    })
+    await source.approve("a", approvalId(appReview), "once", "person")
+    await flush()
+    expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
+      "a",
+      "turn",
+      "app-1",
+      "allow",
+    ])
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ approval: null, revision: 3 }),
+    })
+  })
+
+  it("P5: a call that settles elsewhere is read until a read shows its review gone, then no more", async () => {
+    const { gateway, source, updates, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    gateway.views.set(
+      "a",
+      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+    )
+    await advance(timing.pollMs)
+    // It expired on the gateway: the call is answered, and the review is gone from the view.
+    gateway.views.set("a", view("a", { revision: "3", messages: [ended] }))
+    answer.reject(new Error("expired"))
+    await expect(call).rejects.toThrow("expired")
+    const before = readsOf("a")
+    await advance(timing.pollMs)
+    // The last read still showed the review, so this round reads, and finds it gone.
+    expect(readsOf("a")).toBe(before + 1)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ approval: null, revision: 3 }),
+    })
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(before + 1)
+  })
+
+  it("P6: with two calls unanswered, one settling leaves the conversation read until the other does", async () => {
+    const { source, readsOf, advance } = await idle()
+    const first = deferred<string>()
+    const second = deferred<string>()
+    const one = source.appCall("a", () => first.promise)
+    const two = source.appCall("a", () => second.promise)
+    first.resolve("one")
+    await one
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(3)
+    second.resolve("two")
+    await two
+    const before = readsOf("a")
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(before)
+  })
+
+  it("P7: a call that is refused, or throws before it is sent, stops the reads as an answer does, and is passed on as it was", async () => {
+    const { source, readsOf, advance } = await idle()
+    const refusal = new Error("mcp_tool_not_for_app")
+    await expect(source.appCall("a", () => Promise.reject(refusal))).rejects.toBe(refusal)
+    const thrown = new TypeError("past the bounds")
+    await expect(
+      source.appCall("a", () => {
+        throw thrown
+      }),
+    ).rejects.toBe(thrown)
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(1)
+  })
+
+  it("P8: a call in one conversation reads that conversation alone", async () => {
+    const { source, readsOf, advance } = await idle(["a", "b"])
+    const answer = deferred<string>()
+    void source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(3)
+    expect(readsOf("b")).toBe(1)
+    answer.resolve("done")
+  })
+
+  it("P9: a conversation taken out is not read for an app's call, which still goes to the gateway", async () => {
+    const { gateway, source, readsOf, advance } = await idle()
+    gateway.rows.delete("a")
+    await source.index()
+    const asked = vi.fn(() => Promise.resolve("answered"))
+    await expect(source.appCall("a", asked)).resolves.toBe("answered")
+    const hanging = deferred<string>()
+    void source.appCall("a", () => hanging.promise)
+    await advance(timing.pollMs * 3)
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect(readsOf("a")).toBe(1)
+    hanging.resolve("done")
+  })
+
+  it.each(["conversation_state_unreadable", "conversation_deleted"])(
+    "P9: a conversation the gateway will not show again (%s) is not read for an app's call, before or after it",
+    async (code) => {
+      const { gateway, source, readsOf, advance } = await idle()
+      const first = deferred<string>()
+      const one = source.appCall("a", () => first.promise)
+      gateway.once("read", async () => {
+        throw rpcCode(code)
+      })
+      await advance(timing.pollMs)
+      const refused = readsOf("a")
+      expect(refused).toBe(2)
+      await advance(timing.pollMs * 3)
+      expect(readsOf("a")).toBe(refused)
+      first.resolve("one")
+      await one
+      // A later call does not bring it back into the rounds.
+      const second = deferred<string>()
+      void source.appCall("a", () => second.promise)
+      await advance(timing.pollMs * 3)
+      expect(readsOf("a")).toBe(refused)
+      second.resolve("two")
+    },
+  )
+
+  it("P2: a conversation no list has named yet is read each round while an app's call waits, and not at rest", async () => {
+    const { gateway, source, follow, advance } = started()
+    // Past an incomplete list that does not name it (S7).
+    gateway.complete = false
+    gateway.views.set("a", view("a", { revision: "1", messages: [ended] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    const readsOf = () =>
+      gateway.calls.filter((call) => call.method === "read" && call.args[0] === "a")
+        .length
+    await advance(timing.pollMs * 2)
+    expect(readsOf()).toBe(1)
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs * 2)
+    expect(readsOf()).toBe(3)
+    answer.resolve("done")
+    await call
+    await advance(timing.pollMs * 2)
+    expect(readsOf()).toBe(3)
+  })
+
+  it("P2: a call begun while a round's list is still on its way is read in that round", async () => {
+    const { gateway, source, readsOf, advance } = await idle()
+    const list = deferred<void>()
+    gateway.once("list", async (normal) => {
+      await list.promise
+      return normal()
+    })
+    await advance(timing.pollMs)
+    const answer = deferred<string>()
+    void source.appCall("a", () => answer.promise)
+    list.resolve()
+    await flush()
+    expect(readsOf("a")).toBe(2)
+    answer.resolve("done")
+  })
+
+  it("P2 (reconnect): a call that spans a reconnect keeps its conversation read each round, and not at rest once it settles", async () => {
+    const { gateway, source, updates, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(2)
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    gateway.setState({ status: "connected" })
+    expect(updates).toContainEqual({ kind: "resync" })
+    // The reconnect does not end the call: it is still read each round.
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(4)
+    answer.resolve("done")
+    await call
+    // The last read showed no review: at rest again (P1).
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(4)
+  })
+
+  it("P2 (new client): a call that spans a close for good keeps its conversation read each round on the new client, and not at rest once it settles", async () => {
+    const gateway = fakeGateway()
+    const next = fakeGateway()
+    next.rows.set("a", row("a"))
+    next.views.set("a", view("a", { revision: "1", messages: [ended] }))
+    let attempts = 0
+    const { source, updates, advance } = await idle(
+      ["a"],
+      started(gateway, () =>
+        Promise.resolve(++attempts === 1 ? gateway.client : next.client),
+      ),
+    )
+    const readsOnNext = () =>
+      next.calls.filter((call) => call.method === "read" && call.args[0] === "a").length
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs)
+    gateway.setState({ status: "closed", error: new Error("gone") })
+    // Making the new client takes more than one round's microtasks (C3).
+    await source.index()
+    expect(attempts).toBe(2)
+    expect(updates).toContainEqual({ kind: "resync" })
+    // The new client does not end the call: it is still read each round.
+    await advance(timing.pollMs * 2)
+    expect(readsOnNext()).toBe(2)
+    answer.resolve("done")
+    await call
+    // The last read showed no review: at rest again (P1).
+    await advance(timing.pollMs * 3)
+    expect(readsOnNext()).toBe(2)
+  })
+
+  it("P2 (read lost): a round's read that the reconnect makes fail does not drop the call; its conversation is read on the next rounds", async () => {
+    const { gateway, source, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    const held = deferred<never>()
+    gateway.once("read", () => held.promise)
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(2)
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    held.reject(new NessaConnectionClosedError(1006, ""))
+    gateway.setState({ status: "connected" })
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(4)
+    answer.resolve("done")
+    await call
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(4)
+  })
+
+  it("P2 (settles while reconnecting): a call that settles while the client reconnects is read once more, which shows the review gone, then at rest", async () => {
+    const { gateway, source, updates, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    gateway.views.set(
+      "a",
+      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+    )
+    await advance(timing.pollMs)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ approval: expect.anything() }),
+    })
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    gateway.views.set("a", view("a", { revision: "3", messages: [ended] }))
+    answer.resolve("done")
+    await call
+    gateway.setState({ status: "connected" })
+    const before = readsOf("a")
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(before + 1)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ approval: null, revision: 3 }),
+    })
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(before + 1)
+  })
+})

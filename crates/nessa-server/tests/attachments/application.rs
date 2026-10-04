@@ -1,13 +1,21 @@
 //! The attachment service over doubles: tickets, uploads, normalization,
 //! release, and what reaches the audit port when each of them fails.
 use super::*;
-use crate::attachments::domain::{Caller, HoldState, TicketLimits, TICKET_LIFETIME_MS};
+use crate::attachments::application::{
+    ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
+};
+use crate::attachments::domain::{
+    Attachment, Caller, Hold, HoldState, MediaType, RetiredFrom, TicketLifetime, TicketLimits,
+    UploadTicket, TICKET_LIFETIME_MS,
+};
+use crate::attachments::infrastructure::DurableAttachmentAudit;
 use crate::attachments_test_support::{
     attachment, begin_request, caller, conversation, digest_of, organization, principal,
     ChannelBody, CountingSecrets, FixedOwnership, Fixture, ManualClock, MemoryStore,
     RecordingAudit, StubNormalizer, CONVERSATION, NOW_MS, OTHER_CONVERSATION,
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use serde_json::Value;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -1111,8 +1119,13 @@ async fn a_caller_the_conversation_context_accepts_is_one_this_context_can_recor
                 assert_eq!(hold.uploaded_by().principal_id(), &principal("owner"));
                 release
             }
-            AttachmentAuditRecord::BlobRemoved { hold, release } => {
-                assert_eq!(hold.stored().digest(), digest_of(BYTES));
+            AttachmentAuditRecord::BlobRemoved { removed } => {
+                assert_eq!(removed.retirements().len(), 1);
+                let retired = &removed.retirements()[0];
+                assert_eq!(retired.hold().stored().digest(), digest_of(BYTES));
+                let RetirementEvidence::Release(release) = &retired.evidence() else {
+                    panic!("expected explicit release")
+                };
                 release
             }
             other => panic!("unexpected {other:?}"),
@@ -1124,7 +1137,9 @@ async fn a_caller_the_conversation_context_accepts_is_one_this_context_can_recor
         assert_eq!(release.requested_at_ms, NOW_MS + 9);
     }
 
-    // Releasing nothing is not a failure and records nothing.
+    // This MemoryStore removes completed records and returns an empty report.
+    // The real store retains retirement metadata; its retry evidence is covered
+    // by the actual durable-audit fixtures in artifacts.rs.
     fixture
         .service
         .release(release_request(CONVERSATION))
@@ -1367,8 +1382,7 @@ async fn a_hold_that_cannot_be_made_usable_is_taken_back_and_said_to_be() {
                 AttachmentAuditRecord::HoldCreated { hold: created },
                 AttachmentAuditRecord::HoldReverted {
                     hold: reverted,
-                    cause: RevertCause::ConfirmationFailed
-                }
+                    cause: RevertCause::ConfirmationFailed, was: RetiredFrom::Pending, }
             ] if created == reverted
         ),
         "{records:?}"
@@ -1811,4 +1825,398 @@ async fn an_upload_finishing_after_its_conversation_was_deleted_keeps_nothing() 
         ),
         "{records:?}"
     );
+}
+
+#[tokio::test]
+async fn a_retired_hold_with_incomplete_blob_cleanup_keeps_the_independent_audit_result() {
+    for refuse_reversal_audit in [false, true] {
+        let fixture = fixture();
+        let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+        fixture.store.confirm_fails.store(true, Ordering::SeqCst);
+        fixture
+            .store
+            .discard_cleanup_incomplete
+            .store(true, Ordering::SeqCst);
+        let door = fixture.audit.hold_after(1, refuse_reversal_audit);
+        let service = fixture.service.clone();
+        let entered = fixture.audit.entered.notified();
+        let upload = tokio::spawn(async move {
+            service
+                .receive(&ticket, None, ChannelBody::of(BYTES, 64))
+                .await
+        });
+        entered.await;
+        door.send(()).unwrap();
+        let evidence = if refuse_reversal_audit {
+            AuditDelivery::Unavailable
+        } else {
+            AuditDelivery::Recorded
+        };
+        assert_eq!(
+            upload.await.unwrap(),
+            Err(UploadError::Rejected {
+                reason: UploadRejection::StorageUnavailable,
+                evidence,
+            })
+        );
+        assert!(fixture.store.held().is_empty());
+        assert_eq!(fixture.store.pending(), 0);
+        assert_eq!(fixture.store.blob_count(), 1);
+        let records = fixture.audit.taken();
+        if refuse_reversal_audit {
+            assert!(matches!(
+                records.as_slice(),
+                [AttachmentAuditRecord::HoldCreated { .. }]
+            ));
+        } else {
+            assert!(
+                matches!(records.as_slice(), [AttachmentAuditRecord::HoldCreated { hold: created }, AttachmentAuditRecord::HoldReverted { hold: reverted, cause: RevertCause::ConfirmationFailed, was: RetiredFrom::Pending, }] if created == reverted)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn pending_and_held_retirements_preserve_independent_cleanup_and_audit_results() {
+    for retired_from in [RetiredFrom::Pending, RetiredFrom::Held] {
+        for cleanup_incomplete in [false, true] {
+            for refuse_reversal_audit in [false, true] {
+                let fixture = fixture();
+                let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+                fixture
+                    .store
+                    .confirm_fails
+                    .store(retired_from == RetiredFrom::Pending, Ordering::SeqCst);
+                fixture
+                    .store
+                    .confirm_reply_fails
+                    .store(retired_from == RetiredFrom::Held, Ordering::SeqCst);
+                fixture
+                    .store
+                    .discard_cleanup_incomplete
+                    .store(cleanup_incomplete, Ordering::SeqCst);
+                let door = fixture.audit.hold_after(1, refuse_reversal_audit);
+                door.send(()).unwrap();
+                let evidence = if refuse_reversal_audit {
+                    AuditDelivery::Unavailable
+                } else {
+                    AuditDelivery::Recorded
+                };
+                assert_eq!(
+                    fixture
+                        .service
+                        .receive(&ticket, None, ChannelBody::of(BYTES, 64))
+                        .await,
+                    Err(UploadError::Rejected {
+                        reason: UploadRejection::StorageUnavailable,
+                        evidence
+                    })
+                );
+                assert!(fixture.store.held().is_empty());
+                assert_eq!(fixture.store.pending(), 0);
+                assert_eq!(fixture.store.blob_count(), usize::from(cleanup_incomplete));
+                assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), 3);
+                let records = fixture.audit.taken();
+                if refuse_reversal_audit {
+                    assert!(matches!(
+                        records.as_slice(),
+                        [AttachmentAuditRecord::HoldCreated { .. }]
+                    ));
+                } else {
+                    assert!(
+                        matches!(records.as_slice(), [AttachmentAuditRecord::HoldCreated { hold: created }, AttachmentAuditRecord::HoldReverted { hold: reverted, cause: RevertCause::ConfirmationFailed, was }] if created == reverted && *was == retired_from),
+                        "{records:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn release_validates_admitted_target_and_cross_entry_agreement_before_hold_audit() {
+    let hold_for = |org: &str, conversation_id: &str, media: &str| {
+        let stored = attachment(BYTES, media);
+        let ticket = UploadTicket::new(
+            organization(org),
+            conversation(conversation_id),
+            stored.clone(),
+            Caller::new(principal("owner"), "panel", "original-upload").unwrap(),
+            TicketLifetime::starting(1_000).unwrap(),
+        );
+        Hold::from_upload(&ticket, stored, 2_000).unwrap()
+    };
+    let original = ReleaseEvidence {
+        cause: ReleaseCause::ConversationDeleted,
+        caller: Caller::new(
+            principal("original-closer"),
+            "original-panel",
+            "original-release",
+        )
+        .unwrap(),
+        requested_at_ms: 3_000,
+    };
+    let retirement = |hold| {
+        RetiredHold::new(
+            hold,
+            RetiredFrom::Held,
+            RetirementEvidence::Release(original.clone()),
+        )
+        .unwrap()
+    };
+    let one = retirement(hold_for("org", CONVERSATION, PDF));
+    let two = retirement(hold_for("org", CONVERSATION, "image/png"));
+    let foreign_org = retirement(hold_for("foreign", CONVERSATION, PDF));
+    let foreign_conversation = retirement(hold_for("org", OTHER_CONVERSATION, PDF));
+    let changed = RetiredHold::new(
+        one.hold().clone(),
+        RetiredFrom::Pending,
+        RetirementEvidence::Release(original.clone()),
+    )
+    .unwrap();
+    let removal = |entries| RemovedBlob::new(entries).unwrap();
+    let invalid = [
+        ReleaseReport {
+            retired: vec![foreign_org.clone()],
+            removed: vec![],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![foreign_conversation.clone()],
+            removed: vec![],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![],
+            removed: vec![removal(vec![foreign_org])],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![one.clone()],
+            removed: vec![removal(vec![foreign_conversation])],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![one.clone(), one.clone()],
+            removed: vec![],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![one.clone()],
+            removed: vec![removal(vec![one.clone()]), removal(vec![one.clone()])],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![one.clone()],
+            removed: vec![removal(vec![changed])],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![one.clone(), two.clone()],
+            removed: vec![removal(vec![one.clone()])],
+            failures: 0,
+        },
+        ReleaseReport {
+            retired: vec![one.clone(), two.clone()],
+            removed: vec![removal(vec![one.clone(), one.clone()])],
+            failures: 0,
+        },
+    ];
+    for (case, report) in invalid.into_iter().enumerate() {
+        let fixture = fixture();
+        fixture.ticket(CONVERSATION, BYTES, PDF).await;
+        *fixture.store.release_report.lock().unwrap() = Some(report);
+        assert_eq!(
+            fixture.service.release(release_request(CONVERSATION)).await,
+            Err(ReleaseError::Incomplete {
+                storage_failures: 1,
+                audit_failures: 0
+            }),
+            "case {case}"
+        );
+        let records = fixture.audit.taken();
+        assert!(
+            matches!(
+                records.as_slice(),
+                [AttachmentAuditRecord::TicketWithdrawn { .. }]
+            ),
+            "case {case}: {records:?}"
+        );
+    }
+    for reverse in [false, true] {
+        let fixture = fixture();
+        let entries = if reverse {
+            vec![two.clone(), one.clone()]
+        } else {
+            vec![one.clone(), two.clone()]
+        };
+        *fixture.store.release_report.lock().unwrap() = Some(ReleaseReport {
+            retired: entries.clone(),
+            removed: vec![removal(entries)],
+            failures: 0,
+        });
+        fixture
+            .service
+            .release(release_request(CONVERSATION))
+            .await
+            .unwrap();
+        let records = fixture.audit.taken();
+        assert_eq!(records.len(), 3);
+        for record in &records {
+            match record {
+                AttachmentAuditRecord::HoldReleased { release, .. } => {
+                    assert_eq!(release, &original)
+                }
+                AttachmentAuditRecord::BlobRemoved { removed } => {
+                    assert_eq!(removed.retirements().len(), 2)
+                }
+                _ => panic!("unexpected audit {record:?}"),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn release_report_stored_lengths_agree_before_actual_durable_audit() {
+    let retired = |media: &str, size, normalized| {
+        let stored =
+            Attachment::new(digest_of(b"bytes"), MediaType::parse(media).unwrap(), size).unwrap();
+        let uploaded = if normalized {
+            attachment(
+                if media == "image/png" {
+                    b"a different original image length"
+                } else {
+                    b"another image"
+                },
+                "image/png",
+            )
+        } else {
+            stored.clone()
+        };
+        let ticket = UploadTicket::new(
+            organization("org"),
+            conversation(CONVERSATION),
+            uploaded,
+            Caller::new(principal("uploader"), "panel", "upload-1").unwrap(),
+            TicketLifetime::starting(1_000).unwrap(),
+        );
+        RetiredHold::new(
+            Hold::from_upload(&ticket, stored, 2_000).unwrap(),
+            RetiredFrom::Held,
+            RetirementEvidence::Release(ReleaseEvidence {
+                cause: ReleaseCause::ConversationDeleted,
+                caller: Caller::new(principal("original-closer"), "panel", "original-release")
+                    .unwrap(),
+                requested_at_ms: 3_000,
+            }),
+        )
+        .unwrap()
+    };
+    for reverse in [false, true] {
+        let first = retired(PDF, 5, false);
+        let second = retired("text/plain", 6, false);
+        let entries = if reverse {
+            vec![second, first]
+        } else {
+            vec![first, second]
+        };
+        assert!(
+            RemovedBlob::new(entries.clone()).is_none(),
+            "contradictory content length cannot construct a removal group"
+        );
+        for partial_removal in [false, true] {
+            let fixture = fixture();
+            let audit = tempfile::tempdir().unwrap();
+            let audit_path = audit.path().join("records");
+            let service = AttachmentService::new(
+                AttachmentDependencies {
+                    store: fixture.store.clone(),
+                    audit: Arc::new(
+                        DurableAttachmentAudit::new(audit_path.clone(), fixture.clock.clone())
+                            .unwrap(),
+                    ),
+                    ownership: fixture.ownership.clone(),
+                    secrets: fixture.secrets.clone(),
+                    normalizer: fixture.normalizer.clone(),
+                    clock: fixture.clock.clone(),
+                },
+                AttachmentLimits::default(),
+            );
+            *fixture.store.release_report.lock().unwrap() = Some(ReleaseReport {
+                retired: entries.clone(),
+                removed: if partial_removal {
+                    vec![RemovedBlob::new(vec![entries[0].clone()]).unwrap()]
+                } else {
+                    vec![]
+                },
+                failures: 0,
+            });
+            assert_eq!(
+                service.release(release_request(CONVERSATION)).await,
+                Err(ReleaseError::Incomplete {
+                    storage_failures: 1,
+                    audit_failures: 0
+                })
+            );
+            assert_eq!(
+                std::fs::read_dir(&audit_path).unwrap().count(),
+                0,
+                "false content must not become durable audit"
+            );
+        }
+        // Same stored content with different image declarations and uploaded
+        // lengths is legitimate normalization, not a content contradiction.
+        let first = retired("image/png", 5, true);
+        let second = retired("image/jpeg", 5, true);
+        assert_ne!(first.hold().uploaded().size(), first.hold().stored().size());
+        let entries = if reverse {
+            vec![second, first]
+        } else {
+            vec![first, second]
+        };
+        for removed in [false, true] {
+            let fixture = fixture();
+            let audit = tempfile::tempdir().unwrap();
+            let audit_path = audit.path().join("records");
+            let service = AttachmentService::new(
+                AttachmentDependencies {
+                    store: fixture.store.clone(),
+                    audit: Arc::new(
+                        DurableAttachmentAudit::new(audit_path.clone(), fixture.clock.clone())
+                            .unwrap(),
+                    ),
+                    ownership: fixture.ownership.clone(),
+                    secrets: fixture.secrets.clone(),
+                    normalizer: fixture.normalizer.clone(),
+                    clock: fixture.clock.clone(),
+                },
+                AttachmentLimits::default(),
+            );
+            *fixture.store.release_report.lock().unwrap() = Some(ReleaseReport {
+                retired: entries.clone(),
+                removed: if removed {
+                    vec![RemovedBlob::new(entries.clone()).unwrap()]
+                } else {
+                    vec![]
+                },
+                failures: 0,
+            });
+            service
+                .release(release_request(CONVERSATION))
+                .await
+                .unwrap();
+            let records: Vec<Value> = std::fs::read_dir(&audit_path)
+                .unwrap()
+                .map(|entry| {
+                    serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+                })
+                .collect();
+            assert_eq!(records.len(), if removed { 3 } else { 2 });
+            for record in &records {
+                if record["kind"] == "attachment_hold_released" {
+                    assert_eq!(record["correlationId"], "original-release");
+                }
+            }
+        }
+    }
 }

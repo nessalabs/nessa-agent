@@ -1,7 +1,10 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
-use nessa_sdk::application::agent_execution::sessions::{
-    SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+use nessa_sdk::application::agent_execution::{
+    hooks::{AfterInvocation, AfterInvocationEvent},
+    sessions::{
+        SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    },
 };
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
@@ -9,6 +12,7 @@ use std::{
     pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll},
+    time::Instant,
 };
 use tempfile::tempdir;
 use tokio::sync::Notify;
@@ -1212,6 +1216,12 @@ async fn records_restore_queue_changes_published_during_gated_open() {
     );
 }
 
+/// Hang bound for the original's completion signal in the restart test.
+const ORIGINAL_COMPLETION_HANG_BOUND: Duration = Duration::from_secs(60);
+/// Bound on the committed-snapshot read reported after a hang. A save that
+/// still owns the evidence lock delays the read behind its own commits.
+const DIAGNOSTIC_SNAPSHOT_BOUND: Duration = Duration::from_secs(5);
+
 #[tokio::test]
 async fn child_process_recovers_original_receipt_without_dispatching_again() {
     let root = tempdir().unwrap();
@@ -1234,23 +1244,77 @@ async fn child_process_recovers_original_receipt_without_dispatching_again() {
     )
     .await
     .unwrap();
-    let lost_reply = agent.enqueue(request("original"), actor()).await.unwrap();
-    drop(lost_reply);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let snapshot = agent.session_manager().snapshot().await.unwrap();
-            if snapshot.invocations[0].result == Some(Ok(ExecutionOutcome::Completed)) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    let input = request("original");
+    let original_id = input.execution_id.clone();
+    let observed_id = original_id.clone();
+    let started = Instant::now();
+    let (completed, observation) = oneshot::channel();
+    let completed = Mutex::new(Some(completed));
+    agent.add_hook(AfterInvocation, move |event: &AfterInvocationEvent<'_>| {
+        if event.context.request.execution_id != observed_id {
+            return Ok(());
         }
+        if let Some(completed) = completed.lock().unwrap().take() {
+            let _ = completed.send((
+                event.context.request.execution_id.clone(),
+                event.result.clone(),
+                started.elapsed(),
+            ));
+        }
+        Ok(())
+    });
+    let lost_reply = agent.enqueue(input, actor()).await.unwrap();
+    eprintln!("original admission acknowledged at {:?}", started.elapsed());
+    drop(lost_reply);
+    // Observe the original supervised invocation without submitting again. The
+    // after hook follows local settlement persistence; close still joins the
+    // queue's final scheduling evidence before the child restores its receipt.
+    // The hook is the completion signal and carries the typed result, so a
+    // failed or cancelled original reports as soon as it settles. The bound
+    // only turns a hang into a failure. It covers about a dozen durable SQLite
+    // commits (FULL sync, DELETE journal) that share disk flushes with every
+    // other storage test in this binary; a 2s bound expired on Windows CI and
+    // under local fsync load while the original was still completing (#406).
+    let completion = tokio::time::timeout(ORIGINAL_COMPLETION_HANG_BOUND, async {
+        let (id, result, elapsed) = observation.await.unwrap();
+        eprintln!("original after hook at {elapsed:?}: {result:?}");
+        assert_eq!(id, original_id);
+        assert_eq!(result, Ok(ExecutionOutcome::Completed));
+        let snapshot = agent.session_manager().snapshot().await.unwrap();
+        let original = snapshot
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == original_id)
+            .expect("original admitted invocation");
+        assert_eq!(original.result, Some(Ok(ExecutionOutcome::Completed)));
+        eprintln!(
+            "original committed result observed at {:?}",
+            started.elapsed()
+        );
     })
-    .await
-    .unwrap();
+    .await;
+    if let Err(timeout) = completion {
+        // A stalled save can own the evidence lock, so diagnostics need their
+        // own bound too. This does not extend the original completion watchdog.
+        let snapshot = tokio::time::timeout(
+            DIAGNOSTIC_SNAPSHOT_BOUND,
+            agent.session_manager().snapshot(),
+        )
+        .await;
+        panic!(
+            "original completion watchdog {timeout:?} at {:?}; attachment: {:?}; \
+             provider executions: {}; committed snapshot: {snapshot:?}",
+            started.elapsed(),
+            agent.attachment_status(),
+            provider.calls.executions.load(Ordering::SeqCst),
+        );
+    }
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 1);
     agent.close(close_action()).await.unwrap();
+    eprintln!("original agent close joined at {:?}", started.elapsed());
     drop(agent);
     storage.shutdown().await.unwrap();
+    eprintln!("original storage shutdown at {:?}", started.elapsed());
     drop(storage);
 
     let child = std::process::Command::new(std::env::current_exe().unwrap())

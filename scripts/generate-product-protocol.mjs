@@ -8,15 +8,20 @@ import {
   coreWireContract,
   applyCoreWireBounds,
 } from "./product-protocol/core-contract.mjs"
-import { pairingValueSchema } from "./product-protocol/pairing-values.mjs"
+import {
+  derivePairingValues,
+  pairingArrayOwner,
+  pairingValueSchema,
+} from "./product-protocol/pairing-values.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
-const pairing = pairingValueSchema(
-  JSON.parse(readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8")),
+const pairingValues = JSON.parse(
+  readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8"),
 )
+const pairing = pairingValueSchema(pairingValues)
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
@@ -31,6 +36,8 @@ const readyMethods = Object.keys(manifest.methods).filter(
 )
 const ownedSchema = JSON.stringify(schema)
 applyCoreWireBounds(schema, coreWireContract(root))
+// Pairing identity, key and code widths have one owner: Auth's wire-values.json.
+schema.$defs = derivePairingValues(schema, pairingValues).schema.$defs
 schema.$defs.ProductSessionReady.properties.methods.maxItems = readyMethods.length
 let schemaOutput
 if (JSON.stringify(schema) !== ownedSchema) {
@@ -136,6 +143,13 @@ const externalRustTypes = new Set()
 const sharedRustReferences = new Set()
 const rustTypeName = (value) => value.split("::").at(-1)
 function type(node, rust) {
+  // A pairing byte array is the owner's fixed width, so serde refuses any other length.
+  const pairingOwner = pairingArrayOwner(node)
+  if (pairingOwner) {
+    if (!rust) return "number[]"
+    externalRustTypes.add(pairingOwner)
+    return `[u8; ${rustTypeName(pairingOwner)}::LENGTH]`
+  }
   if (node.$ref) {
     const name = node.$ref.split("/").at(-1)
     const externalType = schema.$defs[name]["x-rust-type"]
@@ -167,12 +181,25 @@ function doc(description) {
 let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
-  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n#![allow(dead_code)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
 const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
+  "ChangeWatchErrorCode",
+  "ChangeWatchEndReason",
 ])
+// Outcome enums referenced by typed payload fields serialize through Serde.
+// Unreferenced code vocabularies and close-policy enums also expose string codes.
+const payloadOutcomes = new Set(
+  Object.values(schema.$defs).flatMap((definition) =>
+    Object.values(definition.properties ?? {}).flatMap((field) =>
+      typeof field.$ref === "string" && field.$ref.startsWith("#/$defs/")
+        ? [field.$ref.slice("#/$defs/".length)]
+        : [],
+    ),
+  ),
+)
 let contractRs =
   "//! Pure product outcome values generated from protocol/product/v1.json. Do not edit.\nuse serde::{Deserialize, Serialize};\n"
 rs += "__SHARED_RUST_IMPORTS__"
@@ -188,14 +215,20 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
     let enumRs = ""
     enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
-    // The wire spelling, so handlers pass the typed value where a code is written.
-    enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
+    // Shared payload outcomes need no separate string-code API.
+    if (!sharedOutcomes.has(name) || !payloadOutcomes.has(name) || def["x-close-policy"])
+      enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
     if (def["x-close-policy"]) {
       ts += `export const sessionClosePolicy = ${JSON.stringify(def["x-close-policy"])} as const\n`
-      enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } pub(crate) fn from_web_socket_code(code: u16) -> Option<Self> { match code {${def.enum.map((v) => `${def["x-close-policy"][v].webSocketCode} => Some(Self::${pascal(v)})`).join(",")}, _ => None } } }\n`
+      enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } }\n`
     }
     if (sharedOutcomes.has(name)) contractRs += enumRs
     else rs += enumRs
+    continue
+  }
+  if (def.type === "string" && !def.properties) {
+    ts += `export type ${name} = string\n`
+    rs += `pub type ${name} = String;\n`
     continue
   }
   ts += `export interface ${name} {\n`
@@ -246,6 +279,43 @@ function agreeing(name, values) {
     throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
   return first
 }
+// Watch capacity is product policy. The server reads these constants and holds
+// no limit of its own; per-connection capacity is the sum of the per-kind limits.
+const watchLimits = schema["x-changeWatchLimits"]
+const watchLimitNames = [
+  "globalOwners",
+  "principalOwners",
+  "recordTargets",
+  "catalogueTargets",
+]
+for (const name of watchLimitNames) {
+  if (
+    !watchLimits ||
+    !Object.hasOwn(watchLimits, name) ||
+    !Number.isSafeInteger(watchLimits[name]) ||
+    watchLimits[name] <= 0
+  )
+    throw new Error(`Invalid change watch limit: ${name}`)
+}
+if (Object.keys(watchLimits).length !== watchLimitNames.length)
+  throw new Error("Invalid change watch limit: unknown policy key")
+if (watchLimits.principalOwners > watchLimits.globalOwners)
+  throw new Error("Invalid change watch limit: principalOwners exceeds globalOwners")
+const connectionWatches = watchLimits.recordTargets + watchLimits.catalogueTargets
+const watchId = schema.$defs.ChangeWatchId
+if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
+  throw new Error("Invalid change watch ID publication")
+rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
+// Published so the server can test the identities it mints against the schema.
+rs += `pub const CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(watchId.pattern)};\n`
+rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
+rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
+rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
+rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
+rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
+ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
+ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
+ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties

@@ -118,7 +118,12 @@ The gateway serves authenticated WebSocket sessions at `/session`. The panel use
 this protocol and automatically loads its own credential through the native host.
 `auth init` assigns it a distinct principal and private file at
 `auth/surfaces/nessa-panel.token`, with all currently implemented permissions:
-`server.read`, `conversation.write`, and `credential.manage`.
+`server.read`, `conversation.read`, `conversation.write`, and `credential.manage`.
+The owner credential `auth init` writes carries the same four; `conversation.read`
+is what lets it pair a device, whose consent is to read conversations. Credentials
+issued before keep the grants they were issued with: run `auth recover-owner` (below)
+to bring the owner credential to the current grants, and re-provision the panel with
+`auth provision-surface --local --surface-id nessa-panel`.
 Use `auth init --local --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
 to restrict initial chat access. Client metadata never grants permissions.
 
@@ -189,8 +194,10 @@ target/debug/nessa auth recover-owner --local --owner-token-file "$HOME/nessa-ow
 target/debug/nessa server
 ```
 
-Recovery keeps the same gateway and organization and revokes previous
-owner credentials. Other surface credentials retain their separate grants. It needs exclusive access to the registry, so it
+Recovery keeps the same gateway, organization and owner, revokes previous
+owner credentials, and issues the new one with the current owner grants (an owner
+credential from an earlier release is brought up to date this way). Other surface
+credentials retain their separate grants. It needs exclusive access to the registry, so it
 fails while the server holds the lock. Never delete the registry to rotate a
 token: that would discard its identity and revocation history.
 
@@ -211,7 +218,7 @@ Stop the gateway, then provision or replace the credential assigned to a surface
 
 ```sh
 target/debug/nessa auth provision-surface --local --surface-id terminal --grants server.read
-target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.write,credential.manage
+target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.read,conversation.write,credential.manage
 ```
 
 Each surface has a distinct principal, membership, and token. Reprovisioning revokes
@@ -275,6 +282,20 @@ The following values are the defaults:
   }
 }
 ```
+
+Native device pairing is off by default. To turn it on, add a `native` section
+with a numeric listen address (no hostname is looked up); `null` or no section
+keeps it off:
+
+```json
+{
+  "native": { "listenAddress": "127.0.0.1:47650" }
+}
+```
+
+On first start the gateway creates a private `native-pairing/` directory beside
+`auth/` and publishes its pairing key there before binding anything. A missing key
+with enrollment history refuses startup rather than generating a new one.
 
 Omitted fields use defaults. Restart the gateway after editing; offline auth
 commands read the same settings on each invocation. Positive integers are required;

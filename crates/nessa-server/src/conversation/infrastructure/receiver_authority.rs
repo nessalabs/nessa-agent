@@ -2,7 +2,7 @@
 
 use crate::conversation::application::{ReadRefusal, ReceiverAuthority, ReceiverBinding};
 use crate::conversation::domain::{
-    ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
+    PairedReceiver, ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
@@ -63,38 +63,176 @@ impl LocalReceiverAuthority {
         initiator_id: PrincipalId,
         request_id: String,
     ) -> Result<ReceiverBinding, ReceiverChangeError> {
-        let receiver_id = format!("receiver-{}", uuid::Uuid::new_v4());
-        let observed_at_ms = i64::try_from(self.clock.unix_milliseconds())
-            .map_err(|_| ReceiverChangeError::Exhausted)?;
-        let connection = self.connection.clone();
+        let authority = self.clone();
         tokio::task::spawn_blocking(move || {
-            let transition = ReceiverTransition::apply(
-                None,
-                ReceiverIntent::Pair {
-                    receiver_id,
-                    credential_id,
-                    organization_id,
-                    owner_id,
-                },
-                ReceiverInitiator::Principal(initiator_id),
+            authority.pair_now(
+                credential_id,
+                organization_id,
+                owner_id,
+                initiator_id,
                 request_id,
-                observed_at_ms,
             )
-            .map_err(map_transition_error)?;
-            let mut connection = connection
-                .lock()
-                .map_err(|_| ReceiverChangeError::Unavailable)?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|_| ReceiverChangeError::Unavailable)?;
-            persist_transition(&transaction, &transition).map_err(map_write_error)?;
-            transaction
-                .commit()
-                .map_err(|_| ReceiverChangeError::Unavailable)?;
-            Ok(transition.after)
         })
         .await
         .map_err(|_| ReceiverChangeError::Unavailable)?
+    }
+
+    /// `pair` on the calling thread, for a caller already on a blocking worker.
+    /// An exact repeat of the same initiator and request returns the original
+    /// receipt, without a second receiver or epoch; the same request naming
+    /// another credential, organization or owner is a conflict (design row P38,
+    /// `pair_retry_returns_the_original_receipt_and_fence_is_exact`).
+    pub fn pair_now(
+        &self,
+        credential_id: CredentialId,
+        organization_id: OrganizationId,
+        owner_id: PrincipalId,
+        initiator_id: PrincipalId,
+        request_id: String,
+    ) -> Result<ReceiverBinding, ReceiverChangeError> {
+        let receiver_id = format!("receiver-{}", uuid::Uuid::new_v4());
+        let observed_at_ms = i64::try_from(self.clock.unix_milliseconds())
+            .map_err(|_| ReceiverChangeError::Exhausted)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        if let Some(original) = load_receipt(
+            &transaction,
+            &ReceiverInitiator::Principal(initiator_id.clone()),
+            &request_id,
+        )? {
+            let exact = matches!(original.cause, ReceiverIntent::Pair { .. })
+                && original.after.credential_id == credential_id
+                && original.after.organization_id == organization_id
+                && original.after.owner_id == owner_id;
+            return if exact {
+                Ok(original.after)
+            } else {
+                Err(ReceiverChangeError::Conflict)
+            };
+        }
+        let transition = ReceiverTransition::apply(
+            None,
+            ReceiverIntent::Pair {
+                receiver_id,
+                credential_id,
+                organization_id,
+                owner_id,
+            },
+            ReceiverInitiator::Principal(initiator_id),
+            request_id,
+            observed_at_ms,
+        )
+        .map_err(map_transition_error)?;
+        persist_transition(&transaction, &transition).map_err(map_write_error)?;
+        transaction
+            .commit()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        Ok(transition.after)
+    }
+
+    /// Look up the original pair receipt for this initiator and request,
+    /// without pairing anything: `None` is a coherent absence, never a failure.
+    /// Device pairing's terminal cleanup asks this instead of pairing again
+    /// (design row P48).
+    pub fn paired(
+        &self,
+        initiator_id: &PrincipalId,
+        request_id: &str,
+    ) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        match load_receipt(
+            &connection,
+            &ReceiverInitiator::Principal(initiator_id.clone()),
+            request_id,
+        )? {
+            Some(original) if matches!(original.cause, ReceiverIntent::Pair { .. }) => {
+                Ok(Some(original.after))
+            }
+            // Another transition under this request is not a pair receipt.
+            Some(_) => Err(ReceiverChangeError::Conflict),
+            None => Ok(None),
+        }
+    }
+
+    /// The current binding of a credential, on the calling thread.
+    pub fn binding(
+        &self,
+        credential_id: &CredentialId,
+    ) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        load_by_credential(&connection, credential_id.as_str())
+    }
+
+    /// The current binding of `paired`'s receiver, if it still holds that
+    /// pairing (`PairedReceiver::admits`, with this journal saying whether the
+    /// credential was revoked on it since the pair). `None` otherwise.
+    pub fn holding(
+        &self,
+        paired: &PairedReceiver,
+    ) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        let Some(current) = load_by_receiver(&connection, &paired.receiver_id)? else {
+            return Ok(None);
+        };
+        let revoked_since = load_revocation(&connection, paired)?.is_some();
+        Ok(paired.admits(&current, revoked_since).then_some(current))
+    }
+
+    /// Fence the exact receiver a device enrollment paired, as the system, once
+    /// that enrollment has ended (design rows P39, P41, P42). A repeat of
+    /// `request_id` returns the original fence. A revocation of the paired
+    /// credential on that receiver since the pair is the fence, with its own
+    /// initiator kept, even if the receiver was regranted since; it is never
+    /// fenced again. Otherwise the domain's `PairedReceiver::fence` decides.
+    pub fn fence(
+        &self,
+        paired: &PairedReceiver,
+        request_id: String,
+    ) -> Result<ReceiverBinding, ReceiverChangeError> {
+        let observed_at_ms = i64::try_from(self.clock.unix_milliseconds())
+            .map_err(|_| ReceiverChangeError::Exhausted)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        if let Some(original) = load_receipt(&transaction, &ReceiverInitiator::System, &request_id)?
+        {
+            return if paired.revoked_by(&original.cause, original.before.as_ref()) {
+                Ok(original.after)
+            } else {
+                Err(ReceiverChangeError::Conflict)
+            };
+        }
+        if let Some(revocation) = load_revocation(&transaction, paired)? {
+            return Ok(revocation);
+        }
+        let current = load_by_receiver(&transaction, &paired.receiver_id)?
+            .ok_or(ReceiverChangeError::Missing)?;
+        let transition = paired
+            .fence(&current, false, request_id, observed_at_ms)
+            .map_err(map_transition_error)?;
+        persist_transition(&transaction, &transition).map_err(map_write_error)?;
+        transaction
+            .commit()
+            .map_err(|_| ReceiverChangeError::Unavailable)?;
+        Ok(transition.after)
     }
 
     /// Revoke or regrant a known receiver. Each committed transition increments
@@ -402,6 +540,102 @@ fn load_by_receiver(
     ).optional().map_err(|_| ReceiverChangeError::Unavailable)
 }
 
+/// One persisted transition, as replay reads it back.
+struct Receipt {
+    before: Option<ReceiverBinding>,
+    after: ReceiverBinding,
+    cause: ReceiverIntent,
+}
+
+const RECEIPT_COLUMNS: &str = "receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause";
+
+fn receipt_row(
+    row: &nessa_local_database::rusqlite::Row<'_>,
+) -> nessa_local_database::rusqlite::Result<Receipt> {
+    let receiver_id: String = row.get(0)?;
+    let organization_id: String = row.get(1)?;
+    let owner_id: String = row.get(2)?;
+    let before = match (
+        row.get::<_, Option<i64>>(3)?,
+        row.get::<_, Option<i64>>(5)?,
+        row.get::<_, Option<String>>(7)?,
+    ) {
+        (Some(epoch), Some(active), Some(credential)) => Some(binding_from_fields(
+            receiver_id.clone(),
+            credential,
+            organization_id.clone(),
+            owner_id.clone(),
+            epoch,
+            active,
+        )?),
+        _ => None,
+    };
+    let after = binding_from_fields(
+        receiver_id,
+        row.get(8)?,
+        organization_id,
+        owner_id,
+        row.get(4)?,
+        row.get(6)?,
+    )?;
+    let cause = ReceiverIntent::from_cause_name(&row.get::<_, String>(9)?, &after)
+        .ok_or(nessa_local_database::rusqlite::Error::InvalidQuery)?;
+    Ok(Receipt {
+        before,
+        after,
+        cause,
+    })
+}
+
+/// The transition recorded under this initiator and request, if any. The
+/// unique receipt index makes it at most one.
+fn load_receipt(
+    connection: &Connection,
+    initiator: &ReceiverInitiator,
+    request_id: &str,
+) -> Result<Option<Receipt>, ReceiverChangeError> {
+    let (kind, id) = initiator.evidence_parts();
+    connection
+        .query_row(
+            &format!("SELECT {RECEIPT_COLUMNS} FROM receiver_transitions WHERE initiator_kind = ?1 AND ifnull(initiator_id, '') = ?2 AND request_id = ?3"),
+            params![kind, id.unwrap_or(""), request_id],
+            receipt_row,
+        )
+        .optional()
+        .map_err(|_| ReceiverChangeError::Unavailable)
+}
+
+/// The first revocation of `paired`'s credential on its receiver since the
+/// pair, as the domain's `PairedReceiver::revoked_by` reads the journal.
+fn load_revocation(
+    connection: &Connection,
+    paired: &PairedReceiver,
+) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+    let mut query = connection
+        .prepare(&format!("SELECT {RECEIPT_COLUMNS} FROM receiver_transitions WHERE receiver_id = ?1 ORDER BY sequence"))
+        .map_err(|_| ReceiverChangeError::Unavailable)?;
+    let receipts = query
+        .query_map([&paired.receiver_id], receipt_row)
+        .map_err(|_| ReceiverChangeError::Unavailable)?;
+    for receipt in receipts {
+        let receipt = receipt.map_err(|_| ReceiverChangeError::Unavailable)?;
+        if paired.revoked_by(&receipt.cause, receipt.before.as_ref()) {
+            return Ok(Some(receipt.after));
+        }
+    }
+    Ok(None)
+}
+
+fn load_by_credential(
+    connection: &Connection,
+    credential_id: &str,
+) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+    connection.query_row(
+        "SELECT receiver_id, credential_id, organization_id, owner_id, access_epoch, active FROM receivers WHERE credential_id = ?1",
+        [credential_id], row_binding,
+    ).optional().map_err(|_| ReceiverChangeError::Unavailable)
+}
+
 impl ReceiverAuthority for LocalReceiverAuthority {
     fn resolve<'a>(
         &'a self,
@@ -447,6 +681,16 @@ mod tests {
                 map_write_error(Error::SqliteFailure(ffi::Error::new(code), None)),
                 ReceiverChangeError::Unavailable
             );
+        }
+    }
+
+    fn pairing(binding: &ReceiverBinding) -> PairedReceiver {
+        PairedReceiver {
+            receiver_id: binding.receiver_id.clone(),
+            credential_id: binding.credential_id.clone(),
+            organization_id: binding.organization_id.clone(),
+            owner_id: binding.owner_id.clone(),
+            paired_epoch: binding.access_epoch,
         }
     }
 
@@ -968,5 +1212,230 @@ mod tests {
         );
         drop(store);
         assert!(open(&path, "policy-one").is_ok());
+    }
+
+    /// Design rows P38, P39, P42, P48: a device pairing's pair is retried by its
+    /// request, looked up without pairing, and fenced by the system only while
+    /// the receiver still holds the paired credential.
+    #[test]
+    fn pair_retry_returns_the_original_receipt_and_fence_is_exact() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("receiver-access.sqlite3");
+        let store = open(&path, "policy-one").unwrap();
+        let owner = PrincipalId::new("owner").unwrap();
+        let organization = OrganizationId::new("org").unwrap();
+        let credential = CredentialId::new("device").unwrap();
+        let pair = |credential: &CredentialId, organization: &OrganizationId| {
+            store.pair_now(
+                credential.clone(),
+                organization.clone(),
+                owner.clone(),
+                owner.clone(),
+                "stage".into(),
+            )
+        };
+        assert_eq!(store.paired(&owner, "stage"), Ok(None));
+        let paired = pair(&credential, &organization).unwrap();
+        // Exact retry: the original receiver and epoch, no second receiver.
+        assert_eq!(pair(&credential, &organization), Ok(paired.clone()));
+        assert_eq!(store.paired(&owner, "stage"), Ok(Some(paired.clone())));
+        // The same request naming another credential or organization conflicts.
+        assert_eq!(
+            pair(&CredentialId::new("other").unwrap(), &organization),
+            Err(ReceiverChangeError::Conflict)
+        );
+        assert_eq!(
+            pair(&credential, &OrganizationId::new("org-2").unwrap()),
+            Err(ReceiverChangeError::Conflict)
+        );
+        // Another transition under a request is not a pair receipt.
+        let other = store
+            .pair_now(
+                CredentialId::new("unrelated").unwrap(),
+                organization.clone(),
+                owner.clone(),
+                owner.clone(),
+                "unrelated".into(),
+            )
+            .unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        let revoke = ReceiverTransition::apply(
+            Some(&other),
+            ReceiverIntent::Revoke,
+            ReceiverInitiator::Principal(owner.clone()),
+            "not-a-pair".into(),
+            1,
+        )
+        .unwrap();
+        let transaction = connection.transaction().unwrap();
+        persist_transition(&transaction, &revoke).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(
+            store.paired(&owner, "not-a-pair"),
+            Err(ReceiverChangeError::Conflict)
+        );
+        // A fence naming a newer epoch than the receiver has, or another
+        // owner, refuses without a write.
+        for expected in [
+            ReceiverBinding {
+                access_epoch: 2,
+                ..paired.clone()
+            },
+            ReceiverBinding {
+                owner_id: PrincipalId::new("someone").unwrap(),
+                ..paired.clone()
+            },
+        ] {
+            assert_eq!(
+                store.fence(&pairing(&expected), "fence".into()),
+                Err(ReceiverChangeError::Conflict)
+            );
+        }
+        assert_eq!(
+            store.fence(
+                &PairedReceiver {
+                    receiver_id: "receiver-missing".into(),
+                    ..pairing(&paired)
+                },
+                "fence".into()
+            ),
+            Err(ReceiverChangeError::Missing)
+        );
+        let fenced = store.fence(&pairing(&paired), "fence".into()).unwrap();
+        assert!(!fenced.active);
+        assert_eq!(fenced.access_epoch, 2);
+        assert_eq!(store.binding(&credential), Ok(Some(fenced.clone())));
+        // Retried fence: the original, with no further epoch.
+        assert_eq!(
+            store.fence(&pairing(&paired), "fence".into()),
+            Ok(fenced.clone())
+        );
+        // Another fence request finds the same revocation rather than a new one.
+        assert_eq!(
+            store.fence(&pairing(&paired), "fence-2".into()),
+            Ok(fenced.clone())
+        );
+        let raw = Connection::open(&path).unwrap();
+        let causes = raw
+            .prepare("SELECT cause, initiator_kind FROM receiver_transitions ORDER BY sequence")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<nessa_local_database::rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            causes,
+            [
+                ("paired".into(), "principal".into()),
+                ("paired".into(), "principal".into()),
+                ("revoked".into(), "principal".into()),
+                ("revoked".into(), "system".into())
+            ]
+        );
+        drop(store);
+        // Replay accepts the system fence on reopen.
+        let reopened = open(&path, "policy-one").unwrap();
+        assert_eq!(reopened.binding(&credential), Ok(Some(fenced)));
+    }
+
+    /// Design row P42: a receiver its owner already revoked and regranted to
+    /// another credential is not fenced again; the owner's revocation stands.
+    #[tokio::test]
+    async fn fence_keeps_an_earlier_revocation_and_never_fences_a_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("receiver-access.sqlite3");
+        let store = open(&path, "policy-one").unwrap();
+        let owner = PrincipalId::new("owner").unwrap();
+        let paired = store
+            .pair_now(
+                CredentialId::new("device").unwrap(),
+                OrganizationId::new("org").unwrap(),
+                owner.clone(),
+                owner.clone(),
+                "stage".into(),
+            )
+            .unwrap();
+        let revoked = store
+            .change(
+                paired.receiver_id.clone(),
+                None,
+                false,
+                owner.clone(),
+                "revoke".into(),
+            )
+            .await
+            .unwrap();
+        store
+            .change(
+                paired.receiver_id.clone(),
+                Some(CredentialId::new("replacement").unwrap()),
+                true,
+                owner,
+                "regrant".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.fence(&pairing(&paired), "fence".into()), Ok(revoked));
+        assert!(
+            store
+                .binding(&CredentialId::new("replacement").unwrap())
+                .unwrap()
+                .unwrap()
+                .active
+        );
+    }
+
+    /// Row P46: a receiver holds its pairing until its credential is revoked on
+    /// it, even if that same credential is regranted back afterwards.
+    #[tokio::test]
+    async fn holding_ends_at_an_intervening_revocation_even_when_regranted_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let store = open(&private.join("receiver-access.sqlite3"), "policy-one").unwrap();
+        let owner = PrincipalId::new("owner").unwrap();
+        let credential = CredentialId::new("device").unwrap();
+        let paired = store
+            .pair_now(
+                credential.clone(),
+                OrganizationId::new("org").unwrap(),
+                owner.clone(),
+                owner.clone(),
+                "stage".into(),
+            )
+            .unwrap();
+        assert_eq!(store.holding(&pairing(&paired)), Ok(Some(paired.clone())));
+        let receiver = paired.receiver_id.clone();
+        let steps = [
+            (None, false, "revoke-1"),
+            (
+                Some(CredentialId::new("other").unwrap()),
+                true,
+                "regrant-other",
+            ),
+            (None, false, "revoke-2"),
+            (Some(credential.clone()), true, "regrant-back"),
+        ];
+        for (replacement, active, request) in steps {
+            store
+                .change(
+                    receiver.clone(),
+                    replacement,
+                    active,
+                    owner.clone(),
+                    request.into(),
+                )
+                .await
+                .unwrap();
+        }
+        let current = store.binding(&credential).unwrap().unwrap();
+        assert!(current.active && current.access_epoch > paired.access_epoch);
+        assert_eq!(store.holding(&pairing(&paired)), Ok(None));
     }
 }

@@ -6,6 +6,8 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+#[cfg(unix)]
+use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::generated::AgentsListResult;
 #[cfg(unix)]
 use crate::product::generated::{
@@ -28,7 +30,7 @@ use crate::{
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
-        LocalConversationStore, LocalReceiverAuthority,
+        LocalConversationStore,
     },
 };
 use crate::{
@@ -41,8 +43,11 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::application::{
         ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+        WatchCatalogue, WatchRecords,
     },
-    conversation::infrastructure::{NessaCatalogueReadSource, NessaRecordReadSource},
+    conversation::infrastructure::{
+        LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+    },
     core::RunError,
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
@@ -59,7 +64,7 @@ use nessa_auth::{
         dto::CredentialMetadataDto,
         ports::{Clock, PortFuture},
     },
-    domain::{AudienceId, OrganizationId, ResourceId},
+    domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
@@ -108,6 +113,10 @@ pub(super) struct LocalProduct {
     /// The gateway's connection to each configured MCP server, and its relay:
     /// started once the gateway is listening, stopped after conversations.
     pub(super) mcp: McpParts,
+    /// Native pairing with its key restored and enrollments settled, bound by
+    /// the root after the browser listener; `None` unless `config.json` names
+    /// a native listen address (design row S1).
+    pub(super) native: Option<super::native_pairing::PreparedNative>,
 }
 
 #[cfg(unix)]
@@ -187,6 +196,40 @@ pub(super) async fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
+    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
+    let namespace = directory
+        .parent()
+        .ok_or_else(|| setup_error("invalid data root"))?;
+    // One receiver authority, shared by conversations' passive reads and by
+    // native pairing, which pairs and fences receivers (design row S7).
+    let receivers = if settings.agents.is_some() || settings.native.is_some() {
+        Some(receiver_access(
+            namespace,
+            &CedarPolicyEvaluator::profile_digest(),
+        )?)
+    } else {
+        None
+    };
+    // Before any socket is bound: the key is restored or first published,
+    // this gateway's unfinished enrollments are settled, and ended ones have
+    // their receivers settled (design rows S3–S8).
+    let native = match (&settings.native, &receivers) {
+        (Some(native), Some(receivers)) => Some(
+            super::native_pairing::prepare(
+                native,
+                super::native_pairing::NativeInputs {
+                    namespace: namespace.to_path_buf(),
+                    registry: store.clone(),
+                    policy: policy.clone(),
+                    receivers: receivers.clone(),
+                    clock: Arc::new(SystemClock),
+                    gateway: Resource::new(organization.clone(), gateway.clone()),
+                },
+            )
+            .await?,
+        ),
+        _ => None,
+    };
     let credential_namespace = CredentialNamespace::new(
         config.stage.as_str().to_owned(),
         config.instance().map(str::to_owned),
@@ -200,15 +243,14 @@ pub(super) async fn product_state(
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
-    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
-    let (conversations, agent_probe, warm_ups, mcp) = match &settings.agents {
-        Some(agents) => {
+    let (conversations, agent_probe, warm_ups, mcp) = match (&settings.agents, receivers) {
+        (Some(agents), Some(receivers)) => {
             let mut built = conversations(
                 agents,
                 directory,
+                receivers,
                 agent_credentials.clone(),
                 packaged_agents,
-                &CedarPolicyEvaluator::profile_digest(),
                 record_origin.clone(),
             )
             .await?;
@@ -222,13 +264,15 @@ pub(super) async fn product_state(
                     built.record_reader,
                     built.catalogue_reader,
                     built.resource_route,
+                    built.record_watches,
+                    built.catalogue_watches,
                 )),
                 built.agent_probe,
                 built.warm_ups,
                 built.mcp.take(),
             )
         }
-        None => (
+        _ => (
             None,
             Arc::new(LocalAgentProbe::from_environment(
                 HashMap::new(),
@@ -272,6 +316,13 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    let native = match native {
+        Some((prepared, commands)) => {
+            product = product.with_pairing(Arc::new(commands));
+            Some(prepared)
+        }
+        None => None,
+    };
     let mut record_reader = None;
     let mut catalogue_reader = None;
     if let Some((
@@ -283,6 +334,8 @@ pub(super) async fn product_state(
         reader,
         catalogue,
         resource_route,
+        record_watches,
+        catalogue_watches,
     )) = conversations
     {
         record_reader = Some(reader.clone());
@@ -290,6 +343,7 @@ pub(super) async fn product_state(
         product = product
             .with_conversations(Arc::new(service))
             .with_passive_read(receivers, metadata)
+            .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
             .with_attachments(attachments)
@@ -305,6 +359,7 @@ pub(super) async fn product_state(
         catalogue_reader,
         warm_ups,
         mcp,
+        native,
     })
 }
 
@@ -359,6 +414,8 @@ struct BuiltConversations {
     service: ConversationService,
     record_reader: Arc<NessaRecordReadSource>,
     catalogue_reader: Arc<NessaCatalogueReadSource>,
+    record_watches: Arc<dyn WatchRecords>,
+    catalogue_watches: Arc<dyn WatchCatalogue>,
     receivers: Arc<dyn ReceiverAuthority>,
     metadata: Arc<dyn ConversationRepository>,
     attachments: AttachmentService,
@@ -384,9 +441,9 @@ struct BuiltConversations {
 async fn conversations(
     _agents: &AgentsConfig,
     _directory: &Path,
+    _receivers: Arc<LocalReceiverAuthority>,
     _credentials: Arc<dyn AgentCredentialSource>,
     _packaged_agents: bool,
-    _policy_revision: &str,
     _record_origin: RecordId,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
@@ -394,9 +451,22 @@ async fn conversations(
     ))
 }
 
+/// Open the namespace's receiver-access store, creating its directory.
+fn receiver_access(
+    namespace: &Path,
+    policy_revision: &str,
+) -> Result<Arc<LocalReceiverAuthority>, RunError> {
+    let root = conversation_root(namespace);
+    nessa_local_storage::create_directory(&root)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let path = root.join("receiver-access.sqlite3");
+    LocalReceiverAuthority::open(&path, policy_revision, Arc::new(SystemClock))
+        .map(Arc::new)
+        .map_err(|cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &path, cause))
+}
+
 /// Where a namespace keeps its conversations. Read by composition and by the
 /// retirement that reports whether they are still there.
-#[cfg(unix)]
 pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }
@@ -405,9 +475,9 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 async fn conversations(
     agents: &AgentsConfig,
     directory: &Path,
+    receivers: Arc<LocalReceiverAuthority>,
     credentials: Arc<dyn AgentCredentialSource>,
     packaged_agents: bool,
-    policy_revision: &str,
     record_origin: RecordId,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
@@ -473,12 +543,7 @@ async fn conversations(
             )
         })?,
     );
-    let receiver_path = root.join("receiver-access.sqlite3");
-    let receivers: Arc<dyn ReceiverAuthority> = Arc::new(
-        LocalReceiverAuthority::open(&receiver_path, policy_revision, clock.clone()).map_err(
-            |cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &receiver_path, cause),
-        )?,
-    );
+    let receivers: Arc<dyn ReceiverAuthority> = receivers;
     let current_opencode_model = opencode
         .configured()
         .map(|profile| profile.validated().model());
@@ -582,6 +647,8 @@ async fn conversations(
         .initialize()
         .await
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    let record_watches = Arc::new(NessaRecordWatches::new(storage.clone()));
+    let catalogue_watches: Arc<dyn WatchCatalogue> = metadata.clone();
     let record_reader = Arc::new(NessaRecordReadSource::new(
         storage.clone(),
         record_origin.clone(),
@@ -734,6 +801,8 @@ async fn conversations(
         agents_catalog,
         record_reader,
         catalogue_reader,
+        record_watches,
+        catalogue_watches,
         agent_probe: resolver,
         warm_ups,
         mcp,

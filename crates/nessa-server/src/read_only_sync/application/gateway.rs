@@ -25,27 +25,21 @@ pub(crate) trait GatewayConnector {
 pub(crate) struct GatewayPolicy {
     handshake_ms: u64,
     operation_ms: u64,
-    upgrade_bytes: usize,
     unexpected_events: usize,
-    control_frames: usize,
 }
 impl GatewayPolicy {
     pub(crate) fn new(
         handshake_ms: u64,
         operation_ms: u64,
-        upgrade_bytes: usize,
         unexpected_events: usize,
-        control_frames: usize,
     ) -> Result<Self, GatewayError> {
-        if handshake_ms == 0 || operation_ms == 0 || upgrade_bytes == 0 {
+        if handshake_ms == 0 || operation_ms == 0 {
             return Err(GatewayError::InvalidPolicy);
         }
         Ok(Self {
             handshake_ms,
             operation_ms,
-            upgrade_bytes,
             unexpected_events,
-            control_frames,
         })
     }
     pub(crate) fn handshake_ms(self) -> u64 {
@@ -54,14 +48,8 @@ impl GatewayPolicy {
     pub(crate) fn operation_ms(self) -> u64 {
         self.operation_ms
     }
-    pub(crate) fn upgrade_bytes(self) -> usize {
-        self.upgrade_bytes
-    }
     pub(crate) fn unexpected_events(self) -> usize {
         self.unexpected_events
-    }
-    pub(crate) fn control_frames(self) -> usize {
-        self.control_frames
     }
 }
 
@@ -77,12 +65,19 @@ pub(crate) enum GatewayError {
     Closed(Option<SessionCloseReason>),
     Protocol,
     Correlation,
-    UpgradeTooLarge,
+    /// TLS refused the connection: the gateway key is not the pinned one, or
+    /// the handshake failed. Not a statement about the device's credential.
+    NativeHandshake,
     ResponseTooLarge,
     RequestTooLarge,
     EventCapacity,
-    ControlCapacity,
     InvalidCredential,
+    /// The gateway answered `openProduct` with the enrollment `Refused` reply:
+    /// no product session for this connection (design rows PR2, PR10, PR13,
+    /// PR15). The reply is redacted, so a key without an active credential is
+    /// not told apart from a full pool here; the pinned status asked next
+    /// tells them apart (row PC5).
+    ProductRefused,
     Authentication(SessionCloseReason),
     ScopeChanged,
     Busy,

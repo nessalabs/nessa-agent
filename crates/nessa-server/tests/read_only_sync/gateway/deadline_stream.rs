@@ -72,7 +72,6 @@ fn trickled_reads_share_absolute_deadline_and_stop_before_fourth_physical_read()
         clock,
         Arc::new(Cancel(AtomicBool::new(false))),
         10,
-        100,
     );
     let mut bytes = [0; 1];
     assert_eq!(stream.read(&mut bytes).unwrap(), 1);
@@ -85,12 +84,8 @@ fn trickled_reads_share_absolute_deadline_and_stop_before_fourth_physical_read()
     assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
 }
 #[test]
-fn upgrade_capacity_cancellation_and_os_timeout_retain_typed_cause_without_extra_io() {
-    for expected in [
-        GatewayError::UpgradeTooLarge,
-        GatewayError::Cancelled,
-        GatewayError::TimedOut,
-    ] {
+fn cancellation_and_os_timeout_retain_typed_cause_without_extra_io() {
+    for expected in [GatewayError::Cancelled, GatewayError::TimedOut] {
         let clock = Arc::new(Time(AtomicU64::new(0)));
         let reads = Arc::new(AtomicUsize::new(0));
         let shutdowns = Arc::new(AtomicUsize::new(0));
@@ -101,13 +96,7 @@ fn upgrade_capacity_cancellation_and_os_timeout_retain_typed_cause_without_extra
             shutdowns: shutdowns.clone(),
             timeout: expected == GatewayError::TimedOut,
         };
-        let mut stream = DeadlineStream::new(
-            Box::new(physical),
-            clock,
-            cancel,
-            10,
-            usize::from(expected != GatewayError::UpgradeTooLarge),
-        );
+        let mut stream = DeadlineStream::new(Box::new(physical), clock, cancel, 10);
         assert!(stream.read(&mut [0; 1]).is_err());
         assert_eq!(stream.take_failure(), Some(expected));
         assert_eq!(
@@ -176,7 +165,6 @@ fn admitted_io_cancellation_and_partial_writes_stop_before_later_effects() {
             clock,
             cancel,
             10,
-            100,
         );
         if cancel_after_read {
             assert!(stream.read(&mut [0; 1]).is_err());

@@ -890,13 +890,14 @@ store or portable provider history.
 
 ```mermaid
 sequenceDiagram
-    participant Receiver as Seeded read-only receiver
-    participant Socket as Authenticated /session socket
+    participant Receiver as Paired read-only receiver
+    participant Socket as Product session (protected native connection)
     participant Admission as AdmitPassiveRead
     participant Records as ReadRecords application use case
     participant Thread as Tracked source thread
     participant SDK as RecordStorage / bounded source
     participant Cache as Receiver durable cache and semantic checkpoint
+    Receiver->>Socket: Pinned TLS, openProduct, authenticate with the issued credential id
     Receiver->>Socket: recordsHead(receiver ID, access epoch, conversation)
     Socket->>Socket: Reserve one socket slot and one of four global read permits
     Socket->>Records: Dispatch with physical read lease
@@ -948,7 +949,8 @@ Tests: [fresh receiver authorization](../../../crates/nessa-server/tests/convers
 [gateway session protocol](../../../crates/nessa-server/tests/read_only_sync/gateway/session.rs),
 [deadline streams](../../../crates/nessa-server/tests/read_only_sync/gateway/deadline_stream.rs),
 [durable cache](../../../crates/nessa-server/tests/read_only_sync/infrastructure/cache.rs),
-and [end-to-end receiver processes](../../../crates/nessa-server/tests/read_only_sync/gateway/process.rs).
+[protected native sessions](../../../crates/nessa-server/tests/device_pairing/infrastructure/protected.rs)
+and [end-to-end receiver processes](../../../crates/nessa-server/tests/composition/read_only_online.rs).
 Socket capacity/wire-boundary regressions also live in the owning socket/codec files.
 
 The [authorized reads design](../../design/authorized-record-reads.md) is marked
@@ -956,8 +958,11 @@ implemented; its historical baseline/proposal wording must be read against curre
 code. The [read-only receiver design](../../design/read-only-sync-example.md)
 and [receiver implementation](../../../crates/nessa-server/src/read_only_sync/mod.rs)
 cover retained checkpoints. Downloaded physical position and applied semantic
-position are different facts. Pairing, automatic device discovery, and writable
-cross-device collaboration are outside this implemented seeded read-only path.
+position are different facts. The receiver pairs through native device
+pairing and reads over the protected native channel
+([device pairing slice 3](../../design/auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3));
+automatic device discovery and writable cross-device collaboration are outside
+this read-only path.
 
 Bug tracing: distinguish `source_preparing`, identity change, pruned history,
 oversized record/response, stale receiver epoch, wrong owner/receiver, and read
