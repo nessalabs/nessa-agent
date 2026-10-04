@@ -402,7 +402,10 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Permission execution is missing its message")
     permissionIds.add(permissionKey)
     text(permission, "title", 2048)
-    text(permission, "toolName", 256)
+    const toolName = text(permission, "toolName", 256)
+    // The card names the app's tool; the answer approves toolName.
+    if (kind === "app" && origin.tool !== toolName)
+      throw new Error("An app's review names a tool other than the one it reviews")
     JSON.parse(text(permission, "argumentsJson", 32768))
     const options = items(permission, "options", 64)
     if (!options.length) throw new Error("Permission response has no choices")

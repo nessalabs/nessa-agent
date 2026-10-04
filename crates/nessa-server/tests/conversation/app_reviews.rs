@@ -74,6 +74,8 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
     assert_eq!(shown[0].tool_id, "t1");
     assert_eq!(shown[0].permission_id, waiting.permission_id);
     assert_eq!(shown[0].arguments_json, "{\"id\":1}");
+    // The review names the tool the app asked to call, as its origin does.
+    assert_eq!(shown[0].tool_name, "delete_rows");
     assert_eq!(
         shown[0].origin,
         ConversationPermissionOrigin::App {

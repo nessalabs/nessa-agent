@@ -194,6 +194,7 @@ async fn a_destructive_call_waits_on_the_persons_review_and_is_sent_once_allowed
     assert_eq!(review.execution_id, fixture.execution_id);
     assert_eq!(review.tool_id, fixture.tool_id);
     assert_eq!(review.arguments_json, "{\"id\":1}");
+    assert_eq!(review.tool_name, "delete_rows");
     assert_eq!(
         review.origin,
         ConversationPermissionOrigin::App {

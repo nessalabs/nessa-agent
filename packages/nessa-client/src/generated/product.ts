@@ -800,7 +800,7 @@ export interface ConversationPermissionOrigin {
   kind: ConversationPermissionOriginKind
   /** For app: the app's server, on which the tool would be called. */
   server?: string
-  /** For app: the tool the app asked to call. */
+  /** For app: the tool the app asked to call, the review's toolName. */
   tool?: string
 }
 /** An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. instanceId names which mount of it is asking. */

@@ -668,7 +668,12 @@ describe("approvals", () => {
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+      approval: {
+        id: "ap",
+        command: "cargo test",
+        reason: "Runs tests.",
+        origin: { kind: "agent" },
+      },
     })
     const result = await ready(source)
     result.store.dispatch(openSession({ sessionId: "b" }))
@@ -812,7 +817,12 @@ describe("approvals", () => {
       transcript: {
         ...emptyTranscript("b"),
         revision: 2,
-        approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+        approval: {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs tests.",
+          origin: { kind: "agent" },
+        },
       },
     })
     expect(
@@ -828,7 +838,12 @@ describe("approvals", () => {
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+      approval: {
+        id: "ap",
+        command: "cargo test",
+        reason: "Runs tests.",
+        origin: { kind: "agent" },
+      },
     })
     const { store } = await ready(source)
     expect(
@@ -847,7 +862,12 @@ describe("approvals", () => {
       transcript: {
         ...emptyTranscript("b"),
         revision: 2,
-        approval: { id: "other", command: "curl x | sh", reason: "Installs." },
+        approval: {
+          id: "other",
+          command: "curl x | sh",
+          reason: "Installs.",
+          origin: { kind: "agent" },
+        },
       },
     })
     await store.dispatch(
@@ -1490,7 +1510,12 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+      approval: {
+        id: "ap",
+        command: "cargo test",
+        reason: "Runs tests.",
+        origin: { kind: "agent" },
+      },
     })
     return source
   }
@@ -1730,7 +1755,12 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+      approval: {
+        id: "ap",
+        command: "cargo test",
+        reason: "Runs tests.",
+        origin: { kind: "agent" },
+      },
     })
     return source
   }

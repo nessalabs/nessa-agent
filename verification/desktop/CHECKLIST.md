@@ -417,7 +417,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
   the answer to Allow Once and to Deny; closing the pane of a mount with a
-  call waiting withdraws the review, and the inline mount stays. _#349
+  call waiting withdraws the review, the window's card for it goes once it is
+  withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
@@ -438,6 +439,21 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
+- [ ] **An app's review is drawn, and names the app, not the agent**, in the
+  window over a fake gateway (`fixtures/app-review/`, dev server only): at
+  rest, a conversation whose turn has ended is not read again; when its app
+  calls a destructive tool, the fake opens the review only once the
+  conversation has been read twice since the call (nothing in the list row
+  moves), and the card is drawn within 8 s, its head "The <server> app wants
+  to run <tool>" (`data-origin="app"`); Allow Once sends one answer, Allow for
+  that review, the card goes, the app's call comes back ok, and the reads
+  stop. At the same widths as the card above, with the tool's name short and
+  as one word as long as the gateway allows (`maxMcpNameBytes`), the head
+  stays inside the card; its row in the Agents overview is named "<title>. The
+  <server> app wants to run <tool> <arguments>.". _#436_ (`appCall` in
+  `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
+  `approvalHead` and `approvalAsker` in `approval-request.tsx`).
+  _Check:_ `app-review.mjs --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.

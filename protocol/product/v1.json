@@ -2008,7 +2008,7 @@
           "minLength": 1,
           "maxLength": 128,
           "x-utf8MaxBytes": 128,
-          "description": "For app: the tool the app asked to call."
+          "description": "For app: the tool the app asked to call, the review's toolName."
         }
       },
       "required": ["kind"]

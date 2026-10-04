@@ -35,6 +35,7 @@ const functional = [
   "load-fallback",
   "widgets",
   "mcp-apps",
+  "app-review",
 ]
 
 const options = cli({

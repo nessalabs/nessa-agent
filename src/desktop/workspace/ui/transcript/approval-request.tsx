@@ -26,7 +26,35 @@ import {
   MenuItem,
 } from "../../../ui/menu"
 import type { TooltipAttributes } from "../../../ui/tooltip"
+import type { ApprovalOrigin } from "../../model/transcript"
 import "./approval-card.css"
+
+/**
+ * Who asks, as the person is told: the agent by its name, or an app by its
+ * server, so that a review an app opened is not put in the agent's mouth
+ * (`transcript.test.tsx` O1/O2, `overview.test.tsx` O3, on #436). The one
+ * place the asker is worded: the card's head (`approvalHead`) and the
+ * overview's row both read it; each says what is asked in its own way.
+ */
+export function approvalAsker(origin: ApprovalOrigin, agent: string): string {
+  switch (origin.kind) {
+    case "agent":
+      return agent
+    case "app":
+      return `The ${origin.server} app`
+  }
+}
+
+/** The card's head: who asks, and to run what — a command, or the tool an app named. */
+export function approvalHead(origin: ApprovalOrigin, agent: string): string {
+  const asker = approvalAsker(origin, agent)
+  switch (origin.kind) {
+    case "agent":
+      return `${asker} wants to run a command`
+    case "app":
+      return `${asker} wants to run ${origin.tool}`
+  }
+}
 
 /** An answer to an approval, as its buttons give it. */
 export type ApprovalChoice = "deny" | "always" | "once"
