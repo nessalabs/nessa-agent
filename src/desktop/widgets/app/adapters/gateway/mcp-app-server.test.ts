@@ -1,7 +1,7 @@
 /**
  * `McpAppServer` over a fake `client.mcpApps` that can give every answer the
  * gateway can: each test names its row of the state table on #384 (A1–A14,
- * D1, R1–R8, M2, M5–M5d), and the last group holds #349's L14 and L24, and
+ * D1, R1–R8 with R5b-1 to R5b-7, M2, M5–M5d), and the last group holds #349's L14 and L24, and
  * #384's J1–J5, through the real bridge over this adapter. The size and
  * SHA-256 check is the client's own
  * (`packages/nessa-client`, `mcp-apps-api.test.ts`); here a mismatch is what
@@ -259,7 +259,7 @@ describe("tools/call", () => {
     expect(await server.callTool(address, "t", {})).toEqual({ kind: "refused", reason })
   })
 
-  it("A8, L1b: no room on the app lane is busy, for the same request to be made again", async () => {
+  it("A8, L1b, R5b-4: no room on the app lane is busy, for the same request to be made again", async () => {
     const busy = () =>
       Promise.reject(refusal(ConversationErrorCode.TemporarilyUnavailable))
     const server = gatewayAppServer(
@@ -424,22 +424,28 @@ describe("resources/read and the ticket", () => {
     })
   })
 
-  it.each<McpResourceFailureCode>([
-    "not_found",
-    "unavailable",
-    "integrity",
-    "timeout",
-    "unreachable",
-    "unexpected_response",
+  // Each as the client builds it (`mcp-apps-api.ts` `fetchResource`): the
+  // route's status when there was one, the cause when there was no answer.
+  it.each<[McpResourceFailureCode, () => NessaMcpResourceError]>([
+    ["not_found", () => new NessaMcpResourceError("not_found", 404)],
+    ["unavailable", () => new NessaMcpResourceError("unavailable", 503)],
+    ["integrity", () => new NessaMcpResourceError("integrity", 200)],
+    ["timeout", () => new NessaMcpResourceError("timeout")],
+    [
+      "unreachable",
+      () =>
+        new NessaMcpResourceError(
+          "unreachable",
+          undefined,
+          new TypeError("fetch failed"),
+        ),
+    ],
+    ["unexpected_response", () => new NessaMcpResourceError("unexpected_response", 500)],
   ])(
     "R4: a redemption that fails as %s is a failure, never retried, and its log holds no ticket",
-    async (code) => {
+    async (_code, thrown) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {})
-      const apps = fakeApps({
-        fetchResource: vi.fn(() =>
-          Promise.reject(new NessaMcpResourceError(code, 404, new Error("route"))),
-        ),
-      })
+      const apps = fakeApps({ fetchResource: vi.fn(() => Promise.reject(thrown())) })
       expect(await gatewayAppServer(apps).readResource(address, uri, live())).toEqual({
         kind: "failed",
       })
@@ -450,7 +456,7 @@ describe("resources/read and the ticket", () => {
     },
   )
 
-  it("R5: a read the gateway refused is the A table's answer, in a resource's words; no ticket is redeemed", async () => {
+  it("R5, R5b-1, R5b-6: a read the gateway refused is the A table's answer, in a resource's words; no ticket is redeemed", async () => {
     const cases: [string, ServerAnswer][] = [
       [
         ConversationErrorCode.McpAppUnknown,
@@ -472,61 +478,58 @@ describe("resources/read and the ticket", () => {
     }
   })
 
-  const notForApp: ServerAnswer = {
-    kind: "refused",
-    reason: "This app may not use that tool",
-  }
-  const tooLarge: ServerAnswer = {
-    kind: "refused",
-    reason: "The request is larger than the gateway accepts",
-  }
-  const invalid: ServerAnswer = {
-    kind: "refused",
-    reason: "The gateway refused the request as invalid",
-  }
+  // The codes a read can be refused with that R5 and A8 do not already read
+  // (#384's amendment, R5b-1 to R5b-7). Each answers a read as it answers a
+  // call — one `answerFor` — and these codes' words are the same for both.
   const remote = { code: -32002, message: "Resource not found" }
-  it.each<[string, unknown, ServerAnswer, ServerAnswer]>([
+  it.each<[string, string, unknown, ServerAnswer]>([
     [
-      ConversationErrorCode.McpToolNotForApp,
+      "R5b-2",
+      ConversationErrorCode.InvalidRequest,
       undefined,
-      notForApp,
-      { kind: "refused", reason: "This app may not read that resource" },
+      { kind: "refused", reason: "The gateway refused the request as invalid" },
     ],
     [
-      ConversationErrorCode.ConversationNotFound,
+      "R5b-3",
+      ConversationErrorCode.McpCancelled,
       undefined,
-      { kind: "server-gone" },
-      { kind: "server-gone" },
+      { kind: "refused", reason: "The request was withdrawn" },
     ],
+    ["R5b-5", ConversationErrorCode.McpResultTooLarge, undefined, { kind: "failed" }],
     [
-      ConversationErrorCode.ConversationDeleted,
-      undefined,
-      { kind: "server-gone" },
-      { kind: "server-gone" },
-    ],
-    [
-      ConversationErrorCode.ConversationClosed,
-      undefined,
-      { kind: "server-gone" },
-      { kind: "server-gone" },
-    ],
-    [
+      "R5b-6",
       ConversationErrorCode.McpRemoteError,
       remote,
       { kind: "failed", error: remote },
-      { kind: "failed", error: remote },
     ],
-    [ConversationErrorCode.McpRequestTooLarge, undefined, tooLarge, tooLarge],
-    [ConversationErrorCode.InvalidRequest, undefined, invalid, invalid],
+    ["R5b-6", ConversationErrorCode.McpRemoteError, undefined, { kind: "failed" }],
+    [
+      "R5b-7",
+      ConversationErrorCode.ConversationNotFound,
+      undefined,
+      { kind: "server-gone" },
+    ],
+    [
+      "R5b-7",
+      ConversationErrorCode.ConversationDeleted,
+      undefined,
+      { kind: "server-gone" },
+    ],
+    [
+      "R5b-7",
+      ConversationErrorCode.ConversationClosed,
+      undefined,
+      { kind: "server-gone" },
+    ],
   ])(
-    "R5b: a read refused %s gets the outcome a call refused so gets, in a resource's words; nothing redeemed, nothing logged",
-    async (code, details, onCall, onRead) => {
+    "%s: a read refused %s (details %o) gets what a call refused so gets; nothing redeemed, nothing logged",
+    async (_row, code, details, expected) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {})
       const refused = () => Promise.reject(refusal(code, details))
       const apps = fakeApps({ callTool: vi.fn(refused), readResource: vi.fn(refused) })
       const server = gatewayAppServer(apps)
-      expect(await server.callTool(address, "t", {})).toEqual(onCall)
-      expect(await server.readResource(address, uri, live())).toEqual(onRead)
+      expect(await server.readResource(address, uri, live())).toEqual(expected)
+      expect(await server.callTool(address, "t", {})).toEqual(expected)
       expect(apps.fetchResource).not.toHaveBeenCalled()
       expect(error).not.toHaveBeenCalled()
     },
@@ -624,7 +627,7 @@ describe("a read whose mount is released (R6)", () => {
 })
 
 describe("whatever the client throws", () => {
-  it("callTool and readResource never reject: each is an outcome", async () => {
+  it("A11, R4: callTool and readResource never reject: whatever the client throws is an outcome", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
     for (const thrown of [undefined, null, 0, "x", {}, new Error("x"), Symbol("x")]) {
       const reject = () => Promise.reject(thrown)
@@ -978,7 +981,7 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     ])
   })
 
-  it("L24: the place removed while a review waits releases the mount, and the withdrawn call's answer is not posted", async () => {
+  it("L24, A12: the place removed while a review waits releases the mount, and the withdrawn call's answer is not posted", async () => {
     const apps = fakeApps()
     let answer!: (error: unknown) => void
     apps.callTool.mockImplementationOnce(
@@ -1126,23 +1129,39 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     expect(view.bridge.view().serverGone).toBeFalsy()
   })
 
-  it("J5: the app's own resources/read after live gets the resource, never the ticket; a refused read gets -32000 with the gateway's words", async () => {
+  it("J5: the app's own resources/read after live gets the resource, never the ticket; refused, failed, busy and server-gone reads get the call's errors", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const apps = fakeApps()
     const view = bridged(apps)
     await live(view)
-    view.say({ jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri } })
-    await flush()
-    apps.readResource.mockRejectedValueOnce(
-      refusal(ConversationErrorCode.McpToolNotForApp),
+    const read = async (id: number) => {
+      view.say({ jsonrpc: "2.0", id, method: "resources/read", params: { uri } })
+      await flush()
+    }
+    await read(2)
+    apps.readResource.mockRejectedValueOnce(refusal(ConversationErrorCode.McpAppUnknown))
+    await read(3)
+    const lost = new NessaMcpAppError(
+      conversationId,
+      "r",
+      app,
+      new Error("socket closed"),
     )
-    view.say({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri } })
-    await flush()
-    // The first read (the mount's) and the app's own two, all as its own mount.
-    expect(apps.readResource.mock.calls).toEqual([
-      [conversationId, ownApp, "weather", uri],
-      [conversationId, ownApp, "weather", uri],
-      [conversationId, ownApp, "weather", uri],
-    ])
+    apps.readResource.mockRejectedValueOnce(lost)
+    await read(4)
+    apps.readResource.mockRejectedValueOnce(
+      refusal(ConversationErrorCode.TemporarilyUnavailable),
+    )
+    await read(5)
+    expect(view.bridge.view().serverGone).toBeFalsy()
+    apps.readResource.mockRejectedValueOnce(
+      refusal(ConversationErrorCode.McpSessionUnavailable),
+    )
+    await read(6)
+    // The first read (the mount's) and the app's own five, all as its own mount.
+    expect(apps.readResource.mock.calls).toEqual(
+      Array.from({ length: 6 }, () => [conversationId, ownApp, "weather", uri]),
+    )
     expect(apps.fetchResource).toHaveBeenCalledTimes(2)
     expect(view.posted).toEqual([
       {
@@ -1174,7 +1193,24 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
         id: 3,
         error: { code: -32000, message: "This app may not read that resource" },
       },
+      { jsonrpc: "2.0", id: 4, error: { code: -32603, message: "The request failed" } },
+      {
+        jsonrpc: "2.0",
+        id: 5,
+        error: { code: -32000, message: "Too many requests at once" },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        error: { code: -32000, message: "The app's server has stopped" },
+      },
     ])
     expect(JSON.stringify(view.posted)).not.toContain(ticket)
+    expect(view.bridge.view()).toMatchObject({
+      lifecycle: { kind: "live" },
+      serverGone: true,
+    })
+    // Only the unplaced fault is logged.
+    expect(error.mock.calls).toEqual([["An MCP App call failed", lost]])
   })
 })
