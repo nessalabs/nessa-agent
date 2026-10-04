@@ -1537,7 +1537,8 @@ Watch shutdown is part of normal host cleanup in `composition/root.rs`: after na
 pairing is signalled to stop, it closes
 `ProductRouteState` watch admission before polling the reader and watch drains,
 then carries their outcomes through conversation/storage, MCP and the native join
-in the same `ShutdownReport` (typed phases in `core/shutdown.rs`). Interleaving tests are
+in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
+stage, in `core/shutdown.rs`). Interleaving tests are
 `tests/composition/watch_shutdown.rs`, using the watch fixture in
 `tests/product/socket/watches.rs`. The separate-process replay-to-live tests, with
 the probe client and with the example's own `watch` on two paired devices, are in
