@@ -16,13 +16,11 @@ use crate::{
         TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
-use nessa_protocol::conversation::domain::ConversationApprovalMode;
-use nessa_protocol::conversation::domain::ConversationModelId;
-use nessa_protocol::conversation::view::ConversationTranscriptState;
-use nessa_protocol::conversation::view::{ConversationApprovalModeChangeStatus, ConversationView};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::{
-    ConversationDisposition, ConversationLifecyclePhase, ConversationMessageStatus,
-    ConversationStartupFailureCode,
+    ConversationApprovalModeChangeStatus, ConversationDisposition, ConversationLifecyclePhase,
+    ConversationMessageStatus, ConversationStartupFailureCode, ConversationTranscriptState,
+    ConversationView,
 };
 use nessa_protocol::{
     agents::AgentId,

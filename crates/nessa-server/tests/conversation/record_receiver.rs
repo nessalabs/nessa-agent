@@ -8,6 +8,8 @@ use crate::conversation::domain::Conversation;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId};
 use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
 use nessa_protocol::product::generated::{ConversationRecordsHeadResult, ConversationRecordsPageResult};
+use nessa_protocol::product::passive_read::{decode_scope, wire_scope};
+use nessa_protocol::product::record_read::decode_page_request;
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -270,12 +272,12 @@ impl ProductSource {
         let response: ConversationRecordsHeadResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
         Ok((
-            nessa_protocol::product::passive_read::decode_scope(&response.scope).unwrap(),
+            decode_scope(&response.scope).unwrap(),
             response.head.parse().unwrap(),
         ))
     }
     fn request(scope: &Scope) -> Value {
-        serde_json::to_value(nessa_protocol::product::passive_read::wire_scope(scope)).unwrap()
+        serde_json::to_value(wire_scope(scope)).unwrap()
     }
 }
 impl RecordSource for ProductSource {
@@ -294,7 +296,7 @@ impl RecordSource for ProductSource {
         let response: ConversationRecordsPageResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
         let echoed =
-            nessa_protocol::product::record_read::decode_page_request(&response.request).unwrap();
+            decode_page_request(&response.request).unwrap();
         let records = response
             .records
             .into_iter()
