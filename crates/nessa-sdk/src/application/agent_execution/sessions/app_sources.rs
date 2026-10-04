@@ -51,6 +51,7 @@ impl fmt::Display for UnknownApp {
         })
     }
 }
+impl std::error::Error for UnknownApp {}
 
 /// The MCP tool call `update` observes, with the server and tool it names:
 /// a tool observation that carries an MCP identity. A tool call names its MCP

@@ -6,19 +6,21 @@
 //! ```text
 //! begin_record (admission) ──> at_admission ──> target_event_offset
 //! validation::continuation ──┐
-//! records InputAccepted ─────┼─> saved ──> Option<SteeringPosition>
-//! records Injected ──────────┘                ├─> app_sources::validate_saved
+//! records InputAccepted ─────┴─> saved ──> Option<SteeringPosition>
+//!                                             ├─> app_sources::validate_saved
 //!                                             ├─> provider correlation evidence
-//!                                             └─> a bound on the target's history
+//!                                             └─> the offset's bound on the target's history
+//! records Injected ──────────> saved ──> target ──> the target can take steering
 //! validation::continuation ──┐
 //! ProviderEvidence ──────────┴─> any_saved ──> provider correlation evidence
 //! ```
 //!
 //! Arrows show who asks. The pair is read from a saved invocation only here,
 //! so restoration and replay refuse the same half-saved pair. Restoration and
-//! replay's `InputAccepted` each still bound the offset against the target
-//! history they hold; an injection keeps admission's bound, as a target's
-//! events only grow (`records::validate_target_prefix`).
+//! replay's `InputAccepted` each bound the offset against the target history
+//! they hold. A replayed injection reads only the target; why it takes no
+//! bound of its own is stated once, in `docs/design/mcp-app-calls.md` ("The
+//! app a message names").
 #![deny(missing_docs)]
 
 use super::{InvocationRecord, StorageError};
@@ -98,3 +100,7 @@ impl<'a> SteeringPosition<'a> {
         self.offset
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/sessions/steering_position.rs"]
+mod tests;

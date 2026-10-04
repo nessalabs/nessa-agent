@@ -1,54 +1,18 @@
 //! The app a message names, row by row of "The app a message names"
 //! (`docs/design/mcp-app-calls.md`): the rule as admission asks it of the
 //! turns saved before the message, as restoration asks it of a snapshot, and
-//! as a replayed record log asks it of each accepted input.
+//! as a replayed record log asks it of each accepted input. Where a steered
+//! message stands is `steering_position`'s, tested beside it.
+use super::super::test_support::{
+    app, drawn, from, invocation_mut, mcp, record_log, snapshot, steered_log, text, tool_call,
+    turn, DRAWN, STEERED,
+};
 use super::*;
 use crate::application::agent_execution::sessions::{
-    InvocationSchedulingEvent, QueueHistoryRecord,
+    records::fold_changes, validation, SessionChange, StorageError,
 };
-use crate::application::agent_execution::{
-    executions::{ExecutionEvent, ExecutionRequest},
-    permissions::ActionContext,
-    providers::ProviderIdentity,
-    sessions::{
-        records::fold_changes, validation, ProviderContext, SessionChange, SessionSnapshot,
-        StorageError, SubmissionAcknowledgement,
-    },
-};
-use crate::domain::agent_execution::{
-    executions::{
-        ExecutionOutcome, InvocationKind, InvocationStage, QueueMutation, SchedulingCause,
-        SubmissionMode,
-    },
-    prompts::PromptText,
-    sessions::{ExecutionSessionId, SessionId},
-    tools::ToolCallUpdate,
-};
+use crate::domain::agent_execution::tools::ToolCallUpdate;
 
-/// The turn whose tool call `call-1` was to `charts/show`, beside a tool call
-/// `plain` that named no MCP server.
-const DRAWN: &str = "turn-1";
-
-fn mcp(server: &str, tool: &str) -> McpTool {
-    McpTool::new(server, tool).unwrap()
-}
-fn app(turn: &str, tool_id: &str, tool: McpTool) -> McpAppSource {
-    McpAppSource::new(
-        ExecutionId::new(turn).unwrap(),
-        ToolCallId::new(tool_id).unwrap(),
-        tool,
-    )
-    .unwrap()
-}
-fn drawn() -> McpAppSource {
-    app(DRAWN, "call-1", mcp("charts", "show"))
-}
-fn text() -> UserMessage {
-    UserMessage::text_only(PromptText::new("plot").unwrap())
-}
-fn from(app: McpAppSource) -> UserMessage {
-    text().sent_by(MessageSender::App(app))
-}
 fn carrying(apps: impl IntoIterator<Item = McpAppSource>) -> UserMessage {
     text()
         .with_app_model_context(
@@ -63,41 +27,6 @@ fn carrying(apps: impl IntoIterator<Item = McpAppSource>) -> UserMessage {
         )
         .unwrap()
 }
-/// A completed turn `id` whose message is `message` and whose tool calls
-/// are `tools`, observed in that order.
-fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -> InvocationRecord {
-    let id = ExecutionId::new(id).unwrap();
-    let mut events: Vec<_> = tools
-        .into_iter()
-        .map(|update| ExecutionEvent::new(id.clone(), ExecutionUpdate::Tool(update)))
-        .collect();
-    events.push(ExecutionEvent::new(
-        id.clone(),
-        ExecutionUpdate::Finished(ExecutionOutcome::Completed),
-    ));
-    InvocationRecord {
-        target_event_offset: None,
-        submission: SubmissionMode::Immediate,
-        request: ExecutionRequest {
-            execution_id: id,
-            user_message: message,
-            estimated_input_tokens: 1,
-            reserved_output_tokens: 1,
-        },
-        actor: ActionContext::new("user", "test", "invoke").unwrap(),
-        acknowledgement: SubmissionAcknowledgement::Pending,
-        events,
-        scheduling: Vec::new(),
-        provider_report: None,
-        local_cancellation: None,
-        local_outcome: Some(ExecutionOutcome::Completed),
-        cancellation: None,
-        result: Some(Ok(ExecutionOutcome::Completed)),
-    }
-}
-fn tool_call(id: &str) -> ToolCallUpdate {
-    ToolCallUpdate::new(ToolCallId::new(id).unwrap(), None, None, None, None, None)
-}
 /// The turn that drew the app: `call-1` named as `charts/show` on its second
 /// observation, not its first, and `plain` never named.
 fn drawing_turn() -> InvocationRecord {
@@ -111,45 +40,6 @@ fn drawing_turn() -> InvocationRecord {
         ],
     )
 }
-fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
-    SessionSnapshot {
-        id: SessionId::new("session").unwrap(),
-        provider: ProviderIdentity::new("provider", "model", "").unwrap(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),
-        invocations,
-        queue_history: Vec::new(),
-    }
-}
-/// The changes a record log keeps for `snapshot`, in its order.
-fn record_log(snapshot: &SessionSnapshot) -> Vec<SessionChange> {
-    let mut changes = vec![SessionChange::Opened {
-        id: snapshot.id.clone(),
-        provider: snapshot.provider.clone(),
-        context: snapshot.provider_context.clone(),
-    }];
-    for record in &snapshot.invocations {
-        let mut input = record.clone();
-        input.events.clear();
-        input.result = None;
-        input.local_outcome = None;
-        changes.push(SessionChange::InputAccepted(Box::new(input)));
-        changes.extend(
-            record
-                .events
-                .iter()
-                .cloned()
-                .map(SessionChange::ProviderObservation),
-        );
-        changes.push(SessionChange::LocalSettlement {
-            execution_id: record.request.execution_id.clone(),
-            before: None,
-            after: record.result.clone().unwrap(),
-            local_outcome: record.local_outcome,
-        });
-    }
-    changes
-}
-
 /// The rule three ways: as admission asks it of `earlier`, as restoration
 /// asks it of the snapshot `earlier` then the message, and as a replayed
 /// record log does. Each must agree with `expected`.
@@ -310,122 +200,6 @@ fn a8_a_restored_message_naming_a_later_turns_call_is_corrupt() {
     );
 }
 
-/// The steered message's own turn.
-const STEERED: &str = "steered";
-
-/// The record log of the completed turns `earlier`, then `target` running,
-/// observing `before`, then `message` steered natively into it as
-/// [`STEERED`] (its `target_event_offset` the count of `before`), then
-/// `target` observing `after`.
-fn steered_log(
-    earlier: &[InvocationRecord],
-    target: &str,
-    message: UserMessage,
-    before: Vec<ToolCallUpdate>,
-    after: Vec<ToolCallUpdate>,
-) -> Vec<SessionChange> {
-    let target = ExecutionId::new(target).unwrap();
-    let event = |kind, target: Option<&ExecutionId>, before, stage, cause, actor| {
-        InvocationSchedulingEvent {
-            kind,
-            target: target.cloned(),
-            before,
-            stage,
-            cause,
-            actor,
-        }
-    };
-    let actor = || Some(ActionContext::new("user", "test", "invoke").unwrap());
-    let mut running = turn(target.as_str(), text(), Vec::new());
-    running.events.clear();
-    running.result = None;
-    running.local_outcome = None;
-    running.submission = SubmissionMode::Queued;
-    running.scheduling = vec![event(
-        InvocationKind::Queued,
-        None,
-        None,
-        InvocationStage::Queued,
-        SchedulingCause::Submitted,
-        actor(),
-    )];
-    let mut steering = turn(STEERED, message, Vec::new());
-    steering.events.clear();
-    steering.result = None;
-    steering.local_outcome = None;
-    steering.submission = SubmissionMode::Steering;
-    steering.target_event_offset = Some(before.len());
-    steering.scheduling = vec![event(
-        InvocationKind::Steering,
-        Some(&target),
-        None,
-        InvocationStage::Queued,
-        SchedulingCause::Submitted,
-        actor(),
-    )];
-    let observed = |tools: Vec<ToolCallUpdate>| {
-        tools.into_iter().map(|update| {
-            SessionChange::ProviderObservation(ExecutionEvent::new(
-                target.clone(),
-                ExecutionUpdate::Tool(update),
-            ))
-        })
-    };
-    // Opened, then each earlier turn whole.
-    let mut changes = record_log(&snapshot(earlier.to_vec()));
-    changes.extend([
-        SessionChange::InputAccepted(Box::new(running)),
-        SessionChange::QueueDecision(QueueHistoryRecord {
-            mutation: QueueMutation::Admitted {
-                id: target.clone(),
-                kind: InvocationKind::Queued,
-            },
-            actor: actor(),
-            scheduling_length: Some(1),
-        }),
-        SessionChange::QueueDecision(QueueHistoryRecord {
-            mutation: QueueMutation::Selected { id: target.clone() },
-            actor: None,
-            scheduling_length: Some(1),
-        }),
-        SessionChange::SchedulingTransition {
-            execution_id: target.clone(),
-            event: event(
-                InvocationKind::Queued,
-                None,
-                Some(InvocationStage::Queued),
-                InvocationStage::Running,
-                SchedulingCause::Dispatched,
-                None,
-            ),
-        },
-    ]);
-    changes.extend(observed(before));
-    changes.push(SessionChange::InputAccepted(Box::new(steering)));
-    changes.push(SessionChange::SchedulingTransition {
-        execution_id: ExecutionId::new(STEERED).unwrap(),
-        event: event(
-            InvocationKind::Steering,
-            Some(&target),
-            Some(InvocationStage::Queued),
-            InvocationStage::Injected,
-            SchedulingCause::SteeringInjected,
-            None,
-        ),
-    });
-    changes.extend(observed(after));
-    changes
-}
-
-/// The saved invocation `id` of `snapshot`.
-fn invocation_mut<'a>(snapshot: &'a mut SessionSnapshot, id: &str) -> &'a mut InvocationRecord {
-    snapshot
-        .invocations
-        .iter_mut()
-        .find(|record| record.request.execution_id.as_str() == id)
-        .unwrap()
-}
-
 /// A message steered into a running turn (A1b, A1c, A8): the rule as
 /// admission asks it of `earlier` and the target's calls saved before the
 /// message, as a replayed record log does, and as restoration asks it of a
@@ -554,158 +328,6 @@ fn a1c_a_message_steered_into_a_running_turn_names_an_earlier_turns_call_past_it
             Ok(()),
         );
     }
-}
-
-/// A saved steering position is both halves or neither (A11): a target
-/// without its offset, or an offset without a target, is `Corrupt` on
-/// restoration and on replay alike.
-#[test]
-fn a11_a_steering_target_and_offset_are_saved_together_or_not_at_all() {
-    let log = steered_log(&[], DRAWN, text(), Vec::new(), Vec::new());
-    let valid = fold_changes(None, &log).unwrap();
-    for (id, offset, refusal) in [
-        (STEERED, None, "steering target has no steering offset"),
-        (DRAWN, Some(0), "targetless input has a steering offset"),
-    ] {
-        let refused = Err(StorageError::Corrupt(refusal.into()));
-        let mut restored = valid.clone();
-        invocation_mut(&mut restored, id).target_event_offset = offset;
-        let mut replayed = log.clone();
-        for change in &mut replayed {
-            if let SessionChange::InputAccepted(record) = change {
-                if record.request.execution_id.as_str() == id {
-                    record.target_event_offset = offset;
-                }
-            }
-        }
-        assert_eq!(
-            (
-                validation::validate(&restored),
-                fold_changes(None, &replayed).map(drop)
-            ),
-            (refused.clone(), refused),
-            "restoration and replay, {id}"
-        );
-    }
-}
-
-/// Round 3's repro (A11 through A8): a steered snapshot whose offset was
-/// removed, naming a call its target observed after the message, was
-/// restored, as the offset bound was skipped. It is `Corrupt` now.
-#[test]
-fn a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call() {
-    let shown = || tool_call("call-1").with_mcp_tool(mcp("charts", "show"));
-    let mut restored = fold_changes(
-        None,
-        &steered_log(&[], DRAWN, text(), Vec::new(), vec![shown()]),
-    )
-    .unwrap();
-    let steered = invocation_mut(&mut restored, STEERED);
-    steered.request.user_message = from(drawn());
-    steered.target_event_offset = None;
-    assert_eq!(
-        validation::validate(&restored),
-        Err(StorageError::Corrupt(
-            "steering target has no steering offset".into()
-        ))
-    );
-}
-
-/// Each path bounds a saved offset by the target history it holds. Replay's
-/// `InputAccepted` holds the target's events so far, and takes exactly their
-/// count: one short or one past it is `Corrupt`. Restoration holds the whole
-/// target, and takes at most its count: one past it is `Corrupt`, and one
-/// short is restored, as the target may have run on after the message.
-#[test]
-fn a_steering_offset_is_bounded_by_the_target_history_each_path_holds() {
-    // The target observed one event before the message, and none after.
-    let log = steered_log(&[], DRAWN, text(), vec![tool_call("plain")], Vec::new());
-    let valid = fold_changes(None, &log).unwrap();
-    for offset in [0, 2] {
-        let mut replayed = log.clone();
-        for change in &mut replayed {
-            if let SessionChange::InputAccepted(record) = change {
-                if record.request.execution_id.as_str() == STEERED {
-                    record.target_event_offset = Some(offset);
-                }
-            }
-        }
-        assert_eq!(
-            fold_changes(None, &replayed).map(drop),
-            Err(StorageError::Corrupt(
-                "steering offset is outside the prior target history".into()
-            )),
-            "replay, offset {offset}"
-        );
-    }
-    let mut restored = valid.clone();
-    invocation_mut(&mut restored, STEERED).target_event_offset = Some(2);
-    assert_eq!(
-        validation::validate(&restored),
-        Err(StorageError::Corrupt(
-            "steering offset is outside the preceding target history".into()
-        )),
-        "restoration, one past"
-    );
-    invocation_mut(&mut restored, STEERED).target_event_offset = Some(0);
-    assert_eq!(
-        validation::validate(&restored),
-        Ok(()),
-        "restoration, one short"
-    );
-}
-
-/// A saved steering position is provider correlation evidence, read through
-/// `SteeringPosition`: a message steered natively into a turn that has no
-/// other provider evidence (an immediate turn still in flight) needs a
-/// recorded provider context, on restoration and on replay alike.
-#[test]
-fn a_saved_steering_position_needs_a_recorded_provider_context() {
-    let mut running = turn(DRAWN, text(), Vec::new());
-    running.events.clear();
-    running.result = None;
-    running.local_outcome = None;
-    let mut steered = running.clone();
-    steered.request.execution_id = ExecutionId::new(STEERED).unwrap();
-    steered.submission = SubmissionMode::Steering;
-    steered.target_event_offset = Some(0);
-    steered.scheduling = vec![InvocationSchedulingEvent {
-        kind: InvocationKind::Steering,
-        target: Some(ExecutionId::new(DRAWN).unwrap()),
-        before: None,
-        stage: InvocationStage::Queued,
-        cause: SchedulingCause::Submitted,
-        actor: Some(ActionContext::new("user", "test", "invoke").unwrap()),
-    }];
-    let mut restored = snapshot(vec![running, steered]);
-    let judged = |restored: &SessionSnapshot| {
-        let mut replayed = vec![SessionChange::Opened {
-            id: restored.id.clone(),
-            provider: restored.provider.clone(),
-            context: restored.provider_context.clone(),
-        }];
-        replayed.extend(
-            restored
-                .invocations
-                .iter()
-                .cloned()
-                .map(|record| SessionChange::InputAccepted(Box::new(record))),
-        );
-        (
-            validation::validate(restored),
-            fold_changes(None, &replayed).map(drop),
-        )
-    };
-    assert_eq!(judged(&restored), (Ok(()), Ok(())), "recorded context");
-    restored.provider_context = ProviderContext::Absent;
-    let refused = Err(StorageError::Corrupt(
-        "provider evidence requires a recorded provider context".into(),
-    ));
-    assert_eq!(
-        judged(&restored),
-        (refused.clone(), refused),
-        "absent context"
-    );
 }
 
 #[test]

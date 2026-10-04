@@ -118,10 +118,8 @@ fn apply_history<T>(
 /// its offset is exactly the target's events so far, so it borrows no output
 /// from the future
 /// (`a_steering_offset_is_bounded_by_the_target_history_each_path_holds`). A
-/// later injection takes no offset bound of its own: the
-/// target's events only grow while the message is saved (a failed unit takes
-/// back its facts last first, the target's later events before the message),
-/// so admission's bound, or restoration's, still holds.
+/// later injection takes no offset bound of its own; why is stated once, in
+/// `docs/design/mcp-app-calls.md` ("The app a message names").
 fn validate_target_prefix(
     snapshot: &SessionSnapshot,
     positions: &HashMap<ExecutionId, usize>,
@@ -453,9 +451,10 @@ impl continuation::Continuation {
                         .get(execution_id)
                         .and_then(|index| snapshot.invocations.get(*index))
                         .ok_or_else(|| corrupt("semantic fact has no accepted input"))?;
-                    // The admitted position still holds (see
-                    // `validate_target_prefix`): an injection naming another
-                    // target is refused below by `InvocationHistory::schedule`.
+                    // The admitted position still holds
+                    // (`docs/design/mcp-app-calls.md`, "The app a message
+                    // names"): an injection naming another target is refused
+                    // below by `InvocationHistory::schedule`.
                     validate_target_prefix(
                         snapshot,
                         positions,

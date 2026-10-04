@@ -229,7 +229,8 @@ impl AppModelContext {
             .map_or(0, str::len)
             .saturating_add(self.structured_content.as_deref().map_or(0, str::len))
     }
-    /// Retained variable payload bytes: the app and both parts.
+    /// Retained variable payload bytes: the app, the update identity, and
+    /// both parts.
     pub fn payload_bytes(&self) -> usize {
         self.app
             .payload_bytes()

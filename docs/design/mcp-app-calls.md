@@ -335,7 +335,9 @@ exactly its events so far on replay
 replayed injection takes no bound of its own: replay's admission bound is
 exact (restoration's holds for a message restored before it), and a target's
 events only grow while the message is saved, as a failed unit takes back its
-facts last first, the target's later events before the message. The
+facts last first, the target's later events before the message
+(`a_replayed_injection_holds_after_a_failed_unit_takes_back_its_targets_later_events`).
+This is the one statement of that reason; the code points here. The
 saved position is also the provider correlation a history holds, read through
 the same owner (`a_saved_steering_position_needs_a_recorded_provider_context`).
 Restoration cannot tell whether an
@@ -399,9 +401,12 @@ Each row above has a test, named after it:
 - An app in its conversation, the SDK's rows: "The app a message names",
   each row asked by admission, restoration and a replayed record log alike,
   in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`
-  (A1c and A11 among them, with round 3's repro of a steered snapshot
-  stripped of its offset,
-  `a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call`),
+  (A1c among them); the saved steering position in `sessions/steering_position.rs`:
+  A11 (`a11_a_steering_target_and_offset_are_saved_together_or_not_at_all`,
+  and round 3's repro of a steered snapshot stripped of its offset,
+  `a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call`), each
+  path's offset bound, the position as provider correlation, and a replayed
+  injection after a failed unit;
   admission against saved turns in `sessions/manager.rs`
   (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`,
   `admission_keeps_a_calls_first_mcp_identity`, and A11's admission side,
