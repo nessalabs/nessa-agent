@@ -177,7 +177,9 @@ test("a stand-in that does not start fails session/new", async () => {
   })
   assert.match(opened.error.message, /stand-in/)
   agent.child.stdin.end()
-  assert.equal(await exited(agent.child, 5000), true)
+  // At once: a spawn that failed has ended, so the stop has no grace to wait out.
+  assert.equal(await exited(agent.child, STOP_GRACE_MS - 500), true)
+  assert.equal(agent.child.exitCode, 0)
 })
 
 test("a prompt with no mcptest server fails the turn", async () => {
@@ -293,8 +295,8 @@ test("an agent not named, or with no tool to call, exits 2 saying how to run it"
  * A stand-in that answers every request with `{}`, keeps running after its
  * input closes (as `server.mjs` does not), and writes its pid: what is
  * stopped is then the agent's doing. Returns its `session/new` entry,
- * `pid()`, and `termed()` (whether it was sent SIGTERM, with `ignoresTerm`);
- * it is killed after the test whatever happened.
+ * `pid()`, `termed()` (whether it was sent SIGTERM, with `ignoresTerm`), and
+ * `heirPid()` (with `heir`); both are killed after the test whatever happened.
  */
 function lingering(
   t,
@@ -305,6 +307,7 @@ function lingering(
     delayMs = 0,
     deafAfterInitialize = false,
     ignoresTerm = false,
+    heir = false,
     name = "lingering",
   } = {},
 ) {
@@ -313,9 +316,14 @@ function lingering(
   // `exits(method)`: by exiting instead; `delayMs`: after how long;
   // `deafAfterInitialize`: it stops reading its input once it has answered
   // initialize, but keeps running; `ignoresTerm`: SIGTERM does not stop it,
-  // and writes `termed` beside the pid file.
+  // and writes `termed` beside the pid file; `heir`: it starts a process of
+  // its own that holds its stdout open, ignores SIGTERM, and writes its pid
+  // to `heir` beside the pid file.
   const termedFile = join(dirname(pidFile), "termed")
-  const script = `if (${ignoresTerm}) process.on("SIGTERM", () => require("node:fs").writeFileSync(${JSON.stringify(termedFile)}, ""))
+  const heirFile = join(dirname(pidFile), "heir")
+  const heirScript = `require("node:fs").writeFileSync(${JSON.stringify(heirFile)}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)`
+  const script = `if (${heir}) require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(heirScript)}], { stdio: ["ignore", "inherit", "inherit"] })
+if (${ignoresTerm}) process.on("SIGTERM", () => require("node:fs").writeFileSync(${JSON.stringify(termedFile)}, ""))
 require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line)
@@ -333,10 +341,13 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 setInterval(() => {}, 1000)`
   const pid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null)
   const termed = () => existsSync(termedFile)
+  const heirPid = () =>
+    existsSync(heirFile) ? Number(readFileSync(heirFile, "utf8")) : null
   t.after(() => {
-    if (pid() !== null && alive(pid())) process.kill(pid(), "SIGKILL")
+    for (const p of [pid(), heirPid()])
+      if (p !== null && alive(p)) process.kill(p, "SIGKILL")
   })
-  return { server: { ...mcptest, name, args: ["-e", script] }, pid, termed }
+  return { server: { ...mcptest, name, args: ["-e", script] }, pid, termed, heirPid }
 }
 
 /** Waits up to 5 s for process `pid` to have gone; whether it has. */
@@ -610,6 +621,28 @@ for (const [trigger, close] of [
     assert.ok(Date.now() - stopped >= STOP_GRACE_MS - 100, "killed before its grace")
   })
 
+test("a stand-in whose own process holds its output open does not keep the agent from exiting", async (t) => {
+  const stubborn = lingering(t, { ignoresTerm: true, heir: true })
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [stubborn.server],
+  })
+  assert.ok(opened.result.sessionId)
+  const end = Date.now() + 5000
+  while (stubborn.heirPid() === null && Date.now() < end) await sleep(50)
+  agent.child.stdin.end()
+  // The stand-in is reaped once killed, though its pipe stays open in the heir.
+  assert.equal(await exited(agent.child, STOP_GRACE_MS + 3000), true)
+  assert.equal(agent.child.exitCode, 0)
+  assert.equal(alive(stubborn.pid()), false, "the stand-in outlived its agent")
+  assert.equal(alive(stubborn.heirPid()), true, "the heir did not hold the pipe")
+})
+
+/**
+ * Only that nothing starts is asserted: the row's failed `session/new` is
+ * answered on the output whose failure began the stop, so it cannot be read.
+ */
 test("a session/new during the stop's grace starts no stand-in", async (t) => {
   const stubborn = lingering(t, { ignoresTerm: true })
   const late = lingering(t, { name: "late" })

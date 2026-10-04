@@ -19,9 +19,9 @@
  * calls use, lives as long as the stand-in does. A stand-in that does not
  * answer within `MCP_DEADLINE_MS` fails what was waiting on it. When its input
  * closes or its output fails, it stops every stand-in and waits for each to
- * close (`stop`) before it exits. Its design
- * table is on #418. It reads no credential; the check starts the gateway
- * signed out (`startLocalGateway`'s `signedOut`).
+ * exit (`stop`) before it exits. Its design table is on #418. It reads no
+ * credential; the check starts the gateway signed out (`startLocalGateway`'s
+ * `signedOut`).
  *
  * Not replayed: a harness's permission request for the call. The recordings
  * hold only `session/update` frames, so the scripted agent asks for none.
@@ -57,21 +57,23 @@ const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
 const failure = (id, code, message) => send({ id, error: { code, message } })
 
-/** How long a stopped stand-in has to close before it is killed. */
+/** How long a stopped stand-in has to exit before it is killed. */
 const STOP_GRACE_MS = 2_000
 
 /**
  * Every stand-in started, connected or still connecting, by its process, with
- * a promise of its `close` taken at spawn (so one that has already closed has
- * nothing left to wait for): stopped when the agent's input closes or its
- * output fails.
+ * a promise taken at spawn that it has ended: its `exit`, by which it is
+ * reaped (not `close`, which a process of its own holding its pipes can put
+ * off forever), or the `error` of a spawn that failed, which has no `exit`.
+ * One that has already ended has nothing left to wait for. Stopped when the
+ * agent's input closes or its output fails.
  */
 const standIns = new Map()
 
 /** Set once a stop begins: the agent stops once, and starts no stand-in after. */
 let stopping = false
 /**
- * Stops every stand-in and waits for each to close, killing one still open
+ * Stops every stand-in and waits for each to exit, killing one still running
  * after `STOP_GRACE_MS`; then exits 0, its stand-ins reaped (the tests of
  * a stand-in that ignores SIGTERM). A second stop while one is in progress
  * does nothing more, and a stand-in asked for meanwhile is not started
@@ -81,10 +83,10 @@ async function stop() {
   if (stopping) return
   stopping = true
   await Promise.all(
-    [...standIns].map(async ([child, closed]) => {
+    [...standIns].map(async ([child, ended]) => {
       child.kill("SIGTERM")
       const timer = setTimeout(() => child.kill("SIGKILL"), STOP_GRACE_MS)
-      await closed
+      await ended
       clearTimeout(timer)
     }),
   )
@@ -108,7 +110,13 @@ function mcpClient({ command, args, env }) {
     },
     stdio: ["pipe", "pipe", "inherit"],
   })
-  standIns.set(child, new Promise((closed) => child.once("close", closed)))
+  standIns.set(
+    child,
+    new Promise((ended) => {
+      child.once("exit", ended)
+      child.once("error", ended)
+    }),
+  )
   const waiting = new Map()
   let next = 1
   let ended = null
