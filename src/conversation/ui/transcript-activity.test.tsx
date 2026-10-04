@@ -675,6 +675,22 @@ it("replaces only the typed authentication error divider with provider sign-in",
   )
   expect(container.querySelector("[data-slot=transcript-divider]")).toBeNull()
   expect(container.querySelectorAll(".provider-sign-in")).toHaveLength(1)
+  for (const receipt of ["queued", "delivered"] as const) {
+    await render({
+      ...typed,
+      turns: [
+        ...typed.turns,
+        {
+          id: `new-${receipt}`,
+          from: "user",
+          executionId: "new-attempt",
+          receipt,
+          content: textContent("Try again"),
+        },
+      ],
+    })
+    expect(container.querySelector(".provider-sign-in")).toBeNull()
+  }
   await render({
     ...typed,
     turns: typed.turns.map((turn) =>

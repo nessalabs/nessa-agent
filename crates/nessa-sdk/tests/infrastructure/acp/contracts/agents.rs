@@ -871,7 +871,7 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
         assert_eq!(
             attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()),).await,
             Err(AgentError::Provider {
-                code: -32000,
+                code: -32001,
                 diagnostic: Some(ProviderDiagnostic::new("restore failed")),
             }),
             "restoration {index} must reach the provider rather than exhaust the reader queue"
@@ -898,5 +898,70 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     assert_eq!(launches.len(), 26);
     for pid in launches {
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
+}
+
+#[tokio::test]
+async fn authentication_and_generic_provider_failures_keep_their_meaning_after_storage_reopen() {
+    let _slot = process_test_slot().await;
+    for (mode, expected) in [
+        (
+            "provider-auth-error",
+            AgentError::AuthenticationRequired {
+                diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+            },
+        ),
+        (
+            "provider-error",
+            AgentError::Provider {
+                code: -32001,
+                diagnostic: Some(ProviderDiagnostic::new(
+                    "provider plan does not allow this request",
+                )),
+            },
+        ),
+    ] {
+        let (root, provider) = test_acp_binding(mode, 16);
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+        let id = SessionId::new(mode).unwrap();
+        let clock =
+            Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new());
+        let manager = SessionManager::open(Some(id.clone()), storage.clone(), clock.clone())
+            .await
+            .unwrap();
+        let provider: Arc<dyn AgentProvider> = Arc::new(provider);
+        let agent = attached_agent(provider.clone(), manager).await.unwrap();
+        let final_result = agent.invoke(prompt("first"), close_action()).await;
+        let expected_final = if expected.authentication_required() {
+            Err(expected.clone())
+        } else {
+            Err(AgentError::ExecutionObservation {
+                error: Box::new(expected.clone()),
+                execution_result: Some(Box::new(Err(expected.clone()))),
+            })
+        };
+        assert_eq!(final_result, expected_final);
+        agent.close(close_action()).await.unwrap();
+        drop(agent);
+        let restored = SessionManager::open(Some(id), storage, clock)
+            .await
+            .unwrap();
+        let restored = Agent::prepare(provider, restored, Arc::new(RecordingAudit::default()))
+            .await
+            .unwrap();
+        let snapshot = restored.session_manager().snapshot().await.unwrap();
+        assert_eq!(snapshot.invocations[0].result, Some(final_result));
+        if expected.authentication_required() {
+            assert_eq!(
+                snapshot.invocations[0]
+                    .provider_report
+                    .as_ref()
+                    .expect("authentication refusal retains authoritative settlement")
+                    .provider_result(),
+                Some(&Err(expected))
+            );
+        }
+        wait_until_gone(&root, "pid").await;
     }
 }

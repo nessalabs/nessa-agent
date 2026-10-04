@@ -63,7 +63,7 @@ for line in sys.stdin:
         mine = {"sessionId": asked, "cwd": str(root), "title": "t", "updatedAt": "2026-01-01T00:00:00Z"}
         if mode == "list-error":
             # A code of its own, so a test can tell it from the delete's refusal.
-            send({"id": message["id"], "error": {"code": -32000, "message": "store unreadable"}})
+            send({"id": message["id"], "error": {"code": -32001, "message": "store unreadable"}})
         elif mode == "list-listed":
             send({"id": message["id"], "result": {"sessions": [other, mine]}})
         elif mode == "list-paged":

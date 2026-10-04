@@ -1577,7 +1577,9 @@ the probe client and with the example's own `watch` on two paired devices, are i
 `src-tauri/src/provider_authentication/` owns the trusted-window login launch
 command, its injected `ProviderLogin` process boundary, and the macOS terminal
 adapter. The closed provider enum chooses each CLI's default login command.
-`AgentError::authentication_required` publishes the ACP numeric classification;
+`AgentError::authentication_required` reads the explicit adapter-owned refusal;
+the ACP worker translates its protocol’s reserved authentication code into that
+variant. Generic provider errors keep their numeric code and diagnostic.
 `crates/nessa-protocol/src/conversation/projection.rs` publishes it from retained
 provider reports, with restoration regressions in that crate’s
 `tests/conversation/projection.rs`. The desktop

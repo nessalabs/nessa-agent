@@ -33,6 +33,8 @@ pub enum LoginFailure {
 
 /// Outside-process login launch, supplied by host composition.
 pub trait ProviderLogin: Send + Sync {
+    /// Whether this host implements a provider login launcher.
+    fn available(&self) -> bool;
     fn open(&self, provider: Provider) -> Result<(), LoginFailure>;
 }
 
@@ -53,6 +55,16 @@ pub async fn sign_in_to_provider(
     launch(deps.provider_login.clone(), provider).await
 }
 
+/// Publish the injected launcher's capability before offering a login action.
+#[tauri::command]
+pub fn provider_login_available(
+    window: WebviewWindow,
+    deps: State<'_, HostDependencies>,
+) -> Result<bool, LoginFailure> {
+    admit(window.label())?;
+    Ok(deps.provider_login.available())
+}
+
 fn admit(label: &str) -> Result<(), LoginFailure> {
     if label == panel::MAIN_WINDOW || label == desktop_window::DESKTOP_WINDOW {
         Ok(())
@@ -66,6 +78,9 @@ mod tests {
     use super::*;
     struct Refused;
     impl ProviderLogin for Refused {
+        fn available(&self) -> bool {
+            false
+        }
         fn open(&self, _: Provider) -> Result<(), LoginFailure> {
             Err(LoginFailure::Unavailable)
         }
@@ -82,6 +97,7 @@ mod tests {
     }
     #[test]
     fn a_host_without_login_reports_unavailable() {
+        assert!(!Refused.available());
         assert_eq!(
             tauri::async_runtime::block_on(launch(Arc::new(Refused), Provider::Claude)),
             Err(LoginFailure::Unavailable)

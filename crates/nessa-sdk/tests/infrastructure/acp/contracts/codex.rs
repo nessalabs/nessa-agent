@@ -373,8 +373,7 @@ async fn a_codex_nothing_has_signed_in_refuses_its_session_and_is_reported_as_co
             .err()
             .map(|failure| failure.cause().clone())
             .unwrap(),
-        AgentError::Provider {
-            code: -32000,
+        AgentError::AuthenticationRequired {
             diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
         }
     );

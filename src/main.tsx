@@ -17,6 +17,7 @@ import { BrowserApplication } from "./composition/browser"
 import {
   hasNativeHost,
   signInToProvider,
+  providerLoginAvailable,
   hostStartup,
   quitNessa,
   restartNessa,
@@ -47,6 +48,7 @@ const panel = (
   <Provider store={store}>
     <App
       onProviderSignIn={signInToProvider}
+      canSignInToProvider={providerLoginAvailable}
       attachmentResources={dependencies.attachments}
       canChoosePaths={dependencies.canChoosePaths}
       digest={dependencies.digest}

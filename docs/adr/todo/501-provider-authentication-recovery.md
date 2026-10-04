@@ -4,9 +4,11 @@ Status: proposed; typed ACP recovery is implemented locally, Claude internal-err
 
 ## Decision
 
-The provider's numeric ACP authentication-required response (`-32000`) is the
-only authentication fact used by this change. `AgentError::authentication_required`
-owns the classification; the conversation projection publishes it from the
+ACP protocol 1 reserves `-32000` for Authentication required. The ACP worker
+maps that response to `AgentError::AuthenticationRequired`; generic
+`AgentError::Provider` codes from other adapters or saved history keep their
+original meaning, including `-32000`. `AgentError::authentication_required`
+reads only the explicit variant; the conversation projection publishes it from the
 retained provider report, and both desktop surfaces consume the latest turn's published
 fact. Internal errors (`-32603`) and diagnostic text never select the card.
 
@@ -29,6 +31,9 @@ command `claude auth login` or `codex login`. This starts the provider-owned log
 flow using the person's default CLI configuration. Custom runtime environments,
 provider executables installed only in Nessa's managed runtime, browser previews,
 and other desktop operating systems are not promised this launch capability.
+The native injected launcher publishes availability before a card enables its
+action. Unsupported or unreachable hosts retain a disabled sign-in button and
+do not attempt a launch. Browser verification injects the same capability port.
 The native launch acknowledgement does not prove login completed. It does not
 resend the failed message or remove the notice. Provider credentials remain
 outside Nessa's launcher.
@@ -37,13 +42,17 @@ outside Nessa's launcher.
 
 | State | Event | Result | Evidence |
 | --- | --- | --- | --- |
-| Latest turn failed | ACP `-32000` in provider report | Recovery card shown | SDK code test, projection restoration test, gateway mapping test |
-| Latest turn failed | ACP `-32603`, even auth diagnostic text | No recovery card | SDK code test, projection test, gateway mapping test |
+| Latest turn failed | Adapter-owned authentication-required report | Recovery card shown | SDK code test, projection restoration test, gateway mapping test |
+| Latest turn failed | Generic provider code, including `-32000` or auth diagnostic text | No recovery card | SDK code test, projection test, gateway mapping test |
+| Card unsupported | Capability absent, false, or unanswerable | Disabled action; no launch | Browser provider-sign-in script |
+| ACP prompt refused authentication | Execution reply owns the refusal; finalized secondary failures absent and cleanup succeeded | Reply carries refusal; observation stream ends without duplicating it as a fault | Real ACP/Agent/storage roundtrip |
+| ACP prompt refused authentication | Independent audit, delivery, or cleanup failure retained | Observation fault and required-work notice remain | ACP rejecting-audit and projection regressions |
+| ACP startup or steering refused | No execution reply owns the refusal | Error remains on startup/steering path | ACP startup contract |
 | Card available | Click / keyboard activate | Native login opens; button disabled while launch pending | Browser provider-sign-in script |
 | Launch pending | Additional activation | No second launch | Disabled button and component in-flight guard |
 | Launch pending | Launch acknowledged | Button available; card remains | Browser script |
 | Launch pending | Launch refused / unsupported | Button available; small launch failure shown | Browser script |
-| Card shown | Later turn replaces latest auth refusal | Card removed | Gateway mapping test, browser script |
+| Card shown | Later user-only queued or running turn replaces latest refusal | Card removed | Gateway mapping test, browser script |
 | Failed turn restored | Provider report retained | Same typed recovery fact | Projection restoration test |
 
 ## Remaining limitation

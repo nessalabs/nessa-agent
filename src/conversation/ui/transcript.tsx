@@ -36,6 +36,7 @@ export function Transcript({
   gatewayAvailable,
   onOpenPaste,
   onProviderSignIn,
+  canSignInToProvider,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
@@ -46,6 +47,7 @@ export function Transcript({
   gatewayAvailable: boolean
   onOpenPaste: (text: string) => void
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
+  canSignInToProvider?: () => Promise<boolean>
 }) {
   // Scoped to the conversation, so a key that happens to recur in the next
   // tab does not open that tab's sheet.
@@ -87,9 +89,7 @@ export function Transcript({
     (turn) =>
       turn.from === "user" && turn.receipt === "queued" && !linkedUserIds.has(turn.id),
   )
-  const latestAssistant = [...conversation.turns]
-    .reverse()
-    .find((turn) => turn.from === "assistant")
+  const latestTurn = conversation.turns.at(-1)
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
 
@@ -172,10 +172,11 @@ export function Transcript({
                       turn.authenticationRequired,
                   ) ? (
                     <React.Fragment key={`${row.key}:auth`}>
-                      {latestAssistant?.id === row.sourceTurnId ? (
+                      {latestTurn?.id === row.sourceTurnId ? (
                         <ProviderSignInCard
                           provider={provider}
                           onSignIn={onProviderSignIn}
+                          canSignIn={canSignInToProvider}
                         />
                       ) : null}
                       {row.status !== "failed" ? (

@@ -181,6 +181,7 @@ export function failureReason(error: unknown): WorkspaceFailureReason {
  */
 export interface WorkspaceDependencies {
   /** Opens the provider login flow; resolution confirms launch, not sign-in. */
+  readonly providerLoginAvailable?: () => Promise<boolean>
   readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
   readonly workspace: WorkspaceSource
   readonly now: () => number

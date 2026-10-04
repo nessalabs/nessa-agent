@@ -666,3 +666,9 @@ export const signInToProvider =
       throw new Error("Provider sign-in is unavailable on this host.")
     await dependencies.signInToProvider(provider)
   }
+
+/** Read the injected host's login capability without attempting a launch. */
+export const providerLoginAvailable =
+  (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>
+    !!dependencies.signInToProvider &&
+    (await (dependencies.providerLoginAvailable?.() ?? true))

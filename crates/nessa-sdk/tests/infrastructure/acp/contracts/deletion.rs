@@ -386,7 +386,7 @@ async fn only_the_list_is_read_past_the_protocol_s_bound_on_values() {
 
 #[tokio::test]
 async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
-    // A list refused (with a code of its own, -32000), too large in bytes or
+    // A list refused (with a code of its own, -32001), too large in bytes or
     // in values, whose cursor repeats, longer than its page bound, or past its
     // budget: nothing
     // is known of the session, so the delete's own refusal (-32603) is the

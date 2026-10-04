@@ -86,6 +86,8 @@ const fixture = {
 Object.assign(window, { __providerSignIn: fixture })
 const dependencies = createDesktopDependencies({
   workspace: source,
+  providerLoginAvailable: async () =>
+    new URLSearchParams(location.search).get("login") !== "unsupported",
   signInToProvider: async (chosen) => {
     fixture.calls.push(chosen)
     await new Promise<void>((done) => {

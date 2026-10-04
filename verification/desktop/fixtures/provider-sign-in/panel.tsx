@@ -67,7 +67,20 @@ const fixture = {
 Object.assign(window, { __providerSignIn: fixture })
 function PanelTranscript() {
   const [current, setCurrent] = useState(value)
-  recover = () => setCurrent({ ...value, turns: [] })
+  recover = () =>
+    setCurrent({
+      ...value,
+      turns: [
+        ...value.turns,
+        {
+          id: "new-prompt",
+          from: "user",
+          executionId: "retry",
+          receipt: "delivered",
+          content: [{ type: "text", text: "Try again" }],
+        },
+      ],
+    })
   return (
     <div
       style={{
@@ -87,6 +100,9 @@ function PanelTranscript() {
         statusLabel="Ready"
         gatewayAvailable
         onOpenPaste={() => {}}
+        canSignInToProvider={async () =>
+          new URLSearchParams(location.search).get("login") !== "unsupported"
+        }
         onProviderSignIn={async (chosen) => {
           fixture.calls.push(chosen)
           await new Promise<void>((done) => {

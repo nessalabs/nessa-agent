@@ -31,6 +31,7 @@ export {
   retryGatewayStartup,
   saveAgentApiKey,
   signInToProvider,
+  providerLoginAvailable,
   hasNativeHost,
   installUpdate,
   type ChosenAgent,

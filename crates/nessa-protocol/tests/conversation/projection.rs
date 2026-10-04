@@ -1195,15 +1195,31 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
 
 #[test]
 fn typed_authentication_refusal_survives_projection_and_not_diagnostic_text() {
-    for (code, expected) in [(-32000, Some(true)), (-32603, None)] {
-        let report = ExecutionReport::new(
-            Some(Err(AgentError::Provider {
-                code,
+    for (error, expected) in [
+        (
+            AgentError::AuthenticationRequired {
                 diagnostic: Some(ProviderDiagnostic::new("OAuth session expired")),
-            })),
+            },
+            Some(true),
+        ),
+        (
+            AgentError::Provider {
+                code: -32000,
+                diagnostic: Some(ProviderDiagnostic::new(
+                    "provider plan does not allow this request",
+                )),
+            },
             None,
-            ProviderSessionState::Usable,
-        );
+        ),
+        (
+            AgentError::Provider {
+                code: -32603,
+                diagnostic: Some(ProviderDiagnostic::new("OAuth session expired")),
+            },
+            None,
+        ),
+    ] {
+        let report = ExecutionReport::new(Some(Err(error)), None, ProviderSessionState::Usable);
         let mut snapshot = review_snapshot(Vec::new());
         snapshot.invocations[0].result = Some(report.clone().into_result());
         snapshot.invocations[0].provider_report = Some(report);
@@ -1219,10 +1235,15 @@ fn typed_authentication_refusal_survives_projection_and_not_diagnostic_text() {
             },
             Some(&snapshot),
         );
-        assert_eq!(
-            restored.read().messages[0].authentication_required,
-            expected
-        );
+        let message = &restored.read().messages[0];
+        assert_eq!(message.authentication_required, expected);
+        if expected.is_none() {
+            assert!(message.error.as_ref().is_some_and(|value| value
+                .contains("provider plan does not allow this request")
+                || value.contains("OAuth session expired")));
+        } else {
+            assert_eq!(message.error, None);
+        }
     }
 }
 
@@ -1230,8 +1251,7 @@ fn typed_authentication_refusal_survives_projection_and_not_diagnostic_text() {
 fn authentication_recovery_keeps_independent_required_work_failure() {
     for independent in [None, Some(AgentError::AuditFailure)] {
         let report = ExecutionReport::new(
-            Some(Err(AgentError::Provider {
-                code: -32000,
+            Some(Err(AgentError::AuthenticationRequired {
                 diagnostic: Some(ProviderDiagnostic::new("login expired")),
             })),
             independent.clone(),

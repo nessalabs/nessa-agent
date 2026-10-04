@@ -493,7 +493,7 @@ async fn provider_error_cannot_hide_a_failed_cancellation_audit() {
         ExecutionUpdate::PermissionRequested { .. }
     ));
     let provider_failure = AgentError::Provider {
-        code: -32000,
+        code: -32001,
         diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
     };
     let expected = rejected_audits(3);

@@ -64,6 +64,11 @@ await main(
                   .count()) !== 1
               )
                 throw new Error("unrelated local notice was suppressed")
+              await button.waitFor({ state: "visible" })
+              await page.waitForFunction(
+                (selector) => !document.querySelector(selector)?.disabled,
+                selectors.button,
+              )
               await button.focus()
               await page.keyboard.press("Enter")
               if (!(await button.isDisabled()))
@@ -100,6 +105,18 @@ await main(
                 window.__providerSignIn.recover()
               })
               await card.waitFor({ state: "detached" })
+              target.searchParams.set("login", "unsupported")
+              await page.goto(target.href)
+              await page.locator(selectors.card).waitFor()
+              const unsupported = page.locator(selectors.button)
+              if (!(await unsupported.isDisabled()))
+                throw new Error("unsupported host offers an enabled login action")
+              await unsupported.evaluate((element) => element.click())
+              const unsupportedCalls = await page.evaluate(
+                () => window.__providerSignIn.calls,
+              )
+              if (unsupportedCalls.length !== 0)
+                throw new Error("unsupported host attempted provider login")
               if (opened.errors.length) throw new Error(opened.errors.join("; "))
               rep.add({
                 name: "provider-sign-in",
@@ -112,6 +129,7 @@ await main(
                 cardWidth: rect.width,
                 buttonHeight: buttonRect.height,
                 loginCalls: calls.length,
+                unsupportedLoginCalls: unsupportedCalls.length,
                 errors: opened.errors.length,
               })
             } finally {

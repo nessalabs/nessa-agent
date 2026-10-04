@@ -81,6 +81,7 @@ fn main() {
             panel::reveal_setup_window,
             agent_credentials::infrastructure::save_agent_api_key,
             provider_authentication::sign_in_to_provider,
+            provider_authentication::provider_login_available,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
             surface_credential::load_surface_credential,

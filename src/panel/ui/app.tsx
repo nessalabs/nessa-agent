@@ -116,6 +116,7 @@ export function App({
   loadConversationChoices,
   agentInstallations,
   onProviderSignIn,
+  canSignInToProvider,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -136,6 +137,7 @@ export function App({
   sessionError?: string
   loadConversationChoices: () => Promise<ConversationChoices>
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
+  canSignInToProvider?: () => Promise<boolean>
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -578,6 +580,7 @@ export function App({
                   gatewayAvailable={chat.gatewayAvailable}
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
+                  canSignInToProvider={canSignInToProvider}
                 />
 
                 {attachments.viewed && (

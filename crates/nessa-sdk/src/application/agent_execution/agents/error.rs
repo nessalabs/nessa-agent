@@ -282,7 +282,12 @@ pub enum AgentError {
     StalePermission,
     /// The adapter received a representation inconsistent with its protocol contract.
     Protocol(String),
-    /// The provider returned a protocol error response.
+    /// The adapter confirmed authentication is required under its provider protocol.
+    AuthenticationRequired {
+        /// Bounded provider context, without lifecycle or cleanup authority.
+        diagnostic: Option<ProviderDiagnostic>,
+    },
+    /// The provider returned a generic protocol error response.
     Provider {
         /// Provider-supplied numeric error code, retained without string classification.
         code: i64,
@@ -336,11 +341,10 @@ impl fmt::Display for AgentError {
 impl Error for AgentError {}
 
 impl AgentError {
-    /// Whether an ACP provider explicitly requires authentication (-32000).
-    /// Generic internal errors (-32603), including diagnostic text mentioning
-    /// credentials, do not establish this fact.
+    /// Whether the adapter published an explicit authentication refusal.
+    /// Generic provider codes and diagnostic text do not establish this fact.
     pub fn authentication_required(&self) -> bool {
-        matches!(self, Self::Provider { code: -32000, .. })
+        matches!(self, Self::AuthenticationRequired { .. })
     }
 }
 
@@ -349,10 +353,13 @@ mod authentication_tests {
     use super::{AgentError, ProviderDiagnostic};
 
     #[test]
-    fn authentication_is_selected_by_the_acp_code_and_not_the_diagnostic() {
-        assert!(AgentError::Provider {
+    fn authentication_requires_the_adapter_owned_variant() {
+        assert!(AgentError::AuthenticationRequired { diagnostic: None }.authentication_required());
+        assert!(!AgentError::Provider {
             code: -32000,
-            diagnostic: None
+            diagnostic: Some(ProviderDiagnostic::new(
+                "provider plan does not allow this request"
+            )),
         }
         .authentication_required());
         assert!(!AgentError::Provider {

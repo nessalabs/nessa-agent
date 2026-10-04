@@ -4,6 +4,9 @@ use super::{LoginFailure, Provider, ProviderLogin};
 pub struct NativeProviderLogin;
 
 impl ProviderLogin for NativeProviderLogin {
+    fn available(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
     fn open(&self, provider: Provider) -> Result<(), LoginFailure> {
         open(provider)
     }
@@ -69,6 +72,7 @@ mod tests {
     use super::*;
     #[test]
     fn each_provider_opens_its_own_login_without_external_command_text() {
+        assert!(NativeProviderLogin.available());
         assert!(script(Provider::Claude).contains("claude auth login"));
         assert!(script(Provider::Codex).contains("codex login"));
     }
