@@ -510,6 +510,46 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
   `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in
   both families.
 
+### Integrations: the gateway's MCP servers
+
+#391 PR 3's design (the issue's comment of its state table, rows U1–U31):
+Settings › Connections › Integrations manages the gateway's stored MCP
+servers over `client.mcpServers`. Every row is a test of
+`settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
+or the script below. Gate 13: the window shows no limit the protocol does not
+publish, and refuses nothing the gateway would judge.
+
+- [ ] **With no gateway, Integrations is pending** — the sample preview and the
+  desktop app until #248 (U1). _Check:_ unit test `integrations-tab.test.tsx`.
+- [ ] **Each write is the gateway's, and the list is what is shown** (gate 16):
+  added with a variable, one row, its switch on, "1 variable", and the
+  variable's value nowhere in the page — markup or field — after the save
+  (U7, U8, U31); inspected, `show_chart` badged UI and `app_delete_row`
+  destructive, complete, Inspect resting while it runs (U22, U23); the switch
+  rests while its save is in flight and shows the new list's state (U12);
+  renamed, one row, its variable kept, the stored value "Stored value kept"
+  (U10, U11); a conflict made by another writer first is refused, said, the
+  list reloaded and what was typed kept (U15); removal asked first, nothing
+  sent until confirmed, then the row gone (U13, U14). Each write is exactly
+  one `mcpServers` request and one list after it. _Check:_
+  `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,conflict,remove`
+  (needs the gateway built and an agent's harness installed).
+- [ ] **A credential without `credential.manage` sees "Only an administrator
+  can manage MCP servers", no control, and sends no `mcpServers` request**
+  (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.
+- [ ] **It fits at 800 and 390px** — nothing outside its card, Settings not
+  scrolling sideways, the fold held, and under a 420px page a server row's
+  actions under its text (U29, U30). _Check:_ `responsive.mjs --only
+  integrations-narrow` (whatever the page shows); with a row, the form and the
+  inspection open over a real gateway, `mcp-servers-gateway.mjs --only narrow`.
+  _Harmless:_ at 390px the window under Settings scrolls 90px sideways (its
+  own 480px minimum), reported as `windowScroll`; Settings itself does not.
+- [ ] **A server added here reaches a new conversation** (the issue's
+  Done-when): added again from the window, the agent asked for `show_chart`
+  in a new conversation, its app frame renders the chart, once. _Check:_
+  `mcp-servers-gateway.mjs --only done-when` (needs the agent signed in on the
+  machine). "Once" depends on #418's fix (#421) being in the tree.
+
 ## Menus and tooltips
 
 _ADR 238 › Interaction and visual rules_ holds the rules; check each by hand,

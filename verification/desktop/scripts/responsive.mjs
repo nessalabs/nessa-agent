@@ -12,6 +12,11 @@
  *                   below it where it does not ("The titlebar's safe area"): an
  *                   inline title never overlaps a titlebar control
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
+ *   integrations-narrow Settings › Integrations at 800 and 390px: nothing
+ *                   outside its card, no sideways scroll, the fold held, and
+ *                   under a 420px page a server row's actions under its text
+ *                   (`lib/settings.mjs`; with servers listed, the form and the
+ *                   inspection open, `mcp-servers-gateway.mjs --only narrow`)
  *   list-gutter     the session list's search field and a row sit as far from what
  *                   is on their left — the sidebar's card, or with the sidebar
  *                   away the window's edge — as from the panes on their right
@@ -79,6 +84,7 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { integrationsFit, openIntegrations } from "./lib/settings.mjs"
 import {
   catalogueFile,
   content,
@@ -296,21 +302,30 @@ const checks = {
       // The resize reaches the page a frame or two later; then its motion runs out.
       await frames(page, 2)
       await settled(page)
-      const r = await page.evaluate((sel) => {
-        const s = document.querySelector(sel.settings)
-        const sidebar =
-          parseFloat(getComputedStyle(s).getPropertyValue("--settings-sidebar-w")) || 0
-        return {
-          sidebar: s.dataset.sidebar,
-          sidebarWidth: sidebar,
-          page: Math.round(s.getBoundingClientRect().width - sidebar),
-        }
-      }, css)
+      const r = await page.evaluate(
+        (sel) => {
+          const s = document.querySelector(sel.settings)
+          const sidebar =
+            parseFloat(getComputedStyle(s).getPropertyValue("--settings-sidebar-w")) || 0
+          return {
+            sidebar: s.dataset.sidebar,
+            sidebarWidth: sidebar,
+            page: Math.round(s.getBoundingClientRect().width - sidebar),
+          }
+        },
+        { settings: css.settings },
+      )
       seen.push({ width, ...r })
       if (r.sidebar === "open" && r.page < 420)
         failures.push(`${width}px: sidebar drawn with a ${r.page}px page (< 420)`)
       await shot(options, page, `settings-${engine}-${width}`)
     }
+    return { widths: seen, failures }
+  },
+  "integrations-narrow": async ({ page, engine, options }) => {
+    await openIntegrations(page)
+    const { seen, failures } = await integrationsFit(page, [800, 390])
+    await shot(options, page, `integrations-${engine}-390`)
     return { widths: seen, failures }
   },
   "home-shape": async ({ page, engine, layout, options }) => {

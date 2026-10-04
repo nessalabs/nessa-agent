@@ -6,7 +6,7 @@
  * the plugins it is given, and two under one id stop it. With a gateway,
  * real servers' apps are registered as the views name them.
  */
-import type { McpAppsApi } from "@nessa/client"
+import type { McpAppsApi, McpServersApi, ProductSessionReady } from "@nessa/client"
 import { describe, expect, it } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
 import {
@@ -18,6 +18,12 @@ import {
 } from "./widgets"
 import { fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
 import { fakeSource } from "./workspace/testing"
+
+/** What a fake client holds for Settings' servers: nothing these tests ask of it. */
+const settingsParts = {
+  mcpServers: {} as McpServersApi,
+  productSession: { grants: [] } as unknown as ProductSessionReady,
+}
 
 describe("the window's widget plugins", () => {
   it("are the sample plugin's while the sample workspace is in use", () => {
@@ -195,6 +201,7 @@ function gatewayWithApp() {
         onConnectionStateChange: client.onConnectionStateChange,
         close: client.close,
         mcpApps,
+        ...settingsParts,
       })
     },
   }
@@ -207,7 +214,11 @@ describe("the window's workspace", () => {
     const { workspace, widgets } = createDesktopDependencies({
       gateway: () => {
         connects++
-        return Promise.resolve({ ...gateway.client, mcpApps: {} as McpAppsApi })
+        return Promise.resolve({
+          ...gateway.client,
+          mcpApps: {} as McpAppsApi,
+          ...settingsParts,
+        })
       },
     })
     // Not the sample: none of its plugins.
@@ -216,6 +227,35 @@ describe("the window's workspace", () => {
     await workspace.index()
     expect(connects).toBe(1)
     expect(gateway.count("list")).toBe(1)
+  })
+
+  it("gives Settings the gateway source's own client for its MCP servers, and none without one", async () => {
+    const gateway = fakeGateway()
+    const listed = { revision: "r1", servers: [] }
+    const mcpServers = { list: () => Promise.resolve(listed) } as unknown as McpServersApi
+    let connects = 0
+    const dependencies = createDesktopDependencies({
+      gateway: () => {
+        connects++
+        return Promise.resolve({
+          ...gateway.client,
+          mcpApps: {} as McpAppsApi,
+          ...settingsParts,
+          mcpServers,
+        })
+      },
+    })
+    await dependencies.workspace.index()
+    await expect(dependencies.mcpServers?.list()).resolves.toEqual({
+      ok: true,
+      value: listed,
+    })
+    // The one client the workspace connected, not a second connection.
+    expect(connects).toBe(1)
+    expect(createDesktopDependencies().mcpServers).toBeUndefined()
+    expect(
+      createDesktopDependencies({ workspace: fakeSource() }).mcpServers,
+    ).toBeUndefined()
   })
 
   it("is the source composition names, ahead of a gateway", () => {

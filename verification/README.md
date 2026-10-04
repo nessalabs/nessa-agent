@@ -37,10 +37,11 @@ verification/
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
-      responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths, a pane's home
+      responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths and Integrations narrow, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
       mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in)
+      mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, toggle, rename, narrow, conflict, remove, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
         cli.mjs             options, stderr diagnostics, JSON result, exit status
@@ -51,6 +52,7 @@ verification/
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
         apps.mjs            an MCP App's documents, read through Playwright's frames
+        settings.mjs        Settings › Integrations reached, and its fit measured at a width (responsive.mjs, mcp-servers-gateway.mjs)
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs: setup's one admitted call, the review a step opened
         gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table)

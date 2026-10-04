@@ -91,6 +91,37 @@ test("once stop() returns, the log holds what the gateway said as it stopped", a
   assert.ok(gateway.log().endsWith("\nlast words\n"), gateway.log().slice(-40))
 })
 
+test("the stored servers are mcptest alone by default, and exactly those given otherwise", async (t) => {
+  t.after(() => delete process.env.MCP_LIVE_NESSA)
+  process.env.MCP_LIVE_NESSA = nessa
+  const stored = async (extra) => {
+    const gateway = await startLocalGateway({
+      agent: "claude",
+      port: await freePort(),
+      instance: "local-gateway-test",
+      agentArgv: [process.execPath],
+      model: "none",
+      mcpServer: { command: process.execPath, args: ["server.mjs"] },
+      ...extra,
+    })
+    try {
+      const config = JSON.parse(
+        readFileSync(
+          join(gateway.directory, "ci", "instances", "local-gateway-test", "config.json"),
+          "utf8",
+        ),
+      )
+      return config.agents.mcpServers
+    } finally {
+      await gateway.stop()
+    }
+  }
+  assert.deepEqual(await stored({}), [
+    { name: "mcptest", command: process.execPath, args: ["server.mjs"] },
+  ])
+  assert.deepEqual(await stored({ mcpServers: [] }), [])
+})
+
 test("a gateway that fails to start leaves its output on the error", async (t) => {
   t.after(() => {
     delete process.env.MCP_LIVE_NESSA

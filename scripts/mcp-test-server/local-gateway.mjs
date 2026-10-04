@@ -1,7 +1,7 @@
 /**
  * A real gateway for a live check: provisioned in a temporary `ci` namespace
  * of its own, with one agent runtime and the test MCP server configured as
- * `mcptest`, started on 127.0.0.1, and stopped and removed again — its owner
+ * `mcptest` (or the servers it is given), started on 127.0.0.1, and stopped and removed again — its owner
  * token with it. `live-check.mjs` and the desktop's real-gateway check
  * (`verification/desktop/scripts/mcp-apps-gateway.mjs`) both start theirs
  * here.
@@ -99,7 +99,11 @@ export async function exited(child, ms) {
  *   (`agentCommand(agent).argv`, possibly wrapped)
  * @param {string} o.model the agent's model
  * @param {string|null} [o.path] a directory to put first on the gateway's `PATH`
- * @param {{ command: string, args: string[] }} o.mcpServer how the gateway starts `mcptest`
+ * @param {{ command: string, args: string[] }} [o.mcpServer] how the gateway starts `mcptest`
+ * @param {object[]} [o.mcpServers] the stored servers the gateway starts with,
+ *   as `agents.mcpServers` holds them; by default `mcptest` alone, started as
+ *   `o.mcpServer` says. `[]` starts it with none (the desktop's Settings check,
+ *   `verification/desktop/scripts/mcp-servers-gateway.mjs`, adds its own).
  * @returns the gateway: `{ directory, token, url, log, server, stop }`. `token`
  *   is the owner token file's path; `log()` the gateway's output so far; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
@@ -161,7 +165,7 @@ export async function startLocalGateway(o) {
           catalog: join(repoRoot, "crates/nessa-sdk/data/models.json"),
           workspace,
           selected: o.agent,
-          mcpServers: [{ name: SERVER, ...o.mcpServer }],
+          mcpServers: o.mcpServers ?? [{ name: SERVER, ...o.mcpServer }],
           runtimes: {
             [o.agent]: {
               command: o.agentArgv[0],

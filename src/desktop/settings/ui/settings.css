@@ -766,6 +766,227 @@ html:not(.dark) .settings-glass {
   margin: 0 0 4px;
 }
 
+/* ——— Integrations: the gateway's MCP servers ——— */
+
+.settings-notice {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--desktop-muted);
+  font-size: 12px;
+}
+
+.settings-notice + .settings-row {
+  box-shadow: 0 -1px 0 var(--settings-hairline);
+}
+
+/*
+ * A server's row wraps rather than squeezes: in a narrow page its actions go
+ * under its name instead of pushing past the card, whatever the width.
+ */
+.settings-server {
+  flex-wrap: wrap;
+}
+
+.settings-server .settings-row-text {
+  flex: 1 1 12rem;
+}
+
+.settings-server-command {
+  color: var(--desktop-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.settings-server-confirm {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.settings-server-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-servers-add {
+  justify-content: flex-end;
+}
+
+.settings-button-danger:not(:disabled) {
+  color: var(--destructive);
+}
+
+.settings-button-primary:not(:disabled) {
+  background: color-mix(in oklab, var(--settings-accent) 80%, transparent);
+  color: var(--background);
+}
+
+/* Rows holding the place of a list on its way. */
+.settings-skeleton span {
+  width: 40%;
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--foreground) 9%, transparent);
+}
+
+.settings-form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 14px;
+  border: 0;
+}
+
+.settings-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-field > label,
+.settings-field-label {
+  color: var(--desktop-muted);
+  font-size: 12px;
+}
+
+.settings-field-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-input {
+  min-width: 0;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  box-shadow: inset 0 0 0 1px var(--settings-hairline);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.settings-input:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--settings-accent) 70%, transparent);
+  outline-offset: 0;
+}
+
+.settings-input[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--destructive);
+}
+
+.settings-input-mono {
+  font-family: var(--font-mono);
+}
+
+.settings-input::placeholder {
+  color: var(--desktop-faint);
+}
+
+.settings-variable {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-variable .settings-input {
+  flex: 1 1 8rem;
+  width: auto;
+}
+
+.settings-field-problem {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.settings-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.settings-inspection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.settings-inspection-note {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.settings-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-tool-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-tool-head code,
+.settings-tool-ui code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-badge {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  color: var(--desktop-muted);
+  font-size: 11px;
+}
+
+.settings-badge[data-badge="destructive"] {
+  color: var(--destructive);
+}
+
+.settings-tool-ui {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.settings-tool-ui > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+
+.settings-tool-ui dt {
+  color: var(--desktop-faint);
+}
+
+.settings-tool-ui dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ——— Cards picked by sight: themes, icon families, layouts ——— */
 
 .settings-choices {

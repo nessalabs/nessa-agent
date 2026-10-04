@@ -240,7 +240,11 @@ writing the full defaults on first launch is buying.
   session, a row its own summary — and the architecture check refuses a view
   that selects the whole workspace. Settings is `src/desktop/settings/`
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
-  (`ui/`). See
+  (`ui/`). Its Integrations tab manages the gateway's stored MCP servers
+  (#391): the reducer and its sentences in `model/mcp-servers.ts`, the
+  window's client read into them in `adapters/mcp-servers-gateway.ts`, and
+  the tab in `ui/integrations-tab.tsx`, given by composition
+  (`dependencies.ts`, `main.tsx`) only where the window has a gateway. See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
 - Widgets are the desktop window's vertical for what a plugin draws
   ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
@@ -705,7 +709,11 @@ a launch), `infrastructure/inspector.rs` (one server started once with
 `McpServers::open_once`, read within its bounds, then stopped; tested against
 real processes in `tests/mcp_servers/inspect.rs`) and
 `infrastructure/settings_audit.rs`
-([design](design/mcp-connections.md#managing-the-stored-servers));
+([design](design/mcp-connections.md#managing-the-stored-servers)); in
+`@nessa/client` they are `presentation/mcp-servers-api.ts`
+(`client.mcpServers`), its refusals `NessaMcpServersError`
+(`application/mcp-servers-error.ts`) and its answers checked by
+`protocol/mcp-servers-validate.ts`;
 `composition/mcp_servers.rs` takes the configured servers
 into `McpServers`, the one owner of the live set, gives every provider open
 the stand-ins for that set as it is then (`StandIns`, an

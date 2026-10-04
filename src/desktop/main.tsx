@@ -6,6 +6,7 @@ import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { createDesktopDependencies } from "./dependencies"
 import { gatewayRequested } from "./model/workspace-backend"
+import { McpServersProvider } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
@@ -64,11 +65,13 @@ createRoot(container).render(
         <ClockProvider now={dependencies.now}>
           {/* Every icon in the window resolves through the family chosen in Settings. */}
           <DesktopIconFamilyProvider>
-            <DesktopWindow
-              hostKind={host.kind}
-              browserSurface={host.kind === "browser"}
-              inspectable={import.meta.env.DEV}
-            />
+            <McpServersProvider gateway={dependencies.mcpServers}>
+              <DesktopWindow
+                hostKind={host.kind}
+                browserSurface={host.kind === "browser"}
+                inspectable={import.meta.env.DEV}
+              />
+            </McpServersProvider>
           </DesktopIconFamilyProvider>
         </ClockProvider>
       </WidgetRegistryProvider>

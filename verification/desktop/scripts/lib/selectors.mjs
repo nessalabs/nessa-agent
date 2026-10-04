@@ -165,6 +165,30 @@ export const css = {
   settingsPanel: "#settings-panel", // the open tab's page
   control: 'button, input, select, textarea, [role="switch"]',
 
+  // Settings › Connections › Integrations: the gateway's MCP servers
+  // (src/desktop/settings/ui/integrations-tab.tsx)
+  mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
+  mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | not-admin
+  mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
+  mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
+  mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
+  mcpStoredRow: "[data-mcp-server]:not([data-managed])",
+  mcpManagedRow: "[data-mcp-server][data-managed]",
+  mcpRowText: ".settings-row-text", // class: a row's name, command and variables
+  mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
+  mcpEmpty: "[data-mcp-empty]",
+  mcpNotice: "[data-mcp-notice]",
+  mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
+  mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
+  mcpVariable: "[data-mcp-variable]", // a variable's row in the form
+  mcpProblem: "[data-mcp-problem]", // a refusal at a field; its value is the field
+  mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
+  mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
+  mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
+  mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
+  mcpCut: "[data-mcp-cut]",
+  mcpSwitch: '[role="switch"]',
+
   // Elements by kind, inside a part found by one of the above
   field: "textarea",
   button: "button",
@@ -298,6 +322,29 @@ export const names = {
   useNightScene: "Use Night Scene",
   allowOnce: "Allow Once",
   leaveSettings: "Back to nessa Agent",
+  /** Settings' category and tab holding the MCP servers. */
+  connections: "Connections",
+  integrations: "Integrations",
+  /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
+  mcp: {
+    add: "Add server…",
+    addVariable: "Add variable",
+    save: "Save",
+    cancel: "Cancel",
+    edit: "Edit",
+    inspect: "Inspect",
+    remove: "Remove",
+    close: "Close",
+    name: "Name",
+    command: "Command",
+    args: "Arguments, one per line",
+    variableName: "Variable name",
+    empty: "No servers yet",
+    notAdmin: "Only an administrator can manage MCP servers.",
+    conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
+    removeAsk: (name) =>
+      `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+  },
   /** A sample session (in-memory source) that waits on an approval. */
   approvalSession: "Release build signing",
   /** Sample sessions (in-memory source) that each wait on one approval. */
