@@ -207,6 +207,16 @@ export type InspectionState =
   | { readonly phase: "done"; readonly name: string; readonly result: Inspection }
   | { readonly phase: "failed"; readonly name: string; readonly text: string }
 
+/**
+ * What the last answer said. `list`: a list that failed, which the next list
+ * that succeeds answers, so it goes then. `write`: a write's, kept until the
+ * next action, since the list read after it does not say what it did.
+ */
+export interface Notice {
+  readonly text: string
+  readonly from: "list" | "write"
+}
+
 export interface McpServersState {
   readonly limits: McpServersLimits
   /** Whether this credential may manage servers; unknown until the gateway is reached. */
@@ -219,7 +229,7 @@ export interface McpServersState {
   readonly confirming: string | null
   readonly inspection: InspectionState | null
   /** What the last answer said, when it said something. */
-  readonly notice: string | null
+  readonly notice: Notice | null
   /** The last request number handed out. */
   readonly seq: number
   /** The last variable row key handed out. */
@@ -295,13 +305,24 @@ export const sentences = {
   notFound: "That server is no longer stored. The list was reloaded.",
   busy: "Another change is in progress. Try again in a moment.",
   stopping: "The gateway is stopping, so nothing was changed.",
-  reservedName: "“nessa” is Nessa's own server and can't be changed here.",
+  /** Named from the list's managed row, the one the gateway keeps for itself. */
+  reservedName: (name: string | undefined) =>
+    name === undefined
+      ? "That name is Nessa's own server's, and can't be changed here."
+      : `${quoted(name)} is Nessa's own server, and can't be changed here.`,
   configInvalid: "The configuration file can't be read as it is, so nothing was changed.",
   configTooLarge: "The configuration would be too large, so nothing was changed.",
   storageUnavailable:
     "The configuration file couldn't be read or written, so nothing was changed.",
   unanswered: "Not confirmed. The list shows where things stand.",
   forbidden: "Only an administrator can manage MCP servers.",
+  gone: (name: string) => `${quoted(name)} is no longer stored.`,
+  tools: (count: number) =>
+    count === 0
+      ? "It offers no tools."
+      : count === 1
+        ? "It offers 1 tool."
+        : `It offers ${count} tools.`,
   removeAsk: (name: string) =>
     `Remove ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
   inspecting: (name: string, ms: number) =>
@@ -347,7 +368,7 @@ function problemAt(failure: Invalid): FormProblem {
     case "name":
       return { field: "name", text: "This name can't be used for a server." }
     case "command":
-      return { field: "command", text: "This isn't an absolute path to a program." }
+      return { field: "command", text: "This command can't be used." }
     case "arguments":
       return { field: "args", text: "One of the arguments can't be used." }
     case "environmentName":
@@ -366,12 +387,12 @@ function problemAt(failure: Invalid): FormProblem {
 }
 
 /** What a failed inspection says. */
-function inspectSentence(name: string, failure: Failure, limits: McpServersLimits) {
+function inspectSentence(name: string, failure: Failure, state: McpServersState) {
   switch (failure.kind) {
     case "startFailed":
       return `${quoted(name)} couldn't be started. Check its command.`
     case "timedOut":
-      return `${quoted(name)} didn't finish within ${seconds(limits.inspectDeadlineMs)}.`
+      return `${quoted(name)} didn't finish within ${seconds(state.limits.inspectDeadlineMs)}.`
     case "gone":
       return `${quoted(name)} stopped before it answered.`
     case "malformed":
@@ -387,17 +408,17 @@ function inspectSentence(name: string, failure: Failure, limits: McpServersLimit
     case "auditUnavailable":
       return auditSentence(failure, "inspection")
     default:
-      return writeSentence(failure)
+      return writeSentence(failure, state)
   }
 }
 
 /** What a failed list, save or remove says when it is not at a field. */
-function writeSentence(failure: Failure): string {
+function writeSentence(failure: Failure, state: McpServersState): string {
   switch (failure.kind) {
     case "notConfigured":
       return sentences.notConfigured
     case "reservedName":
-      return sentences.reservedName
+      return sentences.reservedName(managedName(state))
     case "notFound":
       return sentences.notFound
     case "revisionConflict":
@@ -443,17 +464,21 @@ export function canWrite(state: McpServersState): boolean {
   )
 }
 
-/** Whether an inspection may start now: one at a time, while reachable. */
+/**
+ * Whether an inspection may start now: one at a time, while reachable, and
+ * not while a write is in flight (U21).
+ */
 export function canInspect(state: McpServersState): boolean {
   return (
     state.access === "admin" &&
     state.connection === "connected" &&
+    state.pending === null &&
     state.list.phase === "listed" &&
     state.inspection?.phase !== "running"
   )
 }
 
-/** Whether the form holds what a save needs before the gateway can judge it. */
+/** Whether the form holds what a save needs before the gateway can judge it: a non-blank name and command (U7). */
 export function formReady(form: ServerForm): boolean {
   return form.name.trim() !== "" && form.command.trim() !== ""
 }
@@ -527,6 +552,31 @@ function server(state: McpServersState, name: string): ListedServer | undefined 
   return listed(state)?.servers.find((each) => each.name === name)
 }
 
+/** The name of the managed server, as the list last said. */
+function managedName(state: McpServersState): string | undefined {
+  return listed(state)?.servers.find((each) => each.managed)?.name
+}
+
+const said = (text: string, from: Notice["from"]): Notice => ({ text, from })
+
+/**
+ * A finished inspection of a server the list no longer has — removed or
+ * renamed while it ran, or since — says so, rather than show what it was.
+ */
+function inspectionOfStored(state: McpServersState): McpServersState {
+  const inspection = state.inspection
+  if (!inspection || inspection.phase === "running" || !listed(state)) return state
+  if (server(state, inspection.name)) return state
+  return {
+    ...state,
+    inspection: {
+      phase: "failed",
+      name: inspection.name,
+      text: sentences.gone(inspection.name),
+    },
+  }
+}
+
 function editForm(state: McpServersState, name: string): McpServersState {
   const found = server(state, name)
   if (!found || found.managed) return state
@@ -572,7 +622,12 @@ function answeredList(
 ): McpServersState {
   const done = { ...state, pending: null }
   if (outcome.ok)
-    return { ...done, list: { phase: "listed", list: outcome.value as ServerList } }
+    return inspectionOfStored({
+      ...done,
+      list: { phase: "listed", list: outcome.value as ServerList },
+      // This list answers a list that failed; a write's notice stands.
+      notice: state.notice?.from === "list" ? null : state.notice,
+    })
   const { failure } = outcome
   if (failure.kind === "forbidden") return forbidden(state)
   if (failure.kind === "notConfigured")
@@ -580,7 +635,12 @@ function answeredList(
   return {
     ...done,
     list: { phase: "failed" },
-    notice: failure.kind === "unanswered" ? sentences.listFailed : writeSentence(failure),
+    notice: said(
+      failure.kind === "unanswered"
+        ? sentences.listFailed
+        : writeSentence(failure, state),
+      "list",
+    ),
   }
 }
 
@@ -616,22 +676,26 @@ function answeredWrite(
             notice: null,
             form: { ...state.form, problem: problemAt(failure) },
           }
-        : { ...done, notice: writeSentence(failure) }
+        : { ...done, notice: said(writeSentence(failure, state), "write") }
     case "busy":
     case "stopping":
     case "reservedName":
       // Nothing was written; the controls come back as they were.
-      return { ...done, notice: writeSentence(failure) }
+      return { ...done, notice: said(writeSentence(failure, state), "write") }
     case "auditUnavailable":
       return listAgain({
         ...done,
-        notice: writeSentence(failure),
+        notice: said(writeSentence(failure, state), "write"),
         form: failure.applied === true && fromForm ? null : state.form,
         confirming: null,
       })
     default:
       // The list shows where things stand: what was typed is kept to try again.
-      return listAgain({ ...done, notice: writeSentence(failure), confirming: null })
+      return listAgain({
+        ...done,
+        notice: said(writeSentence(failure, state), "write"),
+        confirming: null,
+      })
   }
 }
 
@@ -778,17 +842,17 @@ export function mcpServersReducer(
       if (running?.phase !== "running" || running.seq !== event.seq) return state
       const { outcome } = event
       if (outcome.ok)
-        return {
+        return inspectionOfStored({
           ...state,
           inspection: { phase: "done", name: running.name, result: outcome.value },
-        }
+        })
       if (outcome.failure.kind === "forbidden") return forbidden(state)
       const failed: McpServersState = {
         ...state,
         inspection: {
           phase: "failed",
           name: running.name,
-          text: inspectSentence(running.name, outcome.failure, state.limits),
+          text: inspectSentence(running.name, outcome.failure, state),
         },
       }
       // A server no longer stored: the list shows where things stand.

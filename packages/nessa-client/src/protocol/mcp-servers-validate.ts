@@ -25,8 +25,12 @@ import { csp, object, permissions } from "./mcp-app-validate.js"
 const entryKeys = ["kind", "name", "command", "args", "envNames", "enabled", "managed"]
 const toolKeys = ["name", "readOnlyHint", "destructiveHint", "ui"]
 
-const text = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0
+/**
+ * A string, as the schema says: any, the empty one included. A server stored
+ * by hand under a name the gateway would refuse is still listed, so the
+ * window can show it and remove it.
+ */
+const text = (value: unknown): value is string => typeof value === "string"
 const texts = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((each) => typeof each === "string")
 

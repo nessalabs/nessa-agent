@@ -108,6 +108,20 @@ async function answer(
 const button = (text: string, within: ParentNode = host) =>
   [...within.querySelectorAll("button")].find((each) => each.textContent === text)
 
+const row = (name: string) => {
+  const found = host.querySelector(`[data-mcp-server="${name}"]`)
+  if (!found) throw new Error(`no row ${name}`)
+  return found
+}
+const form = () => host.querySelector("[data-mcp-form]") ?? host
+
+async function press(element: Element | null, key: string) {
+  if (!element) throw new Error("nothing to press on")
+  await act(async () => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }))
+  })
+}
+
 const list = (...servers: (typeof charts)[]): Outcome<ServerList> => ({
   ok: true,
   value: { revision: "r1", servers },
@@ -218,6 +232,170 @@ describe("Integrations", () => {
     )
     expect(values.join("\n")).not.toContain("very-secret-value")
     expect(fake.requests.map((each) => each.method)).toEqual(["list", "save", "list"])
+  })
+
+  it("U9 and U31: a refusal is said in a region drawn before it, at its field, and a typed value stays out of the markup", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Edit", row("charts")))
+    const command = host.querySelector(
+      "[data-mcp-form] textarea.settings-input-wrapped",
+    ) as HTMLTextAreaElement
+    const problem = host.querySelector('[data-mcp-problem="command"]')
+    // Drawn, empty, before any refusal: what arrives in it is read out.
+    expect(problem?.getAttribute("role")).toBe("alert")
+    expect(problem?.textContent).toBe("")
+    expect(command.getAttribute("aria-describedby")).toBeNull()
+    const value = host.querySelector(
+      '[data-mcp-variable="TOKEN"] input[type="password"]',
+    ) as HTMLInputElement
+    await type(value, "kept-after-refusal")
+    await click(button("Save"))
+    await answer(fake, "save", {
+      ok: false,
+      failure: { kind: "invalid", problem: "command" },
+    })
+    // The same element, now holding the problem, and the field names it.
+    expect(host.querySelector('[data-mcp-problem="command"]')).toBe(problem)
+    expect(problem?.textContent).toBe("This command can't be used.")
+    expect(command.getAttribute("aria-describedby")).toBe(problem?.id)
+    expect(command.getAttribute("aria-invalid")).toBe("true")
+    // The form is kept, the value in its field, and nowhere in the markup.
+    expect(host.querySelector("[data-mcp-form]")).not.toBeNull()
+    expect(value.value).toBe("kept-after-refusal")
+    expect(host.innerHTML).not.toContain("kept-after-refusal")
+  })
+
+  it("the notices' live region is drawn before what it says", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    const region = host.querySelector("[data-mcp-notices]")
+    expect(region?.getAttribute("role")).toBe("status")
+    expect(region?.textContent).toBe("")
+    await answer(fake, "list", { ok: false, failure: { kind: "configInvalid" } })
+    expect(host.querySelector("[data-mcp-notices]")).toBe(region)
+    expect(region?.textContent).toBe(
+      "The configuration file can't be read as it is, so nothing was changed.",
+    )
+    await act(async () => fake.tell({ type: "unreachable" }))
+    expect(host.querySelector("[data-mcp-notices]")).toBe(region)
+    expect(region?.querySelector("[data-mcp-unreachable]")).not.toBeNull()
+  })
+
+  it("the inspection's status is one live region, drawn with the panel, that its answer arrives in", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Inspect", row("charts")))
+    const panel = host.querySelector("[data-mcp-inspection]")
+    expect(panel?.hasAttribute("aria-live")).toBe(false)
+    const status = host.querySelector("[data-mcp-inspection-status]")
+    expect(status?.getAttribute("role")).toBe("status")
+    expect(status?.textContent).toBe("Starting “charts”… It has up to 30 seconds.")
+    await answer(fake, "inspect", {
+      ok: true,
+      value: { complete: true, tools: [{ name: "show_chart" }, { name: "rows" }] },
+    })
+    expect(host.querySelector("[data-mcp-inspection-status]")).toBe(status)
+    expect(status?.textContent).toBe("It offers 2 tools.")
+  })
+
+  it("U21: Inspect rests while a write is in flight", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    expect(button("Inspect", row("charts"))?.disabled).toBe(false)
+    await click(row("charts").querySelector('[role="switch"]') ?? undefined)
+    expect(button("Inspect", row("charts"))?.disabled).toBe(true)
+  })
+
+  describe("focus", () => {
+    async function listedTab() {
+      const fake = fakeGateway()
+      await mount(fake.gateway)
+      await answer(fake, "list", list(charts, nessa))
+      return fake
+    }
+    const active = () => document.activeElement
+    const nameField = () =>
+      host.querySelector("[data-mcp-form] input") as HTMLInputElement | null
+
+    it("Add puts it on the form's first field; Cancel, Escape and Save put it back on Add", async () => {
+      const fake = await listedTab()
+      await click(button("Add server…"))
+      expect(active()).toBe(nameField())
+      await click(button("Cancel", form()))
+      expect(active()).toBe(button("Add server…"))
+      await click(button("Add server…"))
+      await press(nameField(), "Escape")
+      expect(host.querySelector("[data-mcp-form]")).toBeNull()
+      expect(active()).toBe(button("Add server…"))
+      await click(button("Add server…"))
+      await type(nameField(), "maps")
+      await type(host.querySelector("[data-mcp-form] textarea"), "/bin/maps")
+      await click(button("Save"))
+      await answer(fake, "save", { ok: true, value: undefined })
+      // Resting while the list is read, then focused once it is answered.
+      await answer(fake, "list", list(charts, { ...charts, name: "maps" }, nessa))
+      expect(active()).toBe(button("Add server…"))
+    })
+
+    it("Edit puts it on the first field; Cancel or Save puts it back on the row's Edit, under the name saved", async () => {
+      const fake = await listedTab()
+      await click(button("Edit", row("charts")))
+      expect(active()).toBe(nameField())
+      await click(button("Cancel", form()))
+      expect(active()).toBe(button("Edit", row("charts")))
+      await click(button("Edit", row("charts")))
+      await type(nameField(), "graphs")
+      await click(button("Save"))
+      await answer(fake, "save", { ok: true, value: undefined })
+      await answer(fake, "list", list({ ...charts, name: "graphs" }, nessa))
+      expect(active()).toBe(button("Edit", row("graphs")))
+    })
+
+    it("Remove puts it on the confirm's Cancel, linked to its sentence; Cancel and Escape put it back on Remove", async () => {
+      await listedTab()
+      const remove = button("Remove", row("charts"))
+      await click(remove)
+      const cancel = button("Cancel", row("charts"))
+      const ask = row("charts").querySelector("[data-mcp-confirm]")
+      expect(active()).toBe(cancel)
+      // Its own button, not the row's Edit reused in place.
+      expect(cancel).not.toBe(button("Edit", row("charts")))
+      expect(cancel?.getAttribute("data-mcp-action")).toBe("cancel")
+      expect(ask?.id).toBeTruthy()
+      for (const each of [
+        cancel,
+        row("charts").querySelector('[data-mcp-action="confirm"]'),
+      ])
+        expect(each?.getAttribute("aria-describedby")).toBe(ask?.id)
+      await click(cancel)
+      expect(active()).toBe(button("Remove", row("charts")))
+      await click(button("Remove", row("charts")))
+      await press(active(), "Escape")
+      expect(row("charts").querySelector("[data-mcp-confirm]")).toBeNull()
+      expect(active()).toBe(button("Remove", row("charts")))
+    })
+
+    it("a confirmed removal puts it on Add once the row is gone", async () => {
+      const fake = await listedTab()
+      await click(button("Remove", row("charts")))
+      await click(row("charts").querySelector('[data-mcp-action="confirm"]') ?? undefined)
+      await answer(fake, "remove", { ok: true, value: undefined })
+      await answer(fake, "list", list(nessa))
+      expect(active()).toBe(button("Add server…"))
+    })
+
+    it("Inspect puts it on the panel's heading; Close puts it back on the row's Inspect", async () => {
+      const fake = await listedTab()
+      await click(button("Inspect", row("charts")))
+      expect(active()).toBe(host.querySelector("[data-mcp-inspection] h2"))
+      await answer(fake, "inspect", { ok: true, value: { complete: true, tools: [] } })
+      await click(button("Close"))
+      expect(active()).toBe(button("Inspect", row("charts")))
+    })
   })
 
   it("U28: unreachable says so and rests every control", async () => {

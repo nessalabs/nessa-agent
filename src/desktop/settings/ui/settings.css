@@ -775,8 +775,13 @@ html:not(.dark) .settings-glass {
   font-size: 12px;
 }
 
-.settings-notice + .settings-row {
+.settings-notices:not(:empty) + .settings-row {
   box-shadow: 0 -1px 0 var(--settings-hairline);
+}
+
+/* The panel's heading takes focus when an inspection starts; it is not a control. */
+.settings-servers h2[tabindex="-1"]:focus {
+  outline: none;
 }
 
 /*
@@ -886,6 +891,13 @@ html:not(.dark) .settings-glass {
   font-family: var(--font-mono);
 }
 
+/* One line that grows as its value wraps. */
+.settings-input-wrapped {
+  field-sizing: content;
+  resize: none;
+  overflow-wrap: anywhere;
+}
+
 .settings-input::placeholder {
   color: var(--desktop-faint);
 }
@@ -905,6 +917,14 @@ html:not(.dark) .settings-glass {
   margin: 0;
   color: var(--destructive);
   font-size: 12px;
+}
+
+/*
+ * Drawn with its field, empty until a refusal arrives, so the arrival is
+ * read out; empty, it is out of the field's flow and takes no gap.
+ */
+.settings-field-problem:empty {
+  position: absolute;
 }
 
 .settings-form-actions {

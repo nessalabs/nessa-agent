@@ -5,6 +5,7 @@ import {
   useId,
   useReducer,
   useRef,
+  type KeyboardEvent,
   type ReactNode,
 } from "react"
 import type { McpServersGateway } from "../adapters/mcp-servers-gateway"
@@ -30,7 +31,14 @@ import { PendingAction, SettingGroup, Toggle } from "./settings-controls"
  * Settings › Connections › Integrations: the gateway's stored MCP servers
  * (#391). The rules are the reducer's (`model/mcp-servers.ts`); this draws
  * its state and sends the one request it names. With no gateway — the
- * desktop app until #248, the sample preview — the page keeps its pending row.
+ * sample preview, whose workspace is the in-memory one — the page keeps its
+ * pending row.
+ *
+ * Focus follows what opens and closes (CHECKLIST › Integrations): Add or
+ * Edit puts it on the form's first field, Remove on the confirm's Cancel,
+ * Inspect on the panel's heading; closing any of them puts it back on the
+ * row's button that opened it, or on Add (`focusAfter`). Escape closes the
+ * form and the confirm.
  */
 
 /** The stored servers of the window's gateway, given by composition (`main.tsx`); none without one. */
@@ -100,6 +108,86 @@ function useRequests(
   }, [gateway, running, dispatch])
 }
 
+/** A button focus may go back to: a row's, by its server's name, or Add. */
+export interface FocusTarget {
+  readonly action: "edit" | "inspect" | "remove" | "add"
+  readonly server?: string
+}
+
+/**
+ * Where focus goes back to when the form, the confirm or the inspection
+ * closes between `previous` and `next`: the first of these drawn, once it is
+ * enabled. `null` when nothing closed. A saved form goes back to the row
+ * under the name saved, a cancelled one to the row it edited; a removed row
+ * is gone, so Add.
+ */
+export function focusAfter(
+  previous: McpServersState,
+  next: McpServersState,
+): readonly FocusTarget[] | null {
+  const add: FocusTarget = { action: "add" }
+  if (previous.form && !next.form)
+    return previous.form.editing === undefined
+      ? [add]
+      : [
+          { action: "edit", server: previous.form.name },
+          { action: "edit", server: previous.form.editing },
+          add,
+        ]
+  if (previous.confirming !== null && next.confirming === null)
+    return [{ action: "remove", server: previous.confirming }, add]
+  if (previous.inspection && !next.inspection)
+    return [{ action: "inspect", server: previous.inspection.name }, add]
+  return null
+}
+
+function buttonFor(container: HTMLElement, target: FocusTarget) {
+  const scope =
+    target.server === undefined
+      ? container
+      : [...container.querySelectorAll("[data-mcp-server]")].find(
+          (row) => row.getAttribute("data-mcp-server") === target.server,
+        )
+  return scope?.querySelector<HTMLButtonElement>(`[data-mcp-action="${target.action}"]`)
+}
+
+/**
+ * Puts focus back where `focusAfter` says, once the button is there and
+ * enabled — a save's is only after the list it reads. Only focus that was
+ * lost (on the body, or a surface around the tab) or is still in the tab is
+ * moved: focus taken elsewhere meanwhile stays there.
+ */
+function useFocusReturn(state: McpServersState) {
+  const container = useRef<HTMLDivElement>(null)
+  const previous = useRef(state)
+  const returning = useRef<readonly FocusTarget[] | null>(null)
+  useEffect(() => {
+    const after = focusAfter(previous.current, state)
+    previous.current = state
+    if (after) returning.current = after
+    const targets = returning.current
+    const tab = container.current
+    if (!targets || !tab) return
+    // Lost focus is on the body, or — where a click does not focus a button,
+    // as in WebKit — on the nearest focusable thing around the tab.
+    const active = document.activeElement
+    if (active && !tab.contains(active) && !active.contains(tab)) {
+      returning.current = null
+      return
+    }
+    for (const target of targets) {
+      const button = buttonFor(tab, target)
+      if (!button) continue
+      // Drawn but resting while a request runs: wait for it.
+      if (button.disabled) return
+      button.focus()
+      break
+    }
+    returning.current = null
+  })
+  return container
+}
+
 function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
   const [state, dispatch] = useReducer(
     mcpServersReducer,
@@ -108,6 +196,7 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
   )
   useEffect(() => gateway.follow(dispatch), [gateway])
   useRequests(gateway, state, dispatch)
+  const container = useFocusReturn(state)
   const phase =
     state.access === "notAdmin"
       ? "not-admin"
@@ -120,6 +209,7 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
             : "loading"
   return (
     <div
+      ref={container}
       className="settings-servers"
       data-mcp-servers={phase}
       data-connection={state.connection}
@@ -138,11 +228,24 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
   )
 }
 
-function Notice({ children }: { children: ReactNode }) {
+/**
+ * What the gateway's answers say: one live region, there from the tab's
+ * first draw so what arrives in it later is read out.
+ */
+function Notices({ state }: { state: McpServersState }) {
   return (
-    <p className="settings-notice" role="status" data-mcp-notice>
-      {children}
-    </p>
+    <div className="settings-notices" role="status" data-mcp-notices>
+      {state.connection === "unreachable" ? (
+        <p className="settings-notice" data-mcp-unreachable>
+          {sentences.unreachable}
+        </p>
+      ) : null}
+      {state.notice ? (
+        <p className="settings-notice" data-mcp-notice>
+          {state.notice.text}
+        </p>
+      ) : null}
+    </div>
   )
 }
 
@@ -160,18 +263,25 @@ function ServersCard({
         <p>{sentences.notAdmin}</p>
       </div>
     )
-  const unreachable =
-    state.connection === "unreachable" ? (
-      <Notice>
-        <span data-mcp-unreachable>{sentences.unreachable}</span>
-      </Notice>
-    ) : null
-  const notice = state.notice ? <Notice>{state.notice}</Notice> : null
+  return (
+    <>
+      <Notices state={state} />
+      <ServersBody state={state} dispatch={dispatch} />
+    </>
+  )
+}
+
+function ServersBody({
+  state,
+  dispatch,
+}: {
+  state: McpServersState
+  dispatch: Dispatch
+}) {
   const list = state.list
   if (list.phase === "notConfigured")
     return (
       <>
-        {unreachable}
         <div className="settings-empty">
           <DesktopIcon name="connections" />
           <p>{sentences.notConfigured}</p>
@@ -181,8 +291,6 @@ function ServersCard({
   if (list.phase === "failed")
     return (
       <>
-        {unreachable}
-        {notice}
         <div className="settings-empty">
           <button
             type="button"
@@ -200,6 +308,7 @@ function ServersCard({
     <button
       type="button"
       className="settings-button"
+      data-mcp-action="add"
       disabled={!writable}
       onClick={() => dispatch({ type: "add" })}
     >
@@ -209,7 +318,6 @@ function ServersCard({
   if (list.phase === "loading")
     return (
       <>
-        {unreachable}
         <div
           className="settings-row settings-skeleton"
           data-mcp-skeleton
@@ -230,8 +338,6 @@ function ServersCard({
   const { stored, managed } = storedServers(list.list)
   return (
     <>
-      {unreachable}
-      {notice}
       {stored.length === 0 ? (
         <div className="settings-empty" data-mcp-empty>
           <DesktopIcon name="connections" />
@@ -268,14 +374,27 @@ function ServerRow({
   dispatch: Dispatch
 }) {
   const nameId = useId()
+  const askId = useId()
+  const cancel = useRef<HTMLButtonElement>(null)
   const writable = canWrite(state) && state.form === null
   const confirming = state.confirming === server.name
   const command = [server.command, ...server.args].join(" ")
+  useEffect(() => {
+    if (confirming) cancel.current?.focus()
+  }, [confirming])
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!confirming || event.key !== "Escape" || state.pending !== null) return
+    // The confirm's Escape: Settings' own never closes it.
+    event.preventDefault()
+    event.stopPropagation()
+    dispatch({ type: "cancelRemove" })
+  }
   return (
     <div
       className="settings-row settings-server"
       data-mcp-server={server.name}
       data-managed={server.managed || undefined}
+      onKeyDown={onKeyDown}
     >
       <div className="settings-row-text">
         <span id={nameId}>{server.name}</span>
@@ -286,62 +405,76 @@ function ServerRow({
             : sentences.variables(server.envNames.length)}
         </small>
         {confirming ? (
-          <p className="settings-server-confirm" data-mcp-confirm>
+          <p id={askId} className="settings-server-confirm" data-mcp-confirm>
             {sentences.removeAsk(server.name)}
           </p>
         ) : null}
       </div>
       <div className="settings-row-control settings-server-actions">
-        {server.managed ? null : confirming ? (
-          <>
-            <button
-              type="button"
-              className="settings-button"
-              disabled={state.pending !== null}
-              onClick={() => dispatch({ type: "cancelRemove" })}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="settings-button settings-button-danger"
-              disabled={!canWrite(state)}
-              onClick={() => dispatch({ type: "confirmRemove" })}
-            >
-              Remove
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="settings-button"
-              aria-describedby={nameId}
-              disabled={!writable}
-              onClick={() => dispatch({ type: "edit", name: server.name })}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              className="settings-button"
-              aria-describedby={nameId}
-              disabled={!canInspect(state)}
-              onClick={() => dispatch({ type: "inspect", name: server.name })}
-            >
-              Inspect
-            </button>
-            <button
-              type="button"
-              className="settings-button"
-              aria-describedby={nameId}
-              disabled={!writable}
-              onClick={() => dispatch({ type: "askRemove", name: server.name })}
-            >
-              Remove
-            </button>
-          </>
-        )}
+        {/* Each button keyed: the confirm's are not the row's, reused by place. */}
+        {server.managed
+          ? null
+          : confirming
+            ? [
+                <button
+                  key="cancel"
+                  ref={cancel}
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="cancel"
+                  aria-describedby={askId}
+                  disabled={state.pending !== null}
+                  onClick={() => dispatch({ type: "cancelRemove" })}
+                >
+                  Cancel
+                </button>,
+                <button
+                  key="confirm"
+                  type="button"
+                  className="settings-button settings-button-danger"
+                  data-mcp-action="confirm"
+                  aria-describedby={askId}
+                  disabled={!canWrite(state)}
+                  onClick={() => dispatch({ type: "confirmRemove" })}
+                >
+                  Remove
+                </button>,
+              ]
+            : [
+                <button
+                  key="edit"
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="edit"
+                  aria-describedby={nameId}
+                  disabled={!writable}
+                  onClick={() => dispatch({ type: "edit", name: server.name })}
+                >
+                  Edit
+                </button>,
+                <button
+                  key="inspect"
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="inspect"
+                  aria-describedby={nameId}
+                  disabled={!canInspect(state)}
+                  onClick={() => dispatch({ type: "inspect", name: server.name })}
+                >
+                  Inspect
+                </button>,
+                <button
+                  key="remove"
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="remove"
+                  aria-describedby={nameId}
+                  disabled={!writable}
+                  onClick={() => dispatch({ type: "askRemove", name: server.name })}
+                >
+                  Remove
+                </button>,
+              ]}
         <Toggle
           checked={server.enabled}
           label={server.name}
@@ -353,11 +486,22 @@ function ServerRow({
   )
 }
 
-function FieldProblem({ form, field }: { form: ServerForm; field: FormField }) {
-  if (form.problem?.field !== field) return null
+/**
+ * A field's problem, there from the form's first draw so a refusal arriving
+ * in it is read out, and named by its field's `aria-describedby`.
+ */
+function FieldProblem({
+  form,
+  field,
+  id,
+}: {
+  form: ServerForm
+  field: FormField
+  id: string
+}) {
   return (
-    <p className="settings-field-problem" role="alert" data-mcp-problem={field}>
-      {form.problem.text}
+    <p id={id} className="settings-field-problem" role="alert" data-mcp-problem={field}>
+      {form.problem?.field === field ? form.problem.text : null}
     </p>
   )
 }
@@ -372,39 +516,73 @@ function FormGroup({
   dispatch: Dispatch
 }) {
   const ids = { name: useId(), command: useId(), args: useId() }
+  const problems = {
+    form: useId(),
+    name: useId(),
+    command: useId(),
+    args: useId(),
+    env: useId(),
+  } satisfies Record<FormField, string>
+  const first = useRef<HTMLInputElement>(null)
   const busy = state.pending !== null
+  useEffect(() => {
+    first.current?.focus()
+  }, [])
   const change = (patch: Extract<McpServersEvent, { type: "change" }>["patch"]) =>
     dispatch({ type: "change", patch })
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || busy) return
+    // The form's Escape: Settings' own never closes it.
+    event.preventDefault()
+    event.stopPropagation()
+    dispatch({ type: "cancelForm" })
+  }
+  const described = (field: FormField) =>
+    form.problem?.field === field ? problems[field] : undefined
   return (
-    <section className="settings-group" data-mcp-form={form.editing ?? ""}>
+    <section
+      className="settings-group"
+      data-mcp-form={form.editing ?? ""}
+      onKeyDown={onKeyDown}
+    >
       <h2>{form.editing === undefined ? "Add server" : `Edit “${form.editing}”`}</h2>
-      <fieldset className="settings-card settings-form" disabled={busy}>
-        <FieldProblem form={form} field="form" />
+      <fieldset
+        className="settings-card settings-form"
+        disabled={busy}
+        aria-describedby={described("form")}
+      >
+        <FieldProblem form={form} field="form" id={problems.form} />
         <div className="settings-field">
           <label htmlFor={ids.name}>Name</label>
           <input
+            ref={first}
             id={ids.name}
             className="settings-input"
             value={form.name}
             autoComplete="off"
             spellCheck={false}
             aria-invalid={form.problem?.field === "name" || undefined}
+            aria-describedby={described("name")}
             onChange={(event) => change({ name: event.target.value })}
           />
-          <FieldProblem form={form} field="name" />
+          <FieldProblem form={form} field="name" id={problems.name} />
         </div>
         <div className="settings-field">
           <label htmlFor={ids.command}>Command</label>
-          <input
+          {/* A path is often wider than a narrow page: wrapped where it
+              is read, as the row's command is, rather than cut off. */}
+          <textarea
             id={ids.command}
-            className="settings-input settings-input-mono"
+            className="settings-input settings-input-mono settings-input-wrapped"
+            rows={1}
             value={form.command}
             autoComplete="off"
             spellCheck={false}
             aria-invalid={form.problem?.field === "command" || undefined}
+            aria-describedby={described("command")}
             onChange={(event) => change({ command: event.target.value })}
           />
-          <FieldProblem form={form} field="command" />
+          <FieldProblem form={form} field="command" id={problems.command} />
         </div>
         <div className="settings-field">
           <label htmlFor={ids.args}>Arguments, one per line</label>
@@ -415,9 +593,10 @@ function FormGroup({
             value={form.args}
             spellCheck={false}
             aria-invalid={form.problem?.field === "args" || undefined}
+            aria-describedby={described("args")}
             onChange={(event) => change({ args: event.target.value })}
           />
-          <FieldProblem form={form} field="args" />
+          <FieldProblem form={form} field="args" id={problems.args} />
         </div>
         <div className="settings-field">
           <span className="settings-field-label">Variables</span>
@@ -428,6 +607,7 @@ function FormGroup({
                 aria-label="Variable name"
                 value={row.name}
                 readOnly={row.stored}
+                aria-describedby={described("env")}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(event) =>
@@ -438,12 +618,15 @@ function FormGroup({
                   })
                 }
               />
+              {/* Uncontrolled, with no value or default given: React writes a
+                  controlled field's value, and a default, into the markup as its
+                  value attribute; this field's is only ever its own (U31). */}
               <input
                 className="settings-input settings-input-mono"
                 type="password"
                 aria-label={`Value of ${row.name || "the variable"}`}
+                aria-describedby={described("env")}
                 placeholder={row.stored ? sentences.storedValue : "Value"}
-                value={row.value}
                 autoComplete="off"
                 onChange={(event) =>
                   dispatch({
@@ -472,7 +655,7 @@ function FormGroup({
               Add variable
             </button>
           </div>
-          <FieldProblem form={form} field="env" />
+          <FieldProblem form={form} field="env" id={problems.env} />
         </div>
         <div className="settings-field settings-field-inline">
           <span className="settings-field-label">Offered to new conversations</span>
@@ -487,6 +670,7 @@ function FormGroup({
           <button
             type="button"
             className="settings-button"
+            data-mcp-action="cancel"
             onClick={() => dispatch({ type: "cancelForm" })}
           >
             Cancel
@@ -521,28 +705,37 @@ function InspectionGroup({
   dispatch: Dispatch
 }) {
   const inspection = state.inspection
+  const heading = useRef<HTMLHeadingElement>(null)
+  const started = inspection?.phase === "running" ? inspection.seq : undefined
+  useEffect(() => {
+    if (started !== undefined) heading.current?.focus()
+  }, [started])
   if (!inspection) return null
+  // How it stands, in one live region drawn with the panel: what it starts,
+  // then what it found or why it failed, read out as it arrives.
+  const status =
+    inspection.phase === "running"
+      ? sentences.inspecting(inspection.name, state.limits.inspectDeadlineMs)
+      : inspection.phase === "failed"
+        ? inspection.text
+        : sentences.tools(inspection.result.tools.length)
   return (
-    <section
-      className="settings-group"
-      data-mcp-inspection={inspection.phase}
-      aria-live="polite"
-    >
-      <h2>Inspect “{inspection.name}”</h2>
+    <section className="settings-group" data-mcp-inspection={inspection.phase}>
+      <h2 ref={heading} tabIndex={-1}>
+        Inspect “{inspection.name}”
+      </h2>
       <div className="settings-card settings-inspection">
-        {inspection.phase === "running" ? (
-          <p className="settings-inspection-note">
-            {sentences.inspecting(inspection.name, state.limits.inspectDeadlineMs)}
-          </p>
-        ) : inspection.phase === "failed" ? (
-          <p className="settings-inspection-note" data-mcp-inspection-failure>
-            {inspection.text}
-          </p>
-        ) : (
+        <p
+          className="settings-inspection-note"
+          role="status"
+          data-mcp-inspection-status
+          data-mcp-inspection-failure={inspection.phase === "failed" || undefined}
+        >
+          {status}
+        </p>
+        {inspection.phase === "done" ? (
           <>
-            {inspection.result.tools.length === 0 ? (
-              <p className="settings-inspection-note">It offers no tools.</p>
-            ) : (
+            {inspection.result.tools.length === 0 ? null : (
               <ul className="settings-tools">
                 {inspection.result.tools.map((tool) => (
                   <li key={tool.name} data-mcp-tool={tool.name}>
@@ -596,11 +789,12 @@ function InspectionGroup({
               </p>
             ) : null}
           </>
-        )}
+        ) : null}
         <div className="settings-form-actions">
           <button
             type="button"
             className="settings-button"
+            data-mcp-action="close"
             disabled={inspection.phase === "running"}
             onClick={() => dispatch({ type: "closeInspection" })}
           >

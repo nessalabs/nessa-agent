@@ -253,4 +253,48 @@ describe("mcpServersGateway", () => {
       },
     })
   })
+
+  it("names every CSP list and permission the protocol has, in the table's order", async () => {
+    const inspect = vi.fn(() =>
+      Promise.resolve({
+        complete: true,
+        tools: [
+          {
+            name: "all",
+            ui: {
+              uri: "ui://all",
+              csp: {
+                connectDomains: ["https://c"],
+                resourceDomains: ["https://r"],
+                frameDomains: ["https://f"],
+                baseUriDomains: ["https://b"],
+              },
+              permissions: {
+                camera: true,
+                microphone: true,
+                geolocation: true,
+                clipboardWrite: true,
+              },
+            },
+          },
+        ],
+      }),
+    )
+    const gateway = mcpServersGateway({
+      connected: () => Promise.resolve(client([], { inspect }).value),
+      after: () => () => {},
+    })
+    const answered = await gateway.inspect("all")
+    if (!answered.ok) throw new Error("refused")
+    expect(answered.value.tools[0].ui).toEqual({
+      uri: "ui://all",
+      csp: [
+        { name: "connect", origins: ["https://c"] },
+        { name: "resource", origins: ["https://r"] },
+        { name: "frame", origins: ["https://f"] },
+        { name: "base-uri", origins: ["https://b"] },
+      ],
+      permissions: ["camera", "microphone", "geolocation", "clipboardWrite"],
+    })
+  })
 })

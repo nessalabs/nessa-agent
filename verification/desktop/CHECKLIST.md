@@ -542,25 +542,49 @@ servers over `client.mcpServers`. Every row is a test of
 or the script below. Gate 13: the window shows no limit the protocol does not
 publish, and refuses nothing the gateway would judge.
 
-- [ ] **With no gateway, Integrations is pending** — the sample preview and the
-  desktop app until #248 (U1). _Check:_ unit test `integrations-tab.test.tsx`.
+- [ ] **With no gateway, Integrations is pending** — the sample preview,
+  whose workspace is the in-memory one (U1); the app window and the
+  `?gateway` preview have one. _Check:_ unit test `integrations-tab.test.tsx`.
 - [ ] **Each write is the gateway's, and the list is what is shown** (gate 16):
   added with a variable, one row, its switch on, "1 variable", and the
   variable's value nowhere in the page — markup or field — after the save
-  (U7, U8, U31); inspected, `show_chart` badged UI and `app_delete_row`
-  destructive, complete, Inspect resting while it runs (U22, U23); the switch
+  (U7, U8, U31); inspected, seen running — the test server slow to start
+  (`--initialize-delay-ms`), so the running state is read, not raced — with
+  Inspect and Close resting, then `show_chart` badged UI and `app_delete_row`
+  destructive, complete (U22, U23); the switch
   rests while its save is in flight and shows the new list's state (U12);
   renamed, one row, its variable kept, the stored value "Stored value kept"
   (U10, U11); a conflict made by another writer first is refused, said, the
   list reloaded and what was typed kept (U15); removal asked first, nothing
-  sent until confirmed, then the row gone (U13, U14). Each write is exactly
+  sent until confirmed, then the row gone (U13, U14), and an inspection
+  running as its server is removed says the server is gone; Inspect rests
+  while a write is in flight (U21). Each write is exactly
   one `mcpServers` request and one list after it. _Check:_
   `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,conflict,remove`
   (needs the gateway built and an agent's harness installed).
+- [ ] **Focus follows what opens and closes** — Add and Edit put it on the
+  form's first field; Remove on the confirm's Cancel, which its sentence
+  describes; Inspect on the panel's heading; Cancel, Escape, Save and Close
+  put it back on the row's button that opened the part, or on Add (a save's
+  once the list after it is read). Escape closes the form and the confirm,
+  and never Settings. _Check:_ `mcp-servers-gateway.mjs --only focus`
+  (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
+  (`focus`).
+- [ ] **What the gateway says is read out** — the notices, each field's
+  problem and the inspection's status are live regions drawn before their
+  text arrives, a field naming its problem with `aria-describedby`; no
+  variable value is in the markup, after a refused save too (U9, U31).
+  _Check:_ unit tests `integrations-tab.test.tsx`.
+- [ ] **A failed list's notice goes once a list succeeds** — config.json made
+  unreadable and the connection dropped, the failure is said; restored and
+  dropped again, the list is shown with no notice. A write's "not confirmed"
+  stays through the lists after it until the next action. _Check:_
+  `mcp-servers-gateway.mjs --only reconnect`; unit tests `mcp-servers.test.ts`.
 - [ ] **A credential without `credential.manage` sees "Only an administrator
   can manage MCP servers", no control, and sends no `mcpServers` request**
   (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.
-- [ ] **It fits at 800 and 390px** — nothing outside its card, Settings not
+- [ ] **It fits at 800 and 390px** — nothing outside its card, nothing
+  clipped (a field's value included: the command wraps), Settings not
   scrolling sideways, the fold held, and under a 420px page a server row's
   actions under its text (U29, U30). _Check:_ `responsive.mjs --only
   integrations-narrow` (whatever the page shows); with a row, the form and the
@@ -568,7 +592,7 @@ publish, and refuses nothing the gateway would judge.
   _Harmless:_ at 390px the window under Settings scrolls 90px sideways (its
   own 480px minimum), reported as `windowScroll`; Settings itself does not.
 - [ ] **A server added here reaches a new conversation** (the issue's
-  Done-when): added again from the window, the agent asked for `show_chart`
+  Done-when): added again from the window, its switch on, the agent asked for `show_chart`
   in a new conversation, its app frame renders the chart, once. _Check:_
   `mcp-servers-gateway.mjs --only done-when` (needs the agent signed in on the
   machine). "Once" depends on #418's fix (#421) being in the tree.

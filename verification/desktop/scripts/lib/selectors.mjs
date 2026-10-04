@@ -184,11 +184,13 @@ export const css = {
   mcpRowText: ".settings-row-text", // class: a row's name, command and variables
   mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
   mcpEmpty: "[data-mcp-empty]",
-  mcpNotice: "[data-mcp-notice]",
+  mcpNotices: "[data-mcp-notices]", // the notices' live region, drawn from the tab's first draw
+  mcpNotice: "[data-mcp-notice]", // what an answer said, in the notices' region
   mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
   mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
   mcpVariable: "[data-mcp-variable]", // a variable's row in the form
-  mcpProblem: "[data-mcp-problem]", // a refusal at a field; its value is the field
+  mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's button by what it does: add | edit | inspect | remove | cancel | confirm | close
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
   mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
   mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
@@ -353,6 +355,9 @@ export const names = {
     empty: "No servers yet",
     notAdmin: "Only an administrator can manage MCP servers.",
     conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
+    gone: (name) => `“${name}” is no longer stored.`,
+    configInvalid:
+      "The configuration file can't be read as it is, so nothing was changed.",
     removeAsk: (name) =>
       `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
   },

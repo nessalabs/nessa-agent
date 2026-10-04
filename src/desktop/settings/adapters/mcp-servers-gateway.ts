@@ -13,12 +13,15 @@ import {
   NessaMcpServersError,
   type ConnectionState,
   type McpInspectedTool,
+  type McpInspectedUi,
   type McpServerProblemCode,
   type McpServersApi,
   type McpServersErrorCode,
   type McpServersInspectResult,
   type McpServersListResult,
   type McpServersRefusal,
+  type McpUiCsp,
+  type McpUiPermissions,
   type ProductSessionReady,
 } from "@nessa/client"
 import type {
@@ -150,27 +153,47 @@ function serverList(result: McpServersListResult): ServerList {
   }
 }
 
+/**
+ * Each CSP list's name as the panel shows it, in the order shown: total over
+ * the protocol's lists, so a list it adds is a type error here, not one the
+ * panel leaves out.
+ */
+const cspNames: Record<keyof McpUiCsp, string> = {
+  connectDomains: "connect",
+  resourceDomains: "resource",
+  frameDomains: "frame",
+  baseUriDomains: "base-uri",
+}
+
+/** Each permission's name as the panel shows it; total, as `cspNames`. */
+const permissionNames: Record<keyof McpUiPermissions, string> = {
+  camera: "camera",
+  microphone: "microphone",
+  geolocation: "geolocation",
+  clipboardWrite: "clipboardWrite",
+}
+
+/** A table's own keys, in its order, typed as the table's. */
+const keysOf = <K extends string>(table: Record<K, string>) => Object.keys(table) as K[]
+
+function inspectedUi(ui: McpInspectedUi): NonNullable<InspectedTool["ui"]> {
+  return {
+    uri: ui.uri,
+    csp: keysOf(cspNames)
+      .map((key) => ({ name: cspNames[key], origins: ui.csp[key] }))
+      .filter((each) => each.origins.length > 0),
+    permissions: keysOf(permissionNames)
+      .filter((key) => ui.permissions[key])
+      .map((key) => permissionNames[key]),
+  }
+}
+
 function inspectedTool(tool: McpInspectedTool): InspectedTool {
   return {
     name: tool.name,
     ...(tool.readOnlyHint === undefined ? {} : { readOnly: tool.readOnlyHint }),
     ...(tool.destructiveHint === undefined ? {} : { destructive: tool.destructiveHint }),
-    ...(tool.ui
-      ? {
-          ui: {
-            uri: tool.ui.uri,
-            csp: [
-              { name: "connect", origins: tool.ui.csp.connectDomains },
-              { name: "resource", origins: tool.ui.csp.resourceDomains },
-              { name: "frame", origins: tool.ui.csp.frameDomains },
-              { name: "base-uri", origins: tool.ui.csp.baseUriDomains },
-            ].filter((each) => each.origins.length > 0),
-            permissions: (
-              ["camera", "microphone", "geolocation", "clipboardWrite"] as const
-            ).filter((permission) => tool.ui?.permissions[permission] === true),
-          },
-        }
-      : {}),
+    ...(tool.ui ? { ui: inspectedUi(tool.ui) } : {}),
   }
 }
 

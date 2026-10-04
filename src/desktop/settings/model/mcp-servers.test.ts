@@ -144,13 +144,40 @@ describe("listing", () => {
     )
   })
 
+  it("a list that succeeds after a reconnect clears the failed list's notice", () => {
+    // The list fails, the connection drops and returns, the list succeeds:
+    // the failure is answered, and its notice goes.
+    let state = answer(
+      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      no({ kind: "configInvalid" }),
+    )
+    expect(state.notice).toEqual({ text: sentences.configInvalid, from: "list" })
+    state = run(state, { type: "unreachable" }, { type: "connected", mayManage: true })
+    expect(state.notice?.text).toBe(sentences.configInvalid)
+    state = answer(state, ok(listOf(charts, nessa)))
+    expect(state.list.phase).toBe("listed")
+    expect(state.notice).toBeNull()
+  })
+
+  it("a write not confirmed keeps its sentence through the lists after it, until the next action", () => {
+    let state = run(listed(), { type: "toggle", name: "charts" })
+    state = answer(state, no({ kind: "unanswered" }))
+    expect(state.notice).toEqual({ text: sentences.unanswered, from: "write" })
+    state = answer(state, ok(listOf(charts, nessa)))
+    expect(state.notice?.text).toBe(sentences.unanswered)
+    state = run(state, { type: "unreachable" }, { type: "connected", mayManage: true })
+    state = answer(state, ok(listOf(charts, nessa)))
+    expect(state.notice?.text).toBe(sentences.unanswered)
+    expect(run(state, { type: "add" }).notice).toBeNull()
+  })
+
   it("a list that fails says so and lists again only when asked", () => {
     let state = answer(
       run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
       no({ kind: "unanswered" }),
     )
     expect(state.list.phase).toBe("failed")
-    expect(state.notice).toBe(sentences.listFailed)
+    expect(state.notice?.text).toBe(sentences.listFailed)
     expect(state.pending).toBeNull()
     state = run(state, { type: "retry" })
     expect(state.pending?.kind).toBe("list")
@@ -158,7 +185,7 @@ describe("listing", () => {
 })
 
 describe("the form", () => {
-  it("U7: Add opens an empty form, on, not ready until name and command", () => {
+  it("U7: Add opens an empty form, on, not ready until name and command are non-blank", () => {
     let state = run(listed(), { type: "add" })
     expect(state.form).toEqual({
       name: "",
@@ -258,7 +285,7 @@ describe("the form", () => {
     )
     expect(other.form?.problem).toBeUndefined()
     expect(other.form?.name).toBe("maps")
-    expect(other.notice).toBe("“hand”: This isn't an absolute path to a program.")
+    expect(other.notice?.text).toBe("“hand”: This command can't be used.")
     expect(other.pending).toBeNull()
   })
 
@@ -394,7 +421,7 @@ describe("refusals", () => {
 
   it("U15: a conflict reloads, says so, and keeps what was typed", () => {
     const state = answer(saving(), no({ kind: "revisionConflict" }))
-    expect(state.notice).toBe(sentences.conflict)
+    expect(state.notice?.text).toBe(sentences.conflict)
     expect(state.form?.command).toBe("/bin/new")
     expect(state.pending?.kind).toBe("list")
   })
@@ -404,14 +431,14 @@ describe("refusals", () => {
       run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
       no({ kind: "notFound" }),
     )
-    expect(state.notice).toBe(sentences.notFound)
+    expect(state.notice?.text).toBe(sentences.notFound)
     expect(state.pending?.kind).toBe("list")
     expect(state.confirming).toBeNull()
   })
 
   it("U17: busy says so and gives the controls back, listing nothing", () => {
     const state = answer(saving(), no({ kind: "busy" }))
-    expect(state.notice).toBe(sentences.busy)
+    expect(state.notice?.text).toBe(sentences.busy)
     expect(state.pending).toBeNull()
     expect(canWrite(state)).toBe(true)
     expect(state.form?.command).toBe("/bin/new")
@@ -419,14 +446,14 @@ describe("refusals", () => {
 
   it("the gateway stopping says nothing changed and gives the controls back, listing nothing", () => {
     const state = answer(saving(), no({ kind: "stopping" }))
-    expect(state.notice).toBe("The gateway is stopping, so nothing was changed.")
+    expect(state.notice?.text).toBe("The gateway is stopping, so nothing was changed.")
     expect(state.pending).toBeNull()
     expect(state.form?.command).toBe("/bin/new")
     const removing = answer(
       run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
       no({ kind: "stopping" }),
     )
-    expect(removing.notice).toBe(sentences.stopping)
+    expect(removing.notice?.text).toBe(sentences.stopping)
     expect(removing.pending).toBeNull()
   })
 
@@ -436,7 +463,7 @@ describe("refusals", () => {
     ["storageUnavailable", sentences.storageUnavailable],
   ] as const)("U18: %s says nothing changed and reloads", (kind, text) => {
     const state = answer(saving(), no({ kind }))
-    expect(state.notice).toBe(text)
+    expect(state.notice?.text).toBe(text)
     expect(state.pending?.kind).toBe("list")
   })
 
@@ -445,29 +472,45 @@ describe("refusals", () => {
       saving(),
       no({ kind: "auditUnavailable", applied: true, code: "mcp_servers_busy" }),
     )
-    expect(applied.notice).toBe(
+    expect(applied.notice?.text).toBe(
       "The change was made (mcp_servers_busy), but it couldn't be recorded. The list was reloaded.",
     )
     expect(applied.form).toBeNull()
     expect(applied.pending?.kind).toBe("list")
     const not = answer(saving(), no({ kind: "auditUnavailable", applied: false }))
-    expect(not.notice).toBe(
+    expect(not.notice?.text).toBe(
       "Nothing was changed, but it couldn't be recorded. The list was reloaded.",
     )
     expect(not.form?.command).toBe("/bin/new")
     const unknown = answer(saving(), no({ kind: "auditUnavailable" }))
-    expect(unknown.notice).toMatch(/^Whether the change happened isn't known/)
+    expect(unknown.notice?.text).toMatch(/^Whether the change happened isn't known/)
   })
 
-  it("the reserved name says so, listing nothing", () => {
+  it("the reserved name says so, naming the list's managed server, listing nothing", () => {
     const state = answer(saving(), no({ kind: "reservedName" }))
-    expect(state.notice).toBe(sentences.reservedName)
+    expect(state.notice?.text).toBe(
+      "“nessa” is Nessa's own server, and can't be changed here.",
+    )
     expect(state.pending).toBeNull()
+    // The name is the list's, not a copy of the gateway's: another managed
+    // server's name is the one said.
+    const renamed = answer(
+      run(
+        listed(listOf(charts, { ...nessa, name: "own" })),
+        { type: "edit", name: "charts" },
+        { type: "save" },
+      ),
+      no({ kind: "reservedName" }),
+    )
+    expect(renamed.notice?.text).toBe(
+      "“own” is Nessa's own server, and can't be changed here.",
+    )
+    expect(sentences.reservedName(undefined)).not.toContain("nessa")
   })
 
   it("an unanswered write is not confirmed: the list shows where things stand", () => {
     const state = answer(saving(), no({ kind: "unanswered" }))
-    expect(state.notice).toBe(sentences.unanswered)
+    expect(state.notice?.text).toBe(sentences.unanswered)
     expect(state.pending?.kind).toBe("list")
     expect(state.form?.command).toBe("/bin/new")
   })
@@ -491,6 +534,9 @@ describe("in flight", () => {
       { type: "retry" },
     ] as const)
       expect(run(state, event).pending).toBe(state.pending)
+    // Inspect rests too: every control, while one request runs.
+    expect(canInspect(state)).toBe(false)
+    expect(run(state, { type: "inspect", name: "charts" }).inspection).toBeNull()
     const editing = run(listed(), { type: "edit", name: "charts" }, { type: "save" })
     expect(run(editing, { type: "change", patch: { name: "z" } }).form?.name).toBe(
       "charts",
@@ -588,6 +634,37 @@ describe("inspecting", () => {
   it("U26: a server turned off can be inspected", () => {
     const state = started(listed(listOf({ ...charts, enabled: false }, nessa)))
     expect(state.inspection).toMatchObject({ phase: "running", name: "charts" })
+  })
+
+  it("a server removed while it was inspected: the panel says it is gone", () => {
+    // Inspected, removed while it ran; the inspection answers, then the list.
+    let state = started()
+    state = run(state, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
+    state = answer(state, ok(undefined))
+    state = run(state, { type: "inspected", seq: seqOf(state), outcome: ok(result) })
+    state = answer(state, ok(listOf(nessa)))
+    expect(state.inspection).toEqual({
+      phase: "failed",
+      name: "charts",
+      text: "“charts” is no longer stored.",
+    })
+    // The list first, then the inspection's answer: the same.
+    let later = started()
+    later = run(later, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
+    later = answer(answer(later, ok(undefined)), ok(listOf(nessa)))
+    expect(later.inspection?.phase).toBe("running")
+    later = run(later, { type: "inspected", seq: seqOf(later), outcome: ok(result) })
+    expect(later.inspection).toEqual(state.inspection)
+    // A server still listed keeps what was found.
+    const kept = answer(
+      run(
+        started(),
+        { type: "inspected", seq: seqOf(started()), outcome: ok(result) },
+        { type: "retry" },
+      ),
+      ok(listOf(charts, nessa)),
+    )
+    expect(kept.inspection?.phase).toBe("done")
   })
 
   it("an answer for another inspection changes nothing", () => {

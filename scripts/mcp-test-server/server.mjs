@@ -8,7 +8,11 @@
  * dependencies; every answer is fixed, so a recording of one run can be
  * compared with another.
  *
- *   node scripts/mcp-test-server/server.mjs
+ *   node scripts/mcp-test-server/server.mjs [--initialize-delay-ms <ms>]
+ *
+ * `--initialize-delay-ms` holds its answer to `initialize` that long, so a
+ * check can see a host's state while a server is still starting
+ * (`verification/desktop/scripts/mcp-servers-gateway.mjs`, `inspect`).
  *
  * See README.md beside it for what each tool is for and how the live check
  * (`scripts/mcp-test-server/live-check.mjs`) uses it.
@@ -365,8 +369,32 @@ export function answer(message) {
   }
 }
 
-/** Serve newline-delimited JSON-RPC on `input`, answering on `output`. */
-export function serve(input = process.stdin, output = process.stdout) {
+/**
+ * The `--initialize-delay-ms` given in `argv`, or 0. Anything but a
+ * non-negative integer is refused, so a typo cannot pass for no delay.
+ */
+export function initializeDelayMs(argv) {
+  const at = argv.indexOf("--initialize-delay-ms")
+  if (at === -1) return 0
+  const value = argv[at + 1]
+  if (!/^\d+$/.test(value ?? "")) throw new Error(`--initialize-delay-ms ${value}`)
+  return Number(value)
+}
+
+/**
+ * Serve newline-delimited JSON-RPC on `input`, answering on `output`; the
+ * answer to `initialize` after `initializeDelayMs`, and every answer in order.
+ */
+export function serve(input = process.stdin, output = process.stdout, options = {}) {
+  const delay = options.initializeDelayMs ?? 0
+  // Each answer is written after the one before it, so a delayed one keeps its place.
+  let written = Promise.resolve()
+  const write = (reply, wait = 0) => {
+    written = written.then(async () => {
+      if (wait > 0) await new Promise((done) => setTimeout(done, wait))
+      output.write(`${JSON.stringify(reply)}\n`)
+    })
+  }
   const lines = createInterface({ input, crlfDelay: Infinity })
   lines.on("line", (line) => {
     if (!line.trim()) return
@@ -374,13 +402,16 @@ export function serve(input = process.stdin, output = process.stdout) {
     try {
       message = JSON.parse(line)
     } catch {
-      output.write(`${JSON.stringify(failure(null, -32700, "Parse error"))}\n`)
+      write(failure(null, -32700, "Parse error"))
       return
     }
     const reply = answer(message)
-    if (reply) output.write(`${JSON.stringify(reply)}\n`)
+    if (reply) write(reply, message.method === "initialize" ? delay : 0)
   })
   return lines
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) serve()
+if (process.argv[1] === fileURLToPath(import.meta.url))
+  serve(process.stdin, process.stdout, {
+    initializeDelayMs: initializeDelayMs(process.argv.slice(2)),
+  })

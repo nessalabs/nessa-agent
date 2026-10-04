@@ -66,6 +66,35 @@ describe("client.mcpServers answers", () => {
     expect(listed.servers.map((each) => each.name)).toEqual(["charts", "nessa"])
   })
 
+  it("lists a server stored by hand with empty strings, as the schema allows", async () => {
+    // Held to the schema's shape only: an entry the gateway would refuse to
+    // save is still listed, so the window can show it and remove it.
+    const byHand = { ...entry, name: "", command: "", args: [""] }
+    const { api } = session(() => ({ revision: "", servers: [byHand, managed] }))
+    const listed = await api.list()
+    expect(listed.revision).toBe("")
+    expect(listed.servers[0]).toEqual(byHand)
+    const tool = session(() => ({
+      complete: true,
+      tools: [{ name: "", ui: { uri: "", csp, permissions } }],
+    }))
+    await expect(tool.api.inspect("charts")).resolves.toMatchObject({
+      tools: [{ name: "", ui: { uri: "" } }],
+    })
+    const write = session(() => ({ revision: "" }))
+    await expect(write.api.remove({ revision: "r1", name: "" })).resolves.toEqual({
+      revision: "",
+    })
+  })
+
+  it("refuses an entry that is not the schema's shape", async () => {
+    const { api } = session(() => ({
+      revision: "r1",
+      servers: [{ ...entry, name: 7 }],
+    }))
+    await expect(api.list()).rejects.toThrow()
+  })
+
   it("sends a save and a remove as given, and answers the new revision", async () => {
     const { api, calls } = session(() => ({ revision: "r2" }))
     const save = {

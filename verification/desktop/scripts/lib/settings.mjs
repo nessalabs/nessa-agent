@@ -22,7 +22,8 @@ export async function openIntegrations(page) {
  * At each width, whether Integrations fits (U29, U30): Settings does not
  * scroll sideways, nor reach past the viewport (the window under it, whose
  * own minimum width is not Settings', is reported as `windowScroll`); every part of the tab — rows, buttons, fields, code,
- * badges — lies inside its card (half a pixel's give); the sidebar is folded
+ * badges — lies inside its card (half a pixel's give); nothing is clipped,
+ * a field's value included; the sidebar is folded
  * when the page would be under its 420px (the existing fold); and where the
  * page is that narrow, a server row's actions sit under its text rather
  * than beside it. Returns what was measured and what broke.
@@ -71,13 +72,19 @@ export async function integrationsFit(page, widths) {
           }
         }
         const panel = document.querySelector(sel.panel)
+        // Clipped: what a box holds is wider than it shows — a scroller's
+        // content, or a field's value (an input never wraps, so a value
+        // wider than its field is cut off where it is read).
+        const field = (each) => each.tagName === "TEXTAREA" || each.tagName === "INPUT"
         const overflowing = [...(panel?.querySelectorAll("*") ?? [])]
           .filter((each) => each.scrollWidth > each.clientWidth + 1)
-          .filter((each) => getComputedStyle(each).overflowX !== "visible")
-          .filter((each) => each.tagName !== "TEXTAREA" && each.tagName !== "INPUT")
+          .filter((each) => field(each) || getComputedStyle(each).overflowX !== "visible")
           .map(
             (each) =>
-              `${each.tagName.toLowerCase()}.${String(each.className).split(" ")[0]}`,
+              `${each.tagName.toLowerCase()}.${String(each.className).split(" ")[0]}` +
+              (field(each)
+                ? `[${each.getAttribute("aria-label") ?? each.id}] ${each.clientWidth}<${each.scrollWidth}`
+                : ""),
           )
         const rows = [...document.querySelectorAll(sel.row)].map((row) => {
           const text = row.querySelector(sel.text)?.getBoundingClientRect()

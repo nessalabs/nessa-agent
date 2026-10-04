@@ -12,13 +12,19 @@
  * - a dev server whose `/browser` proxy is that gateway.
  *
  * In each engine it signs a page in with the gateway's owner token and walks
- * the tab: add the test MCP server (`scripts/mcp-test-server/server.mjs`) with
- * one variable, inspect it, turn it off, rename it, measure it narrow, meet a
- * conflict a Node client makes first, remove it; then a credential that may
- * only converse sees the administrator notice and sends no mcpServers
- * request. Last, the issue's Done-when: the server added again from the
- * window, a conversation in which the agent calls `show_chart`, and the
- * chart's app drawn once in the window.
+ * the tab: add the test MCP server (`scripts/mcp-test-server/server.mjs`,
+ * slow to start, so an inspection is seen running) with one variable,
+ * inspect it, follow focus through each part that opens and closes, turn it
+ * off, rename it, measure it narrow, meet a conflict a Node client makes
+ * first, remove it, see a failed list's notice go once a reconnect lists;
+ * then a credential that may only converse sees the administrator notice and
+ * sends no mcpServers request. Last, the issue's Done-when: the server added
+ * again from the window, a conversation in which the agent calls
+ * `show_chart`, and the chart's app drawn once in the window.
+ *
+ * The page's socket to the gateway is routed through the script
+ * (`routeWebSocket`), which counts each mcpServers request sent on it and
+ * can drop it, as a lost connection would, for the window to reconnect.
  *
  * The variable's value is generated, never printed, and must appear nowhere
  * in the page once saved. The owner token is the gateway's own, read from its
@@ -29,7 +35,7 @@
  * those after it, which are reported as not run.
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
@@ -54,16 +60,25 @@ const CHART_TOOL = "show_chart"
 const DESTRUCTIVE = "app_delete_row"
 const RENAMED = `${SERVER}-renamed`
 const VARIABLE = "MCP_TEST_SECRET"
+/**
+ * How long the walk's server holds its answer to `initialize`
+ * (`--initialize-delay-ms`): an inspection runs at least this long, so its
+ * running state is there to be read after the click, not raced.
+ */
+const START_DELAY_MS = 2000
+const SLOW_ARGS = [serverScript, "--initialize-delay-ms", String(START_DELAY_MS)]
 
 const steps = [
   "empty",
   "add",
   "inspect",
+  "focus",
   "toggle",
   "rename",
   "narrow",
   "conflict",
   "remove",
+  "reconnect",
   "non-admin",
   "done-when",
 ]
@@ -71,7 +86,7 @@ const steps = [
 const meta = {
   name: "mcp-servers-gateway",
   summary:
-    "Settings › Integrations over a real gateway: add, inspect, toggle, rename, conflict, remove, non-admin, and an app drawn from a server added there",
+    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, conflict, remove, reconnect, non-admin, and an app drawn from a server added there",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
   help: `
@@ -87,10 +102,16 @@ Options:
 
 Steps, per engine, in order on one page (--only <names> to pick):
   empty      no server stored: "No servers yet", Add offered
-  add        ${SERVER} added with one variable: one row, its switch on,
-             "1 variable", and the variable's value nowhere in the page
-  inspect    show_chart has a UI badge, ${DESTRUCTIVE} is destructive, the
-             answer is complete; Inspect rests while it runs
+  add        ${SERVER} added with one variable, slow to start (${START_DELAY_MS} ms): one
+             row, its switch on, "1 variable", the variable's value nowhere
+             in the page
+  inspect    seen running, Inspect and Close resting while it runs; then
+             show_chart has a UI badge, ${DESTRUCTIVE} is destructive, the
+             answer is complete
+  focus      document.activeElement after each part opens and closes: Add and
+             Edit on the form's first field, Remove on the confirm's Cancel
+             (described by its sentence), Inspect on the panel's heading;
+             Cancel, Escape, Save and Close back on the row's button or Add
   toggle     the switch turns it off: one save, the switch resting in flight,
              and off as the new list says
   rename     renamed to ${RENAMED}: one row, its variable kept
@@ -99,7 +120,11 @@ Steps, per engine, in order on one page (--only <names> to pick):
              row's actions under its text under a 420px page
   conflict   a Node client saves first; the window's save is refused, says so,
              reloads, and keeps what was typed
-  remove     asked first, then removed: the row gone, "No servers yet"
+  remove     asked first while an inspection runs, then removed: the row
+             gone, "No servers yet", the inspection saying the server is gone
+  reconnect  config.json made unreadable, the socket dropped: the list's
+             failure is said; config.json restored, the socket dropped again:
+             the list shown and the failure's notice gone
   non-admin  a credential that may only converse (server.read and
              conversation.*) sees the administrator notice,
              no control, and sends no mcpServers request
@@ -163,7 +188,14 @@ async function startStack(options) {
       profile: "product",
       auth: { credential: token() },
     })
-    return { url: dev.url, mode: "dev", close, client, agent, timings, token }
+    const config = join(
+      gateway.directory,
+      "ci",
+      "instances",
+      "mcp-servers-gateway",
+      "config.json",
+    )
+    return { url: dev.url, mode: "dev", close, client, agent, timings, token, config }
   } catch (error) {
     await close()
     throw error
@@ -201,47 +233,96 @@ async function conversingCredential(client) {
 }
 
 /**
- * A page signed in with `token` through `/browser/login` from the page's own
- * origin, on the gateway's window, counting each mcpServers request it sends
- * on its socket (`sent`).
+ * What a page's load reports that is not the page's fault: Chromium reports
+ * each `/browser/check` the load sends, and the navigation abandons, as
+ * aborted. That one line is set aside; every other error stays, and fails
+ * the step it lands in.
  */
-async function signedIn(browser, stack, token, layout) {
-  const opened = await openPage(browser, { url: stack.url, layout })
-  const { page } = opened
+const loadAbort = /^requestfailed: \S+\/browser\/check net::ERR_ABORTED\s*$/
+
+function setAsideLoadAbort(errors) {
+  errors.splice(0, Infinity, ...errors.filter((each) => !loadAbort.test(each)))
+}
+
+/**
+ * The page's socket to the gateway (`/browser/session`), routed through the
+ * script: each mcpServers request sent on it counted (`sent`), and `drop()`
+ * closing every one open at both ends, as a lost connection would.
+ */
+function routedSockets() {
   const sent = []
-  page.on("websocket", (socket) =>
-    socket.on("framesent", ({ payload }) => {
+  const open = new Set()
+  const route = (ws) => {
+    const server = ws.connectToServer()
+    const pair = { ws, server }
+    open.add(pair)
+    ws.onMessage((message) => {
       try {
         const frame = JSON.parse(
-          typeof payload === "string" ? payload : payload.toString(),
+          typeof message === "string" ? message : message.toString(),
         )
         if (typeof frame.method === "string" && frame.method.startsWith("mcpServers."))
           sent.push(frame.method)
       } catch {
         // Not a JSON frame: not a request, so not one counted.
       }
-    }),
-  )
-  const status = await page.evaluate(
-    async (token) =>
-      (
-        await fetch("/browser/login", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", "X-Nessa-Browser": "1" },
-          body: JSON.stringify({ token }),
-        })
-      ).status,
-    token,
-  )
+      server.send(message)
+    })
+    server.onMessage((message) => ws.send(message))
+    ws.onClose((code, reason) => {
+      open.delete(pair)
+      server.close({ code, reason })
+    })
+    server.onClose((code, reason) => {
+      open.delete(pair)
+      ws.close({ code, reason })
+    })
+  }
+  // The page is told the gateway is restarting (1012): a close it retries,
+  // as it would a gateway that went away and came back.
+  const drop = async () => {
+    const pairs = [...open]
+    open.clear()
+    for (const { ws, server } of pairs) {
+      await server.close({ code: 1000 })
+      await ws.close({ code: 1012 })
+    }
+    return pairs.length
+  }
+  return { sent, route, drop }
+}
+
+/**
+ * A page signed in with `token` through `/browser/login` from the page's own
+ * origin, on the gateway's window, its socket routed (`routedSockets`).
+ */
+async function signedIn(browser, stack, token, layout) {
+  const sockets = routedSockets()
+  const opened = await openPage(browser, {
+    url: stack.url,
+    layout,
+    beforeLoad: (context) => context.routeWebSocket(/\/browser\/session/, sockets.route),
+  })
+  const { page } = opened
+  // Its body read to the end, so the navigation after it abandons nothing.
+  const status = await page.evaluate(async (token) => {
+    const answer = await fetch("/browser/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Nessa-Browser": "1" },
+      body: JSON.stringify({ token }),
+    })
+    await answer.arrayBuffer()
+    return answer.status
+  }, token)
   if (status < 200 || status > 299) {
     await opened.close()
     throw new CannotRun(`the gateway refused the page's sign-in (${status})`)
   }
   await page.goto(`${stack.url}?gateway`, { waitUntil: "domcontentloaded" })
   await need(page, css.anyReady, "the desktop window", 30_000)
-  opened.errors.splice(0)
-  return { ...opened, sent }
+  setAsideLoadAbort(opened.errors)
+  return { ...opened, sent: sockets.sent, drop: sockets.drop }
 }
 
 /** Waits up to `ms` for `check()` to be truthy, and says what it last was. */
@@ -285,13 +366,16 @@ const row = (page, name) => page.locator(css.mcpRowNamed(name))
 const button = (scope, name) => scope.getByRole("button", { name, exact: true })
 const form = (page) => page.locator(css.mcpForm)
 
-/** Fills the add form and saves it; `secret` as one variable's value, when given. */
-async function addServer(page, secret) {
+/**
+ * Fills the add form and saves it: `args`, one per line, and `secret` as one
+ * variable's value, when given.
+ */
+async function addServer(page, { secret, args = [serverScript] } = {}) {
   await button(page.locator(css.mcpGroup), names.mcp.add).click()
   const add = form(page)
   await add.getByLabel(names.mcp.name, { exact: true }).fill(SERVER)
   await add.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
-  await add.getByLabel(names.mcp.args, { exact: true }).fill(serverScript)
+  await add.getByLabel(names.mcp.args, { exact: true }).fill(args.join("\n"))
   if (secret !== undefined) {
     await button(add, names.mcp.addVariable).click()
     const variable = add.locator(css.mcpVariable).last()
@@ -309,6 +393,32 @@ const switchOf = (page, name) =>
       checked: element.getAttribute("aria-checked"),
       disabled: element.disabled,
     }))
+
+/**
+ * What holds focus, in the tab's words: the button by what it does and the
+ * row it is in, the form's first field, or the inspection's heading.
+ */
+const focused = (page) =>
+  page.evaluate(() => {
+    const active = document.activeElement
+    if (!active || active === document.body) return { on: "body" }
+    const form = active.closest("[data-mcp-form]")
+    const firstField = form?.querySelector("input")
+    return {
+      on: active.getAttribute("data-mcp-action")
+        ? `${active.getAttribute("data-mcp-action")}`
+        : active === firstField
+          ? "first-field"
+          : active.matches("[data-mcp-inspection] h2")
+            ? "inspection-heading"
+            : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
+      row: active.closest("[data-mcp-server]")?.getAttribute("data-mcp-server") ?? null,
+      describedBy: active.getAttribute("aria-describedby")
+        ? (document.getElementById(active.getAttribute("aria-describedby"))
+            ?.textContent ?? null)
+        : null,
+    }
+  })
 
 const checks = {
   empty: async (page) => {
@@ -334,7 +444,7 @@ const checks = {
     context.secret = `s3cret-${randomUUID()}`
     const before = context.opened.sent.length
     const at = Date.now()
-    await addServer(page, context.secret)
+    await addServer(page, { secret: context.secret, args: SLOW_ARGS })
     const closed = await gone(form(page))
     const shown = await visible(row(page, SERVER))
     await settled(page)
@@ -368,15 +478,27 @@ const checks = {
     const failures = []
     const at = Date.now()
     await button(row(page, SERVER), names.mcp.inspect).click()
-    const running = await page.locator(css.mcpInspectionIn("running")).count()
-    const restingWhileRunning =
-      running > 0 ? await button(row(page, SERVER), names.mcp.inspect).isDisabled() : null
+    // The server holds its start for START_DELAY_MS: the panel is running
+    // well inside that, and what rests while it runs is read then.
+    const running = await visible(page.locator(css.mcpInspectionIn("running")), 1000)
+    const whileRunning = running
+      ? {
+          inspectRests: await button(row(page, SERVER), names.mcp.inspect).isDisabled(),
+          closeRests: await button(
+            page.locator(css.mcpInspection),
+            names.mcp.close,
+          ).isDisabled(),
+          stillRunning:
+            (await page.locator(css.mcpInspectionIn("running")).count()) === 1,
+          ms: Date.now() - at,
+        }
+      : null
     const done = await visible(page.locator(css.mcpInspectionIn("done")), 45_000)
     const panel = page.locator(css.mcpInspection)
     const seen = {
       ms: Date.now() - at,
       phase: await panel.getAttribute("data-mcp-inspection"),
-      restingWhileRunning,
+      whileRunning,
       chartUi: await panel
         .locator(`${css.mcpTool(CHART_TOOL)} ${css.mcpBadge("ui")}`)
         .count(),
@@ -386,8 +508,19 @@ const checks = {
       cut: await panel.locator(css.mcpCut).count(),
       tools: await panel.locator("[data-mcp-tool]").count(),
     }
+    if (!running)
+      failures.push("the inspection was not seen running within 1 s of the click")
+    else if (!whileRunning.stillRunning)
+      failures.push(`the inspection finished before it was read (${whileRunning.ms} ms)`)
+    else {
+      if (!whileRunning.inspectRests) failures.push("Inspect is enabled while running")
+      if (!whileRunning.closeRests) failures.push("Close is enabled while running")
+    }
     if (!done) failures.push(`the inspection is ${seen.phase}, not done within 45 s`)
-    if (restingWhileRunning === false) failures.push("Inspect is enabled while running")
+    if (seen.ms < START_DELAY_MS)
+      failures.push(
+        `the inspection took ${seen.ms} ms, under the server's ${START_DELAY_MS} ms start`,
+      )
     if (seen.chartUi !== 1) failures.push(`${CHART_TOOL} has ${seen.chartUi} UI badges`)
     if (seen.destructive !== 1) failures.push(`${DESTRUCTIVE} is not marked destructive`)
     if (seen.cut !== 0) failures.push("the inspection says it is incomplete")
@@ -396,15 +529,87 @@ const checks = {
     return { seen, failures }
   },
 
+  focus: async (page) => {
+    const failures = []
+    const trail = []
+    const group = page.locator(css.mcpGroup)
+    const serverRow = row(page, SERVER)
+    /** Where focus is after `what`, held to `on` (and its row, when given). */
+    const expect = async (what, on, inRow = null) => {
+      const at = await waitFor(async () => {
+        const now = await focused(page)
+        return now.on === on && now.row === inRow ? now : null
+      }, 5000)
+      const now = at ?? (await focused(page))
+      trail.push({ after: what, ...now })
+      if (!at)
+        failures.push(
+          `after ${what}, focus is on ${now.on}${now.row ? ` in ${now.row}` : ""}, not ${on}${inRow ? ` in ${inRow}` : ""}`,
+        )
+      return now
+    }
+    await button(group, names.mcp.add).click()
+    await expect("Add", "first-field")
+    // A part Escape leaves open holds the rest of the walk: closed by its
+    // Cancel, and the step ends there.
+    await page.keyboard.press("Escape")
+    if (!(await gone(form(page), 2000))) {
+      failures.push("Escape did not close the add form")
+      await button(form(page), names.mcp.cancel).click()
+      return { seen: { trail }, failures }
+    }
+    await expect("Escape in the add form", "add")
+    await button(serverRow, names.mcp.edit).click()
+    await expect("Edit", "first-field")
+    await button(form(page), names.mcp.cancel).click()
+    await expect("Cancel in the form", "edit", SERVER)
+    await button(serverRow, names.mcp.remove).click()
+    const asked = await expect("Remove", "cancel", SERVER)
+    if (asked.describedBy !== names.mcp.removeAsk(SERVER))
+      failures.push(`the confirm's Cancel is described by "${asked.describedBy}"`)
+    await page.keyboard.press("Escape")
+    if (!(await gone(serverRow.locator(css.mcpConfirm), 2000))) {
+      failures.push("Escape did not close the confirm")
+      await serverRow.locator(css.mcpAction("cancel")).click()
+      return { seen: { trail }, failures }
+    }
+    await expect("Escape in the confirm", "remove", SERVER)
+    await button(serverRow, names.mcp.remove).click()
+    await expect("Remove again", "cancel", SERVER)
+    await serverRow.locator(css.mcpAction("cancel")).click()
+    await expect("Cancel in the confirm", "remove", SERVER)
+    await button(serverRow, names.mcp.inspect).click()
+    await expect("Inspect", "inspection-heading")
+    if (!(await visible(page.locator(css.mcpInspectionIn("done")), 45_000)))
+      failures.push("the inspection did not finish")
+    await button(page.locator(css.mcpInspection), names.mcp.close).click()
+    await expect("Close", "inspect", SERVER)
+    // A save goes back to the row's Edit once the list after it is read.
+    await button(serverRow, names.mcp.edit).click()
+    await expect("Edit again", "first-field")
+    await button(form(page), names.mcp.save).click()
+    if (!(await gone(form(page)))) failures.push("the form did not close on its save")
+    await expect("Save", "edit", SERVER)
+    await settled(page)
+    return { seen: { trail }, failures }
+  },
+
   toggle: async (page, stack, context) => {
     const failures = []
     const before = context.opened.sent.length
     const toggle = row(page, SERVER).locator(css.mcpSwitch)
-    // Whether the switch rested at any moment while its save was in flight.
+    // Whether the switch rested at any moment while its save was in flight,
+    // and Inspect with it (U21: every control, while one request runs).
     await toggle.evaluate((element) => {
+      const inspect = element
+        .closest("[data-mcp-server]")
+        .querySelector('[data-mcp-action="inspect"]')
       window.__mcpSwitchRested = false
+      window.__mcpInspectRested = false
       new MutationObserver(() => {
-        if (element.disabled) window.__mcpSwitchRested = true
+        if (!element.disabled) return
+        window.__mcpSwitchRested = true
+        if (inspect.disabled) window.__mcpInspectRested = true
       }).observe(element, { attributes: true })
     })
     await toggle.click()
@@ -416,11 +621,14 @@ const checks = {
     const seen = {
       switch: await switchOf(page, SERVER),
       restedInFlight: await page.evaluate(() => window.__mcpSwitchRested),
+      inspectRestedInFlight: await page.evaluate(() => window.__mcpInspectRested),
       requests: context.opened.sent.slice(before),
     }
     if (!off) failures.push(`the switch is ${JSON.stringify(seen.switch)}, not off`)
     if (!seen.restedInFlight)
       failures.push("the switch did not rest while its save was in flight")
+    else if (!seen.inspectRestedInFlight)
+      failures.push("Inspect did not rest while the switch's save was in flight")
     if (
       JSON.stringify(seen.requests) !==
       JSON.stringify(["mcpServers.save", "mcpServers.list"])
@@ -462,9 +670,14 @@ const checks = {
   },
 
   narrow: async (page) => {
-    // The row, the form and the inspection all open, then measured.
+    // The row, the form and the finished inspection all open, then measured.
     await button(row(page, RENAMED), names.mcp.inspect).click()
-    await visible(page.locator(css.mcpInspectionIn("done")), 45_000)
+    if (!(await visible(page.locator(css.mcpInspectionIn("done")), 45_000)))
+      return {
+        failures: [
+          `the inspection is ${await page.locator(css.mcpInspection).getAttribute("data-mcp-inspection")}, not done within 45 s: nothing measured`,
+        ],
+      }
     await button(row(page, RENAMED), names.mcp.edit).click()
     await need(page, css.mcpForm, "the edit form")
     const { seen, failures } = await integrationsFit(page, [800, 390])
@@ -534,20 +747,40 @@ const checks = {
 
   remove: async (page, stack, context) => {
     const failures = []
+    // Inspected first, and removed while the inspection still runs (the
+    // server is slow to start): the panel then says the server is gone.
+    await button(row(page, RENAMED), names.mcp.inspect).click()
+    const inspecting = await visible(page.locator(css.mcpInspectionIn("running")), 1000)
     const before = context.opened.sent.length
     await button(row(page, RENAMED), names.mcp.remove).click()
     const asked = await row(page, RENAMED).locator(css.mcpConfirm).textContent()
     const sentOnAsk = context.opened.sent.length - before
-    await button(row(page, RENAMED), names.mcp.remove).click()
+    await row(page, RENAMED).locator(css.mcpAction("confirm")).click()
     const removed = await gone(row(page, RENAMED))
     const empty = await visible(page.locator(css.mcpEmpty))
+    const stillRunning =
+      (await page.locator(css.mcpInspectionIn("running")).count()) === 1
+    const failed = await visible(page.locator(css.mcpInspectionIn("failed")), 45_000)
     const seen = {
+      inspecting,
+      stillRunningAfterRemoval: stillRunning,
       asked,
       sentOnAsk,
       removed,
       empty,
+      inspection: failed
+        ? await page.locator("[data-mcp-inspection-status]").textContent()
+        : await page.locator(css.mcpInspection).getAttribute("data-mcp-inspection"),
       requests: context.opened.sent.slice(before),
     }
+    if (!inspecting) failures.push("the inspection was not seen running")
+    if (!stillRunning)
+      failures.push("the inspection finished before the removal's list: nothing raced")
+    if (seen.inspection !== names.mcp.gone(RENAMED))
+      failures.push(`the inspection of the removed server says "${seen.inspection}"`)
+    await button(page.locator(css.mcpInspection), names.mcp.close).click()
+    if (!(await gone(page.locator(css.mcpInspection))))
+      failures.push("the inspection did not close")
     if (asked !== names.mcp.removeAsk(RENAMED)) failures.push(`it asked "${asked}"`)
     if (sentOnAsk !== 0)
       failures.push(`${sentOnAsk} requests sent before the removal was confirmed`)
@@ -560,6 +793,51 @@ const checks = {
       failures.push(
         `requests ${JSON.stringify(seen.requests)}, expected one remove then one list`,
       )
+    return { seen, failures }
+  },
+
+  reconnect: async (page, stack, context) => {
+    const failures = []
+    const tab = page.locator(css.mcpServers)
+    const notices = page.locator(css.mcpNotices)
+    const original = readFileSync(stack.config)
+    const seen = {}
+    try {
+      // A list that fails: config.json unreadable, and the window lists
+      // again on its next connection.
+      writeFileSync(stack.config, "{ not json")
+      seen.droppedFirst = await context.opened.drop()
+      seen.failed = await waitFor(
+        async () =>
+          (await tab.getAttribute("data-mcp-servers")) === "failed" &&
+          (await notices.textContent())?.includes(names.mcp.configInvalid),
+        20_000,
+      )
+      seen.failedNotice = await notices.textContent()
+    } finally {
+      writeFileSync(stack.config, original)
+    }
+    if (!seen.failed) {
+      failures.push(
+        `the failed list is not said: the tab is ${await tab.getAttribute("data-mcp-servers")}, its notices "${await notices.textContent()}"`,
+      )
+      return { seen, failures }
+    }
+    // Restored, and the connection lost and back: the list it reads answers
+    // the failure, so the failure's notice goes.
+    seen.droppedSecond = await context.opened.drop()
+    seen.listed = await visible(page.locator(css.mcpServersIn("listed")), 20_000)
+    await settled(page)
+    seen.connection = await tab.getAttribute("data-connection")
+    seen.notices = await notices.textContent()
+    seen.empty = await visible(page.locator(css.mcpEmpty), 1000)
+    if (seen.droppedFirst < 1 || seen.droppedSecond < 1)
+      failures.push(`dropped ${seen.droppedFirst} then ${seen.droppedSecond} sockets`)
+    if (!seen.listed) failures.push("the list is not shown after the reconnect")
+    if (seen.connection !== "connected") failures.push(`the tab is ${seen.connection}`)
+    if (seen.notices !== "")
+      failures.push(`after the reconnect's list, the notices still say "${seen.notices}"`)
+    if (!seen.empty) failures.push(`no "${names.mcp.empty}" after the reconnect`)
     return { seen, failures }
   },
 
@@ -778,6 +1056,7 @@ await main(
       try {
         opened = await signedIn(browser, stack, stack.token(), layout)
         const seen = {}
+        const setup = []
         if (first) {
           first = false
           await openIntegrations(opened.page)
@@ -786,6 +1065,8 @@ await main(
           if (!(await visible(row(opened.page, SERVER))))
             throw new Error(`${SERVER} was not added from the window`)
           seen.added = await switchOf(opened.page, SERVER)
+          if (seen.added.checked !== "true")
+            setup.push(`${SERVER}'s switch is ${JSON.stringify(seen.added)}, not on`)
           const conversationId = randomUUID()
           const turnAt = Date.now()
           const call = await chartTurn(stack.client, conversationId, stack.agent)
@@ -796,17 +1077,16 @@ await main(
             (each) => each.conversationId === conversationId,
           )?.title
           if (!title) throw new CannotRun("the conversation has no title to find it by")
-          // Reloaded to show the new conversation. What the reload's own
-          // load reports before the window is ready is set aside, as
-          // `signedIn` sets aside its load's (Chromium reports each
-          // `/browser/check` the load sends as aborted); everything before
-          // the reload, and after the window is ready, is kept.
+          // Reloaded to show the new conversation. Of what the reload
+          // reports, only Chromium's aborted `/browser/check` is set aside,
+          // as `signedIn` sets aside its load's; every other error is kept.
           const beforeReload = opened.errors.splice(0)
           await opened.page.goto(`${stack.url}?gateway`, {
             waitUntil: "domcontentloaded",
           })
           await need(opened.page, css.anyReady, "the desktop window", 30_000)
-          opened.errors.splice(0, Infinity, ...beforeReload)
+          setAsideLoadAbort(opened.errors)
+          opened.errors.unshift(...beforeReload)
         }
         if (!title) throw new CannotRun("not run: the conversation was not made")
         const drawn = await chartDrawn(opened.page, title)
@@ -816,7 +1096,7 @@ await main(
           layout,
           ms: Date.now() - at,
           seen: { ...seen, ...drawn.seen },
-          failures: [...drawn.failures, ...opened.errors.splice(0)],
+          failures: [...setup, ...drawn.failures, ...opened.errors.splice(0)],
         })
         if (options.shots)
           await opened.page.screenshot({
