@@ -2,16 +2,18 @@
 //! session (ADR 344), composed before any agent is built.
 //!
 //! ```text
-//! AgentsConfig.mcpServers ──▶ McpServers (each started by the gateway)
-//!            │
-//!            └──replaced by──▶ stand-ins: <this executable> mcp-relay <socket> <name> <digest>
-//!                              ──▶ every agent's session/new
+//! AgentsConfig.mcpServers ──▶ McpServers: the live set (each started by the gateway)
+//!                                 │ configured(), read at each provider open and each hello
+//!                                 ├──▶ StandIns: <this executable> mcp-relay <socket> <name> <digest>
+//!                                 │             ──▶ every agent's session/new (AcpConfig.mcp_servers)
+//!                                 └──▶ Relay: admits a stand-in against the digests now
 //! ```
 //!
-//! Arrows are what each is built from. A relay socket that cannot be bound
-//! leaves MCP servers off for this run, logged: an agent is never handed a
-//! server directly instead, because then its calls and an app's would reach
-//! different sessions.
+//! Arrows are what each is built from. On Unix the relay is composed even
+//! with no server configured, so a set replaced later reaches the next open.
+//! A relay socket that cannot be bound leaves MCP servers off for this run,
+//! logged: an agent is never handed a server directly instead, because then
+//! its calls and an app's would reach different sessions.
 use super::agent::{agent_search_path, AgentsConfig};
 use crate::core::RunError;
 use crate::mcp_servers::{
@@ -21,7 +23,7 @@ use crate::mcp_servers::{
     },
 };
 use nessa_sdk::infrastructure::{
-    acp::sessions::{StandInSessions, StdioMcpServer},
+    acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
     mcp::{McpServerLaunch, McpServers},
 };
@@ -119,37 +121,62 @@ pub(super) fn server_environment(
     environment
 }
 
-/// The stand-in for each server in `servers`, run by `gateway` over `socket`;
-/// `None` when the gateway's or the socket's path is not UTF-8: a stand-in's
-/// command and arguments must be (`StdioMcpServer::all_valid`).
+/// The stand-in for each server in `servers`, run by `gateway` over
+/// `socket`: the gateway's executable, `mcp-relay`, the socket, the server's
+/// name, and the digest of its command and arguments, which the relay
+/// compares at each hello.
 pub(super) fn stand_ins(
     servers: &[StdioMcpServer],
-    gateway: &Path,
-    socket: &Path,
-) -> Option<Vec<StdioMcpServer>> {
-    gateway.to_str()?;
-    let socket = socket.to_str()?;
-    Some(
-        servers
-            .iter()
-            .map(|server| StdioMcpServer {
-                name: server.name.clone(),
-                command: gateway.to_owned(),
-                args: relay_arguments(
-                    socket,
-                    &server.name,
-                    &configuration_digest(&server.command, &server.args),
-                ),
-            })
-            .collect(),
-    )
+    gateway: &str,
+    socket: &str,
+) -> Vec<StdioMcpServer> {
+    servers
+        .iter()
+        .map(|server| StdioMcpServer {
+            name: server.name.clone(),
+            command: gateway.into(),
+            args: relay_arguments(
+                socket,
+                &server.name,
+                &configuration_digest(&server.command, &server.args),
+            ),
+        })
+        .collect()
+}
+
+/// The stand-ins for the live set, which every provider open reads
+/// ([`McpServerSource`]): an open gets the stand-ins for the servers
+/// configured then, and keeps them for its provider session's life.
+pub(super) struct StandIns {
+    servers: McpServers,
+    gateway: String,
+    socket: String,
+}
+impl StandIns {
+    /// Stand-ins for `servers`, run by `gateway` over `socket`; `None` when
+    /// the gateway's or the socket's path is not UTF-8: a stand-in's command
+    /// and arguments must be ([`StdioMcpServer::problem`]).
+    pub(super) fn new(servers: McpServers, gateway: &Path, socket: &Path) -> Option<Self> {
+        Some(Self {
+            servers,
+            gateway: gateway.to_str()?.to_owned(),
+            socket: socket.to_str()?.to_owned(),
+        })
+    }
+}
+impl McpServerSource for StandIns {
+    fn servers(&self) -> Vec<StdioMcpServer> {
+        stand_ins(&self.servers.configured(), &self.gateway, &self.socket)
+    }
 }
 
 /// Take over `agents`' MCP servers: start nothing yet, bind the relay socket
-/// at `socket` ([`relay_socket`]), replace each server with its stand-in run by `gateway`,
-/// and give each provider open a grant whose token its stand-ins carry.
-/// `None` when no server is configured, or when the socket cannot be bound —
-/// then `agents` is left with no MCP servers, and why is logged.
+/// at `socket` ([`relay_socket`]), give each provider open the stand-ins, run
+/// by `gateway`, for the servers configured then, and give it a grant whose
+/// token its stand-ins carry. Composed with no server configured too, so a
+/// set replaced later ([`McpServers::replace`]) reaches the next open.
+/// `None` when the socket cannot be bound, or a path is not UTF-8 — then
+/// `agents` is left with no MCP servers, and why is logged.
 ///
 /// # Errors
 ///
@@ -161,21 +188,18 @@ pub(super) async fn compose(
     gateway: &Path,
     environment: BTreeMap<OsString, OsString>,
 ) -> Result<Option<McpComposition>, RunError> {
-    if agents.mcp_servers.is_empty() {
-        return Ok(None);
-    }
     let configured = std::mem::take(&mut agents.mcp_servers);
     let launches = configured
-        .iter()
+        .into_iter()
         .map(|server| McpServerLaunch {
-            server: server.clone(),
+            server,
             working_directory: agents.workspace.clone(),
             environment: environment.clone(),
         })
         .collect();
     let servers = McpServers::new(launches, Arc::new(RuntimeClock::new()))
         .map_err(|error| RunError::Agent(error.to_string()))?;
-    let Some(stand_ins) = stand_ins(&configured, gateway, socket) else {
+    let Some(stand_ins) = StandIns::new(servers.clone(), gateway, socket) else {
         tracing::error!(socket = %socket.display(), gateway = %gateway.display(), "MCP servers are off this run: the gateway's or the relay socket's path is not UTF-8");
         return Ok(None);
     };
@@ -186,21 +210,12 @@ pub(super) async fn compose(
             return Ok(None);
         }
     };
-    let digests = configured
-        .iter()
-        .map(|server| {
-            (
-                server.name.clone(),
-                configuration_digest(&server.command, &server.args),
-            )
-        })
-        .collect();
     let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
-    agents.mcp_servers = stand_ins;
+    agents.mcp_stand_ins = McpServerList::read_from(Arc::new(stand_ins));
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
-        relay: Arc::new(Relay::new(servers.clone(), digests, grants)),
+        relay: Arc::new(Relay::new(servers.clone(), grants)),
         servers,
         listener,
         resource_tickets: Arc::new(ResourceTicketStore::new(

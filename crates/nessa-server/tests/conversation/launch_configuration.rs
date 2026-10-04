@@ -25,6 +25,7 @@ fn agents_config() -> AgentsConfig {
         workspace: PathBuf::from("/workspace"),
         mcp_servers: Vec::new(),
         stand_ins: Default::default(),
+        mcp_stand_ins: Default::default(),
         selected: None,
         runtimes: HashMap::new(),
     }

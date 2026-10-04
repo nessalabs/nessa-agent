@@ -9,10 +9,10 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::{
     acp::sessions::{StandInGrant, StandInGrants, StdioMcpServer},
     clock::RuntimeClock,
-    mcp::{McpServerLaunch, McpServers},
+    mcp::{McpServerLaunch, McpServers, MCP_SESSION_VARIABLE},
 };
 use nessa_server::mcp_servers::{
-    domain::{configuration_digest, SESSION_VARIABLE},
+    domain::configuration_digest,
     infrastructure::{bind, ConversationGrants, OsTokens, Relay},
 };
 use serde_json::{json, Value};
@@ -52,15 +52,11 @@ async fn serve(directory: &Path, server: &StdioMcpServer) -> (PathBuf, StandInGr
         Arc::new(RuntimeClock::new()),
     )
     .unwrap();
-    let configured = BTreeMap::from([(
-        server.name.clone(),
-        configuration_digest(&server.command, &server.args),
-    )]);
     let listener = bind(&socket).await.unwrap();
     let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     let grant = grants.grant(&SessionId::new("conversation").unwrap());
     let token = grant.environment()[0].1.clone();
-    tokio::spawn(Arc::new(Relay::new(servers, configured, grants)).listen(listener));
+    tokio::spawn(Arc::new(Relay::new(servers, grants)).listen(listener));
     (socket, grant, token)
 }
 
@@ -74,9 +70,9 @@ impl RelayProcess {
     /// there is one, as a harness gives it.
     fn start(socket: &Path, server: &StdioMcpServer, token: Option<&str>) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_nessa"));
-        command.env_remove(SESSION_VARIABLE);
+        command.env_remove(MCP_SESSION_VARIABLE);
         if let Some(token) = token {
-            command.env(SESSION_VARIABLE, token);
+            command.env(MCP_SESSION_VARIABLE, token);
         }
         let mut child = command
             .args([

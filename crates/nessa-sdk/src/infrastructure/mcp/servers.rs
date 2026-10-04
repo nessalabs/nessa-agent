@@ -5,7 +5,9 @@ use super::{wire, McpError};
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
-use crate::infrastructure::acp::sessions::{ForwardedResults, StandInGrant, StdioMcpServer};
+use crate::infrastructure::acp::sessions::{
+    ForwardedResults, McpServerProblem, StandInGrant, StdioMcpServer,
+};
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
 use std::{
@@ -32,6 +34,12 @@ pub const MAX_TOOL_PAGES: usize = 32;
 /// The most tools one server may list.
 pub const MAX_TOOLS: usize = 1024;
 
+/// The environment variable a host's MCP stand-ins carry their session
+/// token in. A server process is never given it
+/// ([`McpServerProblem::ReservedEnvironmentName`]), so a server cannot read a
+/// token meant for the gateway, nor pass one on.
+pub const MCP_SESSION_VARIABLE: &str = "NESSA_MCP_SESSION";
+
 /// One configured stdio server and what it is started with.
 #[derive(Clone, Debug)]
 pub struct McpServerLaunch {
@@ -41,6 +49,44 @@ pub struct McpServerLaunch {
     pub working_directory: PathBuf,
     /// The server's whole environment; nothing is inherited.
     pub environment: BTreeMap<OsString, OsString>,
+}
+impl McpServerLaunch {
+    /// Why this server cannot be started as configured, or `None` when it
+    /// can: its [`StdioMcpServer::problem`], then its environment — each
+    /// name 1–256 bytes of ASCII letters, digits and `_`, not starting with a
+    /// digit, and not [`MCP_SESSION_VARIABLE`]; each value without NUL.
+    pub fn problem(&self) -> Option<McpServerProblem> {
+        self.server.problem().or_else(|| {
+            self.environment.iter().find_map(|(name, value)| {
+                let Some(name) = name.to_str().filter(|name| {
+                    (1..=256).contains(&name.len())
+                        && !name.starts_with(|c: char| c.is_ascii_digit())
+                        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                }) else {
+                    return Some(McpServerProblem::EnvironmentName);
+                };
+                if name == MCP_SESSION_VARIABLE {
+                    return Some(McpServerProblem::ReservedEnvironmentName {
+                        name: name.to_owned(),
+                    });
+                }
+                value
+                    .as_encoded_bytes()
+                    .contains(&0)
+                    .then(|| McpServerProblem::EnvironmentValue {
+                        name: name.to_owned(),
+                    })
+            })
+        })
+    }
+    /// Why `launches` cannot run together, or `None` when they can: the
+    /// set's rules ([`StdioMcpServer::problem_in`]), then each launch's
+    /// [`Self::problem`]. What [`McpServers::new`] and [`McpServers::replace`]
+    /// ask.
+    pub fn problem_in(launches: &[McpServerLaunch]) -> Option<McpServerProblem> {
+        StdioMcpServer::problem_in(launches.iter().map(|launch| &launch.server))
+            .or_else(|| launches.iter().find_map(Self::problem))
+    }
 }
 
 /// The configured MCP servers, and every session open on them.
@@ -57,15 +103,21 @@ pub struct McpServerLaunch {
 /// `docs/design/mcp-connections.md`, and each row has a test in
 /// `tests/infrastructure/mcp/`.
 ///
+/// The configured set is live: [`McpServers::replace`] swaps it, and each
+/// opening reads the set as it is then. A session already open keeps the
+/// server it was opened on until it ends; replacing the set closes nothing.
+///
 /// Cloning shares the servers. [`McpServers::stop`] closes every session and
-/// refuses new ones.
+/// refuses new ones, and every later replacement.
 #[derive(Clone)]
 pub struct McpServers {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    launches: BTreeMap<String, McpServerLaunch>,
+    /// The configured set now, by name. Swapped whole by `replace`, under
+    /// `live`'s lock, so a replacement and a stop are ordered.
+    launches: RwLock<Arc<BTreeMap<String, McpServerLaunch>>>,
     clock: Arc<dyn Clock>,
     launcher: Arc<dyn Launcher>,
     /// Set once, by `stop`; what an opening races.
@@ -250,8 +302,8 @@ impl McpServers {
     ///
     /// # Errors
     ///
-    /// [`McpError::InvalidConfiguration`] unless every server passes
-    /// [`StdioMcpServer::all_valid`].
+    /// [`McpError::InvalidConfiguration`] with the first problem
+    /// [`McpServerLaunch::problem_in`] finds.
     pub fn new(servers: Vec<McpServerLaunch>, clock: Arc<dyn Clock>) -> Result<Self, McpError> {
         Self::with_launcher(servers, clock, Arc::new(ProcessLauncher))
     }
@@ -261,17 +313,9 @@ impl McpServers {
         clock: Arc<dyn Clock>,
         launcher: Arc<dyn Launcher>,
     ) -> Result<Self, McpError> {
-        let configured: Vec<StdioMcpServer> =
-            servers.iter().map(|each| each.server.clone()).collect();
-        if !StdioMcpServer::all_valid(&configured) {
-            return Err(McpError::InvalidConfiguration);
-        }
         Ok(Self {
             inner: Arc::new(Inner {
-                launches: servers
-                    .into_iter()
-                    .map(|launch| (launch.server.name.clone(), launch))
-                    .collect(),
+                launches: RwLock::new(Arc::new(by_name(servers)?)),
                 clock,
                 launcher,
                 stopping: watch::channel(false).0,
@@ -280,9 +324,43 @@ impl McpServers {
         })
     }
 
-    /// The configured servers' names.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.inner.launches.keys().map(String::as_str)
+    /// The configured servers now, in name order. What a stand-in is
+    /// admitted against and what a provider open is given are read from
+    /// here, each time.
+    pub fn configured(&self) -> Vec<StdioMcpServer> {
+        self.launches()
+            .values()
+            .map(|launch| launch.server.clone())
+            .collect()
+    }
+
+    /// Replace the configured set with `servers`. Openings from now on read
+    /// the new set; sessions already open, and the harnesses using them, keep
+    /// what they were opened on. Nothing is launched or closed.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::InvalidConfiguration`] with the first problem
+    /// [`McpServerLaunch::problem_in`] finds, and [`McpError::Stopped`] once
+    /// [`McpServers::stop`] has begun; the set is unchanged on both.
+    pub fn replace(&self, servers: Vec<McpServerLaunch>) -> Result<(), McpError> {
+        let launches = Arc::new(by_name(servers)?);
+        // Under the lock `stop` sets `stopping` under: a replacement either
+        // lands before the stop looks, or sees it.
+        let _live = self.inner.live.lock().expect("live sessions");
+        if *self.inner.stopping.borrow() {
+            return Err(McpError::Stopped);
+        }
+        *self.inner.launches.write().expect("configured servers") = launches;
+        Ok(())
+    }
+
+    fn launches(&self) -> Arc<BTreeMap<String, McpServerLaunch>> {
+        self.inner
+            .launches
+            .read()
+            .expect("configured servers")
+            .clone()
     }
 
     /// Open a session on `server` for `owner`: launch its process and initialize it,
@@ -300,7 +378,8 @@ impl McpServers {
     /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
         let inner = &self.inner;
-        let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;
+        let launches = self.launches();
+        let launch = launches.get(server).ok_or(McpError::NotConfigured)?;
         if *inner.stopping.borrow() {
             return Err(McpError::Stopped);
         }
@@ -564,6 +643,17 @@ impl McpServers {
         }
         while closing.join_next().await.is_some() {}
     }
+}
+
+/// `servers` by name, once [`McpServerLaunch::problem_in`] finds no problem.
+fn by_name(servers: Vec<McpServerLaunch>) -> Result<BTreeMap<String, McpServerLaunch>, McpError> {
+    if let Some(problem) = McpServerLaunch::problem_in(&servers) {
+        return Err(McpError::InvalidConfiguration(problem));
+    }
+    Ok(servers
+        .into_iter()
+        .map(|launch| (launch.server.name.clone(), launch))
+        .collect())
 }
 
 /// One server process and the one connection to it, for one harness session.

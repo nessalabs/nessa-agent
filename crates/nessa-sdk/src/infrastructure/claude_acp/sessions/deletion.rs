@@ -71,7 +71,7 @@ mod tests {
             credential_environment: BTreeMap::new(),
             workspace: root.path().to_owned(),
             tools_enabled: false,
-            mcp_servers: Vec::new(),
+            mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             launch_timeout: Duration::from_secs(1),

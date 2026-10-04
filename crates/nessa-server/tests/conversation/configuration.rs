@@ -38,8 +38,9 @@ fn the_mcp_grants_are_never_configured() {
     {
         let config: AgentsConfig = serde_json::from_str(one_agent()).unwrap();
         assert!(format!("{:?}", config.stand_ins).contains("granted: false"));
+        assert!(config.mcp_stand_ins.current().is_empty());
     }
-    for name in ["standIns", "stand_ins"] {
+    for name in ["standIns", "stand_ins", "mcpStandIns", "mcp_stand_ins"] {
         let mut value: serde_json::Value = serde_json::from_str(one_agent()).unwrap();
         value[name] = serde_json::json!({});
         assert!(

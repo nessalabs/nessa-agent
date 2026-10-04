@@ -12,7 +12,6 @@
 //! ```
 use super::domain::{
     admit, configuration_digest, relay_arguments, StandInRefusal, RELAY_SUBCOMMAND,
-    SESSION_VARIABLE,
 };
 use super::infrastructure::{
     read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, OsTokens,
@@ -24,7 +23,7 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::infrastructure::{
     acp::sessions::{StandInGrant, StandInGrants, StdioMcpServer},
     clock::RuntimeClock,
-    mcp::{McpServerLaunch, McpServers},
+    mcp::{McpServerLaunch, McpServers, MCP_SESSION_VARIABLE},
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -57,13 +56,9 @@ fn relay_for(servers: Vec<StdioMcpServer>) -> (Arc<Relay>, McpServers, Conversat
         })
         .collect();
     let mcp = McpServers::new(launches, Arc::new(RuntimeClock::new())).unwrap();
-    let digests = servers
-        .iter()
-        .map(|server| (server.name.clone(), digest(server)))
-        .collect();
     let grants = ConversationGrants::new(mcp.clone(), Arc::new(OsTokens));
     (
-        Arc::new(Relay::new(mcp.clone(), digests, grants.clone())),
+        Arc::new(Relay::new(mcp.clone(), grants.clone())),
         mcp,
         grants,
     )
@@ -75,7 +70,7 @@ fn granted(grants: &ConversationGrants, conversation: &str) -> (StandInGrant, St
     let token = grant
         .environment()
         .iter()
-        .find(|(name, _)| name == SESSION_VARIABLE)
+        .find(|(name, _)| name == MCP_SESSION_VARIABLE)
         .map(|(_, token)| token.clone())
         .expect("a token");
     (grant, token)
@@ -284,11 +279,7 @@ async fn without_a_token_an_opens_stand_ins_are_refused() {
     // none is let through.
     assert!(grant.environment().is_empty());
     assert_eq!(grants.live(), 0);
-    let relay = Arc::new(Relay::new(
-        mcp,
-        BTreeMap::from([(server.name.clone(), digest(&server))]),
-        grants,
-    ));
+    let relay = Arc::new(Relay::new(mcp, grants));
     assert!(unknown_session(answered(&relay, &server, "").await));
     drop(grant);
 }
@@ -375,6 +366,53 @@ async fn a_resumed_conversation_gets_a_new_session_and_two_conversations_their_o
     // SAFETY: signal 0 only asks whether the process exists.
     assert_eq!(unsafe { libc::kill(other_pid, 0) }, 0);
     assert_eq!(unsafe { libc::kill(resumed_pid, 0) }, 0);
+}
+
+/// #391 S11, S12: the relay admits each hello against the live set as it is
+/// then. A stand-in already serving keeps its server process; an edited
+/// server's old stand-in is refused `configuration-changed` on its next
+/// hello while the new configuration is let through, and a removed server's
+/// is refused `unknown-server`.
+#[tokio::test]
+async fn a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone() {
+    let server = fixture();
+    let (side, mcp, grants) = relay_for(vec![server.clone()]);
+    let (_grant, token) = granted(&grants, "conversation");
+    let running = through(&side, &server, &token).await;
+    let edited = StdioMcpServer {
+        args: [vec!["-u".to_owned()], server.args.clone()].concat(),
+        ..server.clone()
+    };
+    let launch = |server: &StdioMcpServer| McpServerLaunch {
+        server: server.clone(),
+        working_directory: std::env::temp_dir(),
+        environment: BTreeMap::new(),
+    };
+    mcp.replace(vec![launch(&edited)]).unwrap();
+    assert!(matches!(
+        answered(&side, &server, &token).await,
+        Some(Answer::Refused {
+            reason: Refusal::ConfigurationChanged,
+            ..
+        })
+    ));
+    let replaced = through(&side, &edited, &token).await;
+    assert_ne!(replaced, running);
+    // SAFETY: signal 0 only asks whether the process exists.
+    assert_eq!(
+        unsafe { libc::kill(running, 0) },
+        0,
+        "the running harness's server"
+    );
+    mcp.replace(Vec::new()).unwrap();
+    assert!(matches!(
+        answered(&side, &edited, &token).await,
+        Some(Answer::Refused {
+            reason: Refusal::UnknownServer,
+            ..
+        })
+    ));
+    assert_eq!(unsafe { libc::kill(replaced, 0) }, 0);
 }
 
 /// Through the relay with `token`, list and call `where`: the server's pid.

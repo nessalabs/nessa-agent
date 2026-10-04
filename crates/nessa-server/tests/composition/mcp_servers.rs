@@ -1,15 +1,21 @@
 //! Composing the gateway's one connection per MCP server: what every agent is
-//! handed in place of a server, what a server is started with, and a relay
-//! socket that cannot be bound leaving MCP off rather than handing agents the
-//! servers themselves.
+//! handed in place of a server, read from the live set at each open, what a
+//! server is started with, the relay composed with no server configured, and
+//! a relay socket that cannot be bound leaving MCP off rather than handing
+//! agents the servers themselves.
 use super::super::agent::AgentsConfig;
-use super::{compose, relay_socket, server_environment, stand_ins};
+use super::{compose, relay_socket, server_environment, stand_ins, StandIns};
 use crate::mcp_servers::domain::configuration_digest;
-use nessa_sdk::infrastructure::acp::sessions::StdioMcpServer;
+use nessa_sdk::infrastructure::{
+    acp::sessions::StdioMcpServer,
+    clock::RuntimeClock,
+    mcp::{McpServerLaunch, McpServers},
+};
 use std::{
     collections::{BTreeMap, HashMap},
     ffi::OsString,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 fn server(name: &str, args: &[&str]) -> StdioMcpServer {
@@ -26,6 +32,7 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
         workspace: std::env::temp_dir(),
         mcp_servers: servers,
         stand_ins: Default::default(),
+        mcp_stand_ins: Default::default(),
         selected: None,
         runtimes: HashMap::new(),
     }
@@ -37,12 +44,12 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
         server("mcptest", &["/s.mjs"]),
         server("nessa", &["--workspace", "/w"]),
     ];
-    let gateway = Path::new("/bundle/nessa");
-    let socket = Path::new("/tmp/nessa-mcp-501/0123456789abcdef.sock");
-    let handed = stand_ins(&configured, gateway, socket).unwrap();
+    let gateway = "/bundle/nessa";
+    let socket = "/tmp/nessa-mcp-501/0123456789abcdef.sock";
+    let handed = stand_ins(&configured, gateway, socket);
     for (stand_in, server) in handed.iter().zip(&configured) {
         assert_eq!(stand_in.name, server.name);
-        assert_eq!(stand_in.command, gateway);
+        assert_eq!(stand_in.command, Path::new(gateway));
         assert_eq!(
             stand_in.args,
             [
@@ -57,16 +64,10 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     // another, so the relay, which compares the digest, refuses a server
     // changed under an open conversation with `configuration-changed`. The
     // restoration fingerprint does not read these (ADR 344, #391).
-    assert_eq!(stand_ins(&configured, gateway, socket).unwrap(), handed);
+    assert_eq!(stand_ins(&configured, gateway, socket), handed);
     let changed = vec![server("mcptest", &["/other.mjs"]), configured[1].clone()];
-    assert_ne!(
-        stand_ins(&changed, gateway, socket).unwrap()[0].args,
-        handed[0].args
-    );
-    assert_eq!(
-        stand_ins(&changed, gateway, socket).unwrap()[1].args,
-        handed[1].args
-    );
+    assert_ne!(stand_ins(&changed, gateway, socket)[0].args, handed[0].args);
+    assert_eq!(stand_ins(&changed, gateway, socket)[1].args, handed[1].args);
 }
 
 #[test]
@@ -83,24 +84,37 @@ fn the_relay_socket_is_short_per_user_and_the_same_for_one_namespace() {
     assert!(relay_socket(&deep, u32::MAX).as_os_str().len() < 104);
 }
 
+/// The live set of `servers`, started in `workspace` with nothing in their
+/// environment.
+fn live(servers: &[StdioMcpServer]) -> McpServers {
+    McpServers::new(launches(servers), Arc::new(RuntimeClock::new())).unwrap()
+}
+
+fn launches(servers: &[StdioMcpServer]) -> Vec<McpServerLaunch> {
+    servers
+        .iter()
+        .map(|server| McpServerLaunch {
+            server: server.clone(),
+            working_directory: std::env::temp_dir(),
+            environment: BTreeMap::new(),
+        })
+        .collect()
+}
+
 #[test]
 fn a_gateway_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
     let gateway = PathBuf::from(std::ffi::OsStr::from_bytes(b"/app/\xff/nessa"));
-    assert_eq!(
-        stand_ins(&[server("s", &[])], &gateway, Path::new("/tmp/s.sock")),
-        None
-    );
+    let servers = live(&[server("s", &[])]);
+    assert!(StandIns::new(servers, &gateway, Path::new("/tmp/s.sock")).is_none());
 }
 
 #[test]
 fn a_socket_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
     let socket = PathBuf::from(std::ffi::OsStr::from_bytes(b"/data/\xff/relay.sock"));
-    assert_eq!(
-        stand_ins(&[server("s", &[])], Path::new("/nessa"), &socket),
-        None
-    );
+    let servers = live(&[server("s", &[])]);
+    assert!(StandIns::new(servers, Path::new("/nessa"), &socket).is_none());
 }
 
 #[test]
@@ -135,19 +149,15 @@ fn a_server_is_started_with_the_users_variables_and_the_agents_search_path() {
     );
 }
 
-#[tokio::test]
-async fn no_configured_server_composes_nothing() {
-    let mut config = agents(Vec::new());
-    let composed = compose(
-        &mut config,
-        &std::env::temp_dir(),
-        Path::new("/nessa"),
-        BTreeMap::new(),
-    )
-    .await
-    .unwrap();
-    assert!(composed.is_none());
-    assert!(config.mcp_servers.is_empty());
+/// The names of the stand-ins a provider open of `config` is given now.
+fn opened(config: &AgentsConfig) -> Vec<String> {
+    config
+        .mcp_stand_ins
+        .opened()
+        .current()
+        .iter()
+        .map(|stand_in| stand_in.name.clone())
+        .collect()
 }
 
 #[tokio::test]
@@ -161,9 +171,12 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
         .await
         .unwrap()
         .expect("composed");
-    assert_eq!(composed.servers.names().collect::<Vec<_>>(), ["mcptest"]);
-    assert_eq!(config.mcp_servers[0].command, Path::new("/nessa"));
-    assert_eq!(config.mcp_servers[0].args[0], "mcp-relay");
+    assert_eq!(composed.servers.configured(), vec![configured.clone()]);
+    // Taken into the live set: the configuration keeps no copy.
+    assert!(config.mcp_servers.is_empty());
+    let handed = config.mcp_stand_ins.opened().current();
+    assert_eq!(handed[0].command, Path::new("/nessa"));
+    assert_eq!(handed[0].args[0], "mcp-relay");
     assert!(std::fs::symlink_metadata(&socket)
         .unwrap()
         .file_type()
@@ -229,7 +242,7 @@ async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
     let token = opened
         .environment()
         .iter()
-        .find(|(name, _)| name == crate::mcp_servers::domain::SESSION_VARIABLE)
+        .find(|(name, _)| name == nessa_sdk::infrastructure::mcp::MCP_SESSION_VARIABLE)
         .map(|(_, token)| token.clone())
         .expect("the agents' opens carry a token");
     // Let past the session check (this test's server cannot start, so it is
@@ -279,7 +292,7 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
         .unwrap();
     assert!(composed.is_none());
     // Off, not handed over directly.
-    assert!(config.mcp_servers.is_empty());
+    assert!(opened(&config).is_empty());
     assert_eq!(std::fs::read(&socket).unwrap(), b"not a socket");
     // A path past the platform's socket limit is the same.
     let deep = namespace.path().join("d".repeat(120)).join("relay.sock");
@@ -290,7 +303,7 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
             .unwrap()
             .is_none()
     );
-    assert!(config.mcp_servers.is_empty());
+    assert!(opened(&config).is_empty());
 }
 
 #[tokio::test]
@@ -306,4 +319,99 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error() {
         .await,
         Err(crate::core::RunError::Agent(_))
     ));
+}
+
+/// A hello for `server` naming `token` is refused for `reason`.
+async fn refused(
+    composed: &super::McpComposition,
+    server: &StdioMcpServer,
+    token: &str,
+    reason: crate::mcp_servers::infrastructure::Refusal,
+) -> bool {
+    use crate::mcp_servers::infrastructure::Answer;
+    matches!(
+        answered(composed, server, token).await,
+        Answer::Refused { reason: said, .. } if said == reason
+    )
+}
+
+/// A token one open of `config` carries, and the grant that keeps it live.
+fn token(
+    config: &AgentsConfig,
+) -> (
+    nessa_sdk::infrastructure::acp::sessions::StandInGrant,
+    String,
+) {
+    let (opened, grant) = config.stand_ins.opened(Some(
+        &nessa_sdk::domain::agent_execution::sessions::SessionId::new("conversation").unwrap(),
+    ));
+    let token = opened.environment()[0].1.clone();
+    (grant.expect("a grant"), token)
+}
+
+/// #391 S18: with no server configured the relay is composed all the same,
+/// so a server added later reaches the next open and is let through.
+#[tokio::test]
+async fn s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open() {
+    use crate::mcp_servers::infrastructure::Refusal;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let mut config = agents(Vec::new());
+    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap()
+        .expect("the relay is composed with no server configured");
+    assert!(opened(&config).is_empty());
+    let added = server("mcptest", &["/s.mjs"]);
+    let (_grant, token) = token(&config);
+    assert!(refused(&composed, &added, &token, Refusal::UnknownServer).await);
+    composed
+        .servers
+        .replace(launches(std::slice::from_ref(&added)))
+        .unwrap();
+    assert_eq!(opened(&config), ["mcptest"]);
+    // Admitted: this test's server cannot start, so it is refused as
+    // unavailable rather than unknown.
+    assert!(refused(&composed, &added, &token, Refusal::Unavailable).await);
+}
+
+/// #391 S11–S13 through the composed gateway: an edited server's old
+/// stand-in is refused `configuration-changed` and a new open gets the new
+/// one; a removed server's is refused `unknown-server` and a new open does
+/// not list it; added back, it is in the next open again.
+#[tokio::test]
+async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused() {
+    use crate::mcp_servers::infrastructure::Refusal;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let original = server("mcptest", &["/s.mjs"]);
+    let mut config = agents(vec![original.clone()]);
+    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap()
+        .expect("composed");
+    let (_grant, token) = token(&config);
+    let before = config.mcp_stand_ins.opened().current();
+    // S11: edited.
+    let edited = server("mcptest", &["/edited.mjs"]);
+    composed
+        .servers
+        .replace(launches(std::slice::from_ref(&edited)))
+        .unwrap();
+    assert!(refused(&composed, &original, &token, Refusal::ConfigurationChanged).await);
+    assert!(refused(&composed, &edited, &token, Refusal::Unavailable).await);
+    let after = config.mcp_stand_ins.opened().current();
+    assert_eq!(after[0].name, "mcptest");
+    assert_ne!(after[0].args, before[0].args);
+    // S12: removed.
+    composed.servers.replace(Vec::new()).unwrap();
+    assert!(refused(&composed, &edited, &token, Refusal::UnknownServer).await);
+    assert!(opened(&config).is_empty());
+    // S13: back again.
+    composed
+        .servers
+        .replace(launches(std::slice::from_ref(&edited)))
+        .unwrap();
+    assert_eq!(opened(&config), ["mcptest"]);
+    assert!(refused(&composed, &edited, &token, Refusal::Unavailable).await);
 }

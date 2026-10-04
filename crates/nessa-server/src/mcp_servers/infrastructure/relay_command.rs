@@ -1,12 +1,12 @@
 //! `nessa mcp-relay SOCKET SERVER CONFIGURATION`: the stand-in a harness
 //! runs in place of a configured MCP server. It says hello on the relay
 //! socket — with the session token its harness gave it in its environment
-//! ([`SESSION_VARIABLE`]) — and then copies bytes: its stdin to the gateway, the gateway's
+//! ([`MCP_SESSION_VARIABLE`]) — and then copies bytes: its stdin to the gateway, the gateway's
 //! answers to its stdout. Its stdout is the MCP stream and nothing else;
 //! diagnostics go to stderr.
 use super::relay::{read_line, write_line, Answer, Hello, Refusal, ANSWER_TIMEOUT};
 #[cfg(unix)]
-use crate::mcp_servers::domain::SESSION_VARIABLE;
+use nessa_sdk::infrastructure::mcp::MCP_SESSION_VARIABLE;
 use std::fmt;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -47,7 +47,7 @@ pub async fn run(
         .await
         .map_err(|_| RelayFailure::Unreachable)?;
     // None is said as empty, which no grant matches.
-    let session = std::env::var(SESSION_VARIABLE).unwrap_or_default();
+    let session = std::env::var(MCP_SESSION_VARIABLE).unwrap_or_default();
     relay(
         connection,
         server,

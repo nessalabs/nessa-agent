@@ -418,7 +418,7 @@ async fn a_binding_codex_cannot_honour_is_refused_before_a_process_starts() {
     // Codex brings its own tools and cannot be asked to run without them.
     let text_only = AcpConfig {
         tools_enabled: false,
-        mcp_servers: Vec::new(),
+        mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         ..config.clone()
     };
     assert_eq!(

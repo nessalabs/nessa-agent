@@ -914,8 +914,10 @@ and session deadlines. Use the
 `crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
 native file/web tools remain provider-owned. No tool request selects executable
 configuration. The gateway holds the connection to each configured MCP server
-for each harness session (ADR 344): each agent's `session/new` gets a stand-in
-in the server's place (`nessa mcp-relay`, `crates/nessa-server/src/mcp_servers/`);
+for each harness session (ADR 344): each provider open gets a stand-in in the
+place of each server configured then — `McpServers` owns that live set, which
+can be replaced while conversations run — (`nessa mcp-relay`,
+`crates/nessa-server/src/mcp_servers/`);
 when a harness starts it, the SDK's `infrastructure::mcp::McpServers` opens a
 session of its own — the server process and the one connection to it — lists
 its tools with their MCP Apps `_meta.ui`, reads `ui://` resources, and

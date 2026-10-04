@@ -36,6 +36,8 @@ pub(crate) mod identity;
 pub(crate) mod retrofit;
 mod stand_ins;
 pub(crate) mod thought_level;
-pub use config::{AcpConfig, StdioMcpServer};
+pub use config::{
+    AcpConfig, McpServerList, McpServerProblem, McpServerSource, StdioMcpServer, MAX_MCP_SERVERS,
+};
 pub use forwarded::{ForwardedResults, MAX_FORWARDED_RESULTS};
 pub use stand_ins::{StandInGrant, StandInGrants, StandInSessions};

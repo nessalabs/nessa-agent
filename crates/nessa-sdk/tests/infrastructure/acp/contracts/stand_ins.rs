@@ -6,9 +6,11 @@ use super::support::*;
 use crate::application::agent_execution::providers::{AgentProvider, ProviderOpenRequest};
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::acp::sessions::{
-    AcpConfig, StandInGrant, StandInGrants, StandInSessions, StdioMcpServer,
+    AcpConfig, McpServerList, McpServerSource, StandInGrant, StandInGrants, StandInSessions,
+    StdioMcpServer,
 };
 use serde_json::{json, Value};
+use std::sync::Mutex;
 
 /// Grants that give every open the same token.
 struct TokenGrants;
@@ -24,14 +26,16 @@ impl StandInGrants for TokenGrants {
 /// `config` with two MCP servers and grants.
 fn with_stand_ins(mut config: AcpConfig) -> AcpConfig {
     config.tools_enabled = true;
-    config.mcp_servers = ["first", "second"]
-        .into_iter()
-        .map(|name| StdioMcpServer {
-            name: name.into(),
-            command: "/bin/stand-in".into(),
-            args: vec!["mcp-relay".into(), name.into()],
-        })
-        .collect();
+    config.mcp_servers = McpServerList::fixed(
+        ["first", "second"]
+            .into_iter()
+            .map(|name| StdioMcpServer {
+                name: name.into(),
+                command: "/bin/stand-in".into(),
+                args: vec!["mcp-relay".into(), name.into()],
+            })
+            .collect(),
+    );
     config.stand_ins = StandInSessions::granted_by(Arc::new(TokenGrants));
     config
 }
@@ -112,6 +116,84 @@ async fn opencodes_session_requests_carry_the_grant() {
     )
     .unwrap();
     every_request_carries_the_grant(&provider, &root).await;
+}
+
+/// A host's live set: whatever it holds when an open reads it.
+#[derive(Default)]
+struct LiveSet(Mutex<Vec<StdioMcpServer>>);
+impl LiveSet {
+    fn set(&self, names: &[&str]) {
+        *self.0.lock().unwrap() = names
+            .iter()
+            .map(|name| StdioMcpServer {
+                name: (*name).into(),
+                command: "/bin/stand-in".into(),
+                args: vec!["mcp-relay".into(), (*name).into()],
+            })
+            .collect();
+    }
+}
+impl McpServerSource for LiveSet {
+    fn servers(&self) -> Vec<StdioMcpServer> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+fn names(entries: &Value) -> Vec<&str> {
+    entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap())
+        .collect()
+}
+
+/// #391 S11–S13: the servers are read from the host at each provider open.
+/// A provider session keeps the set it opened with through a relaunch of its
+/// process (its harness keeps what it was given), and the next open gets the
+/// host's set as it is then.
+#[tokio::test]
+async fn each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch() {
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration("stand-ins", 16);
+    let live = Arc::new(LiveSet::default());
+    live.set(&["first"]);
+    config.tools_enabled = true;
+    config.mcp_servers = McpServerList::read_from(live.clone());
+    let provider = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let open = |conversation: &str| {
+        let (_, _, control) = ProviderOpenRequest::without_startup_control(None).into_parts();
+        ProviderOpenRequest::new(SessionId::new(conversation).unwrap(), None, control)
+    };
+    let opened = provider.open(open("one")).await.unwrap();
+    assert_eq!(names(&recorded(&root, "new")), ["first"]);
+    // Replaced while open: its process ends and the binding resumes it, with
+    // the set it opened with.
+    live.set(&["second"]);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    let _ = opened.session.execute(prompt("again")).await.into_result();
+    assert_eq!(names(&recorded(&root, "resume")), ["first"]);
+    // A new open gets the set as it is now.
+    let next = provider.open(open("two")).await.unwrap();
+    assert_eq!(names(&recorded(&root, "new")), ["second"]);
+    for session in [opened.session, next.session] {
+        session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+    }
 }
 
 #[test]

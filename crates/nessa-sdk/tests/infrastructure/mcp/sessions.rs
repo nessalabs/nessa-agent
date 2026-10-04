@@ -5,10 +5,13 @@ use super::fixture::{launch, Behaviour, FixtureLauncher, CHART};
 use super::{servers, session, Harness};
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::UiResourceUri;
+use crate::infrastructure::acp::sessions::{McpServerProblem, MAX_MCP_SERVERS};
 use crate::infrastructure::clock::manual::ManualClock;
-use crate::infrastructure::mcp::{McpError, McpServers, INITIALIZE_TIMEOUT};
+use crate::infrastructure::mcp::{
+    McpError, McpServerLaunch, McpServers, INITIALIZE_TIMEOUT, MCP_SESSION_VARIABLE,
+};
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::{ffi::OsString, sync::Arc, time::Duration};
 
 fn silent(method: &'static str) -> Behaviour {
     let mut behaviour = Behaviour::default();
@@ -191,14 +194,146 @@ fn an_invalid_or_repeated_configuration_is_refused() {
     let repeated = vec![launch("same"), launch("same")];
     assert!(matches!(
         McpServers::with_launcher(repeated, clock.clone(), launcher.clone()),
-        Err(McpError::InvalidConfiguration)
+        Err(McpError::InvalidConfiguration(McpServerProblem::DuplicateName { name }))
+            if name == "same"
     ));
     assert!(matches!(
         McpServers::with_launcher(vec![launch("a__b")], clock.clone(), launcher.clone()),
-        Err(McpError::InvalidConfiguration)
+        Err(McpError::InvalidConfiguration(McpServerProblem::Name))
     ));
     let servers = McpServers::with_launcher(vec![launch("one")], clock, launcher).unwrap();
-    assert_eq!(servers.names().collect::<Vec<_>>(), ["one"]);
+    let names: Vec<_> = servers.configured().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["one"]);
+}
+
+fn configured(servers: &McpServers) -> Vec<String> {
+    servers
+        .configured()
+        .into_iter()
+        .map(|server| server.name)
+        .collect()
+}
+
+/// #391 S11–S13: a replaced set is what the next opening reads. A session
+/// already open — a running harness's — is untouched; a server removed is not
+/// configured for a new opening, and one added back is.
+#[tokio::test]
+async fn a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let open = servers.open("fixture", super::owner()).await.unwrap();
+    servers.replace(vec![launch("other")]).unwrap();
+    assert_eq!(configured(&servers), ["other"]);
+    assert!(matches!(
+        servers.open("fixture", super::owner()).await,
+        Err(McpError::NotConfigured)
+    ));
+    servers.open("other", super::owner()).await.unwrap();
+    // The open session still answers, on the process it was opened with.
+    assert!(open.list_tools().await.is_ok());
+    assert_eq!(launcher.launches(), 2);
+    servers
+        .replace(vec![launch("fixture"), launch("other")])
+        .unwrap();
+    assert_eq!(configured(&servers), ["fixture", "other"]);
+    servers.open("fixture", super::owner()).await.unwrap();
+}
+
+/// #391 S14: once the servers are stopping, a replacement is refused as
+/// stopped, the set is kept, and nothing is launched.
+#[tokio::test]
+async fn a_replacement_once_stopping_is_refused_and_launches_nothing() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    servers.stop().await;
+    assert_eq!(
+        servers.replace(vec![launch("other")]),
+        Err(McpError::Stopped)
+    );
+    assert_eq!(configured(&servers), ["fixture"]);
+    assert_eq!(launcher.launches(), 0);
+}
+
+#[test]
+fn an_invalid_replacement_is_refused_and_keeps_the_set() {
+    let (servers, _, _) = servers(Behaviour::default());
+    assert_eq!(
+        servers.replace(vec![launch("same"), launch("same")]),
+        Err(McpError::InvalidConfiguration(
+            McpServerProblem::DuplicateName {
+                name: "same".into()
+            }
+        ))
+    );
+    assert_eq!(configured(&servers), ["fixture"]);
+}
+
+/// `launch(name)` with `environment`.
+fn with_environment(name: &str, environment: &[(&str, &[u8])]) -> McpServerLaunch {
+    use std::os::unix::ffi::OsStringExt;
+    McpServerLaunch {
+        environment: environment
+            .iter()
+            .map(|(key, value)| (OsString::from(*key), OsString::from_vec(value.to_vec())))
+            .collect(),
+        ..launch(name)
+    }
+}
+
+/// One owner of the set's rules: at most [`MAX_MCP_SERVERS`], names of
+/// their own, and what each process may be given in its environment.
+#[test]
+fn the_sets_count_and_each_servers_environment_are_checked_by_one_owner() {
+    let problem = |launches: &[McpServerLaunch]| McpServerLaunch::problem_in(launches);
+    let many = |count: usize| -> Vec<McpServerLaunch> {
+        (0..count)
+            .map(|index| launch(&format!("s{index}")))
+            .collect()
+    };
+    // The published bound (#391's design), which the gateway will refuse by.
+    assert_eq!(MAX_MCP_SERVERS, 16);
+    assert_eq!(problem(&many(MAX_MCP_SERVERS)), None);
+    assert_eq!(
+        problem(&many(MAX_MCP_SERVERS + 1)),
+        Some(McpServerProblem::TooMany)
+    );
+    let clock = Arc::new(ManualClock::default());
+    let launcher = FixtureLauncher::new(Behaviour::default());
+    assert!(matches!(
+        McpServers::with_launcher(many(MAX_MCP_SERVERS + 1), clock, launcher),
+        Err(McpError::InvalidConfiguration(McpServerProblem::TooMany))
+    ));
+    for name in ["PATH", "_X", "A1", &"N".repeat(256)] {
+        assert_eq!(
+            with_environment("s", &[(name, b"value")]).problem(),
+            None,
+            "{name}"
+        );
+    }
+    for name in ["", "1A", "A-B", "A=B", "Ä", &"N".repeat(257)] {
+        assert_eq!(
+            with_environment("s", &[(name, b"value")]).problem(),
+            Some(McpServerProblem::EnvironmentName),
+            "{name:?}"
+        );
+    }
+    assert_eq!(
+        with_environment("s", &[(MCP_SESSION_VARIABLE, b"token")]).problem(),
+        Some(McpServerProblem::ReservedEnvironmentName {
+            name: MCP_SESSION_VARIABLE.into()
+        })
+    );
+    assert_eq!(
+        with_environment("s", &[("KEY", b"a\0b")]).problem(),
+        Some(McpServerProblem::EnvironmentValue { name: "KEY".into() })
+    );
+    // A server's own rules come first, and a set's rules see every launch's.
+    assert_eq!(
+        with_environment("a__b", &[("", b"")]).problem(),
+        Some(McpServerProblem::Name)
+    );
+    assert_eq!(
+        problem(&[launch("ok"), with_environment("s", &[("1", b"")])]),
+        Some(McpServerProblem::EnvironmentName)
+    );
 }
 
 fn chart_call() -> McpTool {

@@ -67,7 +67,9 @@ end of input (Nessa's own shell server) still does.
 - **What the harness is given.** In `session/new`, each configured server is
   replaced by a stand-in under the same name: the gateway's own executable,
   `mcp-relay`, the relay socket, the server's name, and a digest of the
-  server's configured command and arguments.
+  server's configured command and arguments. The set is read from the
+  gateway's live set at each provider open, and kept for that provider
+  session's life ([the live server set](#the-live-server-set-391)).
 - **Stand-in traffic.** The harness's `initialize` is answered by the gateway
   from the upstream's own answer (its protocol version, capabilities, server
   information and instructions), less `resources.subscribe`;
@@ -149,13 +151,16 @@ end of input (Nessa's own shell server) still does.
 
 ## Failures are typed
 
-`McpError`: `InvalidConfiguration` (servers that cannot be launched as
-configured), `NotConfigured` (no such server), `Start` (could not be
+`McpError`: `InvalidConfiguration(McpServerProblem)` (servers that cannot be
+launched as configured, and why: too many, a name twice, a bad name,
+executable or arguments, a bad, reserved or NUL-holding environment
+variable), `NotConfigured` (no such server), `Start` (could not be
 launched), `Handshake` (refused or unreadable `initialize`), `Timeout`,
 `ServerGone` (the process ended or its pipes closed), `Remote { code,
 message }` (a JSON-RPC error), `Malformed` (an answer of the wrong shape),
 `TooLarge`, `NotAnApp` (not `text/html;profile=mcp-app`), `Busy`, `Stopped`
-(the gateway is shutting down), `Closed` (the session's harness session
+(the gateway is shutting down; also what replacing the set is refused with
+then), `Closed` (the session's harness session
 ended).
 
 ## States
@@ -304,8 +309,9 @@ structured results already do.
   Adding, editing or removing a server, or moving the gateway's executable or
   the relay socket, leaves every saved conversation restorable. A stand-in's
   arguments still carry the server's name and a digest of the configured
-  command and arguments, which the relay compares: a server changed under an
-  open conversation is refused `configuration-changed`, and that conversation
+  command and arguments, which the relay compares against the live set at
+  each hello: a server changed under an open conversation is refused
+  `configuration-changed`, one removed `unknown-server`, and that conversation
   keeps its harness's set until its provider session ends. The session token
   is in the stand-in's environment, never its arguments.
 - **Restarts.** A gateway restart ends every session with the agents. A
@@ -388,6 +394,40 @@ Each row above has at least one test, named after it:
   (`contracts/tools.rs`).
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.
 - Live: `scripts/mcp-test-server/live-check.mjs` with Claude and Codex.
+
+## The live server set (#391)
+
+`McpServers` is the one owner of the configured set: it holds the launches
+behind one swap, `replace(launches)` validated and refused once stopping,
+and `configured()`. Nothing else keeps a copy. A provider open reads the
+stand-ins for the set as it is then (`AcpConfig.mcp_servers`, an
+`McpServerList` read from the gateway's `StandIns`, where the open's grant is
+read too) and keeps them for its provider session's life, through every
+restart of its process; the relay reads the set's digests at every hello.
+On Unix the relay exists even with no server configured, so a set replaced
+later reaches the next open without a restart. A socket that cannot be bound
+still leaves MCP servers off for the run.
+
+The rules for a set have one owner, `StdioMcpServer::problem_in` (at most
+`MAX_MCP_SERVERS` = 16, each server's `problem`, names of their own), with
+`McpServerLaunch::problem` adding what a process may be given:
+environment names of ASCII letters, digits and `_`, 1–256 bytes, not starting
+with a digit; never `NESSA_MCP_SESSION` (`MCP_SESSION_VARIABLE`, the
+stand-ins' token); no NUL in a value. `AcpConfig::validate`, `McpServers::new`
+and `replace` all ask it.
+
+Row numbers are the PR 2 design's, on #391; this pass builds S11–S14 and
+S18, and the gateway methods that will call `replace` come later.
+
+| # | State / event | Expected | Test |
+| --- | --- | --- | --- |
+| S11 | A server edited while a conversation's harness has it | The running harness and its server process are untouched (a relaunch of the same provider session keeps its set); its stand-in's next hello is refused `configuration-changed`; the next open gets the new stand-in | `a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone`, `s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused`, `each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch`, `a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone` |
+| S12 | A server removed while open | Its stand-in's next hello is refused `unknown-server`; a new open does not list it; an open session of it is untouched | the same |
+| S13 | A removed server added back | It is in the next open, and its stand-ins are let through | the same |
+| S14 | `replace` once stopping | Refused `Stopped`; the set is kept; nothing launched | `a_replacement_once_stopping_is_refused_and_launches_nothing` |
+| S18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
+| — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |
+| — | `replace` lands between a hello's admission and its open | The stand-in, admitted against the old digest, is served by the new configuration of the same name; its next hello is refused as S11 | not tested: one read apart, and no harm beyond S11's |
 
 ## MCP servers leave the restoration identity (#391)
 

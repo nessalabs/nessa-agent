@@ -1,3 +1,4 @@
+use crate::infrastructure::acp::sessions::McpServerProblem;
 use std::{error::Error, fmt};
 
 /// Why a request to an MCP server, or a stand-in's connection to it, failed.
@@ -5,9 +6,10 @@ use std::{error::Error, fmt};
 /// Branch on the variant; the text is for people.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpError {
-    /// The servers given could not all be launched as configured
-    /// ([`StdioMcpServer::all_valid`](crate::infrastructure::acp::sessions::StdioMcpServer::all_valid)).
-    InvalidConfiguration,
+    /// The servers given could not all be launched as configured; the
+    /// problem says why
+    /// ([`McpServerLaunch::problem_in`](crate::infrastructure::mcp::McpServerLaunch::problem_in)).
+    InvalidConfiguration(McpServerProblem),
     /// No server is configured under that name.
     NotConfigured,
     /// The server's process could not be launched; the text says why.
@@ -49,9 +51,7 @@ pub enum McpError {
 impl fmt::Display for McpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidConfiguration => {
-                f.write_str("invalid MCP server name, executable or arguments")
-            }
+            Self::InvalidConfiguration(problem) => problem.fmt(f),
             Self::NotConfigured => f.write_str("no MCP server is configured under that name"),
             Self::Start(reason) => write!(f, "the MCP server could not be started: {reason}"),
             Self::Handshake(reason) => write!(f, "the MCP server's handshake failed: {reason}"),

@@ -52,8 +52,9 @@ pub(crate) fn fingerprint(
     }
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
     hash.update([u8::from(config.tools_enabled)]);
-    hash.update((config.mcp_servers.len() as u64).to_be_bytes());
-    for server in &config.mcp_servers {
+    let mcp_servers = config.mcp_servers.current();
+    hash.update((mcp_servers.len() as u64).to_be_bytes());
+    for server in mcp_servers.iter() {
         field(&mut hash, server.name.as_bytes());
         field(&mut hash, server.command.as_os_str().as_encoded_bytes());
         hash.update((server.args.len() as u64).to_be_bytes());

@@ -36,6 +36,15 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     fn supports_questions(&self) -> bool {
         false
     }
+    /// This profile for one provider open, whose configuration — its MCP
+    /// servers read for that open — is `config`. A profile that keeps nothing
+    /// of the open's configuration returns itself.
+    fn for_open(self, _config: &AcpConfig) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError>;
     fn new_session_params(&self, config: &AcpConfig, capabilities: &EffectiveCapabilities)
         -> Value;

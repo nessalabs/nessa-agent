@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! nessa mcp-relay ──hello {server, configuration}──▶ Relay::serve
-//!                 ◀─{accepted} or {refused, message}─┘   │ admit, then McpServers::stand_in
+//!                 ◀─{accepted} or {refused, message}─┘   │ admit against McpServers::configured, then open
 //!                 ◀═══ MCP frames, both ways ═══════════▶ StandIn::serve
 //! ```
 //!
@@ -11,7 +11,7 @@
 //! JSON line of at most [`MAX_HELLO_BYTES`] within [`HELLO_TIMEOUT`] is closed
 //! without an answer.
 use super::grants::ConversationGrants;
-use crate::mcp_servers::domain::{admit, StandInRefusal};
+use crate::mcp_servers::domain::{admit, configuration_digest, StandInRefusal};
 use nessa_sdk::infrastructure::mcp::{McpError, McpServers, INITIALIZE_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, time::Duration};
@@ -120,23 +120,27 @@ pub(crate) fn opening_refused(error: McpError) -> (StandInRefusal, String) {
 
 /// The gateway's side of the relay socket.
 pub struct Relay {
+    /// The live set, whose digests each hello is admitted against as they
+    /// are then, and where its session is opened.
     servers: McpServers,
-    /// Each configured server's configuration digest, by name.
-    configured: BTreeMap<String, String>,
     /// The tokens issued to open conversations' harnesses.
     grants: ConversationGrants,
 }
 impl Relay {
-    pub fn new(
-        servers: McpServers,
-        configured: BTreeMap<String, String>,
-        grants: ConversationGrants,
-    ) -> Self {
-        Self {
-            servers,
-            configured,
-            grants,
-        }
+    pub fn new(servers: McpServers, grants: ConversationGrants) -> Self {
+        Self { servers, grants }
+    }
+
+    /// Each server configured now, by name, with its configuration's digest.
+    fn configured(&self) -> BTreeMap<String, String> {
+        self.servers
+            .configured()
+            .into_iter()
+            .map(|server| {
+                let digest = configuration_digest(&server.command, &server.args);
+                (server.name, digest)
+            })
+            .collect()
     }
 
     /// Serve one stand-in's connection until it, or its server, ends. Its end —
@@ -161,7 +165,10 @@ impl Relay {
             let _ = write_line(&mut output, &answer).await;
             return;
         };
-        if let Err(reason) = admit(&hello.server, &hello.configuration, &self.configured) {
+        // Against the set as it is now: a stand-in of a server since edited is
+        // refused `configuration-changed`, of one since removed
+        // `unknown-server`.
+        if let Err(reason) = admit(&hello.server, &hello.configuration, &self.configured()) {
             let message = match reason {
                 StandInRefusal::UnknownServer => "no MCP server is configured under that name",
                 _ => "the MCP server is configured differently now; start a new session",

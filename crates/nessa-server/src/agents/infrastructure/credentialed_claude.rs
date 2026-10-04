@@ -293,7 +293,7 @@ mod tests {
             credential_environment: BTreeMap::new(),
             workspace: root.path().into(),
             tools_enabled: true,
-            mcp_servers: Vec::new(),
+            mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             launch_timeout: Duration::from_secs(10),

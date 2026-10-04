@@ -6,6 +6,7 @@
 //!
 //! ```text
 //! McpServers ──open(server, McpOwner)──▶ McpSession: server process ─ Connection
+//!     ├── configured / replace (the live set, read at each opening)
 //!     │                                    ├── list_tools / read_ui_resource
 //!     │                                    └── serve(harness pipes) ──▶ stand_in
 //!     │                                          └── record ──▶ acp::sessions::ForwardedResults (the grant's)
@@ -16,8 +17,9 @@
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! ```
 //!
-//! Arrows are calls. `McpServers` owns the open sessions and refuses new ones
-//! once stopped; each is owned by an SDK session (a conversation's) and the
+//! Arrows are calls. `McpServers` owns the configured set, which a host
+//! replaces while sessions are open, and the open sessions, and refuses new
+//! ones once stopped; each is owned by an SDK session (a conversation's) and the
 //! host's grant for that open ([`McpOwner`]); an `McpSession` owns one
 //! process (its process group) and its connection, closed when its harness
 //! session ends or its grant is revoked; `Connection` owns
@@ -46,7 +48,7 @@ mod wire;
 pub use error::McpError;
 pub use servers::{
     McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS,
-    MAX_TOOL_PAGES, REQUEST_TIMEOUT,
+    MAX_TOOL_PAGES, MCP_SESSION_VARIABLE, REQUEST_TIMEOUT,
 };
 pub(crate) use wire::structured_result;
 #[cfg(test)]

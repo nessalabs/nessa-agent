@@ -80,10 +80,11 @@ impl ClaudeProfile {
         }
     }
 }
-impl ClaudeProfile {
-    pub(super) fn with_mcp_servers(mut self, config: &AcpConfig) -> Self {
+impl AcpProfile for ClaudeProfile {
+    fn for_open(mut self, config: &AcpConfig) -> Self {
         self.mcp_prefixes = config
             .mcp_servers
+            .current()
             .iter()
             .map(|server| {
                 format!(
@@ -96,8 +97,6 @@ impl ClaudeProfile {
             .collect();
         self
     }
-}
-impl AcpProfile for ClaudeProfile {
     fn supports_steering(&self, initialize: &Value) -> bool {
         initialize
             .pointer("/_meta/steering/supported")
@@ -131,6 +130,7 @@ impl AcpProfile for ClaudeProfile {
         let servers = config.mcp_server_entries();
         let allowed_servers: Vec<_> = config
             .mcp_servers
+            .current()
             .iter()
             .map(|server| json!({"serverName":server.name}))
             .collect();

@@ -3,7 +3,7 @@ use super::support::*;
 use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 use crate::application::agent_execution::sessions::{SessionManager, StorageError};
 use crate::domain::agent_execution::sessions::SessionId;
-use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::acp::sessions::{McpServerList, StdioMcpServer};
 use crate::infrastructure::session_storage::RecordStorage;
 
 fn provider(config: AcpConfig, model: &ModelMetadata) -> ClaudeAcpProvider {
@@ -150,11 +150,11 @@ async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
     agent.close(close_action()).await.unwrap();
     drop(agent);
     let mut changed = config.clone();
-    changed.mcp_servers.push(StdioMcpServer {
+    changed.mcp_servers = McpServerList::fixed(vec![StdioMcpServer {
         name: "nessa".into(),
         command: "/trusted/nessa-mcp".into(),
         args: vec!["--workspace".into(), "/different".into()],
-    });
+    }]);
     let changed = provider(changed, &model);
     assert_eq!(changed.identity(), identity);
     assert_ne!(
@@ -176,7 +176,7 @@ async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
 #[test]
 fn previous_identity_differs_with_no_mcp_servers() {
     let (_root, config, model) = test_acp_configuration("echo", 16);
-    assert!(config.mcp_servers.is_empty());
+    assert!(config.mcp_servers.current().is_empty());
     let current = provider(config, &model);
     let previous = current.previous_identity();
     assert_ne!(previous, current.identity());
@@ -192,11 +192,11 @@ fn previous_identity_is_the_one_the_earlier_fingerprint_gave() {
     let (_root, mut config, model) = test_acp_configuration("echo", 16);
     config.arguments = vec!["/fixture/handler.py".into(), "echo".into()];
     config.workspace = "/fixture/workspace".into();
-    config.mcp_servers.push(StdioMcpServer {
+    config.mcp_servers = McpServerList::fixed(vec![StdioMcpServer {
         name: "nessa".into(),
         command: "/trusted/nessa-mcp".into(),
         args: vec!["--workspace".into(), "/different".into()],
-    });
+    }]);
     assert_eq!(
         provider(config, &model).previous_identity().context(),
         "sha256:e0279dde8476dba881711d2f24cf89425355fc2a9b11c6113322861b6034995c"
@@ -214,7 +214,7 @@ fn previous_identity_differs_by_mcp_server_name_command_and_arguments() {
     };
     let with = |server: StdioMcpServer| {
         let mut config = config.clone();
-        config.mcp_servers.push(server);
+        config.mcp_servers = McpServerList::fixed(vec![server]);
         provider(config, &model).previous_identity()
     };
     let original = with(server.clone());
@@ -322,11 +322,11 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
     }
     // Nor is the MCP server list (ADR 344, #391).
     let mut served = config.clone();
-    served.mcp_servers.push(StdioMcpServer {
+    served.mcp_servers = McpServerList::fixed(vec![StdioMcpServer {
         name: "nessa".into(),
         command: "/trusted/nessa-mcp".into(),
         args: vec!["--workspace".into(), "/different".into()],
-    });
+    }]);
     assert_eq!(provider(served, &model).identity(), original);
     let mut left = config.clone();
     let mut right = config;

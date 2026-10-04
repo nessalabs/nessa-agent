@@ -104,6 +104,8 @@ pub(super) fn configure(
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::new(),
         });

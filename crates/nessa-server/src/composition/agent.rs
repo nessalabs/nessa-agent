@@ -75,8 +75,18 @@ use std::{collections::HashMap, path::PathBuf};
 pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
     pub workspace: PathBuf,
+    /// The MCP servers configured at startup. Composition takes them into
+    /// the gateway's live set ([`super::mcp_servers`]) before any agent is
+    /// built, leaving this empty; agents read `mcp_stand_ins` instead.
     #[serde(default)]
     pub mcp_servers: Vec<StdioMcpServer>,
+    /// What each provider open's `mcpServers` are read from: the stand-ins
+    /// for the gateway's live set once MCP is composed
+    /// ([`super::mcp_servers`]), none before. Never configured. Unix only,
+    /// as composing MCP and launching an agent are.
+    #[cfg(unix)]
+    #[serde(skip)]
+    pub mcp_stand_ins: nessa_sdk::infrastructure::acp::sessions::McpServerList,
     /// Where each provider open's MCP stand-ins get their session token: the
     /// gateway's grants once MCP is composed ([`super::mcp_servers`]), none
     /// before. Never configured. Unix only, as composing MCP and launching an
@@ -1017,7 +1027,7 @@ pub(super) mod build {
             credential_environment,
             workspace,
             tools_enabled: runtime.tools_enabled,
-            mcp_servers: config.mcp_servers.clone(),
+            mcp_servers: config.mcp_stand_ins.clone(),
             stand_ins: config.stand_ins.clone(),
             permissions: PermissionOfferPolicy::once_only(),
             // All four from protocol/defaults/agent-startup-budgets.json,

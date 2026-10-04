@@ -3,11 +3,6 @@
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-/// The environment variable a stand-in finds its session's token in. It is
-/// set only in the stand-in's own environment, never in its arguments, so it
-/// stays out of a harness's context fingerprint.
-pub const SESSION_VARIABLE: &str = "NESSA_MCP_SESSION";
-
 /// A token as said: 32 random bytes, lowercase hex.
 pub fn session_token(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
