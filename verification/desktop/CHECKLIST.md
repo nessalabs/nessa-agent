@@ -428,9 +428,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   frame, so the app mounts once. _#418 design._ _Check:_
   `mcp-apps-gateway.mjs --agent codex --scripted` and `--agent claude
   --scripted`, `renders`: its step and frame counts (no model, no sign-in: the
-  scripted agent replays the recorded frames under the real gateway). With
-  Claude, `renders` then fails on the app's tool result until #435; the later
-  steps of either depend on #436.
+  scripted agent replays the recorded frames under the real gateway).
 
 ## Composer and approval card
 

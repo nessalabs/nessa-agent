@@ -120,7 +120,7 @@ the gateway shows its review first.`,
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
 async function startStack(options) {
   const stack = await startGatewayStack(options, "mcp-apps-gateway", {
-    scriptedTool: APP_TOOL,
+    scripted: options.scripted ? APP_TOOL : undefined,
   })
   try {
     const started = Date.now()

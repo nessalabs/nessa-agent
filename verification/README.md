@@ -57,7 +57,7 @@ verification/
         apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
         apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
-        gateway-stack.mjs   a real gateway, the dev server before it and a client on it, for the real-gateway checks; the panel's credential; an agent turn sent and waited out
+        gateway-stack.mjs   a real gateway, the dev server before it and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened, what a text-only turn said
         gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
