@@ -71,6 +71,12 @@ impl UiVisibility {
     pub fn app(self) -> bool {
         self.app
     }
+    /// A side is included only when `self` and `other` both include it.
+    /// A name declared more than once is for a side only when every
+    /// declaration says so (#425).
+    pub fn every(self, other: Self) -> Self {
+        Self::new(self.model && other.model, self.app && other.app)
+    }
 }
 
 /// What a tool declares in `_meta.ui`: the UI resource its result is drawn

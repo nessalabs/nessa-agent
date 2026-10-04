@@ -386,9 +386,148 @@ async fn a_stand_in_that_falls_behind_the_change_notices_gets_all_three() {
     assert!(seen.contains("notifications/prompts/list_changed"));
 }
 
+/// A name one `tools/list` result gives twice is the same tool for the model
+/// and for an app, in either order (#425).
+#[tokio::test]
+async fn a_name_listed_twice_is_judged_the_same_for_the_model_and_the_app() {
+    use crate::domain::agent_execution::tools::McpTool;
+    use crate::domain::mcp_apps::UiVisibility;
+    let entry = |uri: &str, visibility: serde_json::Value| {
+        json!({
+            "name": "x",
+            "annotations": { "readOnlyHint": uri == "ui://f/a" },
+            "_meta": { "ui": { "resourceUri": uri, "visibility": visibility } }
+        })
+    };
+    let cases = [
+        (json!(["app"]), json!("app"), false, false),
+        (json!("app"), json!(["app"]), false, false),
+        (json!(["model", "app"]), json!(["model"]), true, false),
+        (json!(["model"]), json!(["model", "app"]), true, false),
+        (json!(["model", "app"]), json!(["model", "app"]), true, true),
+        (json!(["model"]), json!(["app"]), false, false),
+        (json!(["app"]), json!(["model"]), false, false),
+    ];
+    for (index, (first, second, model, app)) in cases.into_iter().enumerate() {
+        let (session, servers, launcher, _) = session(Behaviour {
+            pages: vec![vec![entry("ui://f/a", first), entry("ui://f/b", second)]],
+            ..Behaviour::default()
+        })
+        .await;
+        let listed = servers
+            .listed_tool(&super::conversation(), "fixture", "x")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            listed.ui().visibility(),
+            UiVisibility::new(model, app),
+            "{index}"
+        );
+        assert_eq!(
+            listed
+                .ui()
+                .resource_uri()
+                .map(crate::domain::mcp_apps::UiResourceUri::as_str),
+            Some("ui://f/a"),
+            "{index}"
+        );
+        // Hints stay the first entry's: it only reads, the second does not.
+        assert!(!listed.hints().destructive(), "{index}");
+        assert_eq!(
+            servers.tool_ui(
+                &super::conversation(),
+                &McpTool::new("fixture", "x").unwrap()
+            ),
+            None,
+            "{index}"
+        );
+        let mut harness = Harness::attach(session);
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+            .await;
+        let names: Vec<_> = harness.next().await.unwrap()["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(names.iter().any(|name| name == "x"), model, "{index}");
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "x" } }))
+            .await;
+        let answer = harness.next().await.unwrap();
+        let server = launcher.server(0);
+        if model {
+            assert_eq!(answer["error"]["message"], "unknown tool", "{index}");
+            assert_eq!(server.with_method("tools/call").len(), 1, "{index}");
+        } else {
+            assert_eq!(
+                answer["error"]["message"], "this tool is not available to the model",
+                "{index}"
+            );
+            assert!(server.with_method("tools/call").is_empty(), "{index}");
+        }
+    }
+}
+
+/// The same rule across the pages of one read the session keeps (#425).
+/// A later stand-in list is not asked, so it cannot replace this read.
+#[tokio::test]
+async fn a_name_split_across_the_pages_of_one_read_is_judged_once() {
+    use crate::domain::mcp_apps::UiVisibility;
+    let entry = |uri: &str, visibility: serde_json::Value| json!({ "name": "x", "_meta": { "ui": { "resourceUri": uri, "visibility": visibility } } });
+    let cases = [
+        (json!(["model", "app"]), json!(["model"]), true, false),
+        (json!(["model"]), json!(["app"]), false, false),
+        (json!(["app"]), json!(["model", "app"]), false, true),
+    ];
+    for (index, (first, second, model, app)) in cases.into_iter().enumerate() {
+        let (session, servers, launcher, _) = session(Behaviour {
+            pages: vec![
+                vec![entry("ui://f/a", first)],
+                vec![entry("ui://f/b", second)],
+            ],
+            ..Behaviour::default()
+        })
+        .await;
+        let listed = servers
+            .listed_tool(&super::conversation(), "fixture", "x")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            listed.ui().visibility(),
+            UiVisibility::new(model, app),
+            "{index}"
+        );
+        assert_eq!(
+            listed
+                .ui()
+                .resource_uri()
+                .map(crate::domain::mcp_apps::UiResourceUri::as_str),
+            Some("ui://f/a"),
+            "{index}"
+        );
+        let mut harness = Harness::attach(session);
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "x" } }))
+            .await;
+        let answer = harness.next().await.unwrap();
+        let forwarded = !launcher.server(0).with_method("tools/call").is_empty();
+        assert_eq!(forwarded, model, "{index}");
+        let message = if model {
+            "unknown tool"
+        } else {
+            "this tool is not available to the model"
+        };
+        assert_eq!(answer["error"]["message"], message, "{index}");
+    }
+}
+
 #[test]
 fn the_visibility_record_fails_closed_before_any_list_and_past_its_bound() {
+    use crate::domain::mcp_apps::UiVisibility;
     use crate::infrastructure::mcp::stand_in::{Visibility, MAX_REMEMBERED_TOOLS};
+    use crate::infrastructure::mcp::wire;
     let names = |prefix: &str, count: usize| -> Vec<(String, bool)> {
         (0..count)
             .map(|n| (format!("{prefix}{n}"), false))
@@ -405,12 +544,23 @@ fn the_visibility_record_fails_closed_before_any_list_and_past_its_bound() {
         [("helper".to_owned(), true), ("echo".to_owned(), false)],
     );
     assert!(within.hidden("helper") && !within.hidden("echo") && !within.hidden("unlisted"));
-    // A name one list gives twice is hidden if either says so.
+    // A name one list gives twice is folded before it is stored: hidden
+    // when either entry hides it, in either order (#425).
+    let folded = |entries: [(bool, bool); 2]| {
+        wire::one_visibility_per_name(
+            entries
+                .into_iter()
+                .map(|(model, app)| ("twice".to_owned(), UiVisibility::new(model, app))),
+        )
+        .into_iter()
+        .map(|(name, who)| (name, !who.model()))
+        .collect::<Vec<_>>()
+    };
     let order = within.ask();
-    within.listed(
-        order,
-        [("twice".to_owned(), true), ("twice".to_owned(), false)],
-    );
+    within.listed(order, folded([(false, true), (true, true)]));
+    assert!(within.hidden("twice"));
+    let order = within.ask();
+    within.listed(order, folded([(true, true), (false, true)]));
     assert!(within.hidden("twice"));
     // Lists past the bound together: the latest list's names stand, the
     // earlier one's are forgotten, and anything not remembered is hidden.
