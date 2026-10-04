@@ -958,9 +958,22 @@ fn watch_line(child: &mut WatchChild, kind: &str) -> (Value, Instant) {
     assert_eq!(line["kind"], kind, "{line}");
     (line, at)
 }
-/// A successful complete pass with this trigger, holding `facts` facts.
+/// A successful complete pass with this trigger, holding `facts` facts, and
+/// when it arrived.
 fn watch_pass(child: &mut WatchChild, trigger: &str, facts: u64) -> Instant {
-    let (line, at) = watch_line(child, "pass");
+    watch_pass_report(child, trigger, facts).1
+}
+/// As `watch_pass`, with the pass's report. Attempts the gateway answered
+/// `source_preparing` before it (row W17: a slow cold read) are skipped; the
+/// pass that follows them carries `trigger: preparing`.
+fn watch_pass_report(child: &mut WatchChild, trigger: &str, facts: u64) -> (Value, Instant) {
+    let (mut line, mut at) = watch_line(child, "pass");
+    let mut trigger = trigger;
+    while line["report"]["transportFailure"]["productCode"] == "source_preparing" {
+        assert_eq!(line["report"]["successful"], false, "{line}");
+        (line, at) = watch_line(child, "pass");
+        trigger = "preparing";
+    }
     assert_eq!(line["trigger"], trigger, "{line}");
     assert_eq!(line["report"]["successful"], true, "{line}");
     assert_eq!(line["report"]["work"]["complete"], true, "{line}");
@@ -969,7 +982,7 @@ fn watch_pass(child: &mut WatchChild, trigger: &str, facts: u64) -> Instant {
         facts.to_string(),
         "{line}"
     );
-    at
+    (line["report"].clone(), at)
 }
 fn watch_hint(child: &mut WatchChild, watch: &Value, during_pass: bool) {
     let (line, _) = watch_line(child, "hint");
@@ -1141,11 +1154,29 @@ fn online_two_devices_follow_live_hints_and_converge() {
     // view and progress, so neither cache has a duplicate or missing record.
     let mut b = watch(&profile_b, "1");
     watch_registered(&mut b);
-    watch_pass(&mut b, "recheck", 14);
+    let pass_report = watch_pass_report(&mut b, "recheck", 14).0;
     assert!(watch_end(b, "passesExhausted"));
     let fresh = setup_cache(&directory.path().join("fresh"));
     let (ok, replay) = command(record_command(&root, &fresh, &setup, "100"), false);
     assert!(ok, "{replay:?}");
+    // The pass report is the `sync-records` object: the same fields, the
+    // device's `enrollment` and `recheck` among them.
+    let replay = replay.unwrap();
+    let fields = |value: &Value| {
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(
+        fields(&pass_report),
+        fields(&replay),
+        "{pass_report} {replay}"
+    );
+    assert_eq!(
+        pass_report["enrollment"]["phase"], "active",
+        "{pass_report}"
+    );
+    assert!(pass_report["recheck"].is_null(), "{pass_report}");
     let view_a = show(&cache_a, &setup.receiver);
     let view_b = show(&cache_b, &receiver_b);
     assert_eq!(view_a["facts"], "14", "{view_a}");

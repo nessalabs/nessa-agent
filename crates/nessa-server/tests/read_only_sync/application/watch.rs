@@ -1,4 +1,4 @@
-//! The watch loop against scripted substitutes, one test per row W3–W14.
+//! The watch loop against scripted substitutes, one test per row W3–W14 and W17.
 use super::*;
 use crate::product_contract::generated::{ChangeWatchErrorCode, RecordReadErrorCode};
 use std::collections::VecDeque;
@@ -368,4 +368,64 @@ fn output_failure_stops_the_watch() {
         assert_eq!(follow(&mut script, &mut lines, passes(5)), Err(OutputLost));
         assert_eq!(script.calls, calls);
     }
+}
+
+/// Row W17: a pass answered `source_preparing` is the same pass again, at
+/// once and uncounted toward `MAX_PASSES`; the attempt that succeeds
+/// continues the watch as any complete pass does.
+#[test]
+fn preparing_pass_is_retried_until_it_succeeds() {
+    let preparing = PassResult::Failed(Some(GatewayError::Record(
+        RecordReadErrorCode::SourcePreparing,
+    )));
+    let mut script = Script::new(
+        [preparing, preparing, PassResult::Complete],
+        [Err(GatewayError::TimedOut)],
+    );
+    let (end, lines) = run(&mut script, 1);
+    assert_eq!(
+        script.calls,
+        [Call::Register, Call::Pass, Call::Pass, Call::Pass]
+    );
+    assert_eq!(
+        lines[1..],
+        [
+            Line::Pass(Trigger::Recheck, 1),
+            Line::Pass(Trigger::Preparing, 2),
+            Line::Pass(Trigger::Preparing, 3),
+        ]
+    );
+    // The one counted pass is the one that succeeded.
+    assert_eq!(end.reason, EndReason::PassesExhausted);
+    assert!(end.clean());
+}
+
+/// Row W17: a source still preparing after `PREPARING_ATTEMPTS` attempts ends
+/// the run explicitly with that cause; it is never reported as success.
+#[test]
+fn preparing_beyond_the_attempt_bound_ends_unavailable() {
+    let cause = GatewayError::Record(RecordReadErrorCode::SourcePreparing);
+    let mut script = Script::new(
+        std::iter::repeat_n(PassResult::Failed(Some(cause)), PREPARING_ATTEMPTS),
+        [],
+    );
+    let (end, lines) = run(&mut script, 5);
+    assert_eq!(
+        end,
+        End {
+            reason: EndReason::Unavailable,
+            cause: Some(cause)
+        }
+    );
+    assert!(!end.clean());
+    assert_eq!(lines.len(), 1 + PREPARING_ATTEMPTS);
+    assert_eq!(
+        script
+            .calls
+            .iter()
+            .filter(|call| **call == Call::Pass)
+            .count(),
+        PREPARING_ATTEMPTS
+    );
+    assert!(!script.calls.contains(&Call::Wait));
 }

@@ -463,13 +463,16 @@ impl Run<'_> {
             source,
             authorizer,
             cache,
+            rechecked: None,
         };
         let mut lines = WatchLines::new(output, self.enrollment.clone());
         let end = follow(&mut session, &mut lines, max_passes).map_err(|_| CommandError::Output)?;
-        // Row PC5: `recheck` asks only after an authority refusal.
-        let recheck = end
-            .cause
-            .map_or(Value::Null, |cause| recheck(self.paired, cause));
+        // Row PC5: `recheck` asks only after an authority refusal, and once:
+        // a pass that already asked for this cause carries the answer.
+        let recheck = match (end.cause, session.rechecked.take()) {
+            (Some(cause), Some((asked, answer))) if asked == cause => answer,
+            (cause, _) => cause.map_or(Value::Null, |cause| recheck(self.paired, cause)),
+        };
         lines.end(end, recheck)
     }
     fn catalogue(self, pages: usize, output: &mut dyn Write) -> Result<(), CommandError> {
@@ -528,6 +531,8 @@ struct ConnectionWatch<'a> {
     source: RecordGatewaySource,
     authorizer: GatewayAuthorizer,
     cache: ReadOnlyCache,
+    /// The last pass's gateway failure and the `recheck` its report carries.
+    rechecked: Option<(GatewayError, Value)>,
 }
 impl WatchSession for ConnectionWatch<'_> {
     type Report = Value;
@@ -559,7 +564,13 @@ impl WatchSession for ConnectionWatch<'_> {
             self.scope.origin(),
             self.scope.stream(),
         );
-        let (report, successful) = online::records_report(&attempt, saved, refusal);
+        let recheck = attempt.outcome.failure.map(|failure| {
+            let answer = recheck(self.run.paired, failure);
+            self.rechecked = Some((failure, answer.clone()));
+            answer
+        });
+        let device = json!({"enrollment":self.run.enrollment,"recheck":recheck});
+        let (report, successful) = online::records_report(&attempt, saved, refusal, device);
         let result = match &attempt.result {
             _ if !successful => PassResult::Failed(attempt.outcome.failure),
             Some(Ok(run)) if run.complete => PassResult::Complete,

@@ -25,8 +25,9 @@ use crate::product::generated::{
     wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
     ConversationChanged, ConversationWatchEnded, ConversationWatchRecordsParams,
     ConversationWatchResult, ProductClientMetadata, ProductSessionReady, SessionAuthenticateParams,
-    SessionChallenge, MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_CHANGE_WATCH_ID_BYTES,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
+    SessionChallenge, CHANGE_WATCH_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    MAX_CHANGE_WATCH_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD,
+    PRODUCT_VERSION,
 };
 use crate::product::passive_read::wire::{encode_request, ReadEncodeError};
 use crate::product::wire::{authentication_close_reason, supports_product_version};
@@ -384,8 +385,9 @@ impl Session {
         )?;
         let result = strict_decode::<ConversationWatchResult>(value)
             .and_then(|result| {
-                // The published identity bound, so the inbox holds no more.
-                (result.watch_id.len() <= MAX_CHANGE_WATCH_ID_BYTES)
+                // The complete published identity contract, so the inbox and
+                // the `registered` line hold only a conforming identity.
+                conforming_watch_id(&result.watch_id)
                     .then_some(result)
                     .ok_or(GatewayError::Protocol)
             })
@@ -524,4 +526,16 @@ fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, Gat
             &error.code,
         ))),
     }
+}
+
+/// Whether `id` is within the published change-watch identity contract: its
+/// byte bound and its generated pattern.
+fn conforming_watch_id(id: &str) -> bool {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    id.len() <= MAX_CHANGE_WATCH_ID_BYTES
+        && PATTERN
+            .get_or_init(|| {
+                regex::Regex::new(CHANGE_WATCH_ID_PATTERN).expect("generated pattern compiles")
+            })
+            .is_match(id)
 }

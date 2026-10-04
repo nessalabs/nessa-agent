@@ -65,6 +65,7 @@ impl WatchEvents<Value> for WatchLines<'_> {
             Trigger::Recheck => "recheck",
             Trigger::Hint => "hint",
             Trigger::Incomplete => "incomplete",
+            Trigger::Preparing => "preparing",
         };
         self.line(json!({"kind":"pass","trigger":trigger,"report":report}))
     }

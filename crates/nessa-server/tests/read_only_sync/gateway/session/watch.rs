@@ -94,6 +94,40 @@ fn watch_registration_decodes_the_generated_result() {
     }
 }
 
+/// Row W2: an acknowledgement whose identity is within the byte bound but
+/// outside the generated `CHANGE_WATCH_ID_PATTERN` is a protocol failure, so
+/// the watch loop ends before any `registered` line.
+#[test]
+fn watch_registration_refuses_an_identity_outside_the_published_pattern() {
+    for watch_id in [
+        "w",
+        "00000000-0000-4000-8000-00000000000A-1",
+        "00000000-0000-4000-8000-000000000001-0",
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000001-1 ",
+    ] {
+        assert!(watch_id.len() <= MAX_CHANGE_WATCH_ID_BYTES);
+        let (endpoint, gateway) = peer(move |socket| {
+            let watch = request(socket);
+            socket.write_raw(&response_bytes(&watch.id, json!({ "watchId": watch_id })));
+            while !socket.ended() {}
+        });
+        let mut session = connect(&endpoint);
+        session.begin().unwrap();
+        assert_eq!(
+            session.watch_records(&params()),
+            Err(GatewayError::Protocol),
+            "{watch_id:?}"
+        );
+        assert_eq!(
+            session.finish().unwrap().failure,
+            Some(GatewayError::Protocol)
+        );
+        drop(session);
+        gateway.join().unwrap();
+    }
+}
+
 /// Row W3: a refusal keeps the gateway's typed watch code; a code outside the
 /// generated set is a protocol failure.
 #[test]

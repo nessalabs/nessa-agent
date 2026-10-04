@@ -7,6 +7,8 @@
 //! register --> recheck pass --> wait --> hint --> pass --> wait ...
 //!     |              |            |
 //!  refused        failed       idle / ended / closed
+//!                    |
+//!          source_preparing --> the same pass again (bounded)
 //! ```
 //! Arrows are calls in order on one connection, one operation at a time. The
 //! session keeps hints that arrive during a pass, so `wait` returns at once
@@ -14,7 +16,7 @@
 //! asks the pinned status again for an end whose cause `asks_status` names
 //! (row PC5).
 use super::{device::asks_status, GatewayError};
-use crate::product_contract::generated::ChangeWatchEndReason;
+use crate::product_contract::generated::{ChangeWatchEndReason, RecordReadErrorCode};
 use std::num::NonZeroUsize;
 
 /// What one wait for a hint found.
@@ -35,6 +37,21 @@ pub(crate) enum Trigger {
     Hint,
     /// The previous pass stopped at its page budget (row W7).
     Incomplete,
+    /// The previous attempt was answered `source_preparing`: the same pass
+    /// again, at once (row W17).
+    Preparing,
+}
+
+/// Attempts one pass may make while the gateway answers `source_preparing`,
+/// the first included. The gateway keeps its preparation progress between
+/// attempts, so each one resumes it; the bound keeps a source that never
+/// becomes ready an explicit failure.
+pub(crate) const PREPARING_ATTEMPTS: usize = 4;
+
+/// The gateway's answer that the source is not ready yet: its progress is
+/// retained, and the same read may be asked again.
+fn preparing(cause: GatewayError) -> bool {
+    cause == GatewayError::Record(RecordReadErrorCode::SourcePreparing)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,12 +143,26 @@ pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
     events.registered(&registered)?;
     let mut trigger = Trigger::Recheck;
     let mut passes = 0_usize;
+    let mut attempts = 0_usize;
     loop {
         let pass = match session.pass() {
             Ok(pass) => pass,
             Err(cause) => return Ok(failed(cause)),
         };
         events.pass(trigger, &pass.report)?;
+        attempts += 1;
+        match pass.result {
+            // Row W17: not ready yet. The same pass again, uncounted, until
+            // its attempts are spent; then the cause ends the run.
+            PassResult::Failed(Some(cause))
+                if preparing(cause) && attempts < PREPARING_ATTEMPTS =>
+            {
+                trigger = Trigger::Preparing;
+                continue;
+            }
+            _ => {}
+        }
+        attempts = 0;
         passes += 1;
         match pass.result {
             PassResult::Failed(Some(cause)) => return Ok(failed(cause)),
