@@ -7,10 +7,10 @@
 //! in `docs/design/auth/device-pairing.md` ("Owner routes and mounting").
 use super::{
     generated::{
-        PairingApproveParams, PairingCreateResult, PairingErrorCode,
-        PairingInitiator as WireInitiator, PairingInitiatorKind, PairingInvitationParams,
-        PairingOwnerPhase, PairingOwnerStatus, PairingPendingResult, PairingReceiver,
-        PairingTerminal, PairingTerminalCause,
+        PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateResult,
+        PairingErrorCode, PairingInitiator as WireInitiator, PairingInitiatorKind,
+        PairingInvitationParams, PairingOwnerPhase, PairingOwnerStatus, PairingPendingResult,
+        PairingReceiver, PairingTerminal, PairingTerminalCause,
     },
     socket::{failure, success},
     state::ProductRouteState,
@@ -87,13 +87,31 @@ pub(super) async fn dispatch(
             let Ok(params) = serde_json::from_value::<PairingApproveParams>(frame.params) else {
                 return failure(&id, "invalid_request");
             };
-            pairing
-                .decide(
+            match pairing
+                .approve(
                     session,
                     InvitationId::new(params.invitation_id),
-                    OwnerDecision::Approve(DeviceKey::new(params.device_key)),
+                    DeviceKey::new(params.device_key),
                 )
                 .await
+            {
+                Ok(approval) => {
+                    return success(
+                        &id,
+                        &PairingApproveResult {
+                            status: owner_status(&approval.record),
+                            activation_stopped: approval.stopped.map(|stopped| {
+                                if stopped.retryable() {
+                                    PairingActivationStop::Retryable
+                                } else {
+                                    PairingActivationStop::Permanent
+                                }
+                            }),
+                        },
+                    )
+                }
+                Err(error) => Err(error),
+            }
         }
         method @ ("pairing.status" | "pairing.deny" | "pairing.cancel") => {
             let Ok(params) = serde_json::from_value::<PairingInvitationParams>(frame.params) else {
@@ -223,6 +241,8 @@ fn refusal(error: PairingRuntimeError) -> &'static str {
         | PairingRuntimeError::Crypto(_)
         | PairingRuntimeError::Handshake { .. }
         | PairingRuntimeError::WorkerFault(_)
+        | PairingRuntimeError::Receiver(_)
+        | PairingRuntimeError::Cleanup(_)
         | PairingRuntimeError::Entropy
         // Shutting down: retrying against the next gateway can succeed.
         | PairingRuntimeError::ShuttingDown => PairingErrorCode::PairingUnavailable,

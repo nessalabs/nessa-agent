@@ -276,7 +276,7 @@ fn private_state_is_bounded_and_redacted() {
         .store
         .save_pending(&key(7), &[5; 44], intent(2), None)
         .unwrap();
-    let path = fixture.path().join(PENDING_FILE);
+    let path = fixture.path().join(ENROLLMENT_FILE);
     let encoded = fs::read(&path).unwrap();
     assert_eq!(encoded.len(), PENDING_BYTES);
     assert_eq!(format!("{:?}", key(7)), "PrivateKeyMaterial([REDACTED])");
@@ -299,7 +299,7 @@ fn private_state_is_bounded_and_redacted() {
             bad
         },
     ] {
-        let path = fixture.path().join(PENDING_FILE);
+        let path = fixture.path().join(ENROLLMENT_FILE);
         std::fs::write(&path, bytes).unwrap();
         #[cfg(unix)]
         {
@@ -312,7 +312,7 @@ fn private_state_is_bounded_and_redacted() {
     }
     #[cfg(unix)]
     {
-        let path = fixture.path().join(PENDING_FILE);
+        let path = fixture.path().join(ENROLLMENT_FILE);
         std::fs::remove_file(&path).unwrap();
         symlink("gateway-key", &path).unwrap();
         assert!(matches!(
@@ -349,7 +349,7 @@ fn private_state_is_bounded_and_redacted() {
 #[test]
 fn pending_publication_failure_sends_no_ke3() {
     let fixture = Fixture::new();
-    fs::create_dir(fixture.path().join(PENDING_FILE)).unwrap();
+    fs::create_dir(fixture.path().join(ENROLLMENT_FILE)).unwrap();
     let gateway = NativeIdentity::restore(key(10)).unwrap();
     let device = NativeIdentity::restore(key(11)).unwrap();
     let code = ManualCode::parse(b"ABCD2345").unwrap();
@@ -384,7 +384,7 @@ fn pending_publication_failure_sends_no_ke3() {
         }),
         Err(PairingCryptoError::PendingStorage)
     );
-    fs::remove_dir(fixture.path().join(PENDING_FILE)).unwrap();
+    fs::remove_dir(fixture.path().join(ENROLLMENT_FILE)).unwrap();
     assert!(fixture.store.load_pending().unwrap().is_none());
 }
 
@@ -618,7 +618,7 @@ fn pending_public_retry_and_reopen_preserve_original_fact() {
         .store
         .save_pending(&key(7), &[5; 44], intent(2), None)
         .unwrap();
-    let original = fs::read(fixture.path().join(PENDING_FILE)).unwrap();
+    let original = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
     fixture
         .store
         .save_pending(&key(7), &[5; 44], intent(2), None)
@@ -634,7 +634,7 @@ fn pending_public_retry_and_reopen_preserve_original_fact() {
     assert_eq!(saved.gateway_pin(), &[5; 44]);
     assert_eq!(saved.key().expose_bytes(), &[7; 32]);
     assert_eq!(
-        fs::read(root.join("private").join(PENDING_FILE)).unwrap(),
+        fs::read(root.join("private").join(ENROLLMENT_FILE)).unwrap(),
         original
     );
 }
@@ -748,4 +748,147 @@ fn gateway_publication_failure_preserves_original_operation_and_effect() {
             original_outcome
         );
     }
+}
+/// Slice 2b row A10: the issued credential replaces the exact pending record
+/// in one publication, keeping its key, pin and correlation; an exact retry
+/// acknowledges it, and nothing else can replace or follow it.
+#[test]
+fn issued_credential_replaces_pending_once_and_reopens() {
+    let fixture = Fixture::new();
+    let credential = CredentialId::new("device-1").unwrap();
+    let receiver = ResourceId::new("receiver-1").unwrap();
+    // No pending record: nothing to replace.
+    assert_eq!(
+        fixture
+            .store
+            .save_credential(&credential, &receiver, intent(2)),
+        Err(PrivateStateError::Conflict)
+    );
+    fixture
+        .store
+        .save_pending(&key(7), &[5; 44], intent(2), None)
+        .unwrap();
+    // Another enrollment's credential does not replace this one.
+    assert_eq!(
+        fixture
+            .store
+            .save_credential(&credential, &receiver, intent(4)),
+        Err(PrivateStateError::Conflict)
+    );
+    assert!(fixture.store.load_credential().unwrap().is_none());
+    fixture
+        .store
+        .save_credential(&credential, &receiver, intent(2))
+        .unwrap();
+    assert!(fixture.store.load_pending().unwrap().is_none());
+    let saved = fixture.store.load_credential().unwrap().unwrap();
+    assert_eq!(saved.key().expose_bytes(), &[7; 32]);
+    assert_eq!(saved.gateway_pin(), &[5; 44]);
+    assert_eq!(saved.intent(), intent(2));
+    assert_eq!(saved.credential(), &credential);
+    assert_eq!(saved.receiver(), &receiver);
+    assert!(format!("{saved:?}").contains("[REDACTED]"));
+    let encoded = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
+    // Exact retry acknowledges; another credential or receiver conflicts.
+    fixture
+        .store
+        .save_credential(&credential, &receiver, intent(2))
+        .unwrap();
+    for (other_credential, other_receiver) in [
+        (CredentialId::new("device-2").unwrap(), receiver.clone()),
+        (credential.clone(), ResourceId::new("receiver-2").unwrap()),
+    ] {
+        assert_eq!(
+            fixture
+                .store
+                .save_credential(&other_credential, &other_receiver, intent(2)),
+            Err(PrivateStateError::Conflict)
+        );
+    }
+    // A new enrollment cannot overwrite the issued credential.
+    for expected in [None, Some(intent(2))] {
+        assert_eq!(
+            fixture
+                .store
+                .save_pending(&key(7), &[5; 44], intent(3), expected),
+            Err(PrivateStateError::Conflict)
+        );
+    }
+    assert_eq!(
+        fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap(),
+        encoded
+    );
+    let root = fixture.anchor();
+    drop(fixture.store);
+    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
+    let restored = reopened.load_credential().unwrap().unwrap();
+    assert_eq!(restored.credential(), &credential);
+    assert_eq!(restored.receiver(), &receiver);
+    // A truncated or padded credential record is corrupt, never a pending one.
+    let path = root.join("private").join(ENROLLMENT_FILE);
+    for bytes in [encoded[..encoded.len() - 1].to_vec(), {
+        let mut padded = encoded.clone();
+        padded.push(0);
+        padded
+    }] {
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, bytes).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            reopened.load_credential().map(|saved| saved.is_some()),
+            Err(PrivateStateError::Corrupt)
+        );
+        assert_eq!(
+            reopened.load_pending().map(|saved| saved.is_some()),
+            Err(PrivateStateError::Corrupt)
+        );
+    }
+}
+
+/// Slice 2b row A14: an ended enrollment's record, pending or credential, is
+/// removed for exactly its own enrollment; absence is already ended, and a
+/// new enrollment can then be saved.
+#[test]
+fn ended_enrollment_is_removed_exactly() {
+    let fixture = Fixture::new();
+    assert_eq!(fixture.store.end_enrollment(intent(2)), Ok(()));
+    for issued in [false, true] {
+        fixture
+            .store
+            .save_pending(&key(7), &[5; 44], intent(2), None)
+            .unwrap();
+        if issued {
+            fixture
+                .store
+                .save_credential(
+                    &CredentialId::new("device-1").unwrap(),
+                    &ResourceId::new("receiver-1").unwrap(),
+                    intent(2),
+                )
+                .unwrap();
+        }
+        let before = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
+        assert_eq!(
+            fixture.store.end_enrollment(intent(4)),
+            Err(PrivateStateError::Conflict)
+        );
+        assert_eq!(
+            fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap(),
+            before
+        );
+        fixture.store.end_enrollment(intent(2)).unwrap();
+        assert!(!fixture.path().join(ENROLLMENT_FILE).exists());
+        assert!(fixture.store.load_pending().unwrap().is_none());
+        assert!(fixture.store.load_credential().unwrap().is_none());
+        assert_eq!(fixture.store.end_enrollment(intent(2)), Ok(()));
+    }
+    fixture
+        .store
+        .save_pending(&key(8), &[6; 44], intent(3), None)
+        .unwrap();
+    assert_eq!(
+        fixture.store.load_pending().unwrap().unwrap().intent(),
+        intent(3)
+    );
 }

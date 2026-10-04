@@ -1,10 +1,11 @@
 //! The owner side of one gateway's enrollment runtime, as the product socket
 //! sees it: create, list, read and decide, with entropy chosen by composition.
 use super::{CreatedInvitation, GatewayPairing, PairingRuntimeError};
+use crate::device_pairing::application::Approval;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, RngCore},
     application::{pairing::OwnerDecision, session::AuthenticatedSession},
-    domain::pairing::{InvitationId, PairingRecord},
+    domain::pairing::{DeviceKey, InvitationId, PairingRecord},
 };
 use std::sync::Arc;
 
@@ -56,7 +57,19 @@ impl PairingOwnerCommands {
     ) -> Result<PairingRecord, PairingRuntimeError> {
         self.gateway.owner_status(session, id).await
     }
-    /// Approve the exact claimed key, deny, or cancel (`GatewayPairing::decide`).
+    /// Approve the exact claimed key and carry it through to an issued
+    /// credential (`GatewayPairing::approve`).
+    pub async fn approve(
+        &self,
+        session: &AuthenticatedSession,
+        id: InvitationId,
+        key: DeviceKey,
+    ) -> Result<Approval, PairingRuntimeError> {
+        self.gateway
+            .approve(session, id, key, Entropy((self.entropy)()))
+            .await
+    }
+    /// Deny or cancel (`GatewayPairing::decide`).
     pub async fn decide(
         &self,
         session: &AuthenticatedSession,

@@ -8,10 +8,13 @@ use nessa_auth::{
         },
     },
     application::pairing::{
-        ClientPendingStore, PairingStore, PairingWorkerFault, PendingEnrollment,
+        ClientPendingStore, DeviceCredential, PairingStore, PairingWorkerFault, PendingEnrollment,
         PrivateKeyMaterial, PrivateStateError,
     },
-    domain::pairing::{InvitationId, PublicIntent},
+    domain::{
+        pairing::{InvitationId, PublicIntent},
+        CredentialId, ResourceId,
+    },
 };
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
@@ -231,6 +234,7 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
         gateway,
         time: _,
         owner_token: _,
+        receivers: _,
     } = fixture;
     drop(gateway);
     drop(registry);
@@ -283,6 +287,20 @@ struct AcknowledgedSave {
 impl ClientPendingStore for AcknowledgedSave {
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         self.state.load_pending()
+    }
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
+        self.state.load_credential()
+    }
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        self.state.end_enrollment(expected)
+    }
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError> {
+        self.state.save_credential(credential, receiver, expected)
     }
     fn save_pending(
         &self,
@@ -360,17 +378,9 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     connections.shutdown().await;
     let (address, stop, listener, connections) = fixture.listener().await;
     let resumed = NativeEnrollmentClient::new(state.clone(), RuntimeDependencies::default().clock);
-    let status = tokio::time::timeout(
-        WAIT,
-        resumed.status(TcpStream::connect(address).unwrap(), None),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(status.public(), public);
-    assert!(matches!(status, NativePairingStatus::Unclaimed { .. }));
+    // `retry` reads the original status itself and keeps the record for its
+    // new attempt; `status` would remove it (slice 2b row A16).
     assert_eq!(state.load_pending().unwrap().unwrap().intent(), public);
-    let original = status.clone();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     let retried = tokio::time::timeout(
         WAIT,
@@ -384,7 +394,15 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(retried.original, original);
+    let original = retried.original.clone();
+    assert_eq!(original.public(), public);
+    assert!(
+        matches!(
+            original,
+            NativePairingStatus::Unclaimed { terminal: None, .. }
+        ),
+        "{original:?}"
+    );
     assert!(matches!(retried.retried, NativePairingStatus::Claimed(_)));
     let renewed = retried.retried.public();
     assert_ne!(renewed.attempt(), public.attempt());

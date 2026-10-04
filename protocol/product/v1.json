@@ -3365,12 +3365,12 @@
         }
       },
       "required": ["invitationId", "deviceKey"],
-      "description": "Wire input for pairing.approve. Approval records consent to this exact key; it issues no credential."
+      "description": "Wire input for pairing.approve. Approval records consent to this exact key, then stages, pairs a receiver and publishes the device's credential."
     },
     "PairingOwnerPhase": {
       "type": "string",
       "enum": ["available", "claimed", "approved", "staging", "active", "terminal"],
-      "description": "Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging and active follow approval once credential publication is built. terminal: ended; see terminal."
+      "description": "Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging: a credential and receiver are being prepared for it. active: the credential is issued; this is historical enrollment, not read authority. terminal: ended; see terminal."
     },
     "PairingTerminalCause": {
       "type": "string",
@@ -3441,7 +3441,7 @@
         }
       },
       "required": ["receiverId", "accessEpoch"],
-      "description": "Receiver recorded for an enrollment once credential publication is built; absent before."
+      "description": "Receiver paired for an enrollment, with the access epoch of its original pair receipt; absent before a receiver is paired."
     },
     "PairingOwnerStatus": {
       "type": "object",
@@ -3531,6 +3531,27 @@
         "cleanupPending"
       ],
       "description": "An owner's view of one enrollment. This is historical enrollment, not read authority: every later read is authorized again."
+    },
+    "PairingActivationStop": {
+      "type": "string",
+      "enum": ["retryable", "permanent"],
+      "description": "Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress, or the owner's session expired or membership is inactive, cleared by signing in again or an admin re-enabling the membership); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again."
+    },
+    "PairingApproveResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/PairingOwnerStatus",
+          "description": "The enrollment as it now stands. The approval itself is committed whatever else happened."
+        },
+        "activationStopped": {
+          "$ref": "#/$defs/PairingActivationStop",
+          "description": "Present when activation stopped before active: whether approving again can finish it."
+        }
+      },
+      "required": ["status"],
+      "description": "Result of pairing.approve: the enrollment after approval and activation, and why activation stopped if it did."
     },
     "PairingCreateResult": {
       "type": "object",

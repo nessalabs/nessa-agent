@@ -1338,6 +1338,27 @@ pub struct PairingOwnerStatus {
     pub terminal: Option<PairingTerminal>,
     pub cleanup_pending: bool,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingActivationStop {
+    Retryable,
+    Permanent,
+}
+impl PairingActivationStop {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::Permanent => "permanent",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingApproveResult {
+    pub status: PairingOwnerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_stopped: Option<PairingActivationStop>,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PairingCreateResult {

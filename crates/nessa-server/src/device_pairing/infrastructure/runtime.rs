@@ -3,7 +3,8 @@ use super::owner_admission::{OwnerAdmission, OwnerAdmissionRefusal, OwnerLease};
 use super::worker::worker_fault;
 use super::{RegistrationError, RegistrationWorker};
 use crate::device_pairing::application::{
-    DevicePairingStatus, OwnerError, PairingOwner, ReadDevicePairing,
+    Approval, CleanupError, DevicePairingStatus, DeviceStatusError, FreshStage, OwnerError,
+    PairingOwner, PairingReceivers, ReadDevicePairing, ReceiverError, SettleCleanup,
 };
 use nessa_auth::{
     adapters::pairing::{
@@ -20,10 +21,10 @@ use nessa_auth::{
     },
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, ConsentIntentId, InvitationId, PairingPhase, PairingPolicy,
-            PairingRecord, PublicIntent,
+            AttemptFailure, AttemptId, ConsentIntentId, DeviceKey, InvitationId, PairingPhase,
+            PairingPolicy, PairingRecord, PublicIntent,
         },
-        Resource,
+        CredentialId, Resource,
     },
 };
 use std::{
@@ -61,6 +62,12 @@ pub enum PairingRuntimeError {
     Entropy,
     /// No canonical Available slot with owned volatile setup exists.
     NoInvitation,
+    /// The receiver authority refused or failed while reading an Active
+    /// enrollment's current receiver.
+    Receiver(ReceiverError),
+    /// An ended enrollment's receiver cleanup did not complete; the record
+    /// keeps the obligation and its first cause.
+    Cleanup(CleanupError),
     /// Shutdown has closed owner-command admission; nothing was done.
     ShuttingDown,
 }
@@ -73,6 +80,9 @@ pub struct PairingRuntimeDependencies {
     pub access: Arc<dyn AccessReader>,
     /// Existing current policy evaluator (Cedar in real composition).
     pub policy: Arc<dyn PolicyEvaluator>,
+    /// The canonical receiver authority an approved enrollment is paired with
+    /// and an ended one is fenced at.
+    pub receivers: Arc<dyn PairingReceivers>,
     /// Existing injected absolute clock.
     pub clock: Arc<dyn Clock>,
     /// Composition-resolved exact gateway read resource.
@@ -177,7 +187,8 @@ impl GatewayPairing {
                 policy: dependencies.policy.as_ref(),
                 clock: dependencies.clock.as_ref(),
             },
-            enrollments: dependencies.enrollments.as_ref(),
+            enrollments: &dependencies.enrollments,
+            receivers: dependencies.receivers.as_ref(),
             gateway: &dependencies.gateway,
             policy: PairingPolicy::initial(),
             clock: dependencies.clock.as_ref(),
@@ -465,6 +476,7 @@ impl GatewayPairing {
         }
         let status = ReadDevicePairing {
             enrollments: self.dependencies.enrollments.as_ref(),
+            receivers: self.dependencies.receivers.as_ref(),
             clock: self.dependencies.clock.as_ref(),
         }
         .execute(
@@ -472,9 +484,14 @@ impl GatewayPairing {
             public.attempt(),
             channel.device_proof(),
         )
-        .map_err(PairingRuntimeError::Enrollment)?;
-        // The read may have expired the open invitation; drop its setup.
+        .map_err(|error| match error {
+            DeviceStatusError::Enrollment(error) => PairingRuntimeError::Enrollment(error),
+            DeviceStatusError::Receiver(error) => PairingRuntimeError::Receiver(error),
+        })?;
+        // The read may have expired the open invitation; drop its setup. If
+        // it ended a staged one, settle its receiver now (design row A13).
         discard_ended(&mut *self.available.lock().await, &self.dependencies);
+        self.settle_if_ended(public.invitation()).await;
         Ok(status)
     }
     /// Current protected owner status; historical Active is not read authority.
@@ -487,8 +504,58 @@ impl GatewayPairing {
         self.owner_command(move |owner, handle| handle.block_on(owner.status(&session, id)))
             .await
     }
-    /// Commit explicit owner consent/termination and erase only the matching slot.
-    /// Physical cleanup remains a canonical obligation for its separate coordinator.
+    /// Approve the exact claimed key and carry the enrollment through to an
+    /// issued credential: stage, receiver, publication (design rows P19–P25,
+    /// O5, O6). The server mints the stage's credential and correlation from
+    /// `entropy`; a retry keeps the stage the record already has. A step that
+    /// does not complete leaves the record where it stands; the record is
+    /// returned with why activation stopped, and approving again continues
+    /// from there when that stop is retryable.
+    pub async fn approve<R: RngCore + CryptoRng + Send + 'static>(
+        &self,
+        session: &AuthenticatedSession,
+        id: InvitationId,
+        key: DeviceKey,
+        mut entropy: R,
+    ) -> Result<Approval, PairingRuntimeError> {
+        let mut bytes = [0; 32];
+        entropy
+            .try_fill_bytes(&mut bytes)
+            .map_err(|_| PairingRuntimeError::Entropy)?;
+        let credential = CredentialId::new(format!("device-{}", hex(&bytes[..16])))
+            .map_err(|_| PairingRuntimeError::Entropy)?;
+        let mut request = [0; 16];
+        request.copy_from_slice(&bytes[16..]);
+        let fresh = FreshStage {
+            credential,
+            request: AttemptId::new(request),
+        };
+        let session = session.clone();
+        let approval = self
+            .owner_command(move |owner, handle| {
+                handle.block_on(owner.approve(&session, id, key, fresh))
+            })
+            .await?;
+        if let Approval {
+            record,
+            stopped: Some(stopped),
+        } = &approval
+        {
+            tracing::warn!(
+                invitation = ?id,
+                ?stopped,
+                retryable = stopped.retryable(),
+                phase = ?record.phase(),
+                "device pairing activation stopped"
+            );
+        }
+        Ok(approval)
+    }
+    /// Record an owner decision. `Approve` here records consent only; `approve`
+    /// carries it on to Active. An enrollment that ends after it was staged has its
+    /// receiver settled at once when nothing else holds its stage; otherwise
+    /// the record keeps `cleanup_pending` for the stage's holder or the next
+    /// reconciliation, and is returned that way (design row P23).
     pub async fn decide(
         &self,
         session: &AuthenticatedSession,
@@ -497,9 +564,77 @@ impl GatewayPairing {
     ) -> Result<PairingRecord, PairingRuntimeError> {
         let session = session.clone();
         self.owner_command(move |owner, handle| {
-            handle.block_on(owner.decide(&session, id, decision))
+            let record = handle.block_on(owner.decide(&session, id, decision))?;
+            if !record.cleanup_pending() {
+                return Ok(record);
+            }
+            let settled = handle.block_on(
+                SettleCleanup {
+                    enrollments: owner.enrollments,
+                    receivers: owner.receivers,
+                    clock: owner.clock,
+                }
+                .execute(id),
+            );
+            match settled {
+                Ok(record) => Ok(record),
+                Err(error) => {
+                    tracing::warn!(invitation = ?id, ?error, "device pairing cleanup left pending");
+                    owner
+                        .enrollments
+                        .read_pairing(id)
+                        .map_err(OwnerError::Enrollment)
+                }
+            }
         })
         .await
+    }
+    /// Settle `id`'s receiver if it ended with cleanup owed; a failure leaves
+    /// the obligation for the next path or reconciliation.
+    async fn settle_if_ended(&self, id: InvitationId) {
+        let settled = SettleCleanup {
+            enrollments: &self.dependencies.enrollments,
+            receivers: self.dependencies.receivers.as_ref(),
+            clock: self.dependencies.clock.as_ref(),
+        }
+        .execute(id)
+        .await;
+        if let Err(error) = settled {
+            tracing::warn!(invitation = ?id, ?error, "device pairing cleanup left pending");
+        }
+    }
+    /// Settle every ended enrollment of this gateway whose receiver cleanup is
+    /// pending: lookup only, then fence or no-receiver completion (design rows
+    /// S7, D5). Composition runs it before the native bind and after the
+    /// native and owner drains. Each record is tried; the first failure is
+    /// returned and every unsettled record keeps its obligation (rows S8, D6).
+    pub async fn reconcile_cleanup(&self) -> Result<(), PairingRuntimeError> {
+        let dependencies = self.dependencies.clone();
+        let handle = Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let cleanup = SettleCleanup {
+                enrollments: &dependencies.enrollments,
+                receivers: dependencies.receivers.as_ref(),
+                clock: dependencies.clock.as_ref(),
+            };
+            let mut first = None;
+            for record in dependencies
+                .enrollments
+                .pending_pairings()
+                .map_err(PairingRuntimeError::Enrollment)?
+            {
+                if record.intent().resource() != &dependencies.gateway || !record.cleanup_pending()
+                {
+                    continue;
+                }
+                if let Err(error) = handle.block_on(cleanup.execute(record.id())) {
+                    first.get_or_insert(PairingRuntimeError::Cleanup(error));
+                }
+            }
+            first.map_or(Ok(()), Err)
+        })
+        .await
+        .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
     }
     fn verify_channel<S: Read + Write>(
         &self,
@@ -611,6 +746,11 @@ impl GatewayPairing {
         self.registration.shutdown().await;
         self.owners.drained().await;
     }
+}
+
+/// Lower-case hex, for identities the server mints from random bytes.
+pub(super) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Drop the open invitation's setup if its stored record has ended. A failed

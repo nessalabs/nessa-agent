@@ -6,15 +6,18 @@ use nessa_auth::{
     },
     application::{
         pairing::{
-            ClientPendingStore, OwnerDecision, PairingStore, PairingStoreError, PendingEnrollment,
-            PrivateKeyMaterial, PrivateStateError,
+            ClientPendingStore, DeviceCredential, OwnerDecision, PairingStore, PairingStoreError,
+            PendingEnrollment, PrivateKeyMaterial, PrivateStateError,
         },
         ports::AccessError,
         session::ReadCurrentSession,
     },
-    domain::pairing::{
-        AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingInitiator,
-        PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+    domain::{
+        pairing::{
+            AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingInitiator,
+            PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+        },
+        CredentialId, ResourceId,
     },
 };
 use nessa_server::{
@@ -221,6 +224,20 @@ struct RefusingSave(Arc<FilePairingState>);
 impl ClientPendingStore for RefusingSave {
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         self.0.load_pending()
+    }
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
+        self.0.load_credential()
+    }
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        self.0.end_enrollment(expected)
+    }
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError> {
+        self.0.save_credential(credential, receiver, expected)
     }
     fn save_pending(
         &self,
@@ -1401,7 +1418,8 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
     let (address, stop, listener, connections) = fixture.listener().await;
     drop(store);
     let store = Arc::new(FilePairingState::open(&root, Path::new("state")).unwrap());
-    let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    assert!(store.load_pending().unwrap().is_some());
     assert_eq!(
         tokio::time::timeout(
             WAIT,
@@ -1416,6 +1434,9 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
             terminal: Some(TerminalCause::Expired),
         }
     );
+    // Slice 2b row A16: the invitation has ended, so the attempt can never
+    // claim it; the pending record goes and a new code can be enrolled.
+    assert!(store.load_pending().unwrap().is_none());
     client.shutdown().await;
     stop.send(()).unwrap();
     tokio::time::timeout(WAIT, listener)
@@ -2326,4 +2347,116 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
     });
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
     outcome.expect("gateway work finished on a one-thread blocking pool");
+}
+
+/// Slice 2b row A16: a device whose handshake dropped, after another device
+/// claimed the invitation, reads its attempt Unclaimed (failed, invitation
+/// not ended), loses its pending record, and enrolls again with a new code. A
+/// device whose own attempt is still Pending keeps its record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_attempt_then_another_claim_lets_the_device_enroll_again() {
+    let fixture = Fixture::new().await;
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let (address, stop, listener, connections) = fixture.listener().await;
+    let (_, store) = pending(fixture.directory.path(), "device-a");
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    // Device A saves its pending record after KE2, then its connection drops.
+    let saving = store.clone();
+    let stream = TcpStream::connect(address).unwrap();
+    let (channel, public, key) = tokio::task::spawn_blocking(move || {
+        let (channel, public, key, _) = ready_to_confirm(
+            stream,
+            AttemptId::new([61; AttemptId::LENGTH]),
+            &code,
+            &saving,
+        );
+        (channel, public, key)
+    })
+    .await
+    .unwrap();
+    let a = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    // Its own attempt is still Pending: the record stays.
+    assert_eq!(
+        tokio::time::timeout(WAIT, a.status(TcpStream::connect(address).unwrap(), None))
+            .await
+            .unwrap()
+            .unwrap(),
+        NativePairingStatus::Pending(public)
+    );
+    assert!(store.load_pending().unwrap().is_some());
+    drop(channel);
+    // The gateway settles the dropped attempt; device B then claims.
+    let deadline = std::time::Instant::now() + WAIT;
+    while fixture
+        .registry
+        .read_pairing(public.invitation())
+        .unwrap()
+        .attempt_status(public.attempt(), key)
+        .unwrap()
+        == AttemptOutcome::Pending
+    {
+        assert!(std::time::Instant::now() < deadline, "the drop is settled");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let (_, other) = pending(fixture.directory.path(), "device-b");
+    let b = NativeEnrollmentClient::new(other, RuntimeDependencies::default().clock);
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    assert!(matches!(
+        tokio::time::timeout(
+            WAIT,
+            b.enroll(TcpStream::connect(address).unwrap(), code, OsEntropy)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Claimed(_)
+    ));
+    // A's authenticated status: failed, the invitation not ended.
+    let status = tokio::time::timeout(WAIT, a.status(TcpStream::connect(address).unwrap(), None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            status,
+            NativePairingStatus::Unclaimed {
+                outcome: AttemptOutcome::Failed(_),
+                terminal: None,
+                ..
+            }
+        ),
+        "{status:?}"
+    );
+    assert!(store.load_pending().unwrap().is_none());
+    // A new code enrolls device A.
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    assert!(matches!(
+        tokio::time::timeout(
+            WAIT,
+            a.enroll(TcpStream::connect(address).unwrap(), code, OsEntropy)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Claimed(_)
+    ));
+    a.shutdown().await;
+    b.shutdown().await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, listener)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    connections.shutdown().await;
+    fixture.gateway.shutdown().await;
 }

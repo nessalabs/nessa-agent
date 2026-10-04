@@ -1,14 +1,14 @@
 //! Bounded private binary state beneath one retained directory and lifetime lock.
 use crate::{
     application::pairing::{
-        ClientPendingStore, GatewayKeyStore, GatewayPublicationState, PendingEnrollment,
-        PrivateKeyMaterial, PrivatePublicationEffect, PrivatePublicationError,
+        ClientPendingStore, DeviceCredential, GatewayKeyStore, GatewayPublicationState,
+        PendingEnrollment, PrivateKeyMaterial, PrivatePublicationEffect, PrivatePublicationError,
         PrivatePublicationStep, PrivateStateError, PrivateStorageFailure,
     },
     application::ports::Clock,
     domain::{
         pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent},
-        AudienceId,
+        AudienceId, CredentialId, ResourceId, MAX_IDENTIFIER_BYTES,
     },
 };
 use fs2::FileExt;
@@ -27,12 +27,17 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 const GATEWAY_FILE: &str = "gateway-key";
-const PENDING_FILE: &str = "client-pending";
+/// The client's one enrollment record: pending, or the credential that replaced it.
+const ENROLLMENT_FILE: &str = "client-enrollment";
 const LOCK_FILE: &str = "pairing-state.lock";
 const KEY_BYTES: usize = 36;
 const PENDING_BYTES: usize = 144;
 const KEY_MAGIC: &[u8; 4] = b"NSGK";
 const PENDING_MAGIC: &[u8; 4] = b"NSCP";
+const CREDENTIAL_MAGIC: &[u8; 4] = b"NSCA";
+/// A credential record: the pending layout, then two u16-prefixed identifiers,
+/// each bounded by the identifier owner's own limit.
+const CREDENTIAL_MAX_BYTES: usize = PENDING_BYTES + 2 * (2 + MAX_IDENTIFIER_BYTES);
 
 /// One private storage owner. Its native lock and retained directory live through
 /// every operation; `private_state_lock_excludes_second_handle` tests exclusion.
@@ -229,15 +234,79 @@ impl Drop for FilePairingState {
         let _ = self.lock.unlock();
     }
 }
+/// What the client's enrollment file holds.
+enum ClientRecord {
+    Pending(PendingEnrollment),
+    Credential(DeviceCredential),
+}
+/// A decoded client record with the exact bytes it was read from.
+struct SavedClient {
+    record: ClientRecord,
+    bytes: Zeroizing<Vec<u8>>,
+}
+impl FilePairingState {
+    fn load_client(&self) -> Result<Option<SavedClient>, PrivateStateError> {
+        self.read_bounded(ENROLLMENT_FILE, CREDENTIAL_MAX_BYTES)?
+            .map(|bytes| decode_client(&bytes).map(|record| SavedClient { record, bytes }))
+            .transpose()
+    }
+}
 impl ClientPendingStore for FilePairingState {
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        self.verify_lock()?;
+        let name = OsStr::new(ENROLLMENT_FILE);
+        let mut file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut bytes = Zeroizing::new(Vec::with_capacity(CREDENTIAL_MAX_BYTES + 1));
+        (&mut file)
+            .take((CREDENTIAL_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(storage_error)?;
+        if bytes.len() > CREDENTIAL_MAX_BYTES {
+            return Err(PrivateStateError::Corrupt);
+        }
+        let intent = match decode_client(&bytes)? {
+            ClientRecord::Pending(pending) => pending.intent(),
+            ClientRecord::Credential(credential) => credential.intent(),
+        };
+        if intent != expected {
+            return Err(PrivateStateError::Conflict);
+        }
+        // The open handle names the file read: a replacement is refused.
+        self.directory
+            .remove_file(name, &file)
+            .map_err(storage_error)?;
+        self.directory
+            .sync()
+            .map_err(|_| PrivateStateError::Uncertain)?;
+        self.verify_lock()
+    }
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         let _guard = self
             .operation
             .lock()
             .map_err(|_| PrivateStateError::Unavailable)?;
-        self.read(PENDING_FILE, PENDING_BYTES)?
-            .map(|bytes| decode_pending(&bytes))
-            .transpose()
+        Ok(match self.load_client()?.map(|saved| saved.record) {
+            Some(ClientRecord::Pending(pending)) => Some(pending),
+            Some(ClientRecord::Credential(_)) | None => None,
+        })
+    }
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        Ok(match self.load_client()?.map(|saved| saved.record) {
+            Some(ClientRecord::Credential(credential)) => Some(credential),
+            Some(ClientRecord::Pending(_)) | None => None,
+        })
     }
     fn save_pending(
         &self,
@@ -251,13 +320,22 @@ impl ClientPendingStore for FilePairingState {
             .lock()
             .map_err(|_| PrivateStateError::Unavailable)?;
         let bytes = encode_pending(key, gateway_pin, intent);
-        let replace = match self.read(PENDING_FILE, PENDING_BYTES)? {
+        let replace = match self.load_client()? {
             None if expected.is_none() => false,
             None => return Err(PrivateStateError::Conflict),
-            Some(saved) => {
-                let old = decode_pending(&saved)?;
+            Some(SavedClient {
+                record: ClientRecord::Credential(_),
+                ..
+            }) => {
+                // An issued credential is never replaced by a new enrollment.
+                return Err(PrivateStateError::Conflict);
+            }
+            Some(SavedClient {
+                record: ClientRecord::Pending(old),
+                bytes: saved,
+            }) => {
                 if bool::from(saved.as_slice().ct_eq(bytes.as_slice())) {
-                    return self.reconcile(PENDING_FILE, &bytes);
+                    return self.reconcile(ENROLLMENT_FILE, &bytes);
                 }
                 if expected != Some(old.intent())
                     || !bool::from(old.key().expose_bytes().ct_eq(key.expose_bytes()))
@@ -269,7 +347,48 @@ impl ClientPendingStore for FilePairingState {
                 true
             }
         };
-        self.publish(PENDING_FILE, &bytes, replace)
+        self.publish(ENROLLMENT_FILE, &bytes, replace)
+    }
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        match self.load_client()? {
+            None => Err(PrivateStateError::Conflict),
+            Some(SavedClient {
+                record: ClientRecord::Pending(pending),
+                ..
+            }) => {
+                if pending.intent() != expected {
+                    return Err(PrivateStateError::Conflict);
+                }
+                let bytes = encode_credential(&DeviceCredential::new(
+                    pending,
+                    credential.clone(),
+                    receiver.clone(),
+                ));
+                // One rename replaces the pending record: no state holds both.
+                self.publish(ENROLLMENT_FILE, &bytes, true)
+            }
+            Some(SavedClient {
+                record: ClientRecord::Credential(saved),
+                bytes,
+            }) => {
+                if saved.intent() != expected
+                    || saved.credential() != credential
+                    || saved.receiver() != receiver
+                {
+                    return Err(PrivateStateError::Conflict);
+                }
+                self.reconcile(ENROLLMENT_FILE, &bytes)
+            }
+        }
     }
 }
 fn encode_pending(
@@ -288,10 +407,66 @@ fn encode_pending(
     bytes.extend_from_slice(&intent.expiry_ms().to_be_bytes());
     bytes
 }
+fn encode_credential(credential: &DeviceCredential) -> Zeroizing<Vec<u8>> {
+    let mut bytes = encode_pending(
+        credential.key(),
+        credential.gateway_pin(),
+        credential.intent(),
+    );
+    bytes[..4].copy_from_slice(CREDENTIAL_MAGIC);
+    for identifier in [
+        credential.credential().as_str(),
+        credential.receiver().as_str(),
+    ] {
+        // The identifier owner bounds each value to MAX_IDENTIFIER_BYTES.
+        bytes.extend_from_slice(&(identifier.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(identifier.as_bytes());
+    }
+    bytes
+}
+fn decode_client(bytes: &[u8]) -> Result<ClientRecord, PrivateStateError> {
+    if bytes.len() < PENDING_BYTES {
+        return Err(PrivateStateError::Corrupt);
+    }
+    match &bytes[..4] {
+        magic if magic == PENDING_MAGIC => decode_pending(bytes).map(ClientRecord::Pending),
+        magic if magic == CREDENTIAL_MAGIC => {
+            let pending = decode_pending_fields(&bytes[..PENDING_BYTES])?;
+            let mut rest = &bytes[PENDING_BYTES..];
+            let mut identifier = || -> Result<String, PrivateStateError> {
+                let (length, tail) = rest
+                    .split_first_chunk::<2>()
+                    .ok_or(PrivateStateError::Corrupt)?;
+                let length = usize::from(u16::from_be_bytes(*length));
+                if tail.len() < length {
+                    return Err(PrivateStateError::Corrupt);
+                }
+                let (value, tail) = tail.split_at(length);
+                rest = tail;
+                String::from_utf8(value.to_vec()).map_err(|_| PrivateStateError::Corrupt)
+            };
+            let credential =
+                CredentialId::new(identifier()?).map_err(|_| PrivateStateError::Corrupt)?;
+            let receiver =
+                ResourceId::new(identifier()?).map_err(|_| PrivateStateError::Corrupt)?;
+            if !rest.is_empty() {
+                return Err(PrivateStateError::Corrupt);
+            }
+            Ok(ClientRecord::Credential(DeviceCredential::new(
+                pending, credential, receiver,
+            )))
+        }
+        _ => Err(PrivateStateError::Corrupt),
+    }
+}
 fn decode_pending(bytes: &[u8]) -> Result<PendingEnrollment, PrivateStateError> {
     if bytes.len() != PENDING_BYTES || &bytes[..4] != PENDING_MAGIC {
         return Err(PrivateStateError::Corrupt);
     }
+    decode_pending_fields(bytes)
+}
+/// The key, pin and correlation shared by both record kinds, after the magic.
+fn decode_pending_fields(bytes: &[u8]) -> Result<PendingEnrollment, PrivateStateError> {
     let mut seed = Zeroizing::new([0; 32]);
     seed.copy_from_slice(&bytes[4..36]);
     let mut pin = [0; 44];

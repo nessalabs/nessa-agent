@@ -17,7 +17,7 @@
 //! else keeps the behaviour it had, because a service that retries too often is
 //! a worse bug than one that retries when it did not need to, but a service
 //! that gives up on a failure that would have cleared is worse than both.
-use crate::device_pairing::infrastructure::GatewayIdentityError;
+use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::pairing::{PairingStoreError, PrivateStateError};
 
@@ -93,6 +93,14 @@ pub(super) fn restart(error: &RunError) -> Restart {
                 ),
             ),
         ) => Restart::Pointless,
+        // An ended enrollment's cleanup that the one recurrence classifier
+        // says will fail the same way: startup would fail forever (design rows
+        // S8, S16). Approval's activationStopped asks the same classifier.
+        RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(error)))
+            if error.recurs() =>
+        {
+            Restart::Pointless
+        }
         // Everything below is either transient by nature or carries no typed
         // cause to judge — an opaque message is not evidence of permanence, and
         // guessing wrong here strands a gateway that would have started.
@@ -111,7 +119,9 @@ pub(super) fn restart(error: &RunError) -> Restart {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device_pairing::application::{CleanupError, ReceiverError};
     use crate::env::{EnvironmentError, HOST};
+    use nessa_auth::domain::pairing::PairingError;
     use std::io::{Error, ErrorKind};
 
     /// The failure this issue was reported for: a registry this build cannot
@@ -147,6 +157,16 @@ mod tests {
                 PrivateStateError::Conflict,
             ))),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Corrupt)),
+            // An ended enrollment's cleanup that refuses the same way (row S8).
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Receiver(ReceiverError::Missing),
+            ))),
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Receiver(ReceiverError::Conflict),
+            ))),
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Enrollment(PairingStoreError::Domain(PairingError::Conflict)),
+            ))),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Conflict)),
             // The same private state, met by the first key publication.
             RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
@@ -189,6 +209,13 @@ mod tests {
                 source: Error::from(ErrorKind::AddrInUse),
             }),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Locked)),
+            // A receiver or registry that is only unavailable can clear.
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Receiver(ReceiverError::Unavailable),
+            ))),
+            RunError::Native(NativeFailure::Open(PairingRuntimeError::Cleanup(
+                CleanupError::Enrollment(PairingStoreError::StageOccupied),
+            ))),
             RunError::Native(NativeFailure::Identity(GatewayIdentityError::PrivateState(
                 PrivateStateError::Unavailable,
             ))),
@@ -203,6 +230,89 @@ mod tests {
             ))),
         ] {
             assert_eq!(restart(&error), Restart::Worthwhile, "{error}");
+        }
+    }
+
+    /// Row A11/S8: approval's activationStopped and startup's restart policy
+    /// derive from one classifier, so they agree for every cleanup failure.
+    #[test]
+    fn one_classifier_decides_retry_and_relaunch() {
+        use crate::device_pairing::application::ActivationError;
+        use nessa_auth::application::pairing::PairingWorkerFault;
+        let stores = [
+            PairingStoreError::StageOccupied,
+            PairingStoreError::GatewayKeyHistoryExists,
+            PairingStoreError::PrivateState(PrivateStateError::Corrupt),
+            PairingStoreError::PrivateState(PrivateStateError::Conflict),
+            PairingStoreError::PrivateState(PrivateStateError::Locked),
+            PairingStoreError::PrivateState(PrivateStateError::Unavailable),
+            PairingStoreError::PrivateState(PrivateStateError::Uncertain),
+            PairingStoreError::WorkerFault(PairingWorkerFault::Panic),
+            PairingStoreError::WorkerFault(PairingWorkerFault::Cancelled),
+            PairingStoreError::StaleRevision,
+            PairingStoreError::NotFound,
+            PairingStoreError::Unavailable,
+        ]
+        .into_iter()
+        .chain(
+            [
+                PairingError::Invalid,
+                PairingError::Conflict,
+                PairingError::Ineligible,
+                PairingError::WrongActor,
+                PairingError::Expired,
+                PairingError::Capacity,
+                PairingError::AttemptsExhausted,
+                PairingError::AvailableSlotOccupied,
+                PairingError::StaleGeneration,
+            ]
+            .map(PairingStoreError::Domain),
+        )
+        .map(CleanupError::Enrollment);
+        let receivers = [
+            ReceiverError::Unavailable,
+            ReceiverError::Conflict,
+            ReceiverError::Missing,
+            ReceiverError::Exhausted,
+            ReceiverError::NotPaired,
+        ]
+        .map(CleanupError::Receiver);
+        for error in stores.chain(receivers) {
+            let relaunch = restart(&RunError::Native(NativeFailure::Open(
+                PairingRuntimeError::Cleanup(error),
+            )));
+            let retry = ActivationError::Cleanup(error).retryable();
+            assert_eq!(relaunch == Restart::Worthwhile, retry, "{error:?}");
+            assert_eq!(retry, !error.recurs(), "{error:?}");
+        }
+        // A clock behind the record (Invalid) clears on its own; capacity and
+        // the record's own state refuse again.
+        for (error, recurs) in [
+            (PairingError::Invalid, false),
+            (PairingError::Capacity, true),
+            (PairingError::AvailableSlotOccupied, true),
+            (PairingError::Conflict, true),
+            (PairingError::Ineligible, true),
+            (PairingError::StaleGeneration, true),
+        ] {
+            let cleanup = CleanupError::Enrollment(PairingStoreError::Domain(error));
+            assert_eq!(cleanup.recurs(), recurs, "{error:?}");
+        }
+        // An owner who can sign in again can approve again; a denial cannot.
+        use crate::device_pairing::application::OwnerError;
+        use nessa_auth::application::ports::AccessError;
+        for (error, retryable) in [
+            (AccessError::CredentialExpired, true),
+            (AccessError::InactiveMembership, true),
+            (AccessError::Unavailable, true),
+            (AccessError::Denied, false),
+            (AccessError::CredentialRevoked, false),
+        ] {
+            assert_eq!(
+                ActivationError::Owner(OwnerError::Authorization(error)).retryable(),
+                retryable,
+                "{error:?}"
+            );
         }
     }
 }
