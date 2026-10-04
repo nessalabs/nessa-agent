@@ -10,11 +10,7 @@ use crate::product::{ProductRouteState, WatchTaskFault};
 use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
-    core::{
-        Launch, NativeFailure, NativeShutdownFailure, PassiveReaderOutcomes,
-        PassiveReaderShutdownFailure, RunError, ShutdownFailure, WatchDrainOutcome,
-        WatchShutdownFailure,
-    },
+    core::{Launch, NativeFailure, NativeShutdownFailure, RunError, ShutdownReport},
     env::UptimeBackend,
 };
 use axum::{serve::Listener, Extension, Router};
@@ -200,8 +196,12 @@ impl CompositionRoot {
         // bind failure drops the browser listener unserved (design row S10).
         let native = match native {
             Some(prepared) => {
-                let bound =
-                    super::native_pairing::bind(prepared, dependencies.clock.clone()).await?;
+                let bound = super::native_pairing::bind(
+                    prepared,
+                    dependencies.clock.clone(),
+                    product.clone(),
+                )
+                .await?;
                 tracing::info!(
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
@@ -364,7 +364,7 @@ impl CompositionRoot {
         // Admission stops independently of physical reader drain. The process
         // joins the cleanup owner and carries its retained report into its exit.
         // A panic before publication leaves the report unconfirmed.
-        let report: Arc<Mutex<ShutdownReport>> = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let report: Arc<ReportSlot> = Arc::new(Mutex::new(None));
         let slot = report.clone();
         let stop = stop_signal(shutdown_signal(), native_watch);
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
@@ -457,7 +457,7 @@ async fn serve_with_cleanup(
 fn serve_outcome(
     served: std::io::Result<()>,
     native_failed: Option<std::io::ErrorKind>,
-    report: &Mutex<ShutdownReport>,
+    report: &ReportSlot,
 ) -> Result<(), RunError> {
     let unconfirmed = shutdown_result(report);
     served?;
@@ -490,39 +490,9 @@ async fn stop_signal(
     }
 }
 
-/// What the joined cleanup owner has established so far.
-#[derive(Debug)]
-enum ShutdownReport {
-    /// Reader/conversation outcomes succeeded and MCP stop returned under its
-    /// existing unit-returning contract; no separate MCP confirmation is inferred.
-    Confirmed,
-    /// Callback has not yet published reader evidence.
-    Unreported,
-    /// The report retains each result as it is observed, including deadline evidence.
-    DrainsPending {
-        readers: PassiveReaderOutcomes,
-        watches: WatchDrainOutcome,
-    },
-    /// Both physical drains completed; conversation cleanup has not returned.
-    ConversationsPending {
-        readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchShutdownFailure>,
-    },
-    /// Reader and conversation outcomes are known; MCP stop has not returned.
-    ServersPending {
-        readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchShutdownFailure>,
-        conversations: Result<(), ConversationError>,
-    },
-    /// MCP stop returned; native pairing's drain has not.
-    NativePending {
-        readers: Result<(), PassiveReaderShutdownFailure>,
-        watches: Result<(), WatchShutdownFailure>,
-        conversations: Result<(), ConversationError>,
-    },
-    /// All cleanup owners returned; at least one failed.
-    Failed(ShutdownFailure),
-}
+/// What the joined cleanup owner has published: `None` until it starts, then
+/// one report it updates as each owner returns.
+type ReportSlot = Mutex<Option<ShutdownReport>>;
 
 /// Normal host consumer: close watch admission before polling physical cleanup.
 /// ProductRouteState retains the original WatchOwners throughout this owned future.
@@ -531,7 +501,7 @@ enum ShutdownReport {
 // orders them, so they stay separate parameters.
 #[allow(clippy::too_many_arguments)]
 async fn cleanup_product(
-    slot: &Mutex<ShutdownReport>,
+    slot: &ReportSlot,
     product: &ProductRouteState,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
@@ -555,14 +525,15 @@ async fn cleanup_product(
 }
 
 /// Own reader drain, conversation/MCP cleanup, and their report together.
-/// Each pending stage publishes known evidence before its next await. The final
-/// synchronous publication consumes that evidence rather than cloning errors.
+/// The report is published before the first await, and each result is
+/// recorded in it synchronously before the next await, so an owner that ends
+/// early leaves every known outcome behind and the rest `Unknown`.
 // Each argument is one independently owned cleanup stage (watches, two
 // readers, conversations, MCP, native) or the shared deadline; the report
 // orders them, so they stay separate parameters.
 #[allow(clippy::too_many_arguments)]
 async fn passive_cleanup(
-    slot: &Mutex<ShutdownReport>,
+    slot: &ReportSlot,
     watches: impl Future<Output = Result<(), WatchTaskFault>>,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
@@ -571,13 +542,7 @@ async fn passive_cleanup(
     native: impl Future<Output = Result<(), NativeShutdownFailure>>,
     deadline: Duration,
 ) {
-    record_shutdown(
-        slot,
-        ShutdownReport::DrainsPending {
-            readers: PassiveReaderOutcomes::default(),
-            watches: WatchDrainOutcome::default(),
-        },
-    );
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(ShutdownReport::default());
     tokio::pin!(record, catalogue, watches);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
@@ -585,21 +550,13 @@ async fn passive_cleanup(
     // fires once, recording evidence only against the drains still pending.
     let mut deadline_passed = false;
     loop {
-        let (record_pending, catalogue_pending, watch_pending) = {
-            let report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            let ShutdownReport::DrainsPending {
-                readers: outcomes,
-                watches,
-            } = &*report
-            else {
-                unreachable!()
-            };
+        let (record_pending, catalogue_pending, watch_pending) = read_report(slot, |report| {
             (
-                outcomes.record().is_none(),
-                outcomes.catalogue().is_none(),
-                !watches.complete(),
+                !report.readers().record().is_known(),
+                !report.readers().catalogue().is_known(),
+                !report.watches().outcome().is_known(),
             )
-        };
+        });
         let deadline_pending = !deadline_passed;
         if !record_pending && !catalogue_pending && !watch_pending {
             break;
@@ -608,137 +565,42 @@ async fn passive_cleanup(
         // Each observed result is published synchronously before another await.
         tokio::select! {
             biased;
-            result = &mut record, if record_pending => update_reader_report(slot, |outcomes| outcomes.observe_record(result)),
-            result = &mut catalogue, if catalogue_pending => update_reader_report(slot, |outcomes| outcomes.observe_catalogue(result)),
-            result = &mut watches, if watch_pending => {
-                let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-                let ShutdownReport::DrainsPending { watches, .. } = &mut *report else { unreachable!() };
-                watches.observe(result);
-            },
+            result = &mut record, if record_pending => update_report(slot, |report| report.observe_record(result)),
+            result = &mut catalogue, if catalogue_pending => update_report(slot, |report| report.observe_catalogue(result)),
+            result = &mut watches, if watch_pending => update_report(slot, |report| report.observe_watches(result)),
             _ = &mut timeout, if deadline_pending => {
                 deadline_passed = true;
-                let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-                let ShutdownReport::DrainsPending { readers, watches } = &mut *report else { unreachable!() };
-                if !readers.complete() {
-                    readers.observe_deadline();
-                    tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
-                }
-                if !watches.complete() {
-                    watches.observe_deadline();
-                    tracing::error!("watch shutdown exceeded deadline; retaining runtime until original watch tasks end");
-                }
+                update_report(slot, ShutdownReport::observe_drain_deadline);
             }
         }
     }
-    {
-        let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::DrainsPending {
-            readers: outcomes,
-            watches,
-        } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
-        else {
-            unreachable!()
-        };
-        *report = ShutdownReport::ConversationsPending {
-            readers: outcomes.into_result(),
-            watches: watches.into_result(),
-        };
-    }
+    // Absent conversations are successful no-work evidence.
     let conversations = match conversations {
         Some(conversations) => conversations.await,
         None => Ok(()),
     };
-    {
-        let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::ConversationsPending { readers, watches } =
-            std::mem::replace(&mut *report, ShutdownReport::Unreported)
-        else {
-            unreachable!()
-        };
-        *report = ShutdownReport::ServersPending {
-            readers,
-            watches,
-            conversations,
-        };
-    }
+    update_report(slot, |report| report.observe_conversations(conversations));
     servers.await;
-    {
-        let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let ShutdownReport::ServersPending {
-            readers,
-            watches,
-            conversations,
-        } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
-        else {
-            unreachable!()
-        };
-        *report = ShutdownReport::NativePending {
-            readers,
-            watches,
-            conversations,
-        };
-    }
+    update_report(slot, ShutdownReport::observe_servers);
     let native = native.await;
-    let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    let ShutdownReport::NativePending {
-        readers,
-        watches,
-        conversations,
-    } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
-    else {
-        unreachable!()
-    };
-    *report = match (watches, readers, conversations, native) {
-        (watches, readers, conversations, Err(native)) => {
-            ShutdownReport::Failed(ShutdownFailure::Native {
-                readers,
-                watches,
-                conversations,
-                native,
-            })
+    update_report(slot, |report| {
+        report.observe_native(native);
+        if !report.confirmed() {
+            tracing::error!(error = %report, "gateway shutdown did not confirm all cleanup");
         }
-        (Err(watches), readers, conversations, Ok(())) => {
-            ShutdownReport::Failed(ShutdownFailure::Watches {
-                watches,
-                readers,
-                conversations,
-            })
-        }
-        (Ok(()), Ok(()), Ok(()), Ok(())) => ShutdownReport::Confirmed,
-        (Ok(()), Err(readers), Ok(()), Ok(())) => {
-            ShutdownReport::Failed(ShutdownFailure::Readers(readers))
-        }
-        (Ok(()), Ok(()), Err(conversations), Ok(())) => {
-            ShutdownReport::Failed(ShutdownFailure::Conversations(conversations))
-        }
-        (Ok(()), Err(readers), Err(conversations), Ok(())) => {
-            ShutdownReport::Failed(ShutdownFailure::Both {
-                readers,
-                conversations,
-            })
-        }
-    };
-    if let ShutdownReport::Failed(error) = &*report {
-        tracing::error!(%error, "gateway shutdown did not confirm all cleanup");
-    }
+    });
 }
 
-fn update_reader_report(
-    slot: &Mutex<ShutdownReport>,
-    update: impl FnOnce(&mut PassiveReaderOutcomes),
-) {
-    let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    let ShutdownReport::DrainsPending {
-        readers: outcomes, ..
-    } = &mut *report
-    else {
-        unreachable!()
-    };
-    update(outcomes);
+/// Reads the report this cleanup owner published at its start.
+fn read_report<T>(slot: &ReportSlot, read: impl FnOnce(&ShutdownReport) -> T) -> T {
+    let report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    read(report.as_ref().expect("published at cleanup start"))
 }
 
-fn record_shutdown(slot: &Mutex<ShutdownReport>, report: ShutdownReport) {
-    *slot.lock().unwrap_or_else(PoisonError::into_inner) = report;
+/// Records one result in the report this cleanup owner published at its start.
+fn update_report(slot: &ReportSlot, update: impl FnOnce(&mut ShutdownReport)) {
+    let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    update(report.as_mut().expect("published at cleanup start"));
 }
 
 /// Turn what graceful shutdown reported into this process's result.
@@ -749,47 +611,18 @@ fn record_shutdown(slot: &Mutex<ShutdownReport>, report: ShutdownReport) {
 /// recorded failure to report "never reported" would be a worse answer than the
 /// one it replaced.
 ///
-/// Taking a failure leaves `Unreported` behind, not `Confirmed`. Only one read
-/// happens today, but a second one must not be able to call a run confirmed on
-/// the strength of having already reported that it was not — nor invent a
-/// failure for one that was confirmed, which is why `Confirmed` is left alone.
-fn shutdown_result(report: &Mutex<ShutdownReport>) -> Result<(), RunError> {
+/// Taking an unconfirmed report leaves `None` behind. Only one read happens
+/// today, but a second one must not be able to call a run confirmed on the
+/// strength of having already reported that it was not — nor invent a failure
+/// for one that was confirmed, which is why a confirmed report is left alone.
+fn shutdown_result(report: &ReportSlot) -> Result<(), RunError> {
     let mut slot = report.lock().unwrap_or_else(PoisonError::into_inner);
-    if matches!(*slot, ShutdownReport::Confirmed) {
+    if slot.as_ref().is_some_and(ShutdownReport::confirmed) {
         return Ok(());
     }
-    let unconfirmed = match std::mem::replace(&mut *slot, ShutdownReport::Unreported) {
-        ShutdownReport::Failed(error) => Some(error),
-        ShutdownReport::DrainsPending {
-            readers: outcomes,
-            watches,
-        } => Some(ShutdownFailure::DrainsUnreported { outcomes, watches }),
-        ShutdownReport::ConversationsPending { readers, watches } => {
-            Some(ShutdownFailure::ConversationsUnreported { readers, watches })
-        }
-        ShutdownReport::ServersPending {
-            readers,
-            watches,
-            conversations,
-        } => Some(ShutdownFailure::ServersUnreported {
-            readers,
-            watches,
-            conversations,
-        }),
-        ShutdownReport::NativePending {
-            readers,
-            watches,
-            conversations,
-        } => Some(ShutdownFailure::NativeUnreported {
-            readers,
-            watches,
-            conversations,
-        }),
-        // `Confirmed` returned above; named rather than wildcarded so a new
-        // report has to say what it means instead of inheriting "said nothing".
-        ShutdownReport::Unreported | ShutdownReport::Confirmed => None,
-    };
-    Err(RunError::Shutdown(unconfirmed))
+    Err(RunError::Shutdown(
+        slot.take().and_then(|report| report.into_result().err()),
+    ))
 }
 
 fn runtime_dependencies(config: &Environment) -> RuntimeDependencies {
@@ -834,6 +667,7 @@ impl crate::desktop_runtime::application::BackgroundWork for StartupWarmUps {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{Outcome, ShutdownFailure, ShutdownStage};
     use crate::env::{MockEnv, Stage, STAGE};
     use nessa_auth::application::pairing::PairingWorkerFault;
     use std::future::Ready;
@@ -844,8 +678,48 @@ mod tests {
     use tokio::sync::oneshot::Sender;
     use tokio::sync::{oneshot, Notify};
 
+    /// The unconfirmed report a process result carries.
+    pub(super) fn failure(result: Result<(), RunError>) -> ShutdownFailure {
+        match result {
+            Err(RunError::Shutdown(Some(failure))) => failure,
+            other => panic!("expected an unconfirmed shutdown report: {other:?}"),
+        }
+    }
+
+    /// The conversation failure of a complete report in which every other
+    /// owner confirmed.
+    fn only_conversations_failed(result: Result<(), RunError>) -> ConversationError {
+        let failure = failure(result);
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Complete);
+        assert!(report.readers().confirmed() && report.watches().confirmed());
+        assert!(report.servers().is_ok() && report.native().is_ok());
+        report
+            .conversations()
+            .failed()
+            .cloned()
+            .expect("conversation cleanup failed")
+    }
+
+    /// A complete report: every owner returned success, conversations this.
+    fn report_with(conversations: Result<(), ConversationError>) -> ShutdownReport {
+        let mut report = ShutdownReport::default();
+        report.observe_record(Ok(()));
+        report.observe_catalogue(Ok(()));
+        report.observe_watches(Ok(()));
+        report.observe_conversations(conversations);
+        report.observe_servers();
+        report.observe_native(Ok(()));
+        report
+    }
+
+    /// A slot holding a confirmed report.
+    fn confirmed_slot() -> ReportSlot {
+        Mutex::new(Some(report_with(Ok(()))))
+    }
+
     async fn mcp_cleanup_stage(conversation_failure: bool) {
-        let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let report = Arc::new(Mutex::new(None));
         let entered = Arc::new(Notify::new());
         let (release, gate) = oneshot::channel();
         let task_report = report.clone();
@@ -874,20 +748,19 @@ mod tests {
         let entered = tokio::time::timeout(Duration::from_secs(1), entered.notified())
             .await
             .is_ok();
-        let pending = match &*report.lock().unwrap() {
-            ShutdownReport::ServersPending {
-                readers: Ok(()),
-                watches: Ok(()),
-                conversations,
-            } => {
-                if conversation_failure {
-                    matches!(conversations, Err(ConversationError::Audit))
+        let pending = report.lock().unwrap().as_ref().is_some_and(|report| {
+            report.stage() == ShutdownStage::Servers
+                && report.readers().confirmed()
+                && report.watches().confirmed()
+                && if conversation_failure {
+                    matches!(
+                        report.conversations(),
+                        Outcome::Failed(ConversationError::Audit)
+                    )
                 } else {
-                    conversations.is_ok()
+                    report.conversations().is_ok()
                 }
-            }
-            _ => false,
-        };
+        });
         let unfinished = !task.is_finished();
         let released = release.send(()).is_ok();
         task.await.unwrap();
@@ -904,14 +777,13 @@ mod tests {
             "MCP stage publishes and retains the known conversation outcome"
         );
         assert!(unfinished, "MCP drain remains joined");
-        let report = report.lock().unwrap();
         if conversation_failure {
             assert!(matches!(
-                &*report,
-                ShutdownReport::Failed(ShutdownFailure::Conversations(ConversationError::Audit))
+                only_conversations_failed(shutdown_result(&report)),
+                ConversationError::Audit
             ));
         } else {
-            assert!(matches!(&*report, ShutdownReport::Confirmed));
+            assert!(shutdown_result(&report).is_ok());
         }
     }
 
@@ -926,30 +798,33 @@ mod tests {
     }
 
     fn assert_unreported_servers(
-        report: &Mutex<ShutdownReport>,
+        report: &ReportSlot,
         reader_failure: bool,
         conversation_failure: bool,
     ) {
-        let Err(RunError::Shutdown(Some(ShutdownFailure::ServersUnreported {
-            readers,
-            watches: Ok(()),
-            conversations,
-        }))) = shutdown_result(report)
-        else {
-            panic!("MCP stage must retain known cleanup results")
-        };
-        assert_eq!(readers.is_err(), reader_failure);
-        if let Err(readers) = readers {
-            assert_eq!(
-                readers.outcomes().record(),
-                Some(&Err(RecordReadError::WorkerPanicked))
-            );
-            assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
-        }
+        let failure = failure(shutdown_result(report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Servers);
+        assert!(!report.servers().is_known());
+        assert!(!report.native().is_known());
+        assert!(report.watches().confirmed());
+        assert_eq!(
+            report.readers().record(),
+            &if reader_failure {
+                Outcome::Failed(RecordReadError::WorkerPanicked)
+            } else {
+                Outcome::Ok
+            }
+        );
+        assert_eq!(report.readers().catalogue(), &Outcome::Ok);
+        assert!(!report.readers().deadline_exceeded());
         if conversation_failure {
-            assert!(matches!(conversations, Err(ConversationError::Audit)));
+            assert!(matches!(
+                report.conversations(),
+                Outcome::Failed(ConversationError::Audit)
+            ));
         } else {
-            assert!(conversations.is_ok());
+            assert!(report.conversations().is_ok());
         }
     }
 
@@ -957,7 +832,7 @@ mod tests {
     async fn mcp_drain_panic_retains_known_cleanup_outcomes() {
         for reader_failure in [false, true] {
             for conversation_failure in [true, false] {
-                let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+                let report = Arc::new(Mutex::new(None));
                 let task_report = report.clone();
                 let task = tokio::spawn(async move {
                     passive_cleanup(
@@ -994,7 +869,7 @@ mod tests {
     async fn cancelled_mcp_drain_retains_known_cleanup_outcomes() {
         for reader_failure in [false, true] {
             for conversation_failure in [true, false] {
-                let report = Mutex::new(ShutdownReport::Unreported);
+                let report = Mutex::new(None);
                 {
                     let stop = passive_cleanup(
                         &report,
@@ -1059,7 +934,7 @@ mod tests {
             closed: Some(closed),
         };
         let router = Router::new().route("/health", axum::routing::get(|| async { "ready" }));
-        let report = Arc::new(Mutex::new(ShutdownReport::Confirmed));
+        let report = Arc::new(confirmed_slot());
         let slot = report.clone();
         let (signal, shutdown) = oneshot::channel();
         let (release, reader) = oneshot::channel();
@@ -1125,7 +1000,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_owner_panic_is_returned_to_process_composition() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let report = Arc::new(Mutex::new(None));
         let slot = report.clone();
         let (served, cleanup) = tokio::time::timeout(
             Duration::from_secs(2),
@@ -1156,7 +1031,7 @@ mod tests {
         for record_fails in [false, true] {
             for catalogue_fails in [false, true] {
                 for conversation_fails in [false, true] {
-                    let report = Mutex::new(ShutdownReport::Confirmed);
+                    let report = confirmed_slot();
                     let record = if record_fails {
                         Err(RecordReadError::WorkerPanicked)
                     } else {
@@ -1188,27 +1063,32 @@ mod tests {
                     .await;
                     assert!(cleaned.load(Ordering::SeqCst));
                     let outcome = shutdown_result(&report);
-                    match outcome {
-                        Ok(()) => assert!(!record_fails && !catalogue_fails && !conversation_fails),
-                        Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
-                            ConversationError::Audit,
-                        )))) => assert!(!record_fails && !catalogue_fails && conversation_fails),
-                        Err(RunError::Shutdown(Some(ShutdownFailure::Readers(readers)))) => {
-                            assert!(!conversation_fails);
-                            assert_eq!(readers.outcomes().record(), Some(&record));
-                            assert_eq!(readers.outcomes().catalogue(), Some(&catalogue));
-                            assert!(!readers.outcomes().deadline_exceeded());
-                        }
-                        Err(RunError::Shutdown(Some(ShutdownFailure::Both {
-                            readers,
-                            conversations: ConversationError::Audit,
-                        }))) => {
-                            assert!(conversation_fails);
-                            assert_eq!(readers.outcomes().record(), Some(&record));
-                            assert_eq!(readers.outcomes().catalogue(), Some(&catalogue));
-                        }
-                        other => panic!("cleanup causes changed: {other:?}"),
+                    if !record_fails && !catalogue_fails && !conversation_fails {
+                        assert!(outcome.is_ok());
+                        continue;
                     }
+                    let failure = failure(outcome);
+                    let report = failure.report();
+                    assert_eq!(report.stage(), ShutdownStage::Complete);
+                    assert_eq!(
+                        report.readers().record(),
+                        &record.map_or_else(Outcome::Failed, |()| Outcome::Ok)
+                    );
+                    assert_eq!(
+                        report.readers().catalogue(),
+                        &catalogue.map_or_else(Outcome::Failed, |()| Outcome::Ok)
+                    );
+                    assert!(!report.readers().deadline_exceeded());
+                    assert!(report.watches().confirmed());
+                    assert_eq!(
+                        matches!(
+                            report.conversations(),
+                            Outcome::Failed(ConversationError::Audit)
+                        ),
+                        conversation_fails
+                    );
+                    assert_eq!(report.conversations().is_ok(), !conversation_fails);
+                    assert!(report.servers().is_ok() && report.native().is_ok());
                 }
             }
         }
@@ -1217,7 +1097,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn gated_second_reader_retains_first_fault_deadline_and_eventual_both_causes() {
         let (release, waiting) = oneshot::channel();
-        let report = Arc::new(Mutex::new(ShutdownReport::Confirmed));
+        let report = Arc::new(confirmed_slot());
         let output = report.clone();
         let cleaned = Arc::new(AtomicBool::new(false));
         let cleanup = cleaned.clone();
@@ -1247,29 +1127,30 @@ mod tests {
         assert!(!task.is_finished());
         release.send(()).unwrap();
         task.await.unwrap();
-        let Err(RunError::Shutdown(Some(ShutdownFailure::Both {
-            readers,
-            conversations: ConversationError::Audit,
-        }))) = shutdown_result(&report)
-        else {
-            panic!("all cleanup causes must survive")
-        };
+        let failure = failure(shutdown_result(&report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Complete);
+        assert!(matches!(
+            report.conversations(),
+            Outcome::Failed(ConversationError::Audit)
+        ));
         assert_eq!(
-            readers.outcomes().record(),
-            Some(&Err(RecordReadError::WorkerPanicked))
+            report.readers().record(),
+            &Outcome::Failed(RecordReadError::WorkerPanicked)
         );
         assert_eq!(
-            readers.outcomes().catalogue(),
-            Some(&Err(CatalogueReadError::WorkerPanicked))
+            report.readers().catalogue(),
+            &Outcome::Failed(CatalogueReadError::WorkerPanicked)
         );
-        assert!(readers.outcomes().deadline_exceeded());
+        assert!(report.readers().deadline_exceeded());
+        assert!(report.watches().confirmed());
     }
 
     #[tokio::test(start_paused = true)]
     async fn cancelled_second_reader_preserves_known_fault_or_success_before_and_after_deadline() {
         for result in [Ok(()), Err(RecordReadError::WorkerPanicked)] {
             for after_deadline in [false, true] {
-                let report = Mutex::new(ShutdownReport::Confirmed);
+                let report = confirmed_slot();
                 let cleaned = AtomicBool::new(false);
                 {
                     let stop = passive_cleanup(
@@ -1300,16 +1181,16 @@ mod tests {
                         );
                     }
                 }
-                let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
-                    outcomes,
-                    ..
-                }))) = shutdown_result(&report)
-                else {
-                    panic!("pending reader evidence must survive")
-                };
-                assert_eq!(outcomes.record(), Some(&result));
-                assert_eq!(outcomes.catalogue(), None);
-                assert_eq!(outcomes.deadline_exceeded(), after_deadline);
+                let failure = failure(shutdown_result(&report));
+                let report = failure.report();
+                assert_eq!(report.stage(), ShutdownStage::Drains);
+                assert_eq!(
+                    report.readers().record(),
+                    &result.map_or_else(Outcome::Failed, |()| Outcome::Ok)
+                );
+                assert_eq!(report.readers().catalogue(), &Outcome::Unknown);
+                assert_eq!(report.readers().deadline_exceeded(), after_deadline);
+                assert!(!report.conversations().is_known());
                 assert!(!cleaned.load(Ordering::SeqCst));
             }
         }
@@ -1318,7 +1199,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancelled_before_either_reader_outcome_retains_unknown_drain_and_deadline() {
         for after_deadline in [false, true] {
-            let report = Mutex::new(ShutdownReport::Confirmed);
+            let report = confirmed_slot();
             {
                 let stop = passive_cleanup(
                     &report,
@@ -1343,22 +1224,24 @@ mod tests {
                     );
                 }
             }
-            let Err(RunError::Shutdown(Some(ShutdownFailure::DrainsUnreported {
-                outcomes, ..
-            }))) = shutdown_result(&report)
-            else {
-                panic!("unknown is not successful")
-            };
-            assert_eq!(outcomes.record(), None);
-            assert_eq!(outcomes.catalogue(), None);
-            assert_eq!(outcomes.deadline_exceeded(), after_deadline);
+            let failure = failure(shutdown_result(&report));
+            let report = failure.report();
+            assert_eq!(report.stage(), ShutdownStage::Drains);
+            assert_eq!(report.readers().record(), &Outcome::Unknown);
+            assert_eq!(report.readers().catalogue(), &Outcome::Unknown);
+            assert_eq!(report.readers().deadline_exceeded(), after_deadline);
+            // The watch drain returned before the deadline: no deadline evidence.
+            assert!(report.watches().confirmed());
+            assert!(!report.conversations().is_known());
+            assert!(!report.servers().is_known());
+            assert!(!report.native().is_known());
         }
     }
 
     #[tokio::test]
     async fn cancelled_conversation_cleanup_retains_complete_reader_evidence() {
         for result in [Ok(()), Err(RecordReadError::WorkerPanicked)] {
-            let report = Mutex::new(ShutdownReport::Confirmed);
+            let report = confirmed_slot();
             {
                 let stop = passive_cleanup(
                     &report,
@@ -1376,27 +1259,23 @@ mod tests {
                         .await
                 );
             }
-            let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
-                readers,
-                watches: Ok(()),
-            }))) = shutdown_result(&report)
-            else {
-                panic!("conversation completion remains unknown")
-            };
-            match (result, readers) {
-                (Ok(()), Ok(())) => {}
-                (Err(error), Err(readers)) => {
-                    assert_eq!(readers.outcomes().record(), Some(&Err(error)));
-                    assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
-                }
-                other => panic!("known evidence changed: {other:?}"),
-            }
+            let failure = failure(shutdown_result(&report));
+            let report = failure.report();
+            assert_eq!(report.stage(), ShutdownStage::Conversations);
+            assert!(report.watches().confirmed());
+            assert_eq!(
+                report.readers().record(),
+                &result.map_or_else(Outcome::Failed, |()| Outcome::Ok)
+            );
+            assert_eq!(report.readers().catalogue(), &Outcome::Ok);
+            assert!(!report.readers().deadline_exceeded());
+            assert!(!report.conversations().is_known());
         }
     }
 
     #[tokio::test(start_paused = true)]
     async fn reader_deadline_retains_eventual_successful_drain() {
-        let report = Mutex::new(ShutdownReport::Confirmed);
+        let report = confirmed_slot();
         passive_cleanup(
             &report,
             std::future::ready(Ok(())),
@@ -1411,19 +1290,19 @@ mod tests {
             Duration::from_secs(30),
         )
         .await;
-        let Err(RunError::Shutdown(Some(ShutdownFailure::Readers(readers)))) =
-            shutdown_result(&report)
-        else {
-            panic!("deadline evidence must survive successful drains")
-        };
-        assert!(readers.outcomes().deadline_exceeded());
-        assert_eq!(readers.outcomes().record(), Some(&Ok(())));
-        assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
+        let failure = failure(shutdown_result(&report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Complete);
+        assert!(report.readers().deadline_exceeded());
+        assert_eq!(report.readers().record(), &Outcome::Ok);
+        assert_eq!(report.readers().catalogue(), &Outcome::Ok);
+        assert!(report.watches().confirmed());
+        assert!(report.conversations().is_ok());
     }
 
     #[tokio::test(start_paused = true)]
     async fn cancelled_conversation_after_deadline_retains_both_reader_results() {
-        let report = Mutex::new(ShutdownReport::Confirmed);
+        let report = confirmed_slot();
         let (release, waiting) = oneshot::channel();
         {
             let stop = passive_cleanup(
@@ -1454,26 +1333,24 @@ mod tests {
                 std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await
             );
         }
-        let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
-            watches: Ok(()),
-            readers: Err(readers),
-        }))) = shutdown_result(&report)
-        else {
-            panic!("retain typed catalogue failure and unknown conversation cleanup")
-        };
-        assert!(readers.outcomes().deadline_exceeded());
-        assert_eq!(readers.outcomes().record(), Some(&Ok(())));
+        let failure = failure(shutdown_result(&report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Conversations);
+        assert!(report.watches().confirmed());
+        assert!(report.readers().deadline_exceeded());
+        assert_eq!(report.readers().record(), &Outcome::Ok);
         assert_eq!(
-            readers.outcomes().catalogue(),
-            Some(&Err(CatalogueReadError::OperationAndWorkerPanicked(
-                Box::new(CatalogueReadError::IdentityChanged)
+            report.readers().catalogue(),
+            &Outcome::Failed(CatalogueReadError::OperationAndWorkerPanicked(Box::new(
+                CatalogueReadError::IdentityChanged
             )))
         );
+        assert!(!report.conversations().is_known());
     }
 
     #[tokio::test(start_paused = true)]
     async fn ready_readers_at_zero_deadline_are_not_labeled_timeout() {
-        let report = Mutex::new(ShutdownReport::Confirmed);
+        let report = confirmed_slot();
         passive_cleanup(
             &report,
             std::future::ready(Ok(())),
@@ -1522,18 +1399,17 @@ mod tests {
     }
     #[test]
     fn a_completed_serve_still_fails_when_shutdown_did_not_confirm_cleanup() {
-        let confirmed = Mutex::new(ShutdownReport::Confirmed);
+        let confirmed = confirmed_slot();
         assert!(shutdown_result(&confirmed).is_ok());
 
-        let undrained = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
+        let undrained = Mutex::new(Some(report_with(Err(
             ConversationError::RetirementAdmission {
                 cleanup_error: Some(Box::new(ConversationError::Audit)),
             },
-        )));
+        ))));
         // The typed failure survives the boundary rather than becoming a log line.
-        let Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
-            ConversationError::RetirementAdmission { cleanup_error },
-        )))) = shutdown_result(&undrained)
+        let ConversationError::RetirementAdmission { cleanup_error } =
+            only_conversations_failed(shutdown_result(&undrained))
         else {
             panic!("undrained admission must fail the process result")
         };
@@ -1547,53 +1423,43 @@ mod tests {
             Err(RunError::Shutdown(None))
         ));
         // A run that was confirmed stays confirmed, however often it is read.
-        let confirmed_twice = Mutex::new(ShutdownReport::Confirmed);
+        let confirmed_twice = confirmed_slot();
         assert!(shutdown_result(&confirmed_twice).is_ok());
         assert!(shutdown_result(&confirmed_twice).is_ok());
 
-        let audit = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let audit = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
         assert!(matches!(
-            shutdown_result(&audit),
-            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
-                ConversationError::Audit
-            ))))
+            only_conversations_failed(shutdown_result(&audit)),
+            ConversationError::Audit
         ));
     }
 
     #[test]
     fn the_process_result_carries_both_serving_and_what_shutdown_reported() {
         // Serving finishing is not confirmation that conversations stopped.
-        let unconfirmed = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let unconfirmed = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
         assert!(matches!(
-            serve_outcome(Ok(()), None, &unconfirmed),
-            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
-                ConversationError::Audit
-            ))))
+            only_conversations_failed(serve_outcome(Ok(()), None, &unconfirmed)),
+            ConversationError::Audit
         ));
 
-        let confirmed = Mutex::new(ShutdownReport::Confirmed);
+        let confirmed = confirmed_slot();
         assert!(serve_outcome(Ok(()), None, &confirmed).is_ok());
 
         // A serve failure is the fault that stopped the process, so it wins —
         // but the report is read first, so it cannot be skipped past.
-        let both = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let both = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
         let served = Err(std::io::Error::other("listener died"));
         assert!(matches!(
             serve_outcome(served, None, &both),
             Err(RunError::Serve(_))
         ));
-        assert!(matches!(*both.lock().unwrap(), ShutdownReport::Unreported));
+        assert!(both.lock().unwrap().is_none());
     }
 
     #[tokio::test]
     async fn a_shutdown_that_finishes_records_which_way_it_went() {
-        let confirmed = Mutex::new(ShutdownReport::Unreported);
+        let confirmed = Mutex::new(None);
         passive_cleanup(
             &confirmed,
             std::future::ready(Ok(())),
@@ -1607,7 +1473,7 @@ mod tests {
         .await;
         assert!(shutdown_result(&confirmed).is_ok());
 
-        let failed = Mutex::new(ShutdownReport::Confirmed);
+        let failed = confirmed_slot();
         passive_cleanup(
             &failed,
             std::future::ready(Ok(())),
@@ -1620,17 +1486,15 @@ mod tests {
         )
         .await;
         assert!(matches!(
-            shutdown_result(&failed),
-            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
-                ConversationError::Audit
-            ))))
+            only_conversations_failed(shutdown_result(&failed)),
+            ConversationError::Audit
         ));
     }
 
     #[test]
     fn a_shutdown_that_never_reported_is_not_treated_as_confirmed() {
         // Armed before the await and never cleared: the cleanup owner did not finish.
-        let unreported = Mutex::new(ShutdownReport::Unreported);
+        let unreported = Mutex::new(None);
         let error = shutdown_result(&unreported).unwrap_err();
         assert!(matches!(error, RunError::Shutdown(None)));
         // Said plainly, rather than borrowing another failure's meaning.
@@ -1638,18 +1502,14 @@ mod tests {
 
         // A poisoned slot is read through, so a failure already recorded is
         // still the answer rather than being downgraded to "never reported".
-        let poisoned = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let poisoned = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = poisoned.lock().unwrap();
             panic!("panicked while the report was held")
         }));
         assert!(matches!(
-            shutdown_result(&poisoned),
-            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
-                ConversationError::Audit
-            ))))
+            only_conversations_failed(shutdown_result(&poisoned)),
+            ConversationError::Audit
         ));
     }
 
@@ -1659,7 +1519,7 @@ mod tests {
     async fn native_shutdown_failure_is_retained_beside_other_cleanup() {
         let fault = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
         for conversation_fails in [false, true] {
-            let report = Mutex::new(ShutdownReport::Unreported);
+            let report = Mutex::new(None);
             let servers_stopped = AtomicBool::new(false);
             passive_cleanup(
                 &report,
@@ -1680,20 +1540,19 @@ mod tests {
                 Duration::from_secs(30),
             )
             .await;
-            let Err(RunError::Shutdown(Some(ShutdownFailure::Native {
-                readers: Ok(()),
-                watches: Ok(()),
-                conversations,
-                native,
-            }))) = shutdown_result(&report)
-            else {
-                panic!("a native drain failure must survive into the result");
-            };
-            assert_eq!(native, fault);
-            assert_eq!(conversations.is_err(), conversation_fails);
+            let failure = failure(shutdown_result(&report));
+            let report = failure.report();
+            assert_eq!(report.stage(), ShutdownStage::Complete);
+            assert_eq!(report.native(), &Outcome::Failed(fault));
+            assert!(report.readers().confirmed() && report.watches().confirmed());
+            assert!(report.servers().is_ok());
+            assert_eq!(
+                report.conversations().failed().is_some(),
+                conversation_fails
+            );
         }
         // A confirmed native join leaves an otherwise clean report confirmed.
-        let report = Mutex::new(ShutdownReport::Unreported);
+        let report = Mutex::new(None);
         passive_cleanup(
             &report,
             std::future::ready(Ok(())),
@@ -1712,7 +1571,7 @@ mod tests {
     /// it is never Confirmed.
     #[tokio::test]
     async fn unreported_native_drain_is_not_confirmed() {
-        let report = Mutex::new(ShutdownReport::Unreported);
+        let report = Mutex::new(None);
         {
             let stop = passive_cleanup(
                 &report,
@@ -1729,14 +1588,16 @@ mod tests {
                 std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await
             );
         }
-        let Err(RunError::Shutdown(Some(ShutdownFailure::NativeUnreported {
-            readers: Ok(()),
-            watches: Ok(()),
-            conversations: Err(ConversationError::Audit),
-        }))) = shutdown_result(&report)
-        else {
-            panic!("a pending native drain must not read as confirmed");
-        };
+        let failure = failure(shutdown_result(&report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Native);
+        assert!(!report.native().is_known());
+        assert!(report.readers().confirmed() && report.watches().confirmed());
+        assert!(report.servers().is_ok());
+        assert!(matches!(
+            report.conversations(),
+            Outcome::Failed(ConversationError::Audit)
+        ));
     }
 
     /// Rows S12 and H2 together: a watch task fault and a native drain failure
@@ -1744,7 +1605,7 @@ mod tests {
     #[tokio::test]
     async fn watch_and_native_shutdown_failures_are_both_retained() {
         let fault = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
-        let report = Mutex::new(ShutdownReport::Unreported);
+        let report = Mutex::new(None);
         passive_cleanup(
             &report,
             std::future::ready(Err(WatchTaskFault::Panic)),
@@ -1756,17 +1617,14 @@ mod tests {
             Duration::from_secs(30),
         )
         .await;
-        let Err(RunError::Shutdown(Some(ShutdownFailure::Native {
-            readers: Ok(()),
-            watches: Err(watches),
-            conversations: Ok(()),
-            native,
-        }))) = shutdown_result(&report)
-        else {
-            panic!("both failures must survive into the result");
-        };
-        assert_eq!(native, fault);
-        assert_eq!(watches.fault(), Some(WatchTaskFault::Panic));
+        let failure = failure(shutdown_result(&report));
+        let report = failure.report();
+        assert_eq!(report.stage(), ShutdownStage::Complete);
+        assert_eq!(report.native(), &Outcome::Failed(fault));
+        assert_eq!(report.watches().fault(), Some(WatchTaskFault::Panic));
+        assert!(!report.watches().deadline_exceeded());
+        assert!(report.readers().confirmed());
+        assert!(report.conversations().is_ok() && report.servers().is_ok());
     }
 
     /// Row S14: a native listener failure stops the gateway like a process
@@ -1782,9 +1640,7 @@ mod tests {
             .await
             .expect("the failure resolves the stop signal")
             .unwrap();
-        let report = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let report = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
         assert!(matches!(
             serve_outcome(Ok(()), *failed.borrow(), &report),
             Err(RunError::Native(NativeFailure::Listener(
@@ -1792,7 +1648,7 @@ mod tests {
             )))
         ));
         assert!(
-            matches!(*report.lock().unwrap(), ShutdownReport::Unreported),
+            report.lock().unwrap().is_none(),
             "the report was read before the listener failure was returned"
         );
         // With native pairing off there is no channel; only the process
@@ -1830,7 +1686,7 @@ mod tests {
         .await
         .expect("a vanished listener resolves the stop signal");
         // It is no listener failure: the shutdown report carries the fault.
-        let report = Mutex::new(ShutdownReport::Confirmed);
+        let report = confirmed_slot();
         assert!(serve_outcome(Ok(()), *failed.borrow(), &report).is_ok());
     }
 

@@ -135,6 +135,19 @@ impl ReadOnlyCache {
         policy: CachePolicy,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, CacheError> {
+        // The schema version does not move for a development cache; a file
+        // made before purge receipts existed is refused, not migrated.
+        let current: bool = connection
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_schema
+                 WHERE type = 'table' AND name = 'cache_purges')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(rows::database_error)?;
+        if !current {
+            return Err(CacheError::OutdatedSchema);
+        }
         let page_size: i64 = connection
             .pragma_query_value(None, "page_size", |row| row.get(0))
             .map_err(rows::database_error)?;

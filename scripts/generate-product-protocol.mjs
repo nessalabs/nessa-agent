@@ -220,7 +220,7 @@ for (const [name, def] of Object.entries(schema.$defs)) {
       enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
     if (def["x-close-policy"]) {
       ts += `export const sessionClosePolicy = ${JSON.stringify(def["x-close-policy"])} as const\n`
-      enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } pub(crate) fn from_web_socket_code(code: u16) -> Option<Self> { match code {${def.enum.map((v) => `${def["x-close-policy"][v].webSocketCode} => Some(Self::${pascal(v)})`).join(",")}, _ => None } } }\n`
+      enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } }\n`
     }
     if (sharedOutcomes.has(name)) contractRs += enumRs
     else rs += enumRs

@@ -3,9 +3,12 @@
 //! `driver` schedules finite pages through core ports; `offline` returns saved
 //! positions and the shared bounded conversation view through one read port.
 //! `reset` exposes attributed durable reset receipts through the cache port.
+//! `device` turns the gateway's pinned enrollment status into a read, a purge
+//! with its receipt, or neither.
 
 mod cache;
 mod catalogue;
+pub(crate) mod device;
 pub(crate) mod driver;
 pub(crate) mod offline;
 pub(crate) mod reset;

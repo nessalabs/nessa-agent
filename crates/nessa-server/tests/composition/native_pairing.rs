@@ -2,9 +2,14 @@
 //! and private state (design rows S4, S10, S12 in
 //! `docs/design/auth/device-pairing.md`, "Owner routes and mounting").
 use super::*;
+use crate::agents::{
+    application::{AgentProbe, AgentProbeEvidence},
+    domain::AgentId,
+};
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
+use crate::product::ProductDependencies;
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -114,6 +119,29 @@ impl Namespace {
     }
 }
 
+/// The product state a protected native session would be served with.
+fn product(registry: Arc<LocalCredentialStore>) -> ProductRouteState {
+    struct NoAgents;
+    impl AgentProbe for NoAgents {
+        fn evidence(&self, _: AgentId) -> Option<AgentProbeEvidence> {
+            None
+        }
+    }
+    ProductRouteState::new(
+        ResourceId::new("gateway").unwrap(),
+        OrganizationId::new("org").unwrap(),
+        AudienceId::new("gateway").unwrap(),
+        ProductDependencies {
+            verifier: registry.clone(),
+            access: registry,
+            clock: Arc::new(SystemClock),
+            policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+            uptime_clock: RuntimeDependencies::default().clock,
+            agent_probe: Arc::new(NoAgents),
+        },
+    )
+}
+
 fn loopback() -> NativeConfig {
     NativeConfig {
         listen_address: "127.0.0.1:0".parse().unwrap(),
@@ -192,7 +220,12 @@ async fn native_bind_failure_preserves_key_and_history() {
     let Err(RunError::Native(NativeFailure::Bind {
         address: refused,
         source,
-    })) = bind(prepared, RuntimeDependencies::default().clock).await
+    })) = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry.clone()),
+    )
+    .await
     else {
         panic!("a taken native address must refuse startup");
     };
@@ -207,12 +240,17 @@ async fn native_bind_failure_preserves_key_and_history() {
     drop(commands);
     drop(registry);
     drop(taken);
-    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(namespace.registry()))
+    let registry = namespace.registry();
+    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
         .await
         .unwrap();
-    bind(prepared, RuntimeDependencies::default().clock)
-        .await
-        .unwrap();
+    bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry),
+    )
+    .await
+    .unwrap();
     assert_eq!(std::fs::read(namespace.key_file()).unwrap(), key);
 }
 
@@ -222,12 +260,17 @@ async fn native_bind_failure_preserves_key_and_history() {
 async fn native_shutdown_joins_a_held_peer() {
     let namespace = Namespace::new();
     let session = namespace.bootstrap().await;
-    let (prepared, commands) = prepare(&loopback(), namespace.inputs(namespace.registry()))
+    let registry = namespace.registry();
+    let (prepared, commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
         .await
         .unwrap();
-    let bound = bind(prepared, RuntimeDependencies::default().clock)
-        .await
-        .unwrap();
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry),
+    )
+    .await
+    .unwrap();
     let address = bound.local_address();
     let (failure, failed) = watch::channel(None);
     let mut running = start(bound, failure);
@@ -263,12 +306,17 @@ async fn native_shutdown_joins_a_held_peer() {
 async fn faulted_listener_join_reports_the_fault_without_reconciling() {
     let namespace = Namespace::new();
     namespace.bootstrap().await;
-    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(namespace.registry()))
+    let registry = namespace.registry();
+    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
         .await
         .unwrap();
-    let bound = bind(prepared, RuntimeDependencies::default().clock)
-        .await
-        .unwrap();
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry),
+    )
+    .await
+    .unwrap();
     let running = RunningNative {
         gateway: bound.gateway.clone(),
         stop: None,

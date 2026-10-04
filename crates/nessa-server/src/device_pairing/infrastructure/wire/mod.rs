@@ -64,6 +64,9 @@ pub enum NativePairingRequest {
     },
     /// Exact earlier attempt; fresh actual TLS possession is required by the owner.
     Status(PublicIntent),
+    /// Select the protected product session on this connection. Only a first
+    /// envelope selects it; it carries no credential and grants nothing.
+    OpenProduct,
 }
 /// Client-side decoded enrollment state; no variant grants product access.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -174,6 +177,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeWireEr
             message: message.into_owned(),
         }),
         WireRequest::Status { public } => Ok(NativePairingRequest::Status(public.into_domain()?)),
+        WireRequest::OpenProduct {} => Ok(NativePairingRequest::OpenProduct),
     }
 }
 /// Encode a client request without retaining an unbounded serde output buffer.
@@ -193,6 +197,7 @@ pub fn encode_request(request: &NativePairingRequest) -> Result<Vec<u8>, NativeW
         NativePairingRequest::Status(public) => WireRequest::Status {
             public: WirePublic::from_domain(*public),
         },
+        NativePairingRequest::OpenProduct => WireRequest::OpenProduct {},
     };
     encode(&request)
 }

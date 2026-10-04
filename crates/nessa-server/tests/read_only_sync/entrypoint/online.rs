@@ -26,6 +26,7 @@ fn online_failure_output_keeps_captured_check_and_independent_causes() {
             &attempt,
             Err(CacheError::Corrupt),
             Some(CacheError::Stale),
+            json!({"enrollment":{"phase":"active"},"recheck":{"enrollment":{"phase":"terminal"}}}),
             &mut output
         ),
         Err(CommandError::OnlineRefused)
@@ -42,7 +43,21 @@ fn online_failure_output_keeps_captured_check_and_independent_causes() {
     assert_eq!(value["cacheRefusal"]["code"], "stale");
     assert_eq!(value["freshnessFailure"]["code"], "quota");
     assert_eq!(value["successful"], false);
+    // The enrollment the run was admitted under, and its recheck, join the
+    // report beside the transport and driver causes.
+    assert_eq!(value["enrollment"]["phase"], "active");
+    assert_eq!(value["recheck"]["enrollment"]["phase"], "terminal");
 }
+#[test]
+fn refused_open_product_is_reported_as_product_refused() {
+    // The example client reads this code to tell a refused `openProduct`
+    // from a malformed frame, and re-asks status only for the former.
+    assert_eq!(
+        gateway_failure(GatewayError::ProductRefused),
+        json!({"code":"productRefused","productCode":null})
+    );
+}
+
 #[test]
 fn successful_work_with_unavailable_saved_evidence_is_refused_and_diagnostics_redacted() {
     let attempt = GatewayAttempt {
@@ -66,6 +81,7 @@ fn successful_work_with_unavailable_saved_evidence_is_refused_and_diagnostics_re
                 "private-path-token".into()
             ))),
             None,
+            Value::Null,
             &mut output
         ),
         Err(CommandError::OnlineRefused)

@@ -38,15 +38,11 @@ fn online_process_restarts_reuse_actual_binding() {
     let gateway = Gateway::start(&root);
     let setup: Setup =
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
-    let profile = root.join("profile.json").to_string_lossy().into_owned();
     let cache_root = directory.path().join("cache");
     nessa_local_storage::create_directory(&cache_root).unwrap();
-    let cache = cache_root
-        .join("cache.sqlite3")
-        .to_string_lossy()
-        .into_owned();
+    let profile = profile_for(&root, &cache_root.join("cache.sqlite3"));
     let args = |name: &str, target: Option<&str>, pages: Option<&str>| {
-        let mut args = vec![name.into(), cache.clone(), profile.clone()];
+        let mut args = vec![name.into(), profile.clone()];
         if let Some(target) = target {
             args.push(target.into());
         }
@@ -126,7 +122,6 @@ fn online_profile_refusal_precedes_network_and_cache() {
     let (ok, report) = command(
         vec![
             "check-records".into(),
-            cache.to_string_lossy().into_owned(),
             directory
                 .path()
                 .join("missing.json")
@@ -144,8 +139,7 @@ fn online_profile_refusal_precedes_network_and_cache() {
 fn record_command(root: &Path, cache: &Path, setup: &Setup, pages: &str) -> Vec<String> {
     vec![
         "sync-records".into(),
-        cache.to_string_lossy().into_owned(),
-        root.join("profile.json").to_string_lossy().into_owned(),
+        profile_for(root, cache),
         setup.conversation.clone(),
         pages.into(),
     ]
@@ -292,13 +286,20 @@ fn online_revocation_after_admission_preserves_confirmed_page() {
     assert_eq!(report["durable"]["progress"]["applied"], "0");
     assert_eq!(report["durable"]["status"], "unknown");
     assert!(report["capturedCheck"].is_object());
+    // Row PC5: the refusal asked the pinned status again. The receiver no
+    // longer holds the pairing, so the gateway refuses the status: that is
+    // not an authenticated Terminal, and nothing is purged.
+    assert_eq!(
+        report["recheck"]["enrollmentFailure"]["code"], "refused",
+        "{report}"
+    );
+    assert!(report["recheck"]["purge"].is_null());
     let before = std::fs::read(&cache).unwrap();
     let (ok, report) = command(record_command(&root, &cache, &setup, "1"), false);
     assert!(!ok);
-    assert_eq!(
-        report.unwrap()["transportFailure"]["productCode"],
-        "unauthorized"
-    );
+    let report = report.unwrap();
+    assert_eq!(report["enrollmentFailure"]["code"], "refused", "{report}");
+    assert!(report["purge"].is_null());
     assert_eq!(std::fs::read(cache).unwrap(), before);
 }
 
@@ -354,8 +355,10 @@ fn online_product_aggregate_boundary_and_read_privilege_are_actual() {
     assert_eq!(denied["error"]["code"], "forbidden");
 }
 
+/// Rows PC1, PC4: a device with no issued credential, or whose pinned status
+/// cannot be read, reads nothing and opens no cache.
 #[test]
-fn online_wrong_receiver_or_epoch_does_not_open_cache() {
+fn online_unusable_enrollment_does_not_open_cache() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
     let _gateway = Gateway::start(&root);
@@ -365,19 +368,35 @@ fn online_wrong_receiver_or_epoch_does_not_open_cache() {
         serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
     let private = directory.path().join("cache");
     nessa_local_storage::create_directory(&private).unwrap();
-    for (index, field, value) in [
-        (0, "receiver", json!(uuid())),
-        (1, "accessEpoch", json!(setup.epoch + 1)),
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    for (index, field, value, connection, failure) in [
+        (
+            0,
+            "stateDirectory",
+            json!("unpaired"),
+            "notPerformed",
+            "notPaired",
+        ),
+        (
+            1,
+            "gatewayAddress",
+            json!(closed.to_string()),
+            "attempted",
+            "io",
+        ),
     ] {
+        let cache = private.join(format!("absent-{index}.sqlite3"));
         let mut profile = original.clone();
         profile[field] = value;
+        profile["cache"] = json!(cache);
         let path = root.join(format!("wrong-{index}.json"));
         private_write(&path, &serde_json::to_vec(&profile).unwrap());
-        let cache = private.join(format!("absent-{index}.sqlite3"));
         let (ok, report) = command(
             vec![
                 "check-records".into(),
-                cache.to_string_lossy().into_owned(),
                 path.to_string_lossy().into_owned(),
                 setup.conversation.clone(),
             ],
@@ -386,11 +405,83 @@ fn online_wrong_receiver_or_epoch_does_not_open_cache() {
         assert!(!ok);
         assert!(!cache.exists());
         let report = report.unwrap();
-        assert_eq!(report["connectionCheck"], "performed");
-        assert!(report["transportFailure"]["productCode"].is_string());
+        assert_eq!(report["connectionCheck"], connection, "{report}");
+        let code = if index == 0 {
+            &report["configurationFailure"]
+        } else {
+            &report["enrollmentFailure"]["code"]
+        };
+        assert_eq!(code, failure, "{report}");
     }
 }
 
+/// Rows PC3, A9 (client side): after the owner revokes the device, its next
+/// command reads the authenticated Terminal status and purges the receiver's
+/// cached rows with one receipt before its enrollment record goes; the
+/// receiver stays fenced.
+#[test]
+fn online_terminal_status_purges_with_one_receipt() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let gateway = Gateway::start(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let cache = setup_cache(directory.path());
+    let (ok, synced) = command(record_command(&root, &cache, &setup, "100"), false);
+    assert!(ok, "{synced:?}");
+    assert_eq!(synced.unwrap()["enrollment"]["phase"], "active");
+    let catalogue = vec![
+        "sync-catalogue".into(),
+        profile_for(&root, &cache),
+        "10".into(),
+    ];
+    let (ok, report) = command(catalogue.clone(), false);
+    assert!(ok, "{report:?}");
+    drop(gateway);
+    let _gateway = Gateway::start_mode(&root, "revoke");
+    let (ok, report) = command(record_command(&root, &cache, &setup, "100"), false);
+    assert!(!ok);
+    let report = report.unwrap();
+    assert_eq!(report["enrollment"]["phase"], "terminal", "{report}");
+    assert_eq!(report["enrollment"]["cause"], "credentialRevoked");
+    let purge = &report["purge"];
+    assert_eq!(purge["receiver"], setup.receiver);
+    assert_eq!(purge["cause"], "terminalEnrollment");
+    assert_eq!(purge["initiator"], "gatewayStatus");
+    assert_eq!(purge["transcripts"], "1");
+    assert_ne!(purge["records"], "0");
+    assert_eq!(purge["catalogueEntries"], "2");
+    let database = Connection::open(&cache).unwrap();
+    for table in [
+        "transcript_records",
+        "transcript_progress",
+        "transcript_checkpoints",
+        "catalogue_entries",
+        "catalogue_progress",
+    ] {
+        let count: i64 = database
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE receiver = ?1"),
+                [&setup.receiver],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    // The ended enrollment's record went after the purge: the device is no
+    // longer paired, and the purged receiver stays fenced in the cache.
+    let (ok, again) = command(catalogue, false);
+    assert!(!ok);
+    assert_eq!(again.unwrap()["configurationFailure"], "notPaired");
+    let fenced: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM cache_purges WHERE receiver = ?1",
+            [&setup.receiver],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fenced, 1);
+}
 #[test]
 fn online_saved_projection_handles_competing_owner() {
     let directory = tempfile::tempdir().unwrap();
@@ -448,13 +539,9 @@ fn online_saved_projection_handles_competing_owner() {
         let private = directory.path().join(mode);
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("cache.sqlite3");
+        let profile = profile_for(&root, &path);
         let args = |command: &str, pages: Option<&str>| {
-            let mut args = vec![
-                command.into(),
-                path.to_string_lossy().into_owned(),
-                root.join("profile.json").to_string_lossy().into_owned(),
-                setup.conversation.clone(),
-            ];
+            let mut args = vec![command.into(), profile.clone(), setup.conversation.clone()];
             if let Some(pages) = pages {
                 args.push(pages.into());
             }
@@ -466,6 +553,7 @@ fn online_saved_projection_handles_competing_owner() {
                 "sync-records",
                 Some(if mode == "append" { "1" } else { "100" }),
             ),
+            &mut std::io::empty(),
             &mut output,
         )
         .unwrap();
@@ -574,7 +662,11 @@ fn online_saved_projection_handles_competing_owner() {
             }))
         });
         let mut output = vec![];
-        let result = read_only_example::execute(&args("check-records", None), &mut output);
+        let result = read_only_example::execute(
+            &args("check-records", None),
+            &mut std::io::empty(),
+            &mut output,
+        );
         let report: Value = serde_json::from_slice(&output).unwrap();
         match mode {
             "stable" => {
@@ -658,11 +750,7 @@ fn default_passive_budget(mode: &str) -> (bool, Value, Duration) {
     let (ok, value) = command(
         vec![
             "sync-records".into(),
-            cache_root
-                .join("cache.sqlite3")
-                .to_string_lossy()
-                .into_owned(),
-            root.join("profile.json").to_string_lossy().into_owned(),
+            profile_for(&root, &cache_root.join("cache.sqlite3")),
             setup.conversation,
             "1".into(),
         ],
@@ -705,7 +793,7 @@ fn default_budget_consumes_cumulative_valid_rpcs() {
 /// acknowledgement and that recheck, follows live hints, recovers a commit
 /// made while it was disconnected (so its hint was never sent) from its durable
 /// checkpoint, and ends with the same folded view a fresh
-/// full replay produces. Revocation stops hints and the next read is denied;
+/// full replay produces. Revocation stops hints and the next command is refused;
 /// a sleeping gateway leaves the saved view readable and the check failed.
 /// Rows L1–L7 of the delivery table in docs/design/committed-change-watches.md.
 #[test]
@@ -741,7 +829,7 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
             assert_eq!(value["payload"], json!({ "watchId": watch }));
             bytes
         }
-        Frame::Closed(close) => panic!("closed instead of a hint: {close:?}"),
+        Frame::Closed => panic!("closed instead of a hint"),
     };
 
     // L1: seeded replay to a durable checkpoint.
@@ -823,21 +911,23 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     assert_eq!(live_view, show(&fresh));
 
     // L6: access revoked mid-watch. The next commit's hint is refused at
-    // delivery: the connection closes as authorization lost with no hint,
-    // and the next read is denied.
+    // delivery: the connection closes with no hint (a native close carries no
+    // reason), and the next command is refused before it reads.
     gateway.act("revoke");
     gateway.act("commit");
     match receiver.frame() {
-        Frame::Closed(Some(close)) => assert_eq!(u16::from(close.code), 4004, "{close:?}"),
-        Frame::Closed(None) => panic!("closed without a reason"),
+        Frame::Closed => {}
         Frame::Text { value, .. } => panic!("frame after revocation: {value}"),
     }
     let (ok, denied) = command(record_command(&root, &cache, &setup, "100"), false);
     assert!(!ok);
-    assert_eq!(
-        denied.unwrap()["transportFailure"]["productCode"],
-        "unauthorized"
-    );
+    // The receiver no longer holds the pairing, so the native profile's
+    // pinned status check before any read is refused (row PC5): not an
+    // authenticated Terminal, so nothing is purged.
+    let denied = denied.unwrap();
+    assert_eq!(denied["connectionCheck"], "attempted", "{denied}");
+    assert_eq!(denied["enrollmentFailure"]["code"], "refused", "{denied}");
+    assert!(denied["purge"].is_null(), "{denied}");
 
     // L7: the gateway sleeps. The check fails explicitly, and the saved view
     // is still read offline, unchanged.
@@ -845,10 +935,9 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     let (ok, asleep) = command(record_command(&root, &cache, &setup, "100"), false);
     assert!(!ok);
     let asleep = asleep.unwrap();
-    assert_eq!(
-        asleep["configurationFailure"], "endpointUnavailable",
-        "{asleep}"
-    );
-    assert_eq!(asleep["connectionCheck"], "notPerformed", "{asleep}");
+    // The native profile has no endpoint file to find missing: the connection
+    // is attempted and its pinned status check fails on I/O.
+    assert_eq!(asleep["connectionCheck"], "attempted", "{asleep}");
+    assert_eq!(asleep["enrollmentFailure"]["code"], "io", "{asleep}");
     assert_eq!(show(&cache), live_view);
 }

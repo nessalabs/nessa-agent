@@ -1,7 +1,7 @@
-//! One synchronous socket; absolute deadlines cover each physical syscall.
+//! One protected native connection; absolute deadlines cover each physical syscall.
 mod deadline_stream;
 mod session;
-pub(crate) use session::{LocalConnector, Session};
+pub(crate) use session::{DeviceEvidence, LocalConnector, Session};
 mod sources;
 pub(crate) use sources::GatewayConnection;
 

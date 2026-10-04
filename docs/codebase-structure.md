@@ -375,7 +375,9 @@ holds the owner use cases (`owner.rs`), approval through to an issued credential
 (`activation.rs`), cleanup of ended stages (`cleanup.rs`), the receiver port
 (`receivers.rs`) and the device status query and its projection
 (`read_status.rs`, `status.rs`). `infrastructure/` holds the pure JSON
-codec (`wire/`), framing (`enrollment_channel.rs`), the gateway runtime
+codec (`wire/`), the length-prefixed frame reader both phases use
+(`frames.rs`), enrollment framing (`enrollment_channel.rs`), the protected
+product phase after an `openProduct` envelope (`protected.rs`), the gateway runtime
 (`runtime.rs`, with the single code-registration worker in `registration.rs`),
 connection workers and their shutdown wake-ups (`connection.rs`,
 `connection/wake.rs`), the listener, the device client, gateway identity
@@ -383,20 +385,27 @@ restore, `receivers.rs` (the receiver port over the conversation context's
 `LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
 product socket holds, and `owner_admission.rs`, the lease every owner command
 holds until shutdown drains it.
-The owner product methods are `nessa-server/src/product/pairing.rs`; mounting is
+The owner product methods are `nessa-server/src/product/pairing.rs`, and the
+product session over a protected native connection is
+`nessa-server/src/product/native.rs`; mounting is
 `nessa-server/src/composition/native_pairing.rs`, only when `config.json` names a
 native listen address. Public tests are under
 `nessa-server/tests/device_pairing/infrastructure/`, the owner routes in
 `tests/device_pairing/owner_routes.rs`, activation and cleanup in
 `tests/device_pairing/infrastructure/activation.rs` and the composed process in
 `tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
-`tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`, the
+`tests/native_enrollment.rs`, which also registers the protected sessions in
+`tests/device_pairing/infrastructure/protected.rs`; the protected connection's
+write-wakeup unit test is `tests/device_pairing/infrastructure/protected_waker.rs`;
+codec tests are `tests/device_pairing/wire.rs`, the
+frame reader's unit tests are `tests/device_pairing/infrastructure/frames.rs`, the
 socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`
 and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
 composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
 Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
 [owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
-and [activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b).
+[activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b)
+and [protected reads](design/auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
@@ -1496,26 +1505,36 @@ cite its numbers.
 ### Retained read-only example
 
 `crates/nessa-server/examples/read_only_sync.rs` starts the standalone example
-through `composition/read_only_example.rs`. Its `profile.rs` child admits
-bounded private configuration and delegates current endpoint discovery. Its
-`online.rs` child composes real socket facades and the private cache after actual
-authenticated discovery; the existing finite drivers own work.
+through `composition/read_only_example.rs`. Its `profile.rs` child admits the
+bounded private profile and opens the device's private enrollment state; its
+`device.rs` child pairs and reads the pinned enrollment status. Its `online.rs`
+child admits each run by that status, composes the protected native session's
+facades and the private cache after actual authenticated discovery; the
+existing finite drivers own work.
 The `read_only_sync/entrypoint/`
 owns argument parsing and JSON output; its `online.rs` presents separate captured
 checks, confirmed durable progress, transport and core/cache refusal evidence; `online/causes.rs` owns their sanitized
 typed JSON presentation. `application/driver.rs` schedules finite
 core passes, `application/offline.rs` owns the saved-read port, and
-`application/reset.rs` exposes attributed reset receipts. The private
+`application/reset.rs` exposes attributed reset receipts, and
+`application/device.rs` turns a pinned status into a read or, through the
+record store it gives the enrollment client, a purge before the record goes. The private
 SQLite adapter under `infrastructure/cache/` retains catalogue values, SDK
 checkpoints, pending physical records and their atomic progress. Offline
 transcript views use the conversation feature's shared bounded passive
-projection. Cache/command evidence lives under
+projection; `infrastructure/cache/purge.rs` deletes a receiver's rows with the
+receipt that fences it. Cache/command evidence lives under
 `tests/read_only_sync/infrastructure/`; the [example design](design/read-only-sync-example.md)
 names ordering and resource evidence. Real paired-credential client/gateway
 process, restart, output loss and authority-order evidence lives under
 `tests/composition/read_only_online.rs`, with canonical gateway provisioning and
 client/encoder support in its `read_only_online/fixtures/` children. Pure parser
-and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`.
+and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`,
+the status decision's under `tests/read_only_sync/application/`, and the
+code-line reader's in `tests/composition/read_only_device.rs`.
+`examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
+against a real `nessa server` and real client processes and reports timings and
+bytes on the wire as JSON.
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
 
@@ -1523,7 +1542,8 @@ Watch shutdown is part of normal host cleanup in `composition/root.rs`: after na
 pairing is signalled to stop, it closes
 `ProductRouteState` watch admission before polling the reader and watch drains,
 then carries their outcomes through conversation/storage, MCP and the native join
-in the same `ShutdownReport` (typed phases in `core/shutdown.rs`). Interleaving tests are
+in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
+stage, in `core/shutdown.rs`). Interleaving tests are
 `tests/composition/watch_shutdown.rs`, using the watch fixture in
 `tests/product/socket/watches.rs`. The separate-process replay-to-live test is in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its

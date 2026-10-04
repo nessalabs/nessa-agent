@@ -7,13 +7,15 @@
 //!                          --> GatewayPairing::open --> reconcile_cleanup
 //!                          --> (PreparedNative, PairingOwnerCommands)
 //! bind:    PreparedNative --> TcpEnrollmentAccept --> the one NativeEnrollmentConnections
+//!          (with NativeSessions: the product state + the registry's device verifier)
 //! start:   BoundNative --> listener task (failed --> watch) --> RunningNative
 //! stop:    signal_stop --> join: listener drain, then GatewayPairing::shutdown,
 //!          then reconcile_cleanup
 //! ```
 //! Arrows are construction and ownership handoffs, in order. Design rows
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
-//! and S7, S8, D5, D6 ("Activation and credential delivery").
+//! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
+//! ("Protected reads over the native channel").
 use super::runtime_config::NativeConfig;
 use crate::app::ports::Clock as MonotonicClock;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
@@ -23,16 +25,20 @@ use crate::device_pairing::infrastructure::{
     NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
+use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
         pairing::{FilePairingState, OsEntropy},
     },
     application::{
-        pairing::PairingWorkerFault,
-        ports::{Clock, PolicyEvaluator},
+        pairing::{DeviceConnectionProof, PairingWorkerFault},
+        ports::{
+            AccessError, Clock, CredentialEvidence, CredentialVerifier, PolicyEvaluator,
+            PortFuture, VerifiedCredential,
+        },
     },
-    domain::Resource,
+    domain::{AudienceId, Resource},
 };
 use std::{
     io::{ErrorKind, Result as IoResult},
@@ -68,6 +74,7 @@ pub(super) struct NativeInputs {
 pub(super) struct PreparedNative {
     gateway: Arc<GatewayPairing>,
     address: SocketAddr,
+    registry: Arc<LocalCredentialStore>,
 }
 
 /// Prepare native pairing before either socket is bound (design rows S3–S8):
@@ -108,7 +115,7 @@ pub(super) async fn prepare(
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {
             enrollments: registry.clone(),
-            access: registry,
+            access: registry.clone(),
             policy: inputs.policy,
             receivers: Arc::new(ConversationReceivers::new(inputs.receivers)),
             clock: inputs.clock,
@@ -130,6 +137,7 @@ pub(super) async fn prepare(
         PreparedNative {
             gateway,
             address: config.listen_address,
+            registry,
         },
         commands,
     ))
@@ -152,20 +160,58 @@ impl BoundNative {
 /// Bind the configured address and build this gateway's only connection owner
 /// (design rows S10, S13), on the root's monotonic clock for its deadlines. A
 /// bind failure leaves the key and enrollment history as `prepare` found them.
+/// A connection that opens a product session is served with `product`, the
+/// same state the browser socket has, checking credentials against its TLS key
+/// with the registry's device verifier (design rows PR1, PR3).
 pub(super) async fn bind(
     prepared: PreparedNative,
     clock: Arc<dyn MonotonicClock>,
+    product: ProductRouteState,
 ) -> Result<BoundNative, RunError> {
-    let PreparedNative { gateway, address } = prepared;
+    let PreparedNative {
+        gateway,
+        address,
+        registry,
+    } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
     let bound = socket.local_address().map_err(bind_failed)?;
-    let connections = Arc::new(NativeEnrollmentConnections::new(gateway.clone(), clock));
+    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
+    let connections = Arc::new(
+        NativeEnrollmentConnections::new(gateway.clone(), clock)
+            .with_protected_sessions(Arc::new(sessions)),
+    );
     Ok(BoundNative {
         gateway,
         listener: NativeEnrollmentListener::new(socket, connections),
         address: bound,
     })
+}
+
+/// The registry's device verifier, for credential evidence presented on a
+/// native connection.
+pub(super) struct RegistryDevices(pub(super) Arc<LocalCredentialStore>);
+impl DeviceCredentials for RegistryDevices {
+    fn verify<'a>(
+        &'a self,
+        proof: &'a DeviceConnectionProof,
+        evidence: &'a CredentialEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, VerifiedCredential> {
+        Box::pin(async move {
+            self.0
+                .device_verifier(proof)
+                .verify(evidence, audience)
+                .await
+        })
+    }
+    fn holds_credential(
+        &self,
+        proof: &DeviceConnectionProof,
+        audience: &AudienceId,
+    ) -> Result<bool, AccessError> {
+        self.0.device_verifier(proof).holds_credential(audience)
+    }
 }
 
 /// The serving listener, and how to stop it.
