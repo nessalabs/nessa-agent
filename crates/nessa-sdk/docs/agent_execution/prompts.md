@@ -131,8 +131,9 @@ advertised `promptCapabilities.image` at `initialize`, reported as
 
 Every one of those, with the app and text-input rules in the last two rows, is
 checked when a message is submitted, before it is accepted, by `Agent::invoke`,
-`enqueue`, `enqueue_steering`, and `steer` alike. A refusal there saved nothing,
-queued nothing, and sent nothing:
+`enqueue`, and `enqueue_steering`. A refusal there saved nothing, queued
+nothing, and sent nothing. `steer` checks the app rule the same way, but every
+other row only after the steered message is saved (#477):
 
 | Refused because | Error |
 | --- | --- |
@@ -145,9 +146,7 @@ queued nothing, and sent nothing:
 | the message carries app contexts and the model takes no text input | `InvalidInput(..)` |
 
 Contexts reach the agent as a leading text block, so a message carrying them
-needs the model's text input even with no text of its own. Like a text
-message's, that check runs on `steer` only after the steered message is saved
-(#477). Both rows are in
+needs the model's text input even with no text of its own. Both rows are in
 [The app a message names](../../../../docs/design/mcp-app-calls.md#the-app-a-message-names)
 (A2–A7) and "The values, saved and sent" (B6).
 
