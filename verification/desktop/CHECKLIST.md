@@ -589,13 +589,15 @@ says why where the conversations would be.
   inside the chat area and the window, Try Again is at least 24px tall with
   nothing over it, and no session row or sample plugin is drawn. Try Again
   reads the index again (the status goes while it reads, which no poll does)
-  and connects at once though the poller waits, and says the same while
-  nothing changed. While signed out, and while the
-  gateway is not ready, the window does not ask the host at all for four
-  seconds after its last ask, then asks exactly once by eight seconds: after a
+  and connects at once though the poller waits (its host ask comes within a
+  second of the click, and early enough in the poller's wait that no poll
+  could have made it), and says the same while nothing changed. While signed
+  out, and while the gateway is not ready, the window does not ask the host
+  at all for four seconds after its last ask, then asks exactly once by eight seconds: after a
   failed connect it waits out several poll rounds rather than asking the host
   every second, and then tries again on its own. (The script bounds the wait
-  to four to seven rounds; the unit tests pin the count, S10.)
+  to four to seven rounds; the unit tests pin the rule, `reconnectRounds + 1`
+  rounds, S10.)
   _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a

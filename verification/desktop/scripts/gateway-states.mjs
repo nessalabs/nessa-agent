@@ -33,6 +33,14 @@ const signedOut = "This window isn’t signed in to the local server."
 const quietMs = 4_000
 // By then the five-round wait is over and the poller has connected once more.
 const recoveredMs = 8_000
+// The poller's wait after a failed connect: `defaultGatewayTiming`'s
+// `reconnectRounds` (5) rounds, `pollMs` (1000ms) apart at least, counted
+// from the failure, which comes after its ask. So no poller ask comes sooner
+// than this after the last one. Bare Node can't import the TypeScript source,
+// so the number is kept here with the source's names.
+const pollerWaitMs = 5 * 1_000
+// Try Again's ask comes this soon after the click, or it isn't counted.
+const retryAskMs = 1_000
 
 const scenarios = [
   {
@@ -216,7 +224,7 @@ await main(
             if (scenario.cadence) {
               const { count, since } = await page.evaluate(() => ({
                 count: window.__fakeHostAsked.load_gateway_endpoint,
-                since: performance.now() - window.__fakeHostLastAskAt,
+                since: performance.now() - window.__fakeHostAskTimes.at(-1),
               }))
               await page.waitForTimeout(Math.max(0, quietMs - since))
               quiet = (await measure(page)).asked.load_gateway_endpoint - count
@@ -235,16 +243,27 @@ await main(
             }
             // Try Again reads the index again — the status goes while it reads,
             // which no poll does — and connects at once though the poller
-            // waits (S12): the click lands inside the five-round wait, so an
-            // ask after it is Try Again's. Then it says the same while
-            // nothing changed.
-            const asksBefore = (await measure(page)).asked.load_gateway_endpoint
-            await page.evaluate((empty) => {
-              window.__statusLeft = false
-              new MutationObserver(() => {
-                if (!document.querySelector(empty)) window.__statusLeft = true
-              }).observe(document.body, { childList: true, subtree: true })
-            }, css.workspaceEmpty)
+            // waits (S12). Then it says the same while nothing changed.
+            await page.evaluate(
+              ([empty, retry]) => {
+                window.__statusLeft = false
+                new MutationObserver(() => {
+                  if (!document.querySelector(empty)) window.__statusLeft = true
+                }).observe(document.body, { childList: true, subtree: true })
+                // The click's time, taken before React's own handler, which
+                // runs from the root.
+                window.__retryClickedAt = null
+                window.addEventListener(
+                  "click",
+                  (event) => {
+                    if (window.__retryClickedAt === null && event.target.closest?.(retry))
+                      window.__retryClickedAt = performance.now()
+                  },
+                  { capture: true },
+                )
+              },
+              [css.workspaceEmpty, css.workspaceEmptyRetry],
+            )
             await page.click(css.workspaceEmptyRetry)
             const read = await page
               .waitForFunction(() => window.__statusLeft, null, { timeout: 5_000 })
@@ -253,17 +272,50 @@ await main(
                 () => false,
               )
             if (!read) failures.push("Try Again did not read the index again")
-            const connected = await page
+            // Only an ask within `retryAskMs` of the click counts as Try
+            // Again's, and only while the poller's wait since the last ask
+            // before the click can't explain it (T1–T4, comment 5975998645).
+            const retry = await page
               .waitForFunction(
-                (count) => window.__fakeHostAsked.load_gateway_endpoint > count,
-                asksBefore,
-                { timeout: 3_000 },
+                (windowMs) => {
+                  const clickedAt = window.__retryClickedAt
+                  if (clickedAt === null) return false
+                  const times = window.__fakeHostAskTimes
+                  if (
+                    !times.some((t) => t >= clickedAt) &&
+                    performance.now() <= clickedAt + windowMs
+                  )
+                    return false
+                  return {
+                    lastBefore: times.filter((t) => t < clickedAt).at(-1) ?? null,
+                    clickedAt,
+                    firstAfter: times.find((t) => t >= clickedAt) ?? null,
+                  }
+                },
+                retryAskMs,
+                { timeout: 5_000 },
               )
               .then(
-                () => true,
-                () => false,
+                (handle) => handle.jsonValue(),
+                () => null,
               )
-            if (!connected)
+            const retryTiming = retry && {
+              sinceLastAsk:
+                retry.lastBefore === null ? null : retry.clickedAt - retry.lastBefore,
+              askAfterClick:
+                retry.firstAfter === null ? null : retry.firstAfter - retry.clickedAt,
+            }
+            if (!retry) failures.push("the click on Try Again was never seen")
+            else if (retry.lastBefore === null)
+              failures.push("no failed connect came before Try Again for it to beat")
+            else if (retryTiming.sinceLastAsk + retryAskMs >= pollerWaitMs)
+              failures.push(
+                `Try Again was clicked ${Math.round(retryTiming.sinceLastAsk)}ms after the last ask, too late in the poller's ${pollerWaitMs}ms wait to tell its ask from the poller's`,
+              )
+            else if (
+              retryTiming.askAfterClick === null ||
+              retryTiming.askAfterClick > retryAskMs
+            )
               failures.push("Try Again did not connect while the poller waited")
             await page.waitForSelector(css.workspaceEmpty, { timeout: 10_000 })
             const again = await measure(page)
@@ -276,7 +328,10 @@ await main(
                 (error) => !(scenario.endpoint === noGateway && error.includes(refused)),
               ),
             )
-            return { failures, measured: { first, again, quiet, recovered } }
+            return {
+              failures,
+              measured: { first, again, quiet, recovered, retry: retryTiming },
+            }
           } finally {
             await opened.close()
           }
