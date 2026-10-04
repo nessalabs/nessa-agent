@@ -58,9 +58,9 @@ pub enum RunError {
         source: io::Error,
     },
     Serve(io::Error),
-    /// Composed owners did not confirm cleanup on the way down. A missing
-    /// outcome records an interrupted callback; typed failures retain reader
-    /// drain/deadline and conversation cleanup causes independently.
+    /// Composed owners did not confirm cleanup on the way down. `Some` is the
+    /// shutdown report that did not confirm: every owner's typed outcome, and
+    /// the first owner, in cleanup order, whose outcome is still unknown.
     /// The HTTP server itself finished; this is what shutdown could not prove.
     /// `None` means shutdown never reported at all — unknown, which is its own
     /// fact and not the same as a reported failure.
@@ -349,13 +349,14 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::conversation::infrastructure::LocalConversationStore;
+    use crate::core::ShutdownReport;
     use crate::env::{EnvironmentError, HOST};
 
     #[test]
     fn an_unconfirmed_shutdown_says_which_kind_it_was() {
-        let reported = RunError::Shutdown(Some(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let mut report = ShutdownReport::default();
+        report.observe_conversations(Err(ConversationError::Audit));
+        let reported = RunError::Shutdown(report.into_result().err());
         assert!(reported.to_string().contains("did not confirm all cleanup"));
         // The typed failure is the source, so a caller can match on it.
         assert!(std::error::Error::source(&reported).is_some());
