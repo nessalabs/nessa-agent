@@ -519,3 +519,22 @@ it("names the tab as the gateway does, unless somebody renamed it", () => {
   const renamed = { ...conversation("c0"), title: "Trip", titleEdited: true as const }
   expect(applyView(renamed, { ...view, title: "Flights to Lisbon" }).title).toBe("Trip")
 })
+
+it("carries authentication-required evidence separately from its diagnostic", () => {
+  const result = applyView(conversation("tab"), {
+    ...view,
+    pending: [],
+    messages: [
+      {
+        ...view.messages[0]!,
+        status: "failed",
+        error: "OAuth session expired",
+        authenticationRequired: true,
+      },
+    ],
+  })
+  expect(result.turns.find((turn) => turn.from === "assistant")).toMatchObject({
+    authenticationRequired: true,
+    status: "OAuth session expired",
+  })
+})

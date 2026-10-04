@@ -148,6 +148,8 @@ pub enum ConversationStartupFailureCode {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationMessage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication_required: Option<bool>,
     pub parts: Vec<ConversationPart>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_offset: Option<usize>,

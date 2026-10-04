@@ -8,6 +8,8 @@ import {
   selectTranscriptFailure,
 } from "../../adapters/store/selectors"
 import { reducedMotion } from "../../../adapters/motion-preference"
+import { ProviderSignIn } from "./provider-sign-in"
+import { agentForProvider } from "../../../model/composer-options"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
@@ -53,6 +55,7 @@ export const Transcript = memo(function Transcript({
     selectTranscriptFailure(state, sessionId),
   )
   const model = useWorkspaceSelector((state) => selectSession(state, sessionId)?.model)
+  const provider = model ? agentForProvider(model.provider) : undefined
   const titleRef = useRef<HTMLHeadingElement>(null)
   const pinned = useRef(true)
   // Messages there when the conversation first showed stay put; later ones rise
@@ -168,6 +171,10 @@ export const Transcript = memo(function Transcript({
             isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
           />
         ))}
+        {transcript?.authenticationRequired &&
+        (provider === "claude" || provider === "codex") ? (
+          <ProviderSignIn key={provider} provider={provider} />
+        ) : null}
         {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
         {transcript?.approval && model ? (
           <ApprovalCard

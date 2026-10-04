@@ -214,6 +214,7 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
   const completed = turn.completed?.payload
   return {
     content,
+    sourceTurnId: execution?.sourceTurnId,
     key: turn.key,
     promptId: turn.prompt?.id,
     status:

@@ -73,6 +73,8 @@ use crate::updater::{self, ReleaseSource};
 /// `&dyn SettingsStore`, which is also what makes it testable.
 #[derive(Clone)]
 pub struct HostDependencies {
+    /// Opens provider-owned CLI login flows without reading their credentials.
+    pub provider_login: Arc<dyn crate::provider_authentication::ProviderLogin>,
     /// The settings file: the panel's geometry, the quit policy, and whether
     /// first-run setup has finished.
     pub settings: Arc<dyn SettingsStore>,
@@ -235,6 +237,7 @@ impl HostDependencies {
         };
 
         Ok(Self {
+            provider_login: Arc::new(crate::provider_authentication::NativeProviderLogin),
             settings,
             agent_credentials: Arc::new(LocalAgentCredentialStore::new(
                 service_configuration.credential_namespace().clone(),

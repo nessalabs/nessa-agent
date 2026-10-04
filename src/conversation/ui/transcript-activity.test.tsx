@@ -644,3 +644,77 @@ it("renders one terminal notice across multiple text rows and repeated renders",
   expect(container.textContent).not.toContain("First.")
   expect(container.querySelectorAll('[data-slot="agent-activity"]')).toHaveLength(1)
 })
+
+it("replaces only the typed authentication error divider with provider sign-in", async () => {
+  const value = settled(workingConversation("auth"))
+  const typed = {
+    ...value,
+    remote: value.remote
+      ? {
+          ...value.remote,
+          runtime: {
+            agent: "claude",
+            provider: "anthropic",
+            model: "claude-opus-5",
+            modelName: "Claude",
+            workspace: "/tmp",
+            contextWindowTokens: 200000,
+            reasoning: true,
+          },
+        }
+      : undefined,
+    turns: value.turns.map((turn) =>
+      turn.from === "assistant"
+        ? { ...turn, status: "failed", authenticationRequired: true }
+        : turn,
+    ),
+  }
+  await render(typed)
+  expect(container.querySelector(".provider-sign-in")?.textContent).toContain(
+    "Your login expired",
+  )
+  expect(container.querySelector("[data-slot=transcript-divider]")).toBeNull()
+  expect(container.querySelectorAll(".provider-sign-in")).toHaveLength(1)
+  await render({
+    ...typed,
+    turns: typed.turns.map((turn) =>
+      turn.from === "assistant" ? { ...turn, authenticationRequired: false } : turn,
+    ),
+  })
+  expect(container.querySelector(".provider-sign-in")).toBeNull()
+  expect(container.textContent).toContain("failed")
+})
+
+it("keeps an independent error beside authentication recovery", async () => {
+  const value = settled(workingConversation("auth-independent"))
+  await render({
+    ...value,
+    remote: value.remote
+      ? {
+          ...value.remote,
+          runtime: {
+            agent: "claude",
+            provider: "anthropic",
+            model: "claude-opus-5",
+            modelName: "Claude",
+            workspace: "/tmp",
+            contextWindowTokens: 200000,
+            reasoning: true,
+          },
+        }
+      : undefined,
+    turns: value.turns.map((turn) =>
+      turn.from === "assistant"
+        ? {
+            ...turn,
+            status: "The turn could not complete all required work.",
+            authenticationRequired: true,
+          }
+        : turn,
+    ),
+  })
+  expect(container.querySelector(".provider-sign-in")).not.toBeNull()
+  expect(container.textContent).toContain(
+    "The turn could not complete all required work.",
+  )
+})

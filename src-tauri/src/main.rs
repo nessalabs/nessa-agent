@@ -15,6 +15,7 @@ mod links;
 mod local_data;
 mod panel;
 mod platform;
+mod provider_authentication;
 mod settings;
 mod shortcut;
 mod shortcuts;
@@ -79,6 +80,7 @@ fn main() {
             panel::chosen_agent,
             panel::reveal_setup_window,
             agent_credentials::infrastructure::save_agent_api_key,
+            provider_authentication::sign_in_to_provider,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
             surface_credential::load_surface_credential,

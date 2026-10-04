@@ -115,6 +115,7 @@ export function App({
   sessionError,
   loadConversationChoices,
   agentInstallations,
+  onProviderSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -134,6 +135,7 @@ export function App({
   onSignOut?: () => void
   sessionError?: string
   loadConversationChoices: () => Promise<ConversationChoices>
+  onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -575,6 +577,7 @@ export function App({
                   statusLabel={session.statusLabel}
                   gatewayAvailable={chat.gatewayAvailable}
                   onOpenPaste={openPaste}
+                  onProviderSignIn={onProviderSignIn}
                 />
 
                 {attachments.viewed && (

@@ -440,3 +440,12 @@ export const appReview = {
   /** The fixture page's title, by which the script knows it is served. */
   title: "Nessa: an app's review",
 }
+
+/** Provider recovery fixture and accessible controls (#501). */
+export const providerSignIn = {
+  page: "verification/desktop/fixtures/provider-sign-in/index.html",
+  panelPage: "verification/desktop/fixtures/provider-sign-in/panel.html",
+  card: ".provider-sign-in",
+  button: ".provider-sign-in button",
+  failure: ".provider-sign-in [role=status]",
+}

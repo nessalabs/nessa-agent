@@ -180,6 +180,8 @@ export function failureReason(error: unknown): WorkspaceFailureReason {
  * the page. Tests pass their own.
  */
 export interface WorkspaceDependencies {
+  /** Opens the provider login flow; resolution confirms launch, not sign-in. */
+  readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string

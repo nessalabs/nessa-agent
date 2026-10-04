@@ -1907,3 +1907,71 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
     assert!(!pending.capabilities.queue);
     assert!(serde_json::to_vec(&pending).unwrap().len() <= MAX_VIEW_BYTES);
 }
+
+#[test]
+fn typed_authentication_refusal_survives_projection_and_not_diagnostic_text() {
+    for (code, expected) in [(-32000, Some(true)), (-32603, None)] {
+        let report = ExecutionReport::new(
+            Some(Err(AgentError::Provider {
+                code,
+                diagnostic: Some(ProviderDiagnostic::new("OAuth session expired")),
+            })),
+            None,
+            ProviderSessionState::Usable,
+        );
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(report.clone().into_result());
+        snapshot.invocations[0].provider_report = Some(report);
+        let restored = Projection::new(
+            "conversation".into(),
+            ConversationCapabilities {
+                queue: true,
+                steer: true,
+                resume: false,
+                permissions: true,
+                image_input: false,
+                agent_features: OperationCapabilities::default().into(),
+            },
+            Some(&snapshot),
+        );
+        assert_eq!(
+            restored.read().messages[0].authentication_required,
+            expected
+        );
+    }
+}
+
+#[test]
+fn authentication_recovery_keeps_independent_required_work_failure() {
+    for independent in [None, Some(AgentError::AuditFailure)] {
+        let report = ExecutionReport::new(
+            Some(Err(AgentError::Provider {
+                code: -32000,
+                diagnostic: Some(ProviderDiagnostic::new("login expired")),
+            })),
+            independent.clone(),
+            ProviderSessionState::Usable,
+        );
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(report.clone().into_result());
+        snapshot.invocations[0].provider_report = Some(report);
+        let projected = Projection::new(
+            "conversation".into(),
+            ConversationCapabilities {
+                queue: true,
+                steer: true,
+                resume: false,
+                permissions: true,
+                image_input: false,
+                agent_features: OperationCapabilities::default().into(),
+            },
+            Some(&snapshot),
+        );
+        let view = projected.read();
+        assert_eq!(view.messages[0].authentication_required, Some(true));
+        assert_eq!(
+            view.messages[0].error.as_deref(),
+            independent.map(|_| "The turn could not complete all required work.")
+        );
+    }
+}

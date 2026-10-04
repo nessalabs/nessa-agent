@@ -227,6 +227,8 @@ export type AgentPart = {
 }
 
 export type AssistantTurn = {
+  /** Provider-published authentication refusal, distinct from diagnostic status text. */
+  authenticationRequired?: boolean
   parts: AgentPart[]
   executionId?: string
   id: string

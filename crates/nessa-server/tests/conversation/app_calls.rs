@@ -1265,6 +1265,7 @@ async fn app_reviews_are_the_last_of_a_full_view_to_go() {
     let message = view.messages[0].clone();
     view.messages = (0..40)
         .map(|_| ConversationMessage {
+            authentication_required: None,
             user_text: "y".repeat(2_000),
             ..message.clone()
         })
@@ -1662,6 +1663,7 @@ async fn app_reviews_never_cost_the_agents_own_however_the_view_is_filled() {
             1 => vec![],
             _ => (0..next(60))
                 .map(|_| ConversationMessage {
+                    authentication_required: None,
                     user_text: "m".repeat(next(3_000)),
                     ..message.clone()
                 })

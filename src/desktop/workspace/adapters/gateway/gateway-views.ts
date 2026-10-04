@@ -278,5 +278,12 @@ export function transcriptFrom(
         origin: approvalOrigins[asked.origin.kind](asked.origin),
       }
     : null
-  return { sessionId: view.conversationId, messages, activity, approval, revision }
+  return {
+    sessionId: view.conversationId,
+    messages,
+    activity,
+    approval,
+    revision,
+    authenticationRequired: view.messages.at(-1)?.authenticationRequired === true,
+  }
 }

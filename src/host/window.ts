@@ -988,3 +988,10 @@ export async function loadAssignedGatewayEndpoint(
     )
   }
 }
+
+/** Opens the provider CLI login; launch acknowledgement is not authentication. */
+export async function signInToProvider(provider: "claude" | "codex"): Promise<void> {
+  if (!inTauri) throw new Error("Provider sign-in requires the native desktop host.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("sign_in_to_provider", { provider })
+}

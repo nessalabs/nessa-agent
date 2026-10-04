@@ -58,6 +58,7 @@ export interface DesktopDependencies extends WorkspaceDependencies {
 export function createDesktopDependencies(
   options: {
     workspace?: WorkspaceSource
+    signInToProvider?: WorkspaceDependencies["signInToProvider"]
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -98,6 +99,7 @@ export function createDesktopDependencies(
       : inMemorySource({ now, after }))
   return {
     workspace,
+    signInToProvider: options.signInToProvider,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.

@@ -976,6 +976,10 @@
           "x-utf8MaxBytes": 2048,
           "description": "Bounded diagnostic for this invocation."
         },
+        "authenticationRequired": {
+          "type": "boolean",
+          "description": "The provider reported ACP authentication-required (-32000) for this failed turn. Diagnostic text does not establish this fact."
+        },
         "steeringTarget": {
           "type": "string",
           "minLength": 1,

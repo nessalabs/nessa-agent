@@ -77,6 +77,8 @@ export interface Transcript {
   readonly messages: readonly Message[]
   readonly activity: Activity | null
   readonly approval: Approval | null
+  /** A provider's typed authentication refusal on the latest turn. */
+  readonly authenticationRequired?: boolean
   /** The source's count of changes to this conversation; see `revision.ts`. */
   readonly revision: number
 }

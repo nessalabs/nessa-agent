@@ -629,3 +629,40 @@ describe("a tool's kind", () => {
     )
   })
 })
+
+it("accepts typed authentication only on a failed turn and rejects untyped values", () => {
+  const sample = view()
+  const refused = {
+    ...sample,
+    messages: [
+      {
+        ...sample.messages[1],
+        parts: [],
+        status: "failed",
+        authenticationRequired: true,
+      },
+    ],
+    pending: [],
+    permissions: [],
+    questions: [],
+    tools: [],
+  }
+  expect(
+    conversationView(refused, "conversation").messages[0].authenticationRequired,
+  ).toBe(true)
+  expect(() =>
+    conversationView(
+      { ...refused, messages: [{ ...refused.messages[0], status: "completed" }] },
+      "conversation",
+    ),
+  ).toThrow(/authentication refusal/)
+  expect(() =>
+    conversationView(
+      {
+        ...refused,
+        messages: [{ ...refused.messages[0], authenticationRequired: "true" }],
+      },
+      "conversation",
+    ),
+  ).toThrow(/authenticationRequired/)
+})

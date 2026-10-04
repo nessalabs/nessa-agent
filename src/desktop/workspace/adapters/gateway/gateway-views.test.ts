@@ -362,3 +362,40 @@ describe("the model a session runs on", () => {
     expect(modelFor(undefined)).toEqual(defaultModel())
   })
 })
+
+describe("provider authentication recovery", () => {
+  it("uses only the latest turn's typed refusal, never its diagnostic text", () => {
+    const source = view("auth")
+    source.messages = [turn({ status: "failed", authenticationRequired: true })]
+    expect(transcriptFrom(source, 1, at).authenticationRequired).toBe(true)
+    source.messages.push(turn({ executionId: "later" }))
+    expect(transcriptFrom(source, 2, at).authenticationRequired).toBe(false)
+    source.messages = [turn({ status: "failed", error: "OAuth session expired" })]
+    expect(transcriptFrom(source, 3, at).authenticationRequired).toBe(false)
+  })
+})
+
+it("shows auth recovery without duplicating its diagnostic and preserves unrelated notices", () => {
+  const source = view("auth", {
+    messages: [
+      turn({
+        status: "failed",
+        authenticationRequired: true,
+        error: "Internal error: OAuth session expired",
+        parts: [
+          {
+            ...textPart("Nessa declined a tool review.", 0),
+            kind: "local_notice",
+            noticeId: "review-1",
+          },
+        ],
+      }),
+    ],
+  })
+  const transcript = transcriptFrom(source, 1, at)
+  expect(transcript.authenticationRequired).toBe(true)
+  expect(transcript.messages.flatMap((message) => message.parts)).toEqual([
+    { kind: "text", text: "Chart the sales" },
+    { kind: "text", text: "Nessa declined a tool review." },
+  ])
+})

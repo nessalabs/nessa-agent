@@ -66,6 +66,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
           .filter((part) => part.kind === "thought")
           .map((part) => part.text)
           .join(""),
+        authenticationRequired: message.authenticationRequired,
         status: message.error ?? message.status,
       })
     }

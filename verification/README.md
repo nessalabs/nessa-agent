@@ -26,8 +26,10 @@ verification/
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
+      provider-sign-in/     real transcript with typed auth refusal and controlled login launch
       app-review/           real window over a fake gateway whose app's call asks for a review
     scripts/
+      provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised

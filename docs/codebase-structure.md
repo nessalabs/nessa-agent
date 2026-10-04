@@ -1548,3 +1548,19 @@ stage, in `core/shutdown.rs`). Interleaving tests are
 the probe client and with the example's own `watch` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.
+
+
+## Provider authentication recovery
+
+`src-tauri/src/provider_authentication/` owns the trusted-window login launch
+command, its injected `ProviderLogin` process boundary, and the macOS terminal
+adapter. The closed provider enum chooses each CLI's default login command.
+`AgentError::authentication_required` publishes the ACP numeric classification;
+conversation projection publishes it from retained provider reports. The desktop
+maps the latest turn's fact to `Transcript.authenticationRequired` and draws
+the shared `src/provider-authentication/ui/provider-sign-in.tsx`, with its
+workspace Redux controller in `workspace/ui/transcript/provider-sign-in.tsx`.
+The floating panel carries the same typed fact through `applyView` and replaces
+that turn's error divider with the shared card; its App receives the login action
+from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
+for states and the Claude internal-error limitation.

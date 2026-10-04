@@ -2,7 +2,7 @@ import type { NessaClient } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
-import { host } from "../host"
+import { host, signInToProvider } from "../host"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { createDesktopDependencies } from "./dependencies"
@@ -58,6 +58,7 @@ function windowGateway(
   }
 }
 const dependencies = createDesktopDependencies({
+  signInToProvider,
   gateway,
   apps: {
     sandbox: sandboxFor(host.kind, document),

@@ -128,6 +128,11 @@ fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let provider_error = report
         .and_then(|report| report.provider_result())
         .and_then(|result| result.as_ref().err());
+    if provider_error.is_some_and(AgentError::authentication_required) {
+        let report_error = report.and_then(|report| report.clone().into_result().err());
+        return (report_error.as_ref() != provider_error || provider_error != Some(final_error))
+            .then(|| REQUIRED_WORK_FAILURE.into());
+    }
     let Some(AgentError::Provider {
         diagnostic: Some(diagnostic),
         ..
@@ -433,6 +438,7 @@ impl Projection {
             self.view.truncated = true;
         }
         self.view.messages.push(ConversationMessage {
+            authentication_required: None,
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
@@ -934,6 +940,14 @@ impl Projection {
             }
         }
         self.view.messages[index].error = failure_notice(record);
+        self.view.messages[index].authentication_required = (self.view.messages[index].status
+            == ConversationMessageStatus::Failed)
+            .then_some(record)
+            .and_then(|record| record.provider_report.as_ref())
+            .and_then(|report| report.provider_result())
+            .and_then(|result| result.as_ref().err())
+            .filter(|error| error.authentication_required())
+            .map(|_| true);
         // An ask whose closure never reached storage — the gateway stopped
         // while it was open — would otherwise come back beside a settled or
         // unresolved message; the status is the authority, so it decides.

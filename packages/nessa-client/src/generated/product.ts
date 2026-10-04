@@ -444,6 +444,8 @@ export interface ConversationMessage {
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
   error?: string
+  /** The provider reported ACP authentication-required (-32000) for this failed turn. Diagnostic text does not establish this fact. */
+  authenticationRequired?: boolean
   /** Execution that consumed this injected steering input; its shared reply answers this input. */
   steeringTarget?: string
   /** Provider observations in execution order; offsets address the retained SDK event sequence. */
