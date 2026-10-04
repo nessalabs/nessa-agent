@@ -1,19 +1,18 @@
 use super::{raw_records, reset, rows};
-use crate::{
-    conversation::{application::retained_view, domain::ConversationId},
-    read_only_sync::{
-        application::{
-            driver::TranscriptCache, offline::SavedTranscript, CacheError, CachePolicy,
-            CachedProgress, ResetReceipt,
-        },
-        domain::CacheReset,
+use crate::read_only_sync::{
+    application::{
+        driver::TranscriptCache, offline::SavedTranscript, CacheError, CachePolicy, CachedProgress,
+        ResetReceipt,
     },
+    domain::CacheReset,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_database::{
     rusqlite::{Connection, TransactionBehavior},
     OpenError, Schema,
 };
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::projection::retained_view;
 use nessa_sdk::application::agent_execution::sessions::CommittedStatus;
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,

@@ -46,8 +46,8 @@ provider session's life, through every restart of its process.
 The gateway's grant (`ConversationGrants`) is a fresh token: 32 random bytes,
 of which it keeps only the SHA-256. The SDK puts it in every stand-in's ACP
 `env` as `NESSA_MCP_SESSION`, the same for `session/new` and
-`session/resume` and for all three profiles. It is never in the arguments,
-so it stays out of the context fingerprint, like credentials. The relay
+`session/resume` and for all three profiles, and never in the arguments
+([why](#mcp-servers-and-the-restoration-identity)). The relay
 reads it from its environment and says it in its hello. The session it
 opens is owned by that open (`McpOwner`: the SDK session and the grant).
 When the provider session ends — closed, deleted, stopped, retired, shut
@@ -304,17 +304,8 @@ structured results already do.
 
 ## What one connection per harness session means
 
-- **Context fingerprint.** The SDK fingerprints what the harness is launched
-  with, but not its MCP servers (#391, ADR 344): the server list is a per-open
-  attachment, like the token, and not a selector of the provider's context.
-  Adding, editing or removing a server, or moving the gateway's executable or
-  the relay socket, leaves every saved conversation restorable. A stand-in's
-  arguments still carry the server's name and a keyed digest of the
-  configured command, arguments and environment, which the relay compares against the live set at
-  each hello: a server changed under an open conversation is refused
-  `configuration-changed`, one removed `unknown-server`, and that conversation
-  keeps its harness's set until its provider session ends. The session token
-  is in the stand-in's environment, never its arguments.
+- **Restoration identity.** The server list is not part of it; what follows
+  is in [MCP servers and the restoration identity](#mcp-servers-and-the-restoration-identity).
 - **Restarts.** A gateway restart ends every session with the agents. A
   restored conversation's harness opens new sessions through its stand-ins; a
   handle an old session gave out is unknown to the new one, and the server says
@@ -366,8 +357,9 @@ Each row above has at least one test, named after it:
   opening; forwarded results kept by the stand-in, S1–S8 and S11 (`forwarded.rs`); a provider open holding its session's grant until it ends and
   through a relaunch of its process, the open naming the manager's session, every
   `mcpServers` entry carrying the open's environment, and grants and the MCP
-  server list left out of the fingerprint
-  (`adding_an_mcp_server_keeps_the_identity_and_restores`).
+  server list left out of the fingerprint, with a restore resuming under the
+  current list (`adding_`, `editing_`, `moving_an_mcp_servers_command_` and
+  `removing_an_mcp_server_keeps_the_identity_and_restores`).
 - SDK, real processes (python fixture): launching as configured, separate
   processes per session, a long call in one not blocking another, killing one
   leaving another, closing stopping the process group, the session ending
@@ -767,16 +759,53 @@ answer is only ever one a bound cut.
 | I10 | The deadline, or the stop, while a server that ignores its stdin closing is being closed after a complete reading | Killed with its group at once, not after the SDK's grace; the reading answered | `the_close_ends_at_the_deadline_or_the_stop` |
 | — | `open_once` | No SDK session, no background list, nothing for `tool_ui`; an invalid launch refused before launching; ended by `stop` | `a_session_opened_once_belongs_to_no_conversation_and_stops_with_the_servers`, `listing_tool_pages_stops_at_its_bound_and_says_there_was_more` |
 
-## MCP servers leave the restoration identity (#391)
+## MCP servers and the restoration identity
 
-Removing the server loop from the fingerprint changes every saved
-conversation's identity once: the old hash wrote the number of servers even
-when it was zero, and each server's command, which for a stand-in is the
-gateway's executable path. The release that ships this therefore strands the
-conversations saved before it once — they answer
-`conversation_configuration_changed`, as every app update already does today,
-because each version runs its gateway from a new directory. Nothing moves them
-and no reader of the earlier fingerprint is kept (one current contract). From
-that release on, neither an MCP server change nor a move of the gateway's
-executable strands a saved conversation; only the inputs that still select the
-provider's context do.
+This section is the one statement of what the restoration identity means for
+MCP servers; other documents link here. The SDK's restoration fingerprint does
+not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
+[`acp/sessions/identity.rs`](../../crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs)
+(#391, [ADR 344](../adr/todo/344-mcp-ui.md)).
+
+- **A per-open attachment.** The server list — for the gateway, its stand-ins
+  — is given to each provider open, like the session token, and selects no
+  provider context. Adding, editing or removing a server, or a stand-in's
+  command (the gateway's executable) moving, keeps a saved conversation's
+  identity, and the conversation resumes with the current list.
+- **Read once per run.** The gateway reads the list when it starts, so at this
+  head the list changes only across a restart, which ends every provider
+  session. A stand-in from an earlier run is refused `unknown-session`, since
+  grants are held in memory.
+- **`configuration-changed` guards live changes.** A stand-in's arguments carry
+  the server's name and a digest of its configured command, arguments and
+  environment, keyed per gateway process, which the relay compares with the
+  server in the live set at each hello (the Hello rows of
+  [a stand-in](#a-stand-in)). Settings apply live
+  ([the live server set](#the-live-server-set-391)), so a server changed
+  under an open conversation is refused `configuration-changed`, one removed
+  `unknown-server`, and that conversation keeps its harness's set until its
+  provider session ends.
+- **The token stays out of the arguments** because a process list shows a
+  process's arguments to every user, and its environment only to its own
+  user; the token is in the stand-in's environment instead, where the
+  gateway's own user can still read it (what the token keeps apart, above).
+- **The one-time strand.** The earlier fingerprint hashed the number of
+  servers, even when it was zero, and each server's name, command and
+  arguments; for a stand-in the command is the gateway's executable. Dropping
+  them changes every saved identity, so the release that ships this answers
+  `conversation_configuration_changed` for conversations saved before it.
+  Nothing moves them, and no reader of the earlier fingerprint is kept (one
+  current contract). The same release re-runs the agent warm-up once, since
+  the configuration part of the warm-up's key is this fingerprint
+  ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
+  that costs one background launch and is harmless.
+- **What still strands a saved conversation.** A change to any hashed input,
+  and that includes every update that changes the staged runtime tree, which
+  in practice is every release. The desktop stages the runtime under a
+  directory named by the prepared tree's content fingerprint
+  ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
+  and launches the agent runtime's executable and entry from it (`configure`
+  in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
+  so the executable path and the first argument move with every such update.
+  What stops stranding a conversation after this release is only a change to
+  the MCP servers, and with it the gateway's own path.

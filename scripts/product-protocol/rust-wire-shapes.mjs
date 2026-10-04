@@ -77,7 +77,7 @@ export function rustWireShapes(definitions, roots, references = {}) {
     [...admitted]
       .map(
         ([name, node]) =>
-          `pub(crate) fn ${wireFunctionName(name)}(value: &Value) -> bool { ${shape(node, "value")} }`,
+          `pub fn ${wireFunctionName(name)}(value: &Value) -> bool { ${shape(node, "value")} }`,
       )
       .join("\n") + "\n"
   )

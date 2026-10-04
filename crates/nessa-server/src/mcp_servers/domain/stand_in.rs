@@ -107,7 +107,8 @@ fn finished(hash: Hmac<Sha256>) -> String {
 /// included — which is what the relay compares, refusing a stand-in whose
 /// server changed with `configuration-changed`; it changes with each run of
 /// the gateway too, whose key is its own. None of it is part of a
-/// conversation's restoration identity (ADR 344).
+/// conversation's restoration identity: see "MCP servers and the
+/// restoration identity" in `docs/design/mcp-connections.md`.
 pub fn relay_arguments(socket: &str, server: &str, configuration: &str) -> Vec<String> {
     vec![
         RELAY_SUBCOMMAND.into(),

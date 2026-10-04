@@ -61,6 +61,7 @@ verification/
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened, what a text-only turn said
         gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
+        browser.test.mjs    browser.mjs's recording of a failed request, no browser: harmless or an error (#485's F1′, F2–F4), and the favicon
 ```
 
 When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a

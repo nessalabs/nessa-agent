@@ -245,7 +245,9 @@ pub(crate) fn validate_configured_input(
     input.validate_message_size()?;
     let images = input.user_message.images();
     let mut requirements = Vec::with_capacity(2);
-    if input.user_message.text().is_some() {
+    // App model contexts reach the agent as a leading text block, so a
+    // message carrying them is text input even with no text of its own.
+    if input.user_message.text().is_some() || !input.user_message.app_model_context().is_empty() {
         requirements.push(CapabilityRequirement::Input(Modality::Text));
     }
     if !images.is_empty() {
@@ -282,3 +284,7 @@ fn offered_image_input_or(error: CapabilityError) -> AgentError {
         other => AgentError::InvalidInput(other.to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/providers/session.rs"]
+mod tests;

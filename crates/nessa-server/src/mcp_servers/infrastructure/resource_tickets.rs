@@ -35,10 +35,10 @@ use crate::conversation::application::{
     ResourceTickets, TicketEnd, TicketRefusal, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS,
     RESOURCE_TICKET_LIFETIME_MS,
 };
-use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{resource_ticket, ResourceTicketDigest};
 use crate::mcp_servers::infrastructure::TokenSource;
 use nessa_auth::application::ports::Clock;
+use nessa_protocol::conversation::domain::ConversationId;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, PoisonError, Weak},

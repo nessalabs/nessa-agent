@@ -79,7 +79,7 @@ use super::ports::{
 use crate::mcp_servers::domain::{
     ConfiguredMcpServer, EditRefusal, ServerEdit, ServerSave, StdioServer, MANAGED_SERVER_NAME,
 };
-use crate::product_contract::generated::{
+use nessa_protocol::product_contract::generated::{
     MCP_SERVER_INSPECT_DEADLINE_MS, MCP_SERVER_INSPECT_MAX_CONCURRENT,
     MCP_SERVER_INSPECT_MAX_TOOL_PAGES, MCP_SERVER_INSPECT_MAX_UI_READS,
 };

@@ -15,7 +15,8 @@
  * (`review_rows`) once, and allows that call alone; an agent that calls it
  * more than once leaves the run "could not run". Then, in each engine, it
  * signs the page in with the gateway's owner token through `/browser/login`
- * from the page, opens the conversation, and checks the review app the
+ * from the page, loads the window, which opens the conversation by itself
+ * (the newest of its first channel), and checks the review app the
  * server serves. Shown inline, the app calls the server's destructive tool
  * and two tools hidden from apps as soon as it has its tool result.
  *
@@ -42,7 +43,7 @@ import { join } from "node:path"
 
 import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneCard, oneMount } from "./lib/apps.mjs"
-import { need, openPage, withEngines } from "./lib/browser.mjs"
+import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
   admitOnce,
@@ -93,10 +94,11 @@ Options:
                         and reports the call in the harness's recorded frames
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
-  renders   the call is one step in the transcript and one inline app frame
-            (#418); the review app, as the real server serves it, is live inline in
-            the conversation, told its tool result, in the sandbox: the proxy
-            on another origin than the window, the app on an opaque one
+  renders   the window opens the conversation on load (#485); the call is
+            one step in the transcript and one inline app frame (#418); the
+            review app, as the real server serves it, is live inline in the
+            conversation, told its tool result, in the sandbox: the proxy on
+            another origin than the window, the app on an opaque one
   hidden    the app's calls to both tools hidden from apps (one declaring no
             UI, one declaring the chart's) are refused, and the app shows it.
             The spec's rule: a tool whose visibility leaves out "app" is
@@ -131,7 +133,6 @@ async function startStack(options) {
     const title = conversations.find(
       (each) => each.conversationId === conversationId,
     )?.title
-    if (!title) throw new CannotRun("the conversation has no title to find it by")
     log(
       `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${stack.timings.agentTurnMs} ms`,
     )
@@ -333,56 +334,116 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
 }
 
 /**
- * Signs the page's origin in with the gateway's owner token, then opens the
- * conversation. With the page, returns `reviewsBefore`: the app's reviews
- * pending before this page mounted the app.
+ * Signs the context in with the gateway's owner token (`signIn`), then loads
+ * the window, which opens the newest session of its first channel by itself
+ * (`usecases/updates.ts`): the stack's one conversation. With the page,
+ * returns `reviewsBefore`, the app's reviews pending before the window
+ * loaded, and `conversationOpen`, whether the window opened the
+ * conversation (#485, B1″ and B5).
  */
 async function openConversation(browser, stack, layout) {
-  const opened = await openPage(browser, { url: stack.url, layout })
-  const { page } = opened
-  // The token goes to the page's own origin, which proxies it to the
-  // gateway; it is never printed or kept.
-  const status = await page.evaluate(
-    async (token) =>
-      (
-        await fetch("/browser/login", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", "X-Nessa-Browser": "1" },
-          body: JSON.stringify({ token }),
-        })
-      ).status,
-    stack.token(),
-  )
-  if (status < 200 || status > 299) {
-    await opened.close()
-    throw new CannotRun(`the gateway refused the page's sign-in (${status})`)
-  }
-  await page.goto(`${stack.url}?gateway`, { waitUntil: "domcontentloaded" })
-  await need(page, css.anyReady, "the desktop window", 30_000)
-  // What the sample page said as it was left (its own sign-in check, cut
-  // off by the navigation) is not the gateway window's.
-  opened.errors.splice(0)
-  const row = page.getByText(stack.title, { exact: true }).first()
+  let reviewsBefore
+  const opened = await openPage(browser, {
+    url: `${stack.url}?gateway`,
+    layout,
+    // Before the window's page exists (`signIn`).
+    beforeLoad: async (context) => {
+      reviewsBefore = await signIn(context, stack)
+    },
+  })
   try {
-    await row.waitFor({ timeout: 20_000 })
-  } catch {
-    await opened.close()
-    throw new CannotRun(`no session row "${stack.title}" in the window`)
+    const conversationOpen = await windowOpened(opened.page, stack, reviewsBefore)
+    await settled(opened.page)
+    return { ...opened, reviewsBefore, conversationOpen }
+  } catch (error) {
+    // No step will report the page's lines, so the error carries them, and
+    // the page is closed rather than left open until the browser closes.
+    const lines = [
+      ...opened.errors.splice(0),
+      ...opened.harmless.splice(0).map((line) => `harmless: ${line}`),
+    ]
+    await opened.close().catch(() => {})
+    if (lines.length > 0) error.message += `\n  the page's lines: ${lines.join("; ")}`
+    throw error
   }
-  // The app's reviews pending before this page mounts it: whatever a
-  // previous engine's page left, not yet withdrawn, is not this page's.
-  const reviewsBefore = await pendingReviews(stack)
-  await row.click()
-  // The conversation's transcript, which the app's card is drawn in.
-  await need(page, css.appView, "the app's view in the conversation", 30_000)
-  await settled(page)
-  return { ...opened, reviewsBefore }
+}
+
+/**
+ * Signs `context` in from a page of its own on the sample page, which it
+ * closes: the window's page then records only its own lines. This script
+ * reports them on each step's result, errors as failures and the rest as
+ * `harmless`, and in the error when opening the conversation throws; lines
+ * that arrive after the last step are not reported yet (#494). Returns the
+ * app's reviews pending then: whatever a previous engine's page left, not
+ * yet withdrawn, is not this page's (R4). Read before the window loads: it opens the conversation
+ * on load, so the app can mount, and its first call open a review, at any
+ * point after (#485).
+ */
+async function signIn(context, stack) {
+  const page = await context.newPage()
+  try {
+    await page.goto(stack.url, { waitUntil: "domcontentloaded" })
+    // The token goes to the page's own origin, which proxies it to the
+    // gateway; it is never printed or kept.
+    const status = await page.evaluate(
+      async (token) =>
+        (
+          await fetch("/browser/login", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", "X-Nessa-Browser": "1" },
+            body: JSON.stringify({ token }),
+          })
+        ).status,
+      stack.token(),
+    )
+    if (status < 200 || status > 299)
+      throw new CannotRun(`the gateway refused the page's sign-in (${status})`)
+    return await pendingReviews(stack)
+  } finally {
+    await page.close()
+  }
+}
+
+/**
+ * Waits up to `ms` for the window to have opened the conversation on load
+ * (#485): its inline app live, and the app's first destructive call's review
+ * in the gateway, a key not in `baseline` (B1″). Waiting for both fixes the
+ * order, so the steps after begin from the same state each run.
+ *
+ * Returns false only when the window shows no app view of the conversation
+ * (B5), which `renders` reports. An app that is drawn but not live is
+ * `renders`' to report, and a review that never arrives (B6) is `allow`'s,
+ * with B4's message.
+ */
+async function windowOpened(page, stack, baseline, ms = 20_000) {
+  const until = Date.now() + ms
+  const left = () => Math.max(until - Date.now(), 1)
+  const framed = await page
+    .waitForSelector(css.appFrameIn("inline"), { timeout: left(), state: "attached" })
+    .then(() => true)
+    .catch(() => false)
+  if (!framed) return (await page.$(css.appView)) !== null
+  const app = await appFrame(page, "inline", left()).then(
+    (frame) => frame.app,
+    () => null,
+  )
+  const live = await app
+    ?.waitForSelector(css.reviewState("live"), { timeout: left() })
+    .then(() => true)
+    .catch(() => false)
+  if (live) await reviewOpened(stack, baseline, left())
+  return true
 }
 
 const checks = {
-  renders: async (page, stack, shot) => {
+  renders: async (page, stack, shot, opened) => {
     const failures = []
+    if (!opened.conversationOpen) {
+      if (shot) await page.screenshot({ path: shot })
+      failures.push("the window did not open the conversation (#485, B5)")
+      return { failures }
+    }
     // The app's frame is drawn once its resource is read and fetched: a
     // view that never gets there has failed, and says how in its lifecycle.
     const drawn = await page
@@ -633,6 +694,7 @@ await main(
               ms: Date.now() - at,
               ...result,
               failures: [...(result.failures ?? []), ...opened.errors.splice(0)],
+              harmless: opened.harmless.splice(0),
             })
             // A refused call leaves nothing waiting, so the steps after
             // `hidden` begin from the same page whatever it saw.

@@ -14,14 +14,12 @@ use super::device::{self, client_failure, pinned, status_json, Device};
 use super::profile::{Profile, ProfileError};
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
-use crate::conversation::domain::ConversationId;
-use crate::product::generated::PASSIVE_MIN_REQUEST_TIMEOUT_MS;
 use crate::read_only_sync::application::device::{
     asks_status, CachePurges, PinnedStatus, PurgeBeforeEnd, PurgeReceipt,
 };
 use crate::read_only_sync::application::driver::{run_catalogue, run_records};
 use crate::read_only_sync::application::watch::{
-    follow, PassResult, Registered, Wait, WatchPass, WatchSession,
+    discover, follow, PassResult, Registered, Wait, WatchPass, WatchSession,
 };
 use crate::read_only_sync::application::{
     CacheError, CachePolicy, Cancellation, GatewayError, GatewayPolicy,
@@ -35,6 +33,8 @@ use crate::read_only_sync::infrastructure::gateway::{
 };
 use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::product::generated::PASSIVE_MIN_REQUEST_TIMEOUT_MS;
 use nessa_sync::replication::domain::Id;
 use serde_json::{json, Value};
 #[cfg(test)]
@@ -445,9 +445,8 @@ impl Run<'_> {
             self.access_epoch,
             conversation.clone(),
         );
-        let discovery = self
-            .connection
-            .run(|| source.discover())
+        // Row W17 before registration: a preparing discovery is asked again.
+        let discovery = discover(|| self.connection.run(|| source.discover()))
             .map_err(CommandError::Gateway)?;
         let scope = match discovery.result {
             Some(Ok((scope, _))) => scope,

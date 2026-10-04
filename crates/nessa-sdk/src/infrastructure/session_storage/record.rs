@@ -3129,6 +3129,141 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
+    /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`):
+    /// an accepted input saved without `user_app` or
+    /// `user_app_model_context`, as one saved before #390, is `Corrupt` for
+    /// its own conversation only. Its siblings in the same store open: one
+    /// saved by the writer, and one whose input went through this test's own
+    /// framing unchanged, which shows the refusal is the missing field's.
+    #[tokio::test]
+    async fn an_input_saved_without_its_app_fields_is_corrupt_for_its_conversation_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let input = accepted_input(
+            ExecutionId::new("accepted").unwrap(),
+            SubmissionMode::Immediate,
+            vec![],
+        );
+        // One save group of `input`, encoded as the writer would and then
+        // passed through `edit`, appended after the conversation's opening.
+        let save_raw = |id: &'static str, edit: Option<&'static str>| {
+            let storage = &storage;
+            let input = input.clone();
+            async move {
+                let id = SessionId::new(id).unwrap();
+                let lease = storage.open(id.clone()).await.unwrap();
+                let (change, snapshot) = opening(&id);
+                lease
+                    .save_changes(
+                        lease.load().await.unwrap().binding().clone(),
+                        snapshot,
+                        vec![SessionSaveUnit::new(vec![change]).unwrap()],
+                    )
+                    .await
+                    .unwrap();
+                let binding = lease.load().await.unwrap().binding().clone();
+                drop(lease);
+                let mut saved: serde_json::Value = serde_json::from_slice(
+                    &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
+                )
+                .unwrap();
+                let metadata = saved["changes"][0]["InputAccepted"]["metadata"]
+                    .as_object_mut()
+                    .unwrap();
+                assert!(metadata.contains_key("user_app"));
+                assert!(metadata.contains_key("user_app_model_context"));
+                if let Some(field) = edit {
+                    metadata.remove(field).unwrap();
+                }
+                let payload = serde_json::to_vec(&saved).unwrap();
+                let identity = SaveIdentity::binding(&binding).unwrap();
+                let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
+                let mut frames = stream_fact::frame_fact(
+                    &FramedFact {
+                        key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                        body: unit.encode(&payload),
+                    },
+                    binding.base() + 1,
+                )
+                .unwrap();
+                let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+                frames.extend(
+                    stream_fact::frame_fact(
+                        &FramedFact {
+                            key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                            body: complete.encode(&[]),
+                        },
+                        binding.base() + frames.len() as u64 + 1,
+                    )
+                    .unwrap(),
+                );
+                let runtime = storage.runtime().await.unwrap();
+                let stream = runtime
+                    .find_stream(&StreamId::new(id.as_str()).unwrap())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for frame in frames {
+                    runtime.append(&stream, frame).await.unwrap();
+                }
+            }
+        };
+        save_raw("without-user-app", Some("user_app")).await;
+        save_raw("without-contexts", Some("user_app_model_context")).await;
+        save_raw("framed-unchanged", None).await;
+        let written = SessionId::new("written").unwrap();
+        let lease = storage.open(written.clone()).await.unwrap();
+        let (change, opened) = opening(&written);
+        let expected = records::fold_changes(Some(&opened), std::slice::from_ref(&input)).unwrap();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                expected.clone(),
+                vec![
+                    SessionSaveUnit::new(vec![change]).unwrap(),
+                    SessionSaveUnit::new(vec![input.clone()]).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        for older in ["without-user-app", "without-contexts"] {
+            assert!(
+                matches!(
+                    reopened.open_existing(SessionId::new(older).unwrap()).await,
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{older}"
+            );
+        }
+        for sibling in ["framed-unchanged", "written"] {
+            let id = SessionId::new(sibling).unwrap();
+            let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
+            let snapshot = lease.load().await.unwrap().snapshot().unwrap().clone();
+            assert_eq!(snapshot.id, id);
+            assert_eq!(
+                snapshot
+                    .invocations
+                    .iter()
+                    .map(|record| &record.request)
+                    .collect::<Vec<_>>(),
+                expected
+                    .invocations
+                    .iter()
+                    .map(|record| &record.request)
+                    .collect::<Vec<_>>(),
+                "{sibling}"
+            );
+            drop(lease);
+        }
+        reopened.shutdown().await.unwrap();
+    }
+
     #[ignore = "child process probe"]
     #[tokio::test]
     async fn child_record_replay_probe() {

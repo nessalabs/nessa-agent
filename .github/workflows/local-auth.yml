@@ -167,7 +167,7 @@ jobs:
           shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
           shutil.copytree('protocol', root / 'protocol')
           shutil.copytree('scripts', root / 'scripts')
-          shutil.copytree('crates/nessa-server/src/protocol', root / 'crates/nessa-server/src/protocol')
+          shutil.copytree('crates/nessa-protocol/src/protocol', root / 'crates/nessa-protocol/src/protocol')
           # Generation/parity fixtures consume these canonical source inputs directly.
           for name in [
               'Cargo.lock',
@@ -175,14 +175,14 @@ jobs:
               'crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs',
               'crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs',
               'crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs',
-              'crates/nessa-server/src/product_contract/generated.rs',
+              'crates/nessa-protocol/src/product_contract/generated.rs',
           ]:
               destination = root / name
               destination.parent.mkdir(parents=True, exist_ok=True)
               shutil.copy2(name, destination)
-          product = root / 'crates/nessa-server/src/product'
+          product = root / 'crates/nessa-protocol/src/product'
           product.mkdir(parents=True)
-          shutil.copy2('crates/nessa-server/src/product/generated.rs', product / 'generated.rs')
+          shutil.copy2('crates/nessa-protocol/src/product/generated.rs', product / 'generated.rs')
           shutil.copy2('vitest.config.ts', root / 'vitest.config.ts')
           shutil.copy2('prettier.config.js', root / 'prettier.config.js')
           shutil.copy2('.prettierignore', root / '.prettierignore')
@@ -294,7 +294,7 @@ jobs:
       # CI does too. Dropping it saved 28 seconds on Windows and cost that
       # guarantee, which is not a trade worth making. `database:check`'s fmt is
       # the exception: `cargo fmt --all` in `gateway-contract` covers it.
-      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
+      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-sdk -- --check
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
@@ -314,9 +314,9 @@ jobs:
       # stuck test is still named: libtest prints "has been running for over 60
       # seconds" for each test still running, and that line is in the log before
       # the step is cancelled.
-      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
+      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-sdk
         timeout-minutes: 45
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       # Not on Linux: `gateway-contract` is an ubuntu-latest job and already
       # runs exactly what this script runs — fmt, clippy and test for

@@ -120,15 +120,25 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     );
 }
 
-/// The MCP server list is attached to each open, like the stand-in grant, and
-/// selects no provider context (ADR 344, #391): adding one keeps the identity,
-/// and a conversation saved without it restores with it, launching no process
-/// to find out.
-#[tokio::test]
-async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
+fn nessa_server(workspace: &str) -> StdioMcpServer {
+    StdioMcpServer {
+        name: "nessa".into(),
+        command: "/trusted/nessa-mcp".into(),
+        args: vec!["--workspace".into(), workspace.into()],
+    }
+}
+
+/// Saves a conversation whose provider is given `saved`, then restores it with
+/// `current`: the identity must be the same, and the restore must resume the
+/// saved session with `current` as its server list.
+async fn mcp_server_change_keeps_the_identity_and_restores(
+    saved: Vec<StdioMcpServer>,
+    current: Vec<StdioMcpServer>,
+) {
     let _slot = process_test_slot().await;
     // `stand-ins` mode records the MCP entries each session request carried.
-    let (root, config, model) = test_acp_configuration("stand-ins", 16);
+    let (root, mut config, model) = test_acp_configuration("stand-ins", 16);
+    config.mcp_servers = McpServerList::fixed(saved);
     let original = provider(config.clone(), &model);
     let identity = original.identity();
     let storage_root = tempfile::tempdir().unwrap();
@@ -148,24 +158,66 @@ async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
         .unwrap();
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let mut changed = config.clone();
-    changed.mcp_servers = McpServerList::fixed(vec![StdioMcpServer {
-        name: "nessa".into(),
-        command: "/trusted/nessa-mcp".into(),
-        args: vec!["--workspace".into(), "/different".into()],
-    }]);
+    let mut changed = config;
+    changed.mcp_servers = McpServerList::fixed(current.clone());
     let changed = provider(changed, &model);
     assert_eq!(changed.identity(), identity);
     let restored = attached_agent(Arc::new(changed), manager().await.unwrap())
         .await
         .unwrap();
     restored.close(close_action()).await.unwrap();
-    // Resumed, with the current set.
-    let resumed: serde_json::Value = serde_json::from_str(
+    // Resumed, not refused, with the current set.
+    let resumed: Vec<serde_json::Value> = serde_json::from_str(
         &std::fs::read_to_string(root.path().join("mcp-servers-resume")).unwrap(),
     )
     .unwrap();
-    assert_eq!(resumed[0]["name"], "nessa");
+    assert_eq!(resumed.len(), current.len());
+    for (sent, server) in resumed.iter().zip(&current) {
+        assert_eq!(sent["name"], server.name.as_str());
+        assert_eq!(sent["command"], serde_json::json!(server.command));
+        assert_eq!(sent["args"], serde_json::json!(server.args));
+    }
+}
+
+/// The MCP server list is attached to each open, like the stand-in grant, and
+/// selects no provider context (ADR 344, #391): adding one keeps the identity,
+/// and a conversation saved without it resumes with it.
+#[tokio::test]
+async fn adding_an_mcp_server_keeps_the_identity_and_restores() {
+    mcp_server_change_keeps_the_identity_and_restores(Vec::new(), vec![nessa_server("/different")])
+        .await;
+}
+
+/// Editing a server's arguments keeps the identity, and the conversation
+/// resumes with the edited server.
+#[tokio::test]
+async fn editing_an_mcp_server_keeps_the_identity_and_restores() {
+    mcp_server_change_keeps_the_identity_and_restores(
+        vec![nessa_server("/saved")],
+        vec![nessa_server("/edited")],
+    )
+    .await;
+}
+
+/// Changing only a server's command keeps the identity, and the conversation
+/// resumes with the new command. A stand-in's command is the gateway's
+/// executable, so this is the gateway moving.
+#[tokio::test]
+async fn moving_an_mcp_servers_command_keeps_the_identity_and_restores() {
+    let moved = StdioMcpServer {
+        command: "/moved/nessa-mcp".into(),
+        ..nessa_server("/saved")
+    };
+    mcp_server_change_keeps_the_identity_and_restores(vec![nessa_server("/saved")], vec![moved])
+        .await;
+}
+
+/// Removing a server keeps the identity, and the conversation resumes with no
+/// servers.
+#[tokio::test]
+async fn removing_an_mcp_server_keeps_the_identity_and_restores() {
+    mcp_server_change_keeps_the_identity_and_restores(vec![nessa_server("/saved")], Vec::new())
+        .await;
 }
 
 #[test]

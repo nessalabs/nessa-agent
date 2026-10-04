@@ -1,8 +1,6 @@
 use super::*;
-use crate::conversation::application::{
-    CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadScope,
-    CatalogueReadSource, RecordHead, RecordReadValue,
-};
+use crate::conversation::application::{CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, RecordHead, RecordReadValue};
+use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use crate::product::change_watch::{watch_principal, Notice, WatchOwners};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::Value;

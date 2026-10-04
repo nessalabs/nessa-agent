@@ -1,10 +1,11 @@
 //! Numbers this context enforces and the published protocol schema states
 //! again. Each is valid on its own; these check that they describe the same
 //! gateway, so changing one without the other fails here.
-use crate::conversation::{
-    application::{MAX_LISTED_CONVERSATIONS, MAX_STRUCTURED_CONTENT_BYTES},
-    domain::{ConversationPreview, ConversationTitle, LATEST_TIME_MS},
+use crate::conversation::application::MAX_LISTED_CONVERSATIONS;
+use nessa_protocol::conversation::domain::{
+    ConversationPreview, ConversationTitle, LATEST_TIME_MS,
 };
+use nessa_protocol::conversation::view::MAX_STRUCTURED_CONTENT_BYTES;
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 use serde_json::Value;

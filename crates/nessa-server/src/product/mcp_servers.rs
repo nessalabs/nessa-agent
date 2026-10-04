@@ -9,14 +9,6 @@
 //! frame is written: tools are dropped from the end until it fits
 //! (`i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits`).
 use super::{
-    generated::{
-        McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
-        McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersErrorCode,
-        McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
-        McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
-        McpServersRevisionConflictDetails, McpServersSaveParams,
-        McpServersStorageUnavailableDetails, McpServersWriteResult,
-    },
     mcp_apps::{remote_details, ui_csp, ui_permissions},
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -28,8 +20,16 @@ use crate::mcp_servers::{
     },
     domain::{ServerEdit, ServerSave, StdioServer},
 };
-use crate::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
+    McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersErrorCode,
+    McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
+    McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
+    McpServersRevisionConflictDetails, McpServersSaveParams, McpServersStorageUnavailableDetails,
+    McpServersWriteResult,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use serde_json::json;
 
 pub(super) async fn dispatch(

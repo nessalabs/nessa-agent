@@ -5,17 +5,15 @@ use super::{
     ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
     TicketSecrets, UploadBody, UploadError, UploadRejection,
 };
-use crate::{
-    attachments::domain::{
-        Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
-        TicketLimits, UploadMismatch, UploadTicket,
-    },
-    conversation::domain::ConversationId,
+use crate::attachments::domain::{
+    Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
+    TicketLimits, UploadMismatch, UploadTicket,
 };
 use nessa_auth::{
     application::ports::Clock,
     domain::{OrganizationId, PrincipalId},
 };
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{

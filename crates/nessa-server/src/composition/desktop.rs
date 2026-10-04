@@ -8,7 +8,8 @@ use super::{
     runtime_config::RuntimeConfig,
 };
 use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
-use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
+use crate::{core::RunError, desktop_runtime::domain::RunningRuntime};
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

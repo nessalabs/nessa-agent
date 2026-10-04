@@ -7,11 +7,13 @@
 //!
 //! Arrows mean assembling contributions into validated immutable instructions.
 //! A `UserMessage` is the other thing said to an agent: one turn's text, the
-//! images it refers to by digest, and the files it points at by path.
+//! images it refers to by digest, and the files it points at by path; who
+//! wrote it (`MessageSender`: the person, or an MCP App, `McpAppSource`); and
+//! the context apps gave the model with it (`AppModelContext`).
 pub mod builders;
 pub mod value_objects;
 pub use builders::SystemPromptBuilder;
 pub use value_objects::{
-    ImageReference, LinkedFile, PromptContribution, PromptContributionView, PromptSource,
-    PromptSourceKind, PromptText, SystemPrompt, UserMessage,
+    AppModelContext, ImageReference, LinkedFile, McpAppSource, MessageSender, PromptContribution,
+    PromptContributionView, PromptSource, PromptSourceKind, PromptText, SystemPrompt, UserMessage,
 };

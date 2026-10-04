@@ -1,23 +1,23 @@
-use crate::conversation::{
-    application::{
-        AdmitPassiveRead, CatalogueChangeWatch, CatalogueReadScope, CatalogueWatchError,
-        CatalogueWatchState, ReadRefusal,
-    },
-    domain::ConversationId,
+use crate::conversation::application::{
+    access_refusal, AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError,
+    CatalogueWatchState,
 };
 use crate::product::socket::close_reason;
-use crate::product::{
-    generated::{
-        product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
-        MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
-    },
-    state::ProductRouteState,
-};
-use crate::product_contract::generated::{
-    ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
-};
+use crate::product::state::ProductRouteState;
 use nessa_auth::application::ports::AccessError;
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
+use nessa_protocol::conversation::{
+    domain::ConversationId,
+    read_scope::{CatalogueReadScope, ReadRefusal},
+};
+use nessa_protocol::product::generated::{
+    product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
+    MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
+};
+use nessa_protocol::product::passive_read::decode_epoch;
+use nessa_protocol::product_contract::generated::{
+    ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
+};
 use nessa_sdk::application::agent_execution::sessions::{
     ChangeWatchError, ChangeWatchState, CommittedChangeWatch,
 };
@@ -102,8 +102,7 @@ impl WatchSelector {
                     .map_err(|_| invalid())?
                     .as_str()
                     .to_owned(),
-                epoch: super::super::passive_read::wire::decode_epoch(&value.access_epoch)
-                    .map_err(|_| invalid())?,
+                epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
             })
         } else if method == product_method::CONVERSATION_WATCH_CATALOGUE {
             let value: ConversationWatchCatalogueParams =
@@ -113,8 +112,7 @@ impl WatchSelector {
                     .map_err(|_| invalid())?
                     .as_str()
                     .to_owned(),
-                epoch: super::super::passive_read::wire::decode_epoch(&value.access_epoch)
-                    .map_err(|_| invalid())?,
+                epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
             })
         } else {
             Err(invalid())
@@ -316,7 +314,7 @@ impl WatchRefusal {
     /// The registration reply's code.
     pub fn code(self) -> ChangeWatchErrorCode {
         match self {
-            Self::Access(error) => admission_code(ReadRefusal::from(error)),
+            Self::Access(error) => admission_code(access_refusal(error)),
             Self::Read(refusal) => admission_code(refusal),
             Self::Unavailable => ChangeWatchErrorCode::TemporarilyUnavailable,
         }
@@ -349,7 +347,7 @@ fn admission_code(error: ReadRefusal) -> ChangeWatchErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::product::generated::CHANGE_WATCH_ID_PATTERN;
+    use nessa_protocol::product::generated::CHANGE_WATCH_ID_PATTERN;
 
     /// Row R6: the identities the server mints, up to the last counter, match
     /// the pattern and length the schema publishes, so the format has one owner

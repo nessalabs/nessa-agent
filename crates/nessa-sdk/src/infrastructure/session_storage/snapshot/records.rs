@@ -20,9 +20,13 @@ use crate::domain::{
             PermissionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
             ReviewDeclineReason, ReviewDeclineStage,
         },
-        prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
+        prompts::{
+            AppModelContext as DomainAppModelContext, ImageReference, LinkedFile, McpAppSource,
+            MessageSender, PromptText, UserMessage,
+        },
         questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::ExecutionSessionId,
+        tools::{McpTool, ToolCallId},
     },
     common::value_objects::{ImageMediaType, Sha256Digest},
 };
@@ -85,6 +89,79 @@ impl FileLink {
         LinkedFile::new(self.path).map_err(corrupt)
     }
 }
+/// The MCP App a saved user message was written by, or carries the context
+/// of: its tool call, and the server and tool that call was to.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct App {
+    pub(super) execution_id: String,
+    pub(super) tool_id: String,
+    pub(super) server: String,
+    pub(super) tool: String,
+}
+impl From<&McpAppSource> for App {
+    fn from(value: &McpAppSource) -> Self {
+        Self {
+            execution_id: value.execution_id().as_str().into(),
+            tool_id: value.tool_id().as_str().into(),
+            server: value.tool().server().into(),
+            tool: value.tool().tool().into(),
+        }
+    }
+}
+impl App {
+    /// Rebuild the value object, so an identity or name edited on disk into
+    /// one the domain refuses is a corrupt record.
+    fn decode(self) -> Result<McpAppSource, StorageError> {
+        McpAppSource::new(
+            ExecutionId::new(self.execution_id).map_err(corrupt)?,
+            ToolCallId::new(self.tool_id).map_err(corrupt)?,
+            McpTool::new(self.server, self.tool).map_err(corrupt)?,
+        )
+        .map_err(corrupt)
+    }
+}
+/// What one app gave the model to know, saved with the message it went
+/// with, so a restored message sends what was taken for it
+/// (`semantic_admission_restores_who_wrote_it_and_what_apps_gave_with_it`).
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AppModelContext {
+    pub(super) app: App,
+    pub(super) update: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(super) text: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(super) structured_content: Option<String>,
+}
+impl From<&DomainAppModelContext> for AppModelContext {
+    fn from(value: &DomainAppModelContext) -> Self {
+        Self {
+            app: value.app().into(),
+            update: value.update_id().into(),
+            text: value.text().map(str::to_owned),
+            structured_content: value.structured_content().map(str::to_owned),
+        }
+    }
+}
+impl AppModelContext {
+    /// Rebuild the value object. An empty text is refused rather than read
+    /// as none: no context is saved with one, so a record holding one was
+    /// changed, and is not repaired.
+    fn decode(self) -> Result<DomainAppModelContext, StorageError> {
+        if self.text.as_deref() == Some("") {
+            return Err(corrupt("an app context saved with an empty text"));
+        }
+        DomainAppModelContext::new(
+            self.app.decode()?,
+            &self.update,
+            self.text,
+            self.structured_content,
+        )
+        .map_err(corrupt)?
+        .ok_or_else(|| corrupt("an app context saved with neither part"))
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Metadata {
@@ -96,6 +173,13 @@ pub(super) struct Metadata {
     pub(super) user_images: Vec<Image>,
     /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
+    /// The app that wrote the message on the person's behalf; `null` when
+    /// the person did. Required: a record without it is not of this shape
+    /// (`deserialize_with` keeps serde from reading its absence as `None`).
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(super) user_app: Option<App>,
+    /// What apps gave the model with this message; empty when none did.
+    pub(super) user_app_model_context: Vec<AppModelContext>,
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
@@ -236,6 +320,17 @@ impl From<&InvocationRecord> for Metadata {
                 .iter()
                 .map(Into::into)
                 .collect(),
+            user_app: match value.request.user_message.sender() {
+                MessageSender::Person => None,
+                MessageSender::App(app) => Some(app.into()),
+            },
+            user_app_model_context: value
+                .request
+                .user_message
+                .app_model_context()
+                .iter()
+                .map(Into::into)
+                .collect(),
             estimated_input_tokens: value.request.estimated_input_tokens,
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
@@ -355,6 +450,17 @@ impl Metadata {
                     self.user_files
                         .into_iter()
                         .map(FileLink::decode)
+                        .collect::<Result<_, _>>()?,
+                )
+                .map_err(corrupt)?
+                .sent_by(match self.user_app {
+                    None => MessageSender::Person,
+                    Some(app) => MessageSender::App(app.decode()?),
+                })
+                .with_app_model_context(
+                    self.user_app_model_context
+                        .into_iter()
+                        .map(AppModelContext::decode)
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?,

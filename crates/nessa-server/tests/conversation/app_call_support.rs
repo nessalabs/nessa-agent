@@ -1,21 +1,25 @@
 //! Substitutes for what an MCP App's calls go through — the conversation's
 //! MCP session, the audit, the ticket store — and a conversation whose one
 //! turn called a tool with a UI, for the service's tests and the socket's.
+use crate::conversation::application::conversation_session;
 use crate::conversation::application::{
-    conversation_session, ConversationCaller, ConversationDependencies, ConversationError,
-    ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationPermission,
-    ConversationPermissionOrigin, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
+    ConversationCaller, ConversationDependencies, ConversationError, ConversationFuture,
+    ConversationLimits, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
     McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppPorts,
-    McpAppRef, McpApps, McpToolUis, ProviderSessionErasers, RequestedConversation, ResourceTickets,
+    McpAppRef, McpApps, ProviderSessionErasers, RequestedConversation, ResourceTickets,
     SubmissionMode, SubmittedMessage, TicketEnd, TicketRefusal,
 };
-use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
     Provider, ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
     DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::tool_uis::McpToolUis;
+use nessa_protocol::conversation::view::{
+    ConversationMessageStatus, ConversationPermission, ConversationPermissionOrigin,
+};
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
@@ -39,8 +43,8 @@ pub(crate) const OTHER_INSTANCE: &str = "0d6c3e7a-1b2c-4d5e-8f90-a1b2c3d4e5f6";
 /// The UI the call `charts/show` declared, for the conversation's session.
 pub(crate) struct Uis(String);
 impl McpToolUis for Uis {
-    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
-        (session.as_str() == self.0 && (call.server(), call.tool()) == (SERVER, UI_TOOL))
+    fn resource_uri(&self, conversation: &ConversationId, call: &McpTool) -> Option<UiResourceUri> {
+        (conversation.to_string() == self.0 && (call.server(), call.tool()) == (SERVER, UI_TOOL))
             .then(|| UiResourceUri::new(URI).unwrap())
     }
 }

@@ -1,8 +1,8 @@
 //! The client socket under the native TLS connection: every physical read and
 //! write asks the one absolute deadline and the cancellation first, and the
 //! first refusal is kept as the connection's typed cause.
-use crate::app::ports::Clock;
 use crate::read_only_sync::application::{Cancellation, GatewayError, GatewayStream};
+use nessa_protocol::clock::Clock;
 use std::cell::Cell;
 use std::io::{Error, ErrorKind, Read, Result as IoResult, Write};
 use std::rc::Rc;

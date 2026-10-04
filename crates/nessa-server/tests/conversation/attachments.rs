@@ -1,13 +1,12 @@
 //! Messages that refer to images, through the real SDK Agent: what is refused
 //! before acceptance, what a view echoes, and what closing lets go of.
 use super::{
-    AttachmentReleaseCause, ConversationAttachment, ConversationCaller, ConversationDependencies,
-    ConversationError, ConversationLimits, ConversationMessageStatus, ConversationRepository,
-    ConversationService, ProviderSessionErasers, SubmissionMode, SubmittedImage, SubmittedMessage,
+    AttachmentReleaseCause, ConversationCaller, ConversationDependencies, ConversationError,
+    ConversationLimits, ConversationRepository, ConversationService, ProviderSessionErasers,
+    SubmissionMode, SubmittedImage, SubmittedMessage,
 };
 use crate::{
-    agents::domain::AgentId,
-    conversation::domain::{Conversation, ConversationId},
+    conversation::domain::Conversation,
     conversation_test_support::{
         image_fixture, image_fixture_with_model, only, AcceptingCreationAudit,
         AcceptingDeletionAudit, MemoryAttachments, MemoryRepository, MemorySummaries, Provider,
@@ -15,6 +14,9 @@ use crate::{
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
+use nessa_protocol::conversation::view::{ConversationAttachment, ConversationMessageStatus};
+use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
 use nessa_sdk::{
     application::agent_execution::agents::AgentError,
     domain::{
@@ -438,8 +440,8 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
                 "create-2".into(),
                 1,
                 AgentId::Claude,
-                crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-                crate::conversation::domain::ConversationApprovalMode::Ask,
+                ConversationModelId::new("test-model").unwrap(),
+                ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )

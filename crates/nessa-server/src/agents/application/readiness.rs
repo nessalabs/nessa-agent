@@ -1,5 +1,6 @@
 use crate::agents::application::ports::{AgentProbe, ProbeFailure};
-use crate::agents::domain::{AgentId, HostAnswer, Readiness};
+use crate::agents::domain::{HostAnswer, Readiness};
+use nessa_protocol::agents::AgentId;
 
 /// Report what stands between each agent and running.
 ///

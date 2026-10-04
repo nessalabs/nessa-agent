@@ -1,5 +1,4 @@
 //! Restore audited native identity before opening enrollment or listener admission.
-use super::worker::worker_fault;
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
@@ -13,6 +12,7 @@ use nessa_auth::{
     },
     domain::AudienceId,
 };
+use nessa_protocol::pairing::socket::worker_fault;
 use std::sync::Arc;
 
 /// Startup preserves private publication/audit facts and unexpected worker faults.

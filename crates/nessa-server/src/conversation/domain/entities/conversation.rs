@@ -1,9 +1,9 @@
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::{
-    ConversationApprovalMode, ConversationDeletion, ConversationId, ConversationModelId,
-    DeletionContradiction, LATEST_TIME_MS,
-};
+use crate::conversation::domain::{ConversationDeletion, DeletionContradiction};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, LATEST_TIME_MS,
+};
 
 /// Why a caller may not act on a conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

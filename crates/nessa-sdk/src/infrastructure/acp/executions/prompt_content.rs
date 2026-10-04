@@ -136,7 +136,9 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
                 + json_string_bytes(&markdown_label(file.name()))
         })
         .sum();
-    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + text + images + files;
+    let context = app_model_context_text(message)
+        .map_or(0, |context| TEXT_BLOCK_BYTES + json_string_bytes(&context));
+    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + context + text + images + files;
     let max_bytes = max_frame_bytes as u64;
     if encoded_bytes > max_bytes {
         return Err(AgentError::MessageTooLarge {
@@ -145,6 +147,53 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
         });
     }
     Ok(())
+}
+
+/// What the model is told before the contexts apps gave it.
+const APP_CONTEXT_PREAMBLE: &str =
+    "Context from MCP apps in this conversation, given by the apps and not written by the person:\n";
+
+/// The one text block that carries `message`'s app contexts, or `None` when
+/// it carries none: [`APP_CONTEXT_PREAMBLE`], then the contexts as one JSON
+/// array of `{server, tool, toolCallId, text?, structuredContent?}`.
+///
+/// Written as JSON: every string a JSON string, so nothing an app writes can
+/// close the block or pass for the preamble or another app's entry
+/// (`an_apps_context_cannot_close_its_block_or_pass_for_another`). The
+/// structured content goes in as the text
+/// [`AppModelContext`](crate::domain::agent_execution::prompts::AppModelContext)
+/// holds — one JSON value, which that value object checked and is the one
+/// judge of — and is not parsed again here. A text block is the one prompt
+/// content kind the ACP specification requires every agent to accept, which
+/// is why Claude, Codex and OpenCode, all spoken to through this adapter,
+/// are given it alike.
+fn app_model_context_text(message: &UserMessage) -> Option<String> {
+    if message.app_model_context().is_empty() {
+        return None;
+    }
+    let string = |text: &str| Value::from(text).to_string();
+    let entries: Vec<String> = message
+        .app_model_context()
+        .iter()
+        .map(|context| {
+            let app = context.app();
+            let mut entry = format!(
+                "{{\"server\":{},\"tool\":{},\"toolCallId\":{}",
+                string(app.tool().server()),
+                string(app.tool().tool()),
+                string(app.tool_id().as_str()),
+            );
+            if let Some(text) = context.text() {
+                entry.push_str(&format!(",\"text\":{}", string(text)));
+            }
+            if let Some(structured) = context.structured_content() {
+                entry.push_str(&format!(",\"structuredContent\":{structured}"));
+            }
+            entry.push('}');
+            entry
+        })
+        .collect();
+    Some(format!("{APP_CONTEXT_PREAMBLE}[{}]", entries.join(",")))
 }
 
 /// Length of `text` as a JSON string, quotes included, as `serde_json` writes
@@ -336,7 +385,8 @@ fn markdown_label(name: &str) -> String {
     label
 }
 
-/// The content blocks for `message`: its text, then its images in attachment
+/// The content blocks for `message`: what apps gave the model, when any did
+/// ([`app_model_context_text`]), then its text, then its images in attachment
 /// order, then a link to each of its files. `images` must be what
 /// [`read_images`] answered for this message.
 ///
@@ -358,7 +408,10 @@ pub(in crate::infrastructure::acp) fn content_blocks(
             "resolved image blocks do not match the message".into(),
         ));
     }
-    let mut blocks = Vec::with_capacity(1 + images.blocks.len() + message.files().len());
+    let mut blocks = Vec::with_capacity(2 + images.blocks.len() + message.files().len());
+    if let Some(context) = app_model_context_text(message) {
+        blocks.push(json!({"type":"text","text":context}));
+    }
     if let Some(text) = message.text() {
         blocks.push(json!({"type":"text","text":text.as_str()}));
     }

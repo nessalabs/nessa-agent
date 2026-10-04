@@ -1,8 +1,6 @@
-use crate::{
-    attachments::domain::{Attachment, Caller, UploadTicket},
-    conversation::domain::ConversationId,
-};
+use crate::attachments::domain::{Attachment, Caller, UploadTicket};
 use nessa_auth::domain::OrganizationId;
+use nessa_protocol::conversation::domain::ConversationId;
 
 /// Whether a conversation held a stored file before or after a transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

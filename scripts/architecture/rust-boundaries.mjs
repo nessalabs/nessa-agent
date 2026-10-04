@@ -126,6 +126,16 @@ export function rustBoundaryViolations(path, source) {
       failures.add(
         "domain must not import runtime, transport, or serialization libraries",
       )
+    // The sync engine's own `replication::domain` values (`Id`, `Scope`) are
+    // pure; its catalogue, transport and source modules are not.
+    if (
+      domain &&
+      /\bnessa_sync\b/.test(item) &&
+      !/^\s*nessa_sync::replication::domain\b/.test(item)
+    )
+      failures.add(
+        "domain must not import the sync engine beyond its replication::domain values",
+      )
     if (
       domain &&
       /\bstd\b[\s\S]*\b(fs|net|process)\b/.test(item) &&

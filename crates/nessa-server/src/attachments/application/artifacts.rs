@@ -1,11 +1,9 @@
 #![deny(missing_docs)]
 //! Local content facts for an exact held attachment lifetime; no access grants.
 use super::PortFuture;
-use crate::{
-    attachments::domain::{ArtifactId, Attachment},
-    conversation::domain::ConversationId,
-};
+use crate::attachments::domain::{ArtifactId, Attachment};
 use nessa_auth::domain::OrganizationId;
+use nessa_protocol::conversation::domain::ConversationId;
 
 /// Current content state; revision is derived from this state by the source adapter.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1869,6 +1869,80 @@ mod tests {
     }
 
     #[test]
+    fn an_app_written_message_counts_its_writer_and_every_context_it_carries() {
+        use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
+        use crate::domain::agent_execution::{
+            executions::{ExecutionId, ExecutionOutcome},
+            prompts::{AppModelContext, McpAppSource, MessageSender},
+            sessions::ExecutionSessionId,
+            tools::{McpTool, ToolCallId, ToolCallUpdate},
+        };
+        let app = McpAppSource::new(
+            ExecutionId::new("input-0").unwrap(),
+            ToolCallId::new("call-0").unwrap(),
+            McpTool::new("charts", "plot").unwrap(),
+        )
+        .unwrap();
+        let contexts: Vec<AppModelContext> = (0..4)
+            .map(|n| {
+                AppModelContext::new(
+                    app.clone(),
+                    &format!("update-{n}"),
+                    Some("x".repeat(100 + n)),
+                    Some(format!("{{\"n\":{n}}}")),
+                )
+                .unwrap()
+                .unwrap()
+            })
+            .collect();
+        // The first turn draws the app; the second is the message.
+        let mut person = snapshot::checkpoint::history_fixture(2);
+        person.provider_context =
+            ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let drawing = &mut person.invocations[0];
+        drawing.events = [
+            ExecutionUpdate::Tool(
+                ToolCallUpdate::new(app.tool_id().clone(), None, None, None, None, None)
+                    .with_mcp_tool(app.tool().clone()),
+            ),
+            ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+        ]
+        .map(|update| ExecutionEvent::new(app.execution_id().clone(), update))
+        .into();
+        drawing.local_outcome = Some(ExecutionOutcome::Completed);
+        drawing.result = Some(Ok(ExecutionOutcome::Completed));
+        person.invocations[1].request.user_message =
+            UserMessage::text_only(PromptText::new("plot").unwrap());
+        let mut written = person.clone();
+        written.invocations[1].request.user_message =
+            UserMessage::text_only(PromptText::new("plot").unwrap())
+                .sent_by(MessageSender::App(app.clone()))
+                .with_app_model_context(contexts.clone())
+                .unwrap();
+        let bytes = |state: SessionSnapshot| {
+            let fold = TranscriptFold::from_test_snapshot(scope(), state, 2);
+            fold.assert_retained_accounting();
+            fold.retained_bytes()
+        };
+        // Counted apart from the accounting under test: the writer's
+        // identities, the context slots, and each context's own bytes.
+        let expected = app.payload_bytes()
+            + std::mem::size_of_val(contexts.as_slice())
+            + contexts
+                .iter()
+                .map(|context| {
+                    context.app().payload_bytes()
+                        + context.update_id().len()
+                        + context.text().map_or(0, str::len)
+                        + context.structured_content().map_or(0, str::len)
+                })
+                .sum::<usize>();
+        // The fold holds the published snapshot beside the committed one, and
+        // counts each.
+        assert_eq!(bytes(written) - bytes(person), 2 * expected);
+    }
+
+    #[test]
     fn checkpoint_stream_reader_handles_physical_utf8_and_escape_splits() {
         let mut state = snapshot::checkpoint::history_fixture(1);
         state.invocations[0].request.user_message =

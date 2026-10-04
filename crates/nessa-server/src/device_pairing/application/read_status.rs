@@ -1,6 +1,5 @@
 //! Exact-attempt status consumes the original store and live TLS proof.
 use super::receivers::{PairingReceivers, ReceiverError, ReceiverRequest};
-use super::DevicePairingStatus;
 use nessa_auth::{
     application::{
         pairing::{DeviceConnectionProof, PairingStore, PairingStoreError},
@@ -8,6 +7,7 @@ use nessa_auth::{
     },
     domain::pairing::{AttemptId, AttemptOutcome, InvitationId, PairingPhase},
 };
+use nessa_protocol::pairing::DevicePairingStatus;
 
 /// Why a device's status could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

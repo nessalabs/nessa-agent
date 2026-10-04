@@ -121,8 +121,9 @@ fn cause(value: ConversationCreationCause) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::{application::ConversationOwnershipState, domain::ConversationId};
+    use crate::conversation::application::ConversationOwnershipState;
     use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use nessa_protocol::conversation::domain::ConversationId;
 
     fn creation(observed_at_ms: u64) -> ConversationCreationAuditRecord {
         ConversationCreationAuditRecord {

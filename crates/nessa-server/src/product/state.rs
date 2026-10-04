@@ -1,4 +1,3 @@
-use super::generated::AgentsListResult;
 use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
@@ -20,6 +19,10 @@ use nessa_auth::{
         ports::{AccessReader, Clock, CredentialVerifier, PolicyEvaluator},
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
+};
+use nessa_protocol::clock::Clock as UptimeClock;
+use nessa_protocol::product::generated::{
+    AgentsListResult, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
 };
 use std::{
     sync::Arc,
@@ -90,7 +93,7 @@ pub struct ProductRouteState {
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
     pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
-    pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
+    pub(crate) uptime_clock: Arc<dyn UptimeClock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
 
@@ -135,7 +138,7 @@ pub struct ProductDependencies {
     /// Embedded policy engine constructed and validated once at startup.
     pub policy: Arc<dyn PolicyEvaluator>,
     /// Existing server clock used only to report health uptime.
-    pub uptime_clock: Arc<dyn crate::app::ports::Clock>,
+    pub uptime_clock: Arc<dyn UptimeClock>,
     /// Asks this host which agents could start here. Chosen in composition so
     /// no route handler constructs a machine probe of its own. How often it may
     /// be asked is this state's to decide, not composition's — see
@@ -186,8 +189,8 @@ impl ProductRouteState {
             controls: Arc::new(Semaphore::new(32)),
             record_reads: Arc::new(Semaphore::new(4)),
             change_watches: Arc::new(WatchOwners::new(
-                super::generated::MAX_GLOBAL_CHANGE_WATCHES,
-                super::generated::MAX_PRINCIPAL_CHANGE_WATCHES,
+                MAX_GLOBAL_CHANGE_WATCHES,
+                MAX_PRINCIPAL_CHANGE_WATCHES,
             )),
             record_watches: None,
             catalogue_watches: None,
