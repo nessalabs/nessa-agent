@@ -6,6 +6,8 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+#[cfg(unix)]
+use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::generated::AgentsListResult;
 #[cfg(unix)]
 use crate::product::generated::{
@@ -41,6 +43,7 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::application::{
         ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+        WatchCatalogue, WatchRecords,
     },
     conversation::infrastructure::{
         LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
@@ -261,6 +264,8 @@ pub(super) async fn product_state(
                     built.record_reader,
                     built.catalogue_reader,
                     built.resource_route,
+                    built.record_watches,
+                    built.catalogue_watches,
                 )),
                 built.agent_probe,
                 built.warm_ups,
@@ -329,6 +334,8 @@ pub(super) async fn product_state(
         reader,
         catalogue,
         resource_route,
+        record_watches,
+        catalogue_watches,
     )) = conversations
     {
         record_reader = Some(reader.clone());
@@ -336,6 +343,7 @@ pub(super) async fn product_state(
         product = product
             .with_conversations(Arc::new(service))
             .with_passive_read(receivers, metadata)
+            .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
             .with_attachments(attachments)
@@ -406,6 +414,8 @@ struct BuiltConversations {
     service: ConversationService,
     record_reader: Arc<NessaRecordReadSource>,
     catalogue_reader: Arc<NessaCatalogueReadSource>,
+    record_watches: Arc<dyn WatchRecords>,
+    catalogue_watches: Arc<dyn WatchCatalogue>,
     receivers: Arc<dyn ReceiverAuthority>,
     metadata: Arc<dyn ConversationRepository>,
     attachments: AttachmentService,
@@ -637,6 +647,8 @@ async fn conversations(
         .initialize()
         .await
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    let record_watches = Arc::new(NessaRecordWatches::new(storage.clone()));
+    let catalogue_watches: Arc<dyn WatchCatalogue> = metadata.clone();
     let record_reader = Arc::new(NessaRecordReadSource::new(
         storage.clone(),
         record_origin.clone(),
@@ -789,6 +801,8 @@ async fn conversations(
         agents_catalog,
         record_reader,
         catalogue_reader,
+        record_watches,
+        catalogue_watches,
         agent_probe: resolver,
         warm_ups,
         mcp,

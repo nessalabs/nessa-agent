@@ -79,6 +79,8 @@
 //! issued past once a mount is released or the conversation ended — are
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
+mod change_watch;
+pub use change_watch::{WatchNamespaces, WatchRecords};
 mod catalogue;
 pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{

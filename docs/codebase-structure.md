@@ -549,6 +549,7 @@ source permission or socket capacity. Its lifecycle tests live under
 source adapter. Attachment adapters consume this owner when activated.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
+`product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -1507,3 +1508,13 @@ client/encoder support in its `read_only_online/fixtures/` children. Pure parser
 and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`.
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
+
+Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
+pairing is signalled to stop, it closes
+`ProductRouteState` watch admission before polling the reader and watch drains,
+then carries their outcomes through conversation/storage, MCP and the native join
+in the same `ShutdownReport` (typed phases in `core/shutdown.rs`). Interleaving tests are
+`tests/composition/watch_shutdown.rs`, using the watch fixture in
+`tests/product/socket/watches.rs`. The separate-process replay-to-live test is in
+`tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
+`fixtures/gateway.rs`.

@@ -25,6 +25,7 @@ export {
   type ServerApi,
   type AgentsApi,
   type RecordReadApi,
+  type ChangeWatchApi,
 } from "./presentation/index.js"
 export type {
   NessaClientConnectOptions,
@@ -119,6 +120,15 @@ export type {
   RecordPageRequest,
 } from "./generated/product.js"
 export type { DecodedRecord, DecodedRecordPage } from "./protocol/record-read-validate.js"
+export { ChangeWatchEndReason, ChangeWatchErrorCode } from "./generated/product.js"
+export type {
+  ConversationWatchRecordsParams,
+  ConversationWatchCatalogueParams,
+  ConversationWatchResult,
+  ConversationUnwatchResult,
+  ConversationChanged,
+  ConversationWatchEnded,
+} from "./generated/product.js"
 
 export { NessaMutationError } from "./application/mutation-error.js"
 export type {
