@@ -184,6 +184,58 @@ fn previous_identity_differs_with_no_mcp_servers() {
     assert_eq!(previous.model_id(), current.identity().model_id());
 }
 
+/// The previous identity is the one the earlier fingerprint (`acfd824f`,
+/// `acp/sessions/identity.rs`) gave this exact configuration. The value was
+/// computed independently of this crate, from that commit's hashing order.
+#[test]
+fn previous_identity_is_the_one_the_earlier_fingerprint_gave() {
+    let (_root, mut config, model) = test_acp_configuration("echo", 16);
+    config.arguments = vec!["/fixture/handler.py".into(), "echo".into()];
+    config.workspace = "/fixture/workspace".into();
+    config.mcp_servers.push(StdioMcpServer {
+        name: "nessa".into(),
+        command: "/trusted/nessa-mcp".into(),
+        args: vec!["--workspace".into(), "/different".into()],
+    });
+    assert_eq!(
+        provider(config, &model).previous_identity().context(),
+        "sha256:e0279dde8476dba881711d2f24cf89425355fc2a9b11c6113322861b6034995c"
+    );
+}
+
+/// The earlier fingerprint hashed each server, not only how many there were.
+#[test]
+fn previous_identity_differs_by_mcp_server_name_command_and_arguments() {
+    let (_root, config, model) = test_acp_configuration("echo", 16);
+    let server = StdioMcpServer {
+        name: "nessa".into(),
+        command: "/trusted/nessa-mcp".into(),
+        args: vec!["--workspace".into(), "/one".into()],
+    };
+    let with = |server: StdioMcpServer| {
+        let mut config = config.clone();
+        config.mcp_servers.push(server);
+        provider(config, &model).previous_identity()
+    };
+    let original = with(server.clone());
+    for changed in [
+        StdioMcpServer {
+            name: "other".into(),
+            ..server.clone()
+        },
+        StdioMcpServer {
+            command: "/trusted/other-mcp".into(),
+            ..server.clone()
+        },
+        StdioMcpServer {
+            args: vec!["--workspace".into(), "/two".into()],
+            ..server.clone()
+        },
+    ] {
+        assert_ne!(with(changed), original);
+    }
+}
+
 #[test]
 fn credential_and_context_keys_must_be_disjoint() {
     let (_root, mut config, model) = test_acp_configuration("echo", 16);

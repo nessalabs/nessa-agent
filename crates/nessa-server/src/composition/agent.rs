@@ -1188,7 +1188,7 @@ pub(super) mod build {
 
 #[cfg(test)]
 #[path = "../../tests/conversation/configuration.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(all(test, unix))]
 #[path = "../../tests/conversation/launch_configuration.rs"]

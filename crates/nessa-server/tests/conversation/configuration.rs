@@ -21,7 +21,7 @@ impl AgentCredentialSource for NoCredentials {
 }
 
 #[cfg(unix)]
-fn no_credentials() -> Arc<dyn AgentCredentialSource> {
+pub(in crate::composition) fn no_credentials() -> Arc<dyn AgentCredentialSource> {
     Arc::new(NoCredentials)
 }
 
@@ -309,7 +309,11 @@ fn catalog_entry(provider: &str, model: &str) -> serde_json::Value {
 /// catalog they are pointed at. `missing` names the agent whose command is not
 /// written to disk, which is what `build::provider` refuses on.
 #[cfg(unix)]
-fn two_agents(root: &Path, selected: &str, missing: AgentId) -> (AgentsConfig, std::path::PathBuf) {
+pub(in crate::composition) fn two_agents(
+    root: &Path,
+    selected: &str,
+    missing: AgentId,
+) -> (AgentsConfig, std::path::PathBuf) {
     let catalog = root.join("catalog.json");
     std::fs::write(
         &catalog,
@@ -778,7 +782,7 @@ fn an_image_is_fitted_to_what_every_configured_agent_would_take() {
 /// which agents got built, and nothing here ever prompts, so a source that
 /// panics if read is the honest stand-in.
 #[cfg(unix)]
-struct NoImages;
+pub(in crate::composition) struct NoImages;
 #[cfg(unix)]
 impl nessa_sdk::application::agent_execution::providers::UserImageSource for NoImages {
     fn read(

@@ -431,7 +431,7 @@ them together.
 | R10 | Agent not configured or installed, model or mode unavailable, unsupported agent | `LeftPermanent(reason)` | yes | `r10_an_unresolvable_selection_is_left_for_good_with_its_reason` |
 | R11 | OpenCode resolver times out | `LeftTransient(unavailable)`; other conversations still processed, the selection resolved once | **no** | `r11_a_resolver_timeout_leaves_its_conversations_and_processes_the_rest` |
 | R12 | Audit cannot be written before the rewrite | No unit appended, `LeftTransient(audit)` | **no** | `r12_no_move_is_appended_when_its_intent_cannot_be_recorded` |
-| R13 | Intent audited, then the append fails | Outcome `left: storage`, log unchanged | **no** | `r13_a_failed_append_after_its_intent_is_recorded_as_left` |
+| R13 | Intent audited, then the append fails | Outcome `left: storage`, log unchanged | **no** | `r13_a_failed_append_after_its_intent_is_recorded_as_left`, `r13_a_finished_save_whose_move_is_refused_as_corrupt_is_left_for_the_next_start` |
 | R14 | Conversation tombstoned | Skipped; deletion owns it | yes | `r14_a_deleted_conversation_is_skipped` |
 | R15 | Second gateway in the same namespace | Refused earlier by the registry lock; the retrofit never starts | n/a | existing `bootstrap_is_explicit_private_and_exclusively_locked` (`nessa-auth` local registry) |
 | R16 | Zero MCP servers configured | Still R1: the old hash included the zero length | yes | `r16_with_no_mcp_servers_the_previous_identity_still_differs` (SDK), `previous_identity_differs_with_no_mcp_servers` |

@@ -1835,6 +1835,44 @@ async fn retrofit_identities_of_a_fixed_agent_are_those_reopening_resolves() {
     ));
 }
 
+/// A managed adapter is resolved through `resolve_for` too, and hands the
+/// retrofit the identity its binding had under the earlier fingerprint.
+#[tokio::test]
+async fn retrofit_identities_of_a_managed_agent_carry_its_binding_previous_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Ready(executable(root.path()))));
+    let mut source = resolver(
+        root.path(),
+        store,
+        Arc::new(ClaudeCredentials),
+        HashMap::new(),
+    );
+    let mut runtime = source.config.runtime(AgentId::Claude).unwrap().clone();
+    runtime.model = "claude-sonnet-5".into();
+    std::fs::write(runtime.command.executable(), "adapter fixture").unwrap();
+    source
+        .config
+        .runtimes
+        .insert(AgentId::Claude.name().into(), runtime);
+    source.managed_adapters.insert(AgentId::Claude);
+    let binding = source
+        .managed_provider(AgentId::Claude, "claude-sonnet-5", ApprovalMode::Ask)
+        .unwrap()
+        .unwrap();
+    let identities = source
+        .identities(
+            AgentId::Claude,
+            "claude-sonnet-5",
+            ConversationApprovalMode::Ask,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(identities.current, binding.provider.identity());
+    assert_eq!(identities.previous, Some(binding.previous_identity));
+    assert_ne!(identities.previous, Some(identities.current));
+}
+
 /// OpenCode is observed under the resolver's deadline as a cold slot is, and
 /// nothing is prepared or launched for it: nothing will be opened on what the
 /// retrofit resolves.
@@ -1929,8 +1967,22 @@ async fn retrofit_identities_of_opencode_that_never_answers_are_unavailable_at_t
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished(), "the deadline has not passed yet");
     tokio::time::advance(Duration::from_millis(1)).await;
+    // Paused time does not move by itself while a blocking observation runs,
+    // so it is moved by hand: an answer that is not bounded by the deadline
+    // fails here, well past it, instead of waiting forever.
+    let answered = tokio::select! {
+        biased;
+        answered = tokio::time::timeout(4 * RESOLUTION_DEADLINE, waiting) => {
+            answered.expect("answered by the resolver's deadline")
+        }
+        () = async {
+            loop {
+                tokio::time::advance(RESOLUTION_DEADLINE).await;
+            }
+        } => unreachable!(),
+    };
     assert!(matches!(
-        waiting.await.unwrap(),
+        answered.unwrap(),
         Err(ConversationError::Unavailable)
     ));
     assert_eq!(credentials.reads.load(Ordering::SeqCst), 1);

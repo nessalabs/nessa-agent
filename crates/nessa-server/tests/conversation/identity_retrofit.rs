@@ -178,6 +178,8 @@ struct Storage {
     corrupt_load: Mutex<HashSet<SessionId>>,
     foreign_load: Mutex<HashSet<SessionId>>,
     failing_save: AtomicBool,
+    /// Its appends are refused as the writer refuses a save it will not take.
+    corrupt_save: AtomicBool,
     opened: AtomicUsize,
 }
 impl SessionStorage for Storage {
@@ -196,12 +198,14 @@ impl SessionStorage for Storage {
             let corrupt = self.corrupt_load.lock().unwrap().contains(&id);
             let foreign = self.foreign_load.lock().unwrap().contains(&id);
             let failing_save = self.failing_save.load(Ordering::SeqCst);
+            let corrupt_save = self.corrupt_save.load(Ordering::SeqCst);
             Ok(self.inner.open_existing(id).await?.map(|inner| {
                 Box::new(Lease {
                     inner,
                     corrupt,
                     foreign,
                     failing_save,
+                    corrupt_save,
                 }) as Box<dyn SessionStorageLease>
             }))
         })
@@ -213,6 +217,7 @@ struct Lease {
     /// Its history reads back as another session's.
     foreign: bool,
     failing_save: bool,
+    corrupt_save: bool,
 }
 impl SessionStorageLease for Lease {
     fn load(&self) -> StorageFuture<'_, SessionLoad> {
@@ -243,6 +248,9 @@ impl SessionStorageLease for Lease {
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         if self.failing_save {
             return Box::pin(async { Err(StorageError::Io("fixture append failure".into())) });
+        }
+        if self.corrupt_save {
+            return Box::pin(async { Err(StorageError::Corrupt("fixture append refusal".into())) });
         }
         self.inner.save_changes(binding, snapshot, units)
     }
@@ -282,6 +290,7 @@ impl Fixture {
                 corrupt_load: Mutex::default(),
                 foreign_load: Mutex::default(),
                 failing_save: AtomicBool::new(false),
+                corrupt_save: AtomicBool::new(false),
                 opened: AtomicUsize::new(0),
             }),
             identities: Arc::new(Identities::new()),
@@ -881,6 +890,30 @@ async fn r13_a_failed_append_after_its_intent_is_recorded_as_left() {
     );
     assert_eq!(fixture.rows(), rows);
     assert_eq!(fixture.provider(&id).await, previous());
+    assert!(!fixture.marker.done.load(Ordering::SeqCst));
+}
+
+/// Only an unfinished save the writer refuses is left for good (R9): a
+/// finished one whose move is refused as corrupt may be met differently next
+/// time, so it is left for the next start, as any other failed append is.
+#[tokio::test]
+async fn r13_a_finished_save_whose_move_is_refused_as_corrupt_is_left_for_the_next_start() {
+    let fixture = Fixture::new().await;
+    let id = fixture.saved(previous()).await;
+    fixture.storage.corrupt_save.store(true, Ordering::SeqCst);
+    let rows = fixture.rows();
+    let run = fixture.run().await;
+    assert!(matches!(&run, RetrofitRun::Incomplete(_)));
+    let reason = Leftover::Transient(TransientLeftover::Storage);
+    assert_eq!(left(&run, &id), Some(reason));
+    assert!(fixture
+        .audit
+        .records()
+        .contains(&RetrofitAuditRecord::Left {
+            attempted: moved(&id),
+            reason,
+        }));
+    assert_eq!(fixture.rows(), rows);
     assert!(!fixture.marker.done.load(Ordering::SeqCst));
 }
 
