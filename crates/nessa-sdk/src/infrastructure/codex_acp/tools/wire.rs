@@ -1,17 +1,15 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::tools::{
-    McpTool, ToolCallUpdate, ToolContent, MAX_STRUCTURED_RESULT_BYTES,
-};
+use crate::domain::agent_execution::tools::{McpTool, ToolCallUpdate, ToolContent};
 use crate::infrastructure::acp::fields::{identifier, string};
 use crate::infrastructure::acp::tools::wire::{
     tool_call as acp_tool_call, UNSUPPORTED_TOOL_CONTENT,
 };
-use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::json_rpc::{json_fits, protocol};
+use crate::infrastructure::mcp::structured_result;
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{self, Write};
 
 /// The most tool calls one execution keeps an identity for. Matches the Claude
 /// profile's bound: with 256-byte identifiers and [`MAX_NAME_BYTES`] names, this
@@ -83,22 +81,6 @@ impl ObservedTools {
 // controller's permission and tool-observation retention budgets.
 const MAX_RETAINED_INPUT_BYTES: usize = 1024 * 1024;
 
-struct InputSize {
-    remaining: usize,
-}
-impl Write for InputSize {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > self.remaining {
-            return Err(io::Error::other("tool input retention limit exceeded"));
-        }
-        self.remaining -= bytes.len();
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn same_input(retained: &str, incoming: &Value) -> Result<(), AgentError> {
     let original: Value =
         serde_json::from_str(retained).map_err(|_| protocol("invalid retained tool input"))?;
@@ -124,11 +106,9 @@ fn new_input(
     }
     // Count encoded bytes before allocating the retained copy. Box<str> keeps
     // capacity equal to its charged length rather than retaining spare capacity.
-    let mut size = InputSize {
-        remaining: MAX_RETAINED_INPUT_BYTES - used,
-    };
-    serde_json::to_writer(&mut size, input)
-        .map_err(|_| protocol("tool input retention limit exceeded"))?;
+    if !json_fits(input, MAX_RETAINED_INPUT_BYTES - used) {
+        return Err(protocol("tool input retention limit exceeded"));
+    }
     let encoded = serde_json::to_string(input).map_err(|_| protocol("invalid tool input"))?;
     Ok(Some(encoded.into_boxed_str()))
 }
@@ -339,11 +319,6 @@ fn mcp_tool(value: &Value, mcp: bool) -> Option<McpTool> {
     McpTool::new(server, tool).ok()
 }
 
-/// The text a structured result past the domain's bound
-/// ([`MAX_STRUCTURED_RESULT_BYTES`]) is replaced by: said, not silently dropped.
-pub(in crate::infrastructure::codex_acp) const STRUCTURED_RESULT_OMITTED: &str =
-    "[structured tool result omitted: too large]";
-
 /// One MCP content block from a Codex MCP result, as observed content.
 ///
 /// Text is kept as text; a resource link as its URI, which is the whole of
@@ -380,21 +355,6 @@ fn exact_text<'a>(value: &'a Value, field: &str) -> Result<&'a str, AgentError> 
         .ok_or_else(|| protocol("invalid MCP result text"))
 }
 
-/// A structured result's JSON text, or `None` when it would be longer than the
-/// domain keeps ([`MAX_STRUCTURED_RESULT_BYTES`]). Counted before it is
-/// written out, so a result of any size costs no more than the bound.
-fn structured_json(structured: &Value) -> Result<Option<String>, AgentError> {
-    let mut size = InputSize {
-        remaining: MAX_STRUCTURED_RESULT_BYTES,
-    };
-    if serde_json::to_writer(&mut size, structured).is_err() {
-        return Ok(None);
-    }
-    serde_json::to_string(structured)
-        .map(Some)
-        .map_err(|_| protocol("invalid MCP structured result"))
-}
-
 /// What a completed Codex MCP call returned, as observed content: its content
 /// blocks, then its structured result, or its error.
 ///
@@ -429,11 +389,9 @@ fn mcp_result(value: &Value, mcp: bool) -> Result<Option<Vec<ToolContent>>, Agen
             match result.get("structuredContent") {
                 None | Some(Value::Null) => {}
                 // Past the domain's bound it is said, not kept.
-                Some(structured) => content.push(match structured_json(structured)? {
-                    Some(json) => ToolContent::structured(json)
-                        .map_err(|error| protocol(&error.to_string()))?,
-                    None => ToolContent::text(STRUCTURED_RESULT_OMITTED),
-                }),
+                Some(structured) => content.push(
+                    structured_result(structured).map_err(|error| protocol(&error.to_string()))?,
+                ),
             }
         }
         Some(_) => return Err(protocol("invalid MCP result")),
