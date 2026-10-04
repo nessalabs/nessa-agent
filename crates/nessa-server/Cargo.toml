@@ -85,3 +85,6 @@ tokio = { version = "1", features = ["test-util", "io-util"] }
 # Only to build the pixels a substitute system decoder hands back. The image
 # library this workspace already compiles; nothing new is built.
 image = { version = "0.25.10", default-features = false }
+# Only to drive a real WebSocket write buffer over an in-memory duplex (row
+# R64); already in the build graph through axum, same version.
+tokio-tungstenite = "0.29"

@@ -636,8 +636,9 @@ where
         }
     };
     tokio::pin!(expiry);
-    // Admission retains a response slot through the physical write, so a stalled
-    // sink does not stop this owner from receiving or dispatching controls.
+    // Admission retains a response slot through the physical write (a record's
+    // until its frame is fed, before the flush, row R64), so a stalled sink
+    // does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
     let mut refresh: Option<RefreshCheck<'_>> = None;
@@ -1466,14 +1467,19 @@ async fn send<S: Sink<Message> + Unpin>(
     socket: &mut S,
     message: OutgoingMessage,
 ) -> Result<(), ()> {
+    let text = ordinary_text(message)?;
+    timeout(write_timeout, feed_release_flush(socket, text, || {}))
+        .await
+        .map_err(|_| ())?
+}
+
+/// An ordinary message's wire text, refused past the ordinary encoded ceiling.
+fn ordinary_text(message: OutgoingMessage) -> Result<String, ()> {
     let text = message.to_wire_text().map_err(|_| ())?;
     if text.len() > MAX_PAYLOAD_BYTES as usize {
         return Err(());
     }
-    timeout(write_timeout, socket.send(Message::Text(text.into())))
-        .await
-        .map_err(|_| ())?
-        .map_err(|_| ())
+    Ok(text)
 }
 
 async fn send_queued<S: Sink<Message> + Unpin>(
@@ -1541,20 +1547,20 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
     let release = move || drop((slot, record_work));
     let text = match message {
         WireResponse::Ordinary(message) => {
-            let text = message.to_wire_text().map_err(|_| ())?;
-            if text.len() > MAX_PAYLOAD_BYTES as usize {
-                return Err(());
-            }
-            within_deadline(
+            let text = ordinary_text(*message)?;
+            return within_deadline(
                 deadline,
                 timeout(write_timeout, feed_release_flush(socket, text, release)),
             )
             .await
             .ok_or(())?
-            .map_err(|_| ())??;
-            return Ok(());
+            .map_err(|_| ())?;
         }
         WireResponse::Record { text } => text,
+        // The record lane carries the five passive methods' answers only:
+        // watch replies go through `ConnectionWatches` on the ordinary lane, so
+        // this arm is never reached. It is still delivered as `send_queued`
+        // would, under this response's deadline, rather than dropped.
         message @ WireResponse::Watch(_) => {
             return within_deadline(deadline, send_queued(write_timeout, socket, message))
                 .await
@@ -1569,16 +1575,24 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         .ok_or(())?
 }
 
-/// The WebSocket write buffer each product socket upgrades with: room for the
-/// largest record frame and its header, so a fed record frame stays buffered
-/// until `feed_release_flush` flushes it.
-pub const WEBSOCKET_WRITE_BUFFER_BYTES: usize = MAX_RECORD_RESPONSE_BYTES + 64;
+/// The largest WebSocket frame header (RFC 6455 section 5.2): 2 bytes, an
+/// 8-byte extended length, and a 4-byte mask, which a server never sends.
+const WEBSOCKET_MAX_FRAME_HEADER_BYTES: usize = 14;
 
-/// Hand `text` to the sink, call `release`, then flush. Both sinks keep a
-/// fed frame in their own buffer until the flush (the native profile's
-/// protected transport, and the WebSocket's write buffer, sized in
-/// `server::entrypoint::http` to hold the largest record frame), so nothing
-/// `release` gives back is still held once the client can read the frame.
+/// The WebSocket write buffer each product socket upgrades with: the largest
+/// record frame and its header, so tungstenite keeps a fed record frame in its
+/// buffer until `feed_release_flush` flushes it (it writes inside
+/// `start_send` only once the buffer passes this size).
+pub const WEBSOCKET_WRITE_BUFFER_BYTES: usize =
+    MAX_RECORD_RESPONSE_BYTES + WEBSOCKET_MAX_FRAME_HEADER_BYTES;
+
+/// Hand `text` to the sink, call `release`, then flush. The native profile's
+/// protected transport keeps a fed frame's ciphertext until the flush. The
+/// WebSocket keeps it in a write buffer sized in `server::entrypoint::http`
+/// for the largest record frame, unless a control frame is due in the same
+/// write: tungstenite then queues a pong after the frame and may write both
+/// inside `start_send`. The product's own clients send no pings, so for them
+/// nothing `release` gives back is still held once they can read the frame.
 async fn feed_release_flush<S: Sink<Message> + Unpin>(
     socket: &mut S,
     text: String,
@@ -3106,6 +3120,72 @@ mod tests {
         ) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
+    }
+
+    /// A server WebSocket over an in-memory duplex with this write buffer, and
+    /// the client end's raw bytes.
+    async fn websocket_pair(
+        write_buffer: Option<usize>,
+    ) -> (
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        tokio::io::DuplexStream,
+    ) {
+        use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+        let (server, client) = tokio::io::duplex(4 * WEBSOCKET_WRITE_BUFFER_BYTES);
+        let mut config = WebSocketConfig::default();
+        if let Some(size) = write_buffer {
+            config = config.write_buffer_size(size);
+        }
+        let socket =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(server, Role::Server, Some(config))
+                .await;
+        (socket, client)
+    }
+
+    /// Whether any byte is ready to read from `peer` now.
+    async fn bytes_ready(peer: &mut tokio::io::DuplexStream) -> usize {
+        use tokio::io::AsyncReadExt;
+        let mut buffer = vec![0; 2 * WEBSOCKET_WRITE_BUFFER_BYTES];
+        match timeout(Duration::from_millis(50), peer.read(&mut buffer)).await {
+            Ok(read) => read.unwrap(),
+            Err(_) => 0,
+        }
+    }
+
+    /// Row R64's transport half: with the product's write buffer, a fed
+    /// maximum record frame stays in tungstenite's buffer until the flush.
+    #[tokio::test]
+    async fn websocket_keeps_a_fed_maximum_record_frame_until_the_flush() {
+        let (mut socket, mut peer) = websocket_pair(Some(WEBSOCKET_WRITE_BUFFER_BYTES)).await;
+        let text = "x".repeat(MAX_RECORD_RESPONSE_BYTES);
+        socket
+            .feed(tokio_tungstenite::tungstenite::Message::text(text))
+            .await
+            .unwrap();
+        assert_eq!(bytes_ready(&mut peer).await, 0);
+        socket.flush().await.unwrap();
+        // The frame's 10-byte header and its payload.
+        let mut arrived = 0;
+        while arrived < MAX_RECORD_RESPONSE_BYTES + 10 {
+            let read = bytes_ready(&mut peer).await;
+            assert!(read > 0, "flushed frame arrives");
+            arrived += read;
+        }
+        assert_eq!(arrived, MAX_RECORD_RESPONSE_BYTES + 10);
+    }
+
+    /// The revert probe: with tungstenite's default write buffer the same fed
+    /// frame is written inside `start_send`, before any flush, so dropping the
+    /// upgrade's `write_buffer_size` would reopen #492.
+    #[tokio::test]
+    async fn default_websocket_buffer_sends_a_maximum_record_frame_before_the_flush() {
+        let (mut socket, mut peer) = websocket_pair(None).await;
+        let text = "x".repeat(MAX_RECORD_RESPONSE_BYTES);
+        socket
+            .feed(tokio_tungstenite::tungstenite::Message::text(text))
+            .await
+            .unwrap();
+        assert!(bytes_ready(&mut peer).await > 0);
     }
 
     #[tokio::test]
