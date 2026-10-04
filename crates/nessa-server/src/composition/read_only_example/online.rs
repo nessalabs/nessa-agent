@@ -21,7 +21,7 @@ use crate::read_only_sync::application::device::{
 };
 use crate::read_only_sync::application::driver::{run_catalogue, run_records};
 use crate::read_only_sync::application::watch::{
-    follow, PassResult, Registered, Wait, WatchPass, WatchSession,
+    discover, follow, PassResult, Registered, Wait, WatchPass, WatchSession,
 };
 use crate::read_only_sync::application::{
     CacheError, CachePolicy, Cancellation, GatewayError, GatewayPolicy,
@@ -445,9 +445,8 @@ impl Run<'_> {
             self.access_epoch,
             conversation.clone(),
         );
-        let discovery = self
-            .connection
-            .run(|| source.discover())
+        // Row W17 before registration: a preparing discovery is asked again.
+        let discovery = discover(|| self.connection.run(|| source.discover()))
             .map_err(CommandError::Gateway)?;
         let scope = match discovery.result {
             Some(Ok((scope, _))) => scope,
