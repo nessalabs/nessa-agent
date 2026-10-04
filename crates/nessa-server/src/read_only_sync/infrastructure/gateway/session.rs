@@ -10,7 +10,9 @@ use super::deadline_stream::{io_cause, DeadlineStream};
 use crate::app::ports::Clock;
 use crate::device_pairing::infrastructure::{
     encode_frame,
-    wire::{encode_request as encode_envelope, NativePairingRequest},
+    wire::{
+        decode_reply, encode_request as encode_envelope, NativePairingReply, NativePairingRequest,
+    },
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
 use crate::product::generated::{
@@ -199,8 +201,9 @@ impl Session {
             frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
         };
         let mut events = 0;
+        let mut message = read_opening_frame(&mut socket)?;
         let challenge = loop {
-            match read_frame(&mut socket)? {
+            match message {
                 OutgoingMessage::Event(event)
                     if event.event == product_event::SESSION_CHALLENGE =>
                 {
@@ -212,6 +215,7 @@ impl Session {
                 OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
                 _ => count_event(policy, &mut events)?,
             }
+            message = read_frame(&mut socket)?;
         };
         if !supports_product_version(challenge.min_version, challenge.max_version) {
             return Err(GatewayError::Protocol);
@@ -355,12 +359,29 @@ fn read_response(
         }
     }
 }
+/// The frame answering `openProduct`. A gateway that takes no product permit
+/// for this connection answers the enrollment `Refused` reply on the same
+/// framing (design rows PR2, PR10, PR13, PR15); otherwise product messages
+/// begin. Only this frame is read through the enrollment reply decoder; every
+/// later frame is a product message (`read_frame`), as
+/// `open_product_refusal_is_typed_and_other_frames_stay_protocol` checks.
+fn read_opening_frame(socket: &mut Channel) -> Result<OutgoingMessage, GatewayError> {
+    let text = receive_text(socket)?;
+    OutgoingMessage::decode(&text).map_err(|_| match decode_reply(text.as_bytes()) {
+        Ok(NativePairingReply::Refused) => GatewayError::ProductRefused,
+        _ => GatewayError::Protocol,
+    })
+}
 fn read_frame(socket: &mut Channel) -> Result<OutgoingMessage, GatewayError> {
+    let text = receive_text(socket)?;
+    OutgoingMessage::decode(&text).map_err(|_| GatewayError::Protocol)
+}
+fn receive_text(socket: &mut Channel) -> Result<String, GatewayError> {
     // Buffered plaintext still consumes this same absolute operation deadline.
     socket.transport.stream_mut().remaining()?;
     let text = socket.receive()?;
     socket.transport.stream_mut().remaining()?;
-    OutgoingMessage::decode(&text).map_err(|_| GatewayError::Protocol)
+    Ok(text)
 }
 fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, GatewayError> {
     if response.ok {

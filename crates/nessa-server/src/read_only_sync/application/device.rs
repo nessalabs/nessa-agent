@@ -134,11 +134,14 @@ impl ClientPendingStore for PurgeBeforeEnd {
 
 /// Whether a read failure is the gateway refusing this device's authority, so
 /// the pinned status is asked again before anything else (design row PC5).
+/// A refused `openProduct` counts: a revoked key is its usual cause (row
+/// PR5), and the status read is what tells that cause from a full pool.
 /// The refusal itself never purges.
 pub(crate) fn asks_status(error: GatewayError) -> bool {
     matches!(
         error,
-        GatewayError::Authentication(_)
+        GatewayError::ProductRefused
+            | GatewayError::Authentication(_)
             | GatewayError::Record(
                 RecordReadErrorCode::Unauthorized
                     | RecordReadErrorCode::Forbidden

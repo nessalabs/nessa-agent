@@ -169,6 +169,7 @@ fn only_ending_an_issued_credential_purges() {
 #[test]
 fn only_authority_refusals_ask_status_again() {
     for asks in [
+        GatewayError::ProductRefused,
         GatewayError::Authentication(SessionCloseReason::AuthorizationLost),
         GatewayError::Record(RecordReadErrorCode::Unauthorized),
         GatewayError::Record(RecordReadErrorCode::Forbidden),

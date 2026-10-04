@@ -72,6 +72,12 @@ pub(crate) enum GatewayError {
     RequestTooLarge,
     EventCapacity,
     InvalidCredential,
+    /// The gateway answered `openProduct` with the enrollment `Refused` reply:
+    /// no product session for this connection (design rows PR2, PR10, PR13,
+    /// PR15). The reply is redacted, so a key without an active credential is
+    /// not told apart from a full pool here; the pinned status asked next
+    /// tells them apart (row PC5).
+    ProductRefused,
     Authentication(SessionCloseReason),
     ScopeChanged,
     Busy,

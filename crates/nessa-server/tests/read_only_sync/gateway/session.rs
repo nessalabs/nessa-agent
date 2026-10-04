@@ -7,7 +7,7 @@ use crate::conversation::domain::{conversation_catalogue_stream, ConversationId}
 use crate::conversation::infrastructure::{conversation_catalogue_schema, NessaCatalogueSource};
 use crate::device_pairing::infrastructure::{
     encode_frame,
-    wire::{decode_request, NativePairingRequest},
+    wire::{decode_request, encode_refused, NativePairingRequest},
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES,
 };
 use crate::product::catalogue_read::wire::wire_descriptor;
@@ -182,6 +182,15 @@ fn challenge(socket: &mut PeerSocket) {
 }
 /// A native peer that answers `openProduct` with the scripted exchange only.
 fn native_peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Peer) {
+    native_peer_answering(None, script)
+}
+/// A native peer that answers `openProduct` with `reply`, an enrollment
+/// envelope written as the gateway's `write_reply` writes it, before the
+/// scripted product exchange.
+fn native_peer_answering(
+    reply: Option<Vec<u8>>,
+    script: impl FnOnce(&mut PeerSocket) + Send + 'static,
+) -> (Endpoint, Peer) {
     let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
     let pin = gateway.public_spki();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -195,6 +204,9 @@ fn native_peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoi
             decode_request(&first).unwrap(),
             NativePairingRequest::OpenProduct
         ));
+        if let Some(reply) = reply {
+            selector.send_envelope(&reply).unwrap();
+        }
         let mut socket = PeerSocket {
             transport: selector.into_transport(),
             frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
@@ -631,6 +643,68 @@ fn challenge_scalar_refusal_happens_before_any_authentication_request() {
         ));
         peer.join().unwrap();
     }
+}
+
+/// Rows PR5, PR15 (client): the enrollment `Refused` reply answering
+/// `openProduct` is the typed `ProductRefused`, which asks pinned status
+/// again (row PC5). Any other first frame that is not a product message, and
+/// a `Refused` envelope arriving after product messages began, stay
+/// `Protocol`: only the opening frame is read through the enrollment decoder.
+#[test]
+fn open_product_refusal_is_typed_and_other_frames_stay_protocol() {
+    let refused = encode_refused().unwrap();
+    let (endpoint, peer) = native_peer_answering(Some(refused.clone()), |socket| {
+        assert!(socket.ended());
+    });
+    let result = Session::connect(
+        endpoint.address,
+        endpoint.evidence("credential"),
+        "example",
+        &LocalConnector,
+        Arc::new(Time(Instant::now())),
+        Arc::new(Never),
+        policy(),
+    );
+    assert!(matches!(result, Err(GatewayError::ProductRefused)));
+    peer.join().unwrap();
+
+    let (endpoint, peer) =
+        native_peer_answering(Some(b"{\"kind\":\"unknown\"}".to_vec()), |socket| {
+            assert!(socket.ended());
+        });
+    assert!(matches!(
+        Session::connect(
+            endpoint.address,
+            endpoint.evidence("credential"),
+            "example",
+            &LocalConnector,
+            Arc::new(Time(Instant::now())),
+            Arc::new(Never),
+            policy()
+        ),
+        Err(GatewayError::Protocol)
+    ));
+    peer.join().unwrap();
+
+    let (endpoint, peer) = native_peer(move |socket| {
+        challenge(socket);
+        let _ = request(socket);
+        socket.write_raw(&encode_frame(MAX_RECORD_RESPONSE_BYTES, &refused).unwrap());
+        assert!(socket.ended());
+    });
+    assert!(matches!(
+        Session::connect(
+            endpoint.address,
+            endpoint.evidence("credential"),
+            "example",
+            &LocalConnector,
+            Arc::new(Time(Instant::now())),
+            Arc::new(Never),
+            policy()
+        ),
+        Err(GatewayError::Protocol)
+    ));
+    peer.join().unwrap();
 }
 
 #[test]

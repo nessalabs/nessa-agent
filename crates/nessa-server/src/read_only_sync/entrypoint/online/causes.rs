@@ -26,6 +26,7 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
         GatewayError::RequestTooLarge => ("requestTooLarge", None),
         GatewayError::EventCapacity => ("eventCapacity", None),
         GatewayError::InvalidCredential => ("invalidCredential", None),
+        GatewayError::ProductRefused => ("productRefused", None),
         GatewayError::Authentication(reason) => ("authentication", Some(reason.as_str())),
         GatewayError::ScopeChanged => ("scopeChanged", None),
         GatewayError::Busy => ("busy", None),
