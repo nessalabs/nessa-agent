@@ -52,7 +52,8 @@ verification/
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
-        apps.mjs            an MCP App's documents, read through Playwright's frames
+        apps.mjs            an MCP App's documents, read through Playwright's frames; the window's approval card naming a tool
+        apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the approval card's one locator and the wait for it to go
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs: setup's one admitted call, the review a step opened
         gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table)

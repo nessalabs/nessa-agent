@@ -1830,8 +1830,7 @@ describe("an app's review is read after its turn ended (#436)", () => {
   })
 
   /** A conversation whose turn has ended, read once and followed: no list row will move again. */
-  async function idle(ids: readonly string[] = ["a"]) {
-    const setup = started()
+  async function idle(ids: readonly string[] = ["a"], setup = started()) {
     for (const id of ids) {
       setup.gateway.rows.set(id, row(id))
       setup.gateway.views.set(id, view(id, { revision: "1", messages: [ended] }))
@@ -2079,5 +2078,93 @@ describe("an app's review is read after its turn ended (#436)", () => {
     // The last read showed no review: at rest again (P1).
     await advance(timing.pollMs * 3)
     expect(readsOf("a")).toBe(4)
+  })
+
+  it("P2 (new client): a call that spans a close for good keeps its conversation read each round on the new client, and not at rest once it settles", async () => {
+    const gateway = fakeGateway()
+    const next = fakeGateway()
+    next.rows.set("a", row("a"))
+    next.views.set("a", view("a", { revision: "1", messages: [ended] }))
+    let attempts = 0
+    const { source, updates, advance } = await idle(
+      ["a"],
+      started(gateway, () =>
+        Promise.resolve(++attempts === 1 ? gateway.client : next.client),
+      ),
+    )
+    const readsOnNext = () =>
+      next.calls.filter((call) => call.method === "read" && call.args[0] === "a").length
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    await advance(timing.pollMs)
+    gateway.setState({ status: "closed", error: new Error("gone") })
+    // Making the new client takes more than one round's microtasks (C3).
+    await source.index()
+    expect(attempts).toBe(2)
+    expect(updates).toContainEqual({ kind: "resync" })
+    // The new client does not end the call: it is still read each round.
+    await advance(timing.pollMs * 2)
+    expect(readsOnNext()).toBe(2)
+    answer.resolve("done")
+    await call
+    // The last read showed no review: at rest again (P1).
+    await advance(timing.pollMs * 3)
+    expect(readsOnNext()).toBe(2)
+  })
+
+  it("P2 (read lost): a round's read that the reconnect makes fail does not drop the call; its conversation is read on the next rounds", async () => {
+    const { gateway, source, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    const held = deferred<never>()
+    gateway.once("read", () => held.promise)
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(2)
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    held.reject(new NessaConnectionClosedError(1006, ""))
+    gateway.setState({ status: "connected" })
+    await advance(timing.pollMs * 2)
+    expect(readsOf("a")).toBe(4)
+    answer.resolve("done")
+    await call
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(4)
+  })
+
+  it("P2 (settles while reconnecting): a call that settles while the client reconnects is read once more, which shows the review gone, then at rest", async () => {
+    const { gateway, source, updates, readsOf, advance } = await idle()
+    const answer = deferred<string>()
+    const call = source.appCall("a", () => answer.promise)
+    gateway.views.set(
+      "a",
+      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+    )
+    await advance(timing.pollMs)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ approval: expect.anything() }),
+    })
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    gateway.views.set("a", view("a", { revision: "3", messages: [ended] }))
+    answer.resolve("done")
+    await call
+    gateway.setState({ status: "connected" })
+    const before = readsOf("a")
+    await advance(timing.pollMs)
+    expect(readsOf("a")).toBe(before + 1)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ approval: null, revision: 3 }),
+    })
+    await advance(timing.pollMs * 3)
+    expect(readsOf("a")).toBe(before + 1)
   })
 })

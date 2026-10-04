@@ -38,7 +38,7 @@ import {
   serverScript,
   startLocalGateway,
 } from "../../../scripts/mcp-test-server/local-gateway.mjs"
-import { appFrame, approvalGone, oneMount } from "./lib/apps.mjs"
+import { appFrame, approvalGone, approvalNaming, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
@@ -296,17 +296,6 @@ const said = (frame, id) =>
     (selector) => document.querySelector(selector)?.textContent ?? "",
     css.reviewOutput(id),
   )
-
-/** The window's approval card, once it names `tool`; `null` when it does not within `ms`. */
-async function approvalNaming(page, tool, ms = 10_000) {
-  const card = page.locator(css.approvalCard, { hasText: tool }).first()
-  try {
-    await card.waitFor({ state: "visible", timeout: ms })
-    return card
-  } catch {
-    return null
-  }
-}
 
 /** The keys of the app's reviews pending now: a baseline taken before an action. */
 const pendingReviews = async (stack) =>
@@ -609,10 +598,13 @@ const checks = {
     if (await page.$(css.appFrameIn("pane")))
       failures.push("the pane's app frame is still on the page after its close")
     const withdrawn = await reviewGone(stack, waiting, 15_000)
-    const withdrawnMs = Date.now() - closedAt
+    const withdrawnAt = Date.now()
+    const withdrawnMs = withdrawn ? withdrawnAt - closedAt : null
     if (!withdrawn) failures.push("the review was not withdrawn when the pane closed")
     const cardGone = await approvalGone(page, DESTRUCTIVE, 5000)
-    const cardGoneMs = Date.now() - closedAt
+    // From the withdrawal seen to the card gone; null when either was not seen.
+    const cardGoneAfterWithdrawnMs =
+      withdrawn && cardGone ? Date.now() - withdrawnAt : null
     if (!cardGone)
       failures.push("the window still shows the review after the pane closed")
     // The inline mount is another: untouched.
@@ -628,7 +620,7 @@ const checks = {
         withdrawn: Boolean(withdrawn),
         withdrawnMs,
         cardGone,
-        cardGoneMs,
+        cardGoneAfterWithdrawnMs,
         inlineState,
       },
       failures,

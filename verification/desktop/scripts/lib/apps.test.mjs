@@ -1,12 +1,21 @@
 /**
  * `apps.mjs`'s count of one call's inline mounts: `renders` continues only on
  * exactly one, so a call drawn twice (#418) fails rather than being skipped.
- * And `release`'s wait for a withdrawn review's card to go (rows W1–W4, #436).
+ * And the window's approval card naming a tool: one locator for its appearing
+ * and its going (W5), and `release`'s wait for a withdrawn review's card to go
+ * (rows W1–W4, #436).
  */
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { approvalGone, oneMount } from "./apps.mjs"
+import {
+  approvalCardNaming,
+  approvalGone,
+  approvalNaming,
+  namesTool,
+  oneMount,
+} from "./apps.mjs"
+import { css } from "./selectors.mjs"
 
 describe("oneMount", () => {
   it("accepts exactly one inline frame", () => {
@@ -25,12 +34,23 @@ describe("oneMount", () => {
  * A page whose one approval card goes `goesAfter` ms from the wait's start
  * (`0`: already gone, `Infinity`: never), the way Playwright's
  * `waitFor({ state: "hidden" })` settles: when it goes, or a `TimeoutError`
- * at the bound. `fails` makes the wait throw another error.
+ * at the bound. `fails` makes the wait throw another error. `built` records
+ * how the locator was made: the selector and options, each filter, `.first()`.
  */
 function cardPage({ goesAfter, fails } = {}) {
   const asked = []
+  const built = []
   const locator = {
-    first: () => locator,
+    filter: (options) => {
+      built.push(["filter", options])
+      return locator
+    },
+    first: () => {
+      built.push(["first"])
+      return locator
+    },
+    // Shown at the start unless already gone: what a sample would see.
+    isVisible: () => Promise.resolve(goesAfter > 0),
     waitFor: ({ state, timeout }) => {
       asked.push({ state, timeout })
       if (fails) return Promise.reject(new Error("Target page has been closed"))
@@ -43,8 +63,52 @@ function cardPage({ goesAfter, fails } = {}) {
       return new Promise((resolve) => setTimeout(resolve, goesAfter))
     },
   }
-  return { asked, page: { locator: () => locator } }
+  const page = {
+    locator: (selector, options) => {
+      built.push(["locator", selector, options])
+      return locator
+    },
+  }
+  return { asked, built, page }
 }
+
+/** The one locator both waits use: visible cards naming `tool`, the first of them. */
+const namingT = [
+  ["locator", css.approvalCard, { hasText: /(?<!\w)t(?!\w)/ }],
+  ["filter", { visible: true }],
+  ["first"],
+]
+
+describe("namesTool", () => {
+  it("W5: names the tool as a whole name, case and all", () => {
+    const names = namesTool("app_delete_row")
+    assert.ok(names.test("The mcptest app wants to run app_delete_row"))
+    assert.ok(names.test("app_delete_row {}"))
+    for (const other of ["app_delete_rows", "APP_DELETE_ROW", "xapp_delete_row"])
+      assert.ok(!names.test(other), other)
+  })
+  it("W5: takes a tool's characters literally", () => {
+    assert.ok(namesTool("a.b(c)").test("run a.b(c) now"))
+    assert.ok(!namesTool("a.b").test("run aXb"))
+  })
+})
+
+describe("approvalCardNaming", () => {
+  it("W5: is the first visible approval card naming the tool", () => {
+    const { built, page } = cardPage()
+    approvalCardNaming(page, "t")
+    assert.deepEqual(built, namingT)
+  })
+})
+
+describe("approvalNaming", () => {
+  it("W5: waits for the card by the same locator", async () => {
+    const { asked, built, page } = cardPage({ goesAfter: Infinity })
+    assert.ok(await approvalNaming(page, "t", 30))
+    assert.deepEqual(built, namingT)
+    assert.deepEqual(asked, [{ state: "visible", timeout: 30 }])
+  })
+})
 
 describe("approvalGone", () => {
   it("W1: a card already gone has gone", async () => {
@@ -63,5 +127,10 @@ describe("approvalGone", () => {
   })
   it("W4: an error other than the timeout is not the card's state", async () => {
     await assert.rejects(approvalGone(cardPage({ fails: true }).page, "t", 30), /closed/)
+  })
+  it("W5: waits on the same locator as approvalNaming", async () => {
+    const { built, page } = cardPage({ goesAfter: 0 })
+    await approvalGone(page, "t", 50)
+    assert.deepEqual(built, namingT)
   })
 })

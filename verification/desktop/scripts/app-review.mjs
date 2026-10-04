@@ -189,9 +189,10 @@ const checks = {
           ? await page.evaluate(() => window.__appReview.longestTool)
           : appReview.tool
         const bound = await page.evaluate(() => window.__appReview.toolBound)
-        if (long && tool.length !== bound)
+        const bytes = Buffer.byteLength(tool, "utf8")
+        if (long && bytes !== bound)
           failures.push(
-            `the long tool's name is ${tool.length} bytes, not the ${bound} allowed`,
+            `the long tool's name is ${bytes} UTF-8 bytes, not the ${bound} allowed`,
           )
         if (!(await asked(page, tool))) {
           failures.push(`${long ? "long tool: " : ""}${notDrawn}`)
@@ -231,7 +232,7 @@ const checks = {
             }
           }, card)
           const tag = `${width}px${long ? " long tool" : ""}`
-          seen.push({ width, long, toolBytes: tool.length, ...r })
+          seen.push({ width, long, toolBytes: bytes, ...r })
           if (r.headPastCard)
             failures.push(`${tag}: the head runs ${r.headPastCard}px past the card`)
           if (r.overflow) failures.push(`${tag}: the card overflows`)

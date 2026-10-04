@@ -417,7 +417,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
   the answer to Allow Once and to Deny; closing the pane of a mount with a
-  call waiting withdraws the review, and the inline mount stays. _#349
+  call waiting withdraws the review, the window's card for it goes once it is
+  withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
