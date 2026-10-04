@@ -97,7 +97,7 @@ default 300) adjust the run.
 which a gateway can run as that agent's runtime (an explicit `command`). It
 answers the handshake as the harness pinned in
 `crates/nessa-sdk/harnesses/<agent>-acp/package.json`, and to each prompt makes
-one real call of `<tool>`, with no arguments, through the stand-in the gateway
+one real call of `<tool>`, with the recorded call's arguments, through the stand-in the gateway
 gave it for `mcptest`. It then reports that call in the frames the harness was
 recorded sending, says DONE, and ends the turn. The frames are the recorded
 `show_chart` call from the parser fixtures above, value for value, with only
@@ -107,10 +107,10 @@ those places against the recordings: a recording that carries the call
 anywhere else fails it. It replays only what that call can stand for: one of
 the test server's tools, under a name no harness rewrites, with the recorded
 call's arguments, whose result is shaped as the recorded one is (the same
-keys, text blocks, an object of `structuredContent`). Anything else — a
+keys, as many text blocks, a non-empty object of `structuredContent`). Anything else — a
 failure, a text-only result, a dotted name — is refused, since the harnesses
 report those in frames of their own. A cancel during the call ends the turn
-`cancelled` with nothing reported. It does not ask permission for the call, as a harness
+`cancelled` with nothing reported, whether the call then answers or fails. It does not ask permission for the call, as a harness
 does: the recordings hold no permission request.
 
 It reads no credential: `startLocalGateway({ signedOut: true })` starts the

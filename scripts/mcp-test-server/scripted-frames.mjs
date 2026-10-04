@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-import { repoRoot } from "./local-gateway.mjs"
+import { SERVER, repoRoot } from "./local-gateway.mjs"
 import { TOOLS } from "./server.mjs"
 
 /** The harnesses a scripted agent can stand in for. */
@@ -36,7 +36,7 @@ export function recording(agent) {
 
 /** The recorded frames of a call of `tool` (by default the one this replays), from `recorded` (`recording(agent)`). */
 export function recordedCall(agent, recorded, tool = RECORDED_TOOL) {
-  const name = agent === "claude" ? `mcp__mcptest__${tool}` : tool
+  const name = agent === "claude" ? `mcp__${SERVER}__${tool}` : tool
   const frames = recorded.calls?.[name]
   if (!Array.isArray(frames) || frames.length === 0)
     throw new Error(`the ${agent} recording has no ${name} call`)
@@ -142,9 +142,9 @@ const sameKeys = (a, b) => same(Object.keys(a).sort(), Object.keys(b).sort())
  * Why a call of `tool` that returned `result` cannot be replayed in the
  * recorded call's frames, or `null` when it can: it can when the tool is one
  * of the test server's own, under a name no harness rewrites, and its result
- * is shaped as the recorded call's is — the same keys, content blocks of the
- * recorded block's keys and type with text, and `structuredContent` an
- * object. Anything else (a failure, a text-only result, `_meta`, an image, a
+ * is shaped as the recorded call's is — the same keys, as many content blocks,
+ * each of the recorded block's keys and type with text, and
+ * `structuredContent` a non-empty object. Anything else (a failure, a text-only result, `_meta`, an image, a
  * dotted name) a harness reports in frames of its own, which no replay of
  * the recorded call would match.
  */
@@ -157,6 +157,7 @@ export function unreplayable(tool, result) {
   const [block] = recorded.content
   if (
     !Array.isArray(result.content) ||
+    result.content.length !== recorded.content.length ||
     !result.content.every(
       (each) =>
         plainObject(each) &&
@@ -166,8 +167,11 @@ export function unreplayable(tool, result) {
     )
   )
     return `${tool}'s content is not the recorded call's kind of block`
-  if (!plainObject(result.structuredContent))
-    return `${tool}'s structuredContent is not an object, as the recorded call's is`
+  if (
+    !plainObject(result.structuredContent) ||
+    Object.keys(result.structuredContent).length === 0
+  )
+    return `${tool}'s structuredContent is not a non-empty object, as the recorded call's is`
   return null
 }
 

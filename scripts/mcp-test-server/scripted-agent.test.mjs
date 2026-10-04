@@ -439,6 +439,77 @@ test("a cancel while the call is in flight ends the turn cancelled, and nothing 
   assert.equal(await exited(agent.child, 5000), true)
 })
 
+test("a cancel while the call is in flight ends the turn cancelled even when the call then fails", async (t) => {
+  const refusing = lingering(t, {
+    name: "mcptest",
+    delayMs: 1500,
+    refuses: (method) => method === "tools/call",
+  })
+  const agent = start("codex", codexEnv)
+  const { sessionId } = (
+    await agent.request("session/new", { cwd: here, mcpServers: [refusing.server] })
+  ).result
+  const turn = agent.request("session/prompt", { sessionId, prompt: [] })
+  await sleep(300)
+  agent.notify("session/cancel", { sessionId })
+  const answered = await turn
+  assert.equal(answered.error, undefined, answered.error?.message)
+  assert.deepEqual(answered.result, { stopReason: "cancelled" })
+  assert.equal(answered.notes.length, 0)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a cancel for another session leaves the prompt in flight alone", async (t) => {
+  const refusing = lingering(t, {
+    name: "mcptest",
+    delayMs: 1500,
+    refuses: (method) => method === "tools/call",
+  })
+  const agent = start("codex", codexEnv)
+  const busy = (
+    await agent.request("session/new", { cwd: here, mcpServers: [refusing.server] })
+  ).result.sessionId
+  const idle = (await agent.request("session/new", { cwd: here, mcpServers: [mcptest] }))
+    .result.sessionId
+  const turn = agent.request("session/prompt", { sessionId: busy, prompt: [] })
+  await sleep(300)
+  agent.notify("session/cancel", { sessionId: idle })
+  // Not cancelled: the call's own failure is the turn's answer.
+  assert.match((await turn).error.message, /refused tools\/call/)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a cancel with nothing in flight leaves the session's next prompt to end its turn", async () => {
+  const agent = start("codex", codexEnv)
+  const { sessionId } = (
+    await agent.request("session/new", { cwd: here, mcpServers: [mcptest] })
+  ).result
+  agent.notify("session/cancel", { sessionId })
+  const turn = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.deepEqual(turn.result, { stopReason: "end_turn" })
+  assert.equal(turn.notes.at(-1).params.update.content.text, "DONE")
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("an agent whose output fails stops its stand-ins and exits 0", async (t) => {
+  const stand = lingering(t)
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [stand.server],
+  })
+  assert.ok(opened.result.sessionId)
+  // The gateway stops reading; the agent's next answer has nowhere to go.
+  agent.child.stdout.destroy()
+  agent.request("initialize", { protocolVersion: 1 }).catch(() => {})
+  assert.equal(await exited(agent.child, 5000), true)
+  assert.equal(agent.child.exitCode, 0)
+  assert.equal(await gone(stand.pid()), true, "the stand-in outlived its agent")
+})
+
 test("a second prompt while one is in flight is refused", async (t) => {
   const slow = lingering(t, { name: "mcptest", delayMs: 1500 })
   const agent = start("codex", codexEnv)
@@ -496,6 +567,18 @@ test("two MCP servers of one name are refused before either starts", async () =>
     mcpServers: [mcptest, { ...mcptest, command: join(here, "no-such-command") }],
   })
   assert.match(opened.error.message, /two MCP servers named mcptest/)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("two MCP servers with no name are refused as alike", async () => {
+  const agent = start("codex", codexEnv)
+  const { name: _, ...nameless } = mcptest
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [nameless, { ...nameless, command: join(here, "no-such-command") }],
+  })
+  assert.match(opened.error.message, /two MCP servers named/)
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })

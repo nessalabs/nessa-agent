@@ -7,7 +7,7 @@
  *
  * It answers the gateway's handshake as the harness pinned for `<agent>`
  * would, and to each prompt makes one real call of the test server's
- * `<tool>`, with no arguments, through the stand-in the gateway gave it for
+ * `<tool>`, with the recorded call's arguments, through the stand-in the gateway gave it for
  * `mcptest`, then reports that call in the frames the harness was recorded
  * sending (`scripted-frames.mjs`), says DONE, and ends the turn. The
  * desktop's real-gateway check runs it with `--scripted`
@@ -162,8 +162,8 @@ const handlers = {
   "session/new": async (params) => {
     const values = initialOptions(agent, process.env, params)
     const names = (params.mcpServers ?? []).map((server) => server.name)
-    const twice = names.find((name, index) => names.indexOf(name) !== index)
-    if (twice !== undefined) throw new Error(`two MCP servers named ${twice}`)
+    const twice = names.findIndex((name, index) => names.indexOf(name) !== index)
+    if (twice !== -1) throw new Error(`two MCP servers named ${names[twice]}`)
     const servers = new Map()
     try {
       for (const server of params.mcpServers ?? [])
@@ -195,6 +195,10 @@ const handlers = {
     let result
     try {
       result = await server.request("tools/call", { name: tool, arguments: args })
+    } catch (error) {
+      // A cancel decides the turn however the call settles.
+      if (prompt.cancelled) return { stopReason: "cancelled" }
+      throw error
     } finally {
       session.prompt = null
     }

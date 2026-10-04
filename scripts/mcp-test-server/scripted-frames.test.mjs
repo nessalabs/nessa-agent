@@ -184,13 +184,15 @@ describe("callFrames", () => {
       [{ type: "text", text: 1 }],
       [{ type: "resource", text: "a" }],
       [{ type: "text", text: "a", extra: 1 }],
+      [],
+      [...result.content, ...result.content],
       "text",
     ])
       assert.match(refused("review_rows", { ...result, content }), /kind of block/)
-    for (const structuredContent of ["text", [1], null])
+    for (const structuredContent of ["text", [1], null, {}])
       assert.match(
         refused("review_rows", { ...result, structuredContent }),
-        /not an object/,
+        /not a non-empty object/,
       )
     assert.equal(unreplayable("review_rows", result), null)
   })
