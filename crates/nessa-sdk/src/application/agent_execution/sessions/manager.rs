@@ -1,8 +1,9 @@
 use super::{
-    attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, MessageCommitClock, ProviderContext, QueueHistoryRecord,
-    SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    app_sources, attachment::AttachmentLease, steering_position::SteeringPosition,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, MessageCommitClock,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
+    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -647,17 +648,36 @@ impl SessionManager {
                     "session retained invocation limit reached".into(),
                 ));
             }
+            // Asked of the turns saved so far, under the lock that admits
+            // the next: an app it names was drawn before it.
+            app_sources::validate_against(&request.user_message, |execution| {
+                snapshot
+                    .invocations
+                    .iter()
+                    .find(|record| &record.request.execution_id == execution)
+            })
+            .map_err(AgentError::UnknownApp)?;
             let mut next = snapshot.clone();
+            // A steered message's offset is its target's saved event count.
+            // A target not saved has none: a defensive refusal of an
+            // invariant, since no `Agent` entry reaches it (a native steer
+            // targets the running turn, saved at its own admission). The SDK
+            // has no internal-error variant, so it is `InvalidInput`, saving
+            // nothing rather than half a position
+            // (`admission_saves_a_steering_target_with_its_offset_or_refuses_it`).
             let target_event_offset = scheduling
                 .first()
                 .and_then(|edge| edge.target.as_ref())
-                .and_then(|target| {
-                    snapshot
-                        .invocations
-                        .iter()
-                        .find(|record| &record.request.execution_id == target)
+                .map(|target| {
+                    SteeringPosition::at_admission(target, &snapshot.invocations)
+                        .map(SteeringPosition::offset)
+                        .ok_or_else(|| {
+                            AgentError::InvalidInput(
+                                "steering target is not a saved invocation".into(),
+                            )
+                        })
                 })
-                .map(|record| record.events.len());
+                .transpose()?;
             next.invocations.push(InvocationRecord {
                 target_event_offset,
                 submission,

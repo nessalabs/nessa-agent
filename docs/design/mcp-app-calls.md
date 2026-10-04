@@ -4,7 +4,9 @@ An MCP App ([ADR 344](../adr/todo/344-mcp-ui.md)) reaches its own server
 through the gateway: `mcp.callTool` and `mcp.readResource`, on the
 conversation's own session of that server
 ([one connection per harness session](mcp-connections.md)). Its host releases
-one mount of it with `mcp.releaseApp`. The wire contract is
+one mount of it with `mcp.releaseApp`. It may also speak in its
+conversation: write the person's next message and give the model context
+(#390, "An app in its conversation" below). The wire contract is
 [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls); this is what
 the gateway does with it (#348, part b).
 
@@ -218,6 +220,156 @@ gateway stops; nothing reports it.
 
 Anything still running after that is logged as such.
 
+## An app in its conversation (#390)
+
+An app may write the person's next message (MCP Apps' `ui/message`) and give
+the model context (`ui/update-model-context`). #390 lands in three pull
+requests: this SDK slice, then the gateway, protocol and client, then the
+desktop. This section is the SDK's part: the values, how they are saved and
+sent, and which apps a message may name. The gateway's tables join it with
+the second.
+
+**Decisions.**
+
+- **Who wrote it is part of the message.** `UserMessage` carries its
+  `MessageSender`: the person, or an app (`McpAppSource`: the execution and
+  tool call that drew it, and the MCP server and tool that call was to). A
+  message is the person's until said otherwise. The sender is part of the
+  message's equality, so a retry under a saved message's execution ID that
+  changed it is another message under a used ID, and nothing of it is
+  saved or sent: `invoke` refuses any ID a saved invocation holds
+  (`InvalidInput`, "execution ID already belongs to a saved invocation"),
+  and `enqueue`, `enqueue_steering` and `steer` return `SubmissionConflict`.
+  The saved message keeps its writer.
+- **What an app gave the model goes with a message, not in it.**
+  `AppModelContext` is one app's context: its text, its structured content
+  (the JSON text of one object), or both, and the identity of the host's
+  update that gave it (`update_id`), so a host can join the turn that
+  carried a context to its own record of the update. Neither part is no
+  context (`Ok(None)`); an empty text is none. A message carries at most 4.
+- **Bounds.** A context: 8 KiB of text and structured JSON together
+  (`AppModelContext::MAX_BYTES`), so a turn carries at most 32 KiB of app
+  context (`UserMessage::MAX_APP_MODEL_CONTEXTS`). An app's tool call
+  identity and an update identity are bounded as an execution's is.
+- **How it reaches the agent.** Claude, Codex and OpenCode are all ACP
+  harnesses; each is given one leading `text` block: a fixed preamble, then
+  the contexts as one JSON array of `{server, tool, toolCallId, text?,
+  structuredContent?}` (`prompt_content.rs`). A text block is the one kind
+  every ACP agent takes, and JSON encoding means nothing an app writes can
+  end the block or pass for another app's entry. The structured content is
+  sent exactly as held: `AppModelContext` (`is_json`) is the one judge of
+  "one JSON object", and nothing parses it again. The block counts against
+  the frame like the rest of the prompt. Who wrote the message is not told
+  to the agent here; the message's text follows as the person's turn says it.
+- **Saved with the invocation.** `InputAccepted`'s metadata gains
+  `user_app` (`null` for the person) and `user_app_model_context` (empty
+  when none), both required. Each part is rebuilt through the domain on
+  read, so a value the domain refuses is `Corrupt`, not a message the agent
+  is handed.
+- **Records saved before this (#437).** Under One current contract no older
+  reader is kept: a message saved without the two fields is a record of
+  another shape, refused as `Corrupt` when the conversation it belongs to is
+  restored. The version marker and a typed "another version" refusal for
+  session record streams (ADR 202 rule 1) are #437's, not this slice's.
+- **When a context is done with.** The SDK gives its caller one fact:
+  admission returns only once the turn's `InputAccepted` is saved. The rule
+  the coordinator settled on #390 is that a host lets a context go once the
+  turn carrying it is admitted and persisted; a turn that then fails loses
+  that context, and the app may send it again. The SDK keeps nothing about
+  contexts beyond the message that carried them.
+
+### The app a message names
+
+Every app a message names — its writer, and the giver of each context it
+carries — is an MCP tool call recorded earlier in the session: the tool call
+`tool_id` of an earlier turn `execution_id`, observed with an MCP identity
+whose server and tool are the app's. The app names that identity as the
+session observed it, in the harness's spelling (`rows_get` for a call
+Claude's harness made to the listed `rows.get`): it is the one fact the
+session holds about the call, and it is compared exactly, so the listed
+spelling of a renamed call is `DifferentMcpTool`. A host that resolves an
+app from a transcript carries the observed spelling. The SDK session owns
+the rule (`sessions::app_sources`). It is asked at admission, under the
+session's evidence lock, against the turns already saved (`begin_record`,
+which every immediate, queued and steered submission goes through); and of
+every restored snapshot (`validation::continuation`) and replayed record log
+(`InputAccepted` in `records`), against the turns before the message,
+through each earlier turn's index of its MCP tool calls. That index is
+built as its observations are validated and taken back with a unit that
+fails, so a long history is not scanned once per app. A turn's own tool
+calls come after its message, so an app of the message's own turn is this
+rule's case too. A per-record decode cannot see the history and does not
+ask it. Refused, it is the typed `AgentError::UnknownApp(UnknownApp)`, kept
+as itself in a saved error; on restoration, `StorageError::Corrupt`.
+
+| # | State | Event | Next | Effect |
+| --- | --- | --- | --- | --- |
+| A1 | an earlier turn's tool call observed as MCP `server/tool` | a message from that app, or carrying its context | admitted | as any message |
+| A1b | a running turn whose tool call was observed as MCP `server/tool` | a message from that app is steered into that turn | injected | as any steered message |
+| A1c | a message steered natively into running turn `T2`, with offset `k` | it names an earlier turn `T1`'s call, observed at any index of `T1` | admitted | the offset bounds only `T2`'s calls, on all three paths |
+| A2 | — | an app naming a turn the session has no record of | — | `UnknownApp(NoMcpToolCall)`; nothing saved, queued or sent, at every entry |
+| A3 | the turn recorded, no such tool call in it | as A2 | — | `UnknownApp(NoMcpToolCall)` |
+| A4 | the tool call recorded, with no MCP identity | as A2 | — | `UnknownApp(NoMcpToolCall)` |
+| A5 | the tool call recorded as MCP `server/tool` | an app naming another server, or another tool | — | `UnknownApp(DifferentMcpTool)` |
+| A6 | — | an app naming the message's own turn | — | `UnknownApp(NoMcpToolCall)` |
+| A7 | a recorded writer | one carried context's app not recorded | — | refused as A2–A5; not admitted |
+| A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded before it. That means none, another server or tool, its own turn, a later turn, or, for a message steered into a running turn, a call that turn observed at or after the message's `target_event_offset` | — | `Corrupt`, and nothing is restored |
+| A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it, or recorded only by a unit that failed | — | `Corrupt` |
+| A10 | — | a person's message carrying no context | admitted | nothing looked up |
+| A11 | a restored snapshot or replayed log | a saved invocation with a steering target and no offset, or an offset and no target | — | `Corrupt`, the same on both paths |
+
+Restoration checks the order of the turns, which is what a snapshot keeps,
+and for a message steered natively into a running turn, its
+`target_event_offset`: the count of that turn's events saved when the
+message was admitted, so only a call of that turn observed before the offset
+was recorded before the message (`app_sources::validate_saved`, which a
+replayed record log asks too; there the turn's observations end at the
+offset). The target and its offset are read from a saved invocation in one
+place, `sessions::steering_position`, which refuses either half without the
+other (A11); restoration, replay and `validate_saved` take the position it
+returns, and admission saves the offset through it, refusing a target that is
+not a saved turn. Each path still bounds the offset against the target
+history it holds: at most the target's preceding events on restoration,
+exactly its events so far on replay
+(`a_steering_offset_is_bounded_by_the_target_history_each_path_holds`). A
+replayed injection takes no bound of its own: replay's admission bound is
+exact (restoration's holds for a message restored before it), and a target's
+events only grow while the message is saved, as a failed unit takes back its
+facts last first, the target's later events before the message
+(`a_replayed_injection_holds_after_a_failed_unit_takes_back_its_targets_later_events`).
+This is the one statement of that reason; the code points here. The
+saved position is also the provider correlation a history holds, read through
+the same owner (`a_saved_steering_position_needs_a_recorded_provider_context`).
+Restoration cannot tell whether an
+*earlier* turn's tool call was observed before a later message was admitted
+when the two turns overlapped (a recorded limit). Admission checks that it
+was.
+
+### The values, saved and sent
+
+| # | Input | Outcome |
+| --- | --- | --- |
+| V1 | an app's tool call identity past `MAX_TOOL_ID_BYTES` | `ValueTooLong`; exactly at it, taken |
+| V2 | a context with neither part, or only an empty text | `Ok(None)`: no context |
+| V3 | structured content that is not the JSON text of one object | `InvalidStructuredContent` |
+| V4 | text and structured content together past `MAX_BYTES`, in UTF-8 bytes | `ValueTooLong`; exactly at it, taken |
+| V5 | a blank update identity, or one past `MAX_UPDATE_BYTES` | `EmptyValue` / `ValueTooLong` |
+| V6 | more than 4 contexts on one message | `TooManyValues` |
+| V7 | a message built without a sender | the person's; another sender, or other contexts, is another message |
+| P1 | a message from an app, carrying contexts, saved and read back | the same message |
+| P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
+| P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
+| P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
+| P5 | a saved message without `user_app` or `user_app_model_context`, as one saved before #390 | `Corrupt`, for that conversation only; another opens |
+| P6 | an `UnknownApp` failure saved and read back | the same variant |
+| P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
+| B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
+| B2 | a message carrying none | no block: sent as before |
+| B3 | context text that would close the array or repeat the preamble | stays one string of its own entry |
+| B4 | structured content `is_json` takes that a parser might not (a number past a double, a lone surrogate escape, deep nesting) | sent as held |
+| B5 | a context past the frame with the message | `MessageTooLarge`; the count is at least the encoded size |
+| B6 | a configured model without text input, and a message carrying app contexts, even with no text of its own | refused as a message with text is (`InvalidInput`): the contexts are a leading text block |
+
 ## Lanes
 
 App calls have 4 slots on each socket. A destructive call holds its slot while
@@ -246,3 +398,33 @@ Each row above has a test, named after it:
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `wire_errors.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
+- An app in its conversation, the SDK's rows: "The app a message names",
+  each row asked by admission, restoration and a replayed record log alike,
+  in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`
+  (A1c among them); the saved steering position in `sessions/steering_position.rs`:
+  A11 (`a11_a_steering_target_and_offset_are_saved_together_or_not_at_all`,
+  and round 3's repro of a steered snapshot stripped of its offset,
+  `a11_a_steered_snapshot_without_its_offset_cannot_name_a_later_call`), each
+  path's offset bound, the position as provider correlation, and a replayed
+  injection after a failed unit;
+  admission against saved turns in `sessions/manager.rs`
+  (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`,
+  `admission_keeps_a_calls_first_mcp_identity`, and A11's admission side,
+  `admission_saves_a_steering_target_with_its_offset_or_refuses_it`), at
+  every entry in `agents/messages.rs` (refused, admitted, and a retry that
+  changed the writer), and at every steering entry while a turn runs in
+  `scheduling.rs`, where A1b is a valid app steered natively into the turn
+  that drew it (`an_app_a_running_turn_drew_is_injected_into_that_turn`);
+  that no durable history holds one call as two MCP tools, so the rule has
+  nothing to disagree on, in
+  `no_durable_history_holds_one_call_as_two_mcp_tools`; V1–V7 in
+  `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P5
+  in `snapshot/semantic.rs`, and P5's other conversation opening in the
+  tests of `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
+  (it frames a save group by hand); P6 in
+  `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
+  `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
+  B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`,
+  and at every entry, as a text message is refused, in `agents/messages.rs`
+  (`an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry`;
+  `steer` saves before the check, #477).

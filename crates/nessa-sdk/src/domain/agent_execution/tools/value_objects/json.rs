@@ -18,7 +18,7 @@ enum Open {
 }
 
 /// Whether `text` is exactly one JSON value, surrounded by optional whitespace.
-pub(super) fn is_json(text: &str) -> bool {
+pub(in crate::domain::agent_execution) fn is_json(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut at = 0;
     let mut open: Vec<Open> = Vec::new();
