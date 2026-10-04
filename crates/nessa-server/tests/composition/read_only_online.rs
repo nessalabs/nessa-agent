@@ -1050,6 +1050,29 @@ fn online_watch_precondition_refusals_use_the_records_output() {
     assert_eq!(refused, run("sync-records", &setup.conversation));
 }
 
+/// Row W17 before registration: `watch`'s discovery answered
+/// `source_preparing` is asked again, and the watch registers rather than
+/// reporting the row W16 discovery refusal.
+#[test]
+fn online_watch_registers_after_a_preparing_discovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _gateway = Gateway::start_mode(&root, "preparing-head");
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let cache = setup_cache(directory.path());
+    let mut child = WatchChild::spawn(vec![
+        "watch".into(),
+        profile_for(&root, &cache),
+        setup.conversation.clone(),
+        "100".into(),
+        "1".into(),
+    ]);
+    watch_registered(&mut child);
+    watch_pass(&mut child, "recheck", 1);
+    assert!(watch_end(child, "passesExhausted"));
+}
+
 /// Committed change watches rows L8–L10 and W2–W13, with the example
 /// client's own `watch` command on two paired devices in separate processes
 /// against one gateway that is never restarted.

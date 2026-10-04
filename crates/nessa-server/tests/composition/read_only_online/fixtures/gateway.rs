@@ -7,7 +7,7 @@ use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs};
 use crate::composition::runtime_config::NativeConfig;
 use crate::conversation::application::{
-    ConversationRepository, ReceiverReadScope, RecordReadFuture, RecordReadLease,
+    ConversationRepository, ReceiverReadScope, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
 use crate::conversation::domain::{
@@ -107,6 +107,9 @@ impl RecordReadSource for GatedRead {
                     self.heads.release.notified().await
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
+                // A cold first head read, as a loaded gateway answers it
+                // (row W17); the next head read succeeds.
+                ("preparing-head", Some(1)) => return Err(RecordReadError::SourcePreparing),
                 ("cumulative-head", Some(count)) if count > 1 => {
                     tokio::time::sleep(Duration::from_secs(3)).await
                 }
