@@ -219,7 +219,9 @@ pub struct ConversationPermission {
 /// Who asked for a review. For [`ConversationPermissionOrigin::Harness`],
 /// the review's execution and tool are the agent's call being reviewed; for
 /// [`ConversationPermissionOrigin::App`], they are the app — the tool call
-/// whose UI it is — and `server` and `tool` the tool it asked to call.
+/// whose UI it is — and `server` and `tool` the tool it asked to call, `tool`
+/// being the review's `tool_name` (`review_of` in `app_reviews` builds both
+/// from one name; `tests/conversation/app_reviews.rs` asserts they agree).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationPermissionOrigin {
