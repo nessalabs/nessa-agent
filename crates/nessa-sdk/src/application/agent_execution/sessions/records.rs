@@ -386,8 +386,15 @@ impl continuation::Continuation {
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
-                super::app_sources::validate_app_sources(
+                // The target's observations end at the offset here
+                // (`validate_target_prefix`), as they stood at admission.
+                super::app_sources::validate_saved(
                     &record.request.user_message,
+                    record
+                        .scheduling
+                        .first()
+                        .and_then(|event| event.target.as_ref())
+                        .zip(record.target_event_offset),
                     |execution, tool| {
                         positions.get(execution).and_then(|&index| {
                             invocations[index].mcp_tool(&snapshot.invocations[index], tool)

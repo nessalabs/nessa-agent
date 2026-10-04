@@ -849,8 +849,9 @@ async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
 /// A call observed as `charts/show` and then reported as `charts/hide` keeps
 /// its first MCP identity: the second observation is refused and saved as
 /// nothing, so admission refuses an app naming `charts/hide`
-/// (`DifferentMcpTool`) and takes `charts/show`, as restoration refuses the
-/// two together (`a_restored_call_seen_as_two_mcp_tools_names_no_app`).
+/// (`DifferentMcpTool`) and takes `charts/show`; restoration refuses a
+/// history holding the two together
+/// (`no_durable_history_holds_one_call_as_two_mcp_tools`).
 #[tokio::test]
 async fn admission_keeps_a_calls_first_mcp_identity() {
     use crate::application::agent_execution::sessions::UnknownApp;

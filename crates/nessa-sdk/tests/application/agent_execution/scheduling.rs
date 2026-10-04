@@ -12,6 +12,10 @@ use tokio::sync::{mpsc, oneshot, watch, Notify};
 struct Started {
     id: ExecutionId,
     release: oneshot::Sender<Result<ExecutionOutcome, AgentError>>,
+    /// The session's observation stream, for a test to report what the
+    /// running turn does before it is released. Weak, so close still ends
+    /// the stream by dropping the backend's sender.
+    events: Option<mpsc::WeakUnboundedSender<ExecutionEvent>>,
 }
 struct GatedProvider {
     started: mpsc::UnboundedSender<Started>,
@@ -75,6 +79,12 @@ impl ProviderSessionBackend for GatedBackend {
                         .send(Started {
                             id: input.execution_id.clone(),
                             release,
+                            events: self
+                                .events
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .map(mpsc::UnboundedSender::downgrade),
                         })
                         .unwrap();
                     let mut closing = self.closing.subscribe();
@@ -986,4 +996,96 @@ async fn a_forged_app_is_refused_while_a_turn_runs_at_every_steering_entry() {
         ["active", "correction"]
     );
     agent.close(close_action()).await.unwrap();
+}
+
+/// An app the running turn drew reaches that turn by native steering ("The
+/// app a message names", A1b): with the turn's tool call `call-1` observed
+/// as MCP `charts/show`, a message from that app is injected, and one naming
+/// `charts/hide` for that call is `DifferentMcpTool`, with nothing saved or
+/// steered. What was saved restores (A8): the call was observed before the
+/// injected message's offset.
+#[tokio::test]
+async fn an_app_a_running_turn_drew_is_injected_into_that_turn() {
+    use nessa_sdk::application::agent_execution::sessions::UnknownApp;
+    use nessa_sdk::domain::agent_execution::{
+        prompts::{McpAppSource, MessageSender},
+        tools::{McpTool, ToolCallId, ToolCallUpdate},
+    };
+    let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
+    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let running = started(&mut calls, "active").await;
+    let call = ToolCallId::new("call-1").unwrap();
+    running
+        .events
+        .as_ref()
+        .and_then(mpsc::WeakUnboundedSender::upgrade)
+        .unwrap()
+        .send(ExecutionEvent::new(
+            ExecutionId::new("active").unwrap(),
+            ExecutionUpdate::Tool(
+                ToolCallUpdate::new(call.clone(), None, None, None, None, None)
+                    .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+            ),
+        ))
+        .unwrap();
+    within(async {
+        while record(&storage, "active").events.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let from = |id: &str, tool: &str| ExecutionRequest {
+        user_message: request(id).user_message.sent_by(MessageSender::App(
+            McpAppSource::new(
+                ExecutionId::new("active").unwrap(),
+                call.clone(),
+                McpTool::new("charts", tool).unwrap(),
+            )
+            .unwrap(),
+        )),
+        ..request(id)
+    };
+
+    let saved = storage.snapshot();
+    assert_eq!(
+        agent.steer(from("hidden", "hide"), actor()).await.map(drop),
+        Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
+    );
+    assert!(provider.steered.lock().unwrap().is_empty());
+    assert_eq!(storage.snapshot(), saved);
+
+    let shown = from("shown", "show");
+    assert!(matches!(
+        agent.steer(shown.clone(), actor()).await,
+        Ok(SteeringDelivery::Injected { target, .. }) if target.as_str() == "active"
+    ));
+    assert_eq!(
+        provider
+            .steered
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(target, input)| (target.as_str().to_owned(), input.clone()))
+            .collect::<Vec<_>>(),
+        [("active".to_owned(), shown.clone())]
+    );
+    let injected = record(&storage, "shown");
+    assert_eq!(injected.request.user_message, shown.user_message);
+    assert_eq!(injected.target_event_offset, Some(1));
+    complete(running);
+    assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Completed));
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+
+    let restored = attached_agent(
+        Arc::new(GatedFactory(provider.clone())),
+        storage.manager().await,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        record(&storage, "shown").request.user_message,
+        shown.user_message
+    );
+    restored.close(close_action()).await.unwrap();
 }

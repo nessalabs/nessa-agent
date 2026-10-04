@@ -305,20 +305,26 @@ as itself in a saved error; on restoration, `StorageError::Corrupt`.
 | # | State | Event | Next | Effect |
 | --- | --- | --- | --- | --- |
 | A1 | an earlier turn's tool call observed as MCP `server/tool` | a message from that app, or carrying its context | admitted | as any message |
+| A1b | a running turn whose tool call was observed as MCP `server/tool` | a message from that app is steered into that turn | injected | as any steered message |
 | A2 | — | an app naming a turn the session has no record of | — | `UnknownApp(NoMcpToolCall)`; nothing saved, queued or sent, at every entry |
 | A3 | the turn recorded, no such tool call in it | as A2 | — | `UnknownApp(NoMcpToolCall)` |
 | A4 | the tool call recorded, with no MCP identity | as A2 | — | `UnknownApp(NoMcpToolCall)` |
 | A5 | the tool call recorded as MCP `server/tool` | an app naming another server, or another tool | — | `UnknownApp(DifferentMcpTool)` |
 | A6 | — | an app naming the message's own turn | — | `UnknownApp(NoMcpToolCall)` |
 | A7 | a recorded writer | one carried context's app not recorded | — | refused as A2–A5; not admitted |
-| A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded in an earlier one — none, another server or tool, its own, a later one's | — | `Corrupt`; not restored |
+| A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded before it. That means none, another server or tool, its own turn, a later turn, or, for a message steered into a running turn, a call that turn observed at or after the message's `target_event_offset` | — | `Corrupt`, and nothing is restored |
 | A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it, or recorded only by a unit that failed | — | `Corrupt` |
 | A10 | — | a person's message carrying no context | admitted | nothing looked up |
 
-Restoration checks the order of the turns, which is what a snapshot keeps:
-it cannot tell whether an earlier turn's tool call was observed before a
-later message was admitted when the two overlapped (a recorded limit).
-Admission checks that it was.
+Restoration checks the order of the turns, which is what a snapshot keeps,
+and for a message steered natively into a running turn, its
+`target_event_offset`: the count of that turn's events saved when the
+message was admitted, so only a call of that turn observed before the offset
+was recorded before the message (`app_sources::validate_saved`, which a
+replayed record log asks too; there the turn's observations end at the
+offset). It cannot tell whether an *earlier* turn's tool call was observed
+before a later message was admitted when the two turns overlapped (a
+recorded limit). Admission checks that it was.
 
 ### The values, saved and sent
 
@@ -343,6 +349,7 @@ Admission checks that it was.
 | B3 | context text that would close the array or repeat the preamble | stays one string of its own entry |
 | B4 | structured content `is_json` takes that a parser might not (a number past a double, a lone surrogate escape, deep nesting) | sent as held |
 | B5 | a context past the frame with the message | `MessageTooLarge`; the count is at least the encoded size |
+| B6 | a configured model without text input, and a message carrying app contexts, even with no text of its own | refused as a message with text is (`InvalidInput`): the contexts are a leading text block |
 
 ## Lanes
 
@@ -380,10 +387,15 @@ Each row above has a test, named after it:
   `admission_keeps_a_calls_first_mcp_identity`), at every entry in
   `agents/messages.rs` (refused, admitted, and a retry that changed the
   writer), and at every steering entry while a turn runs in
-  `scheduling.rs`; V1–V7 in
+  `scheduling.rs`, where A1b is a valid app steered natively into the turn
+  that drew it (`an_app_a_running_turn_drew_is_injected_into_that_turn`);
+  that no durable history holds one call as two MCP tools, so the rule has
+  nothing to disagree on, in
+  `no_durable_history_holds_one_call_as_two_mcp_tools`; V1–V7 in
   `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P5
   in `snapshot/semantic.rs`, and P5's other conversation opening in the
   tests of `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
   (it frames a save group by hand); P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
-  `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`.
+  `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
+  B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`.

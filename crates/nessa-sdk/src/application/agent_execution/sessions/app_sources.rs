@@ -2,8 +2,8 @@
 //! recorded before it.
 //!
 //! ```text
-//! begin_record (admission) ──┐
-//! validation::continuation ──┼─> validate_app_sources(message, recorded)
+//! begin_record (admission) ──> validate_against ──┐
+//! validation::continuation ──┬─> validate_saved ──┴─> validate_app_sources(message, recorded)
 //! records InputAccepted ─────┘
 //! recorded: admission scans the named saved turn (mcp_tool_calls);
 //!           restoration and replay ask each earlier turn's observation index
@@ -13,7 +13,11 @@
 //! Arrows show who asks. Each caller answers `recorded` from the turns before
 //! the message only, and every answer reads tool calls through
 //! [`mcp_tool_call`], so what counts as a recorded MCP tool call is decided
-//! once.
+//! once. A message steered into a running turn may name that turn's calls
+//! observed before it: admission and replay see only those, as they hold the
+//! turn as it stood then; a restored snapshot holds the whole turn, so
+//! [`validate_saved`] keeps the calls before the message's
+//! `target_event_offset`.
 #![deny(missing_docs)]
 
 use super::InvocationRecord;
@@ -32,8 +36,8 @@ use std::fmt;
 pub enum UnknownApp {
     /// No earlier turn of the session observed the named tool call as an MCP
     /// call: the turn is unknown, has no such tool call, the tool call named
-    /// no MCP server, or it is the message's own turn, whose tool calls come
-    /// after it.
+    /// no MCP server, it is the message's own turn, whose tool calls come
+    /// after it, or the message was steered into that turn before the call.
     NoMcpToolCall,
     /// The tool call was recorded as a call to another MCP server or tool than
     /// the one the app names.
@@ -96,6 +100,27 @@ pub(crate) fn validate_app_sources<'a>(
                 Some(_) => Ok(()),
             },
         )
+}
+
+/// [`validate_app_sources`] for a saved message, against `observed`, which
+/// finds a named tool call with the index of the event that first observed
+/// it as an MCP call. A message steered into a running turn (`steered`: that
+/// turn, and the message's `target_event_offset`, the count of the turn's
+/// events saved when the message was admitted) names a call of that turn
+/// only if the call was observed before the offset; one observed at or after
+/// it was not recorded before the message, and is `NoMcpToolCall`.
+pub(crate) fn validate_saved<'a>(
+    message: &UserMessage,
+    steered: Option<(&ExecutionId, usize)>,
+    observed: impl Fn(&ExecutionId, &ToolCallId) -> Option<(usize, &'a McpTool)>,
+) -> Result<(), UnknownApp> {
+    validate_app_sources(message, |execution, tool_id| {
+        observed(execution, tool_id)
+            .filter(|&(index, _)| {
+                steered.is_none_or(|(target, offset)| target != execution || index < offset)
+            })
+            .map(|(_, tool)| tool)
+    })
 }
 
 /// [`validate_app_sources`] against `earlier`, the session's turns before the

@@ -138,16 +138,16 @@ impl InvocationContinuation {
         self.usage = undo.usage;
     }
     /// The MCP tool `tool_id` was observed calling in `record`, the
-    /// invocation this continuation is of.
+    /// invocation this continuation is of, with the index of the event that
+    /// first observed it so.
     pub(super) fn mcp_tool<'a>(
         &self,
         record: &'a InvocationRecord,
         tool_id: &ToolCallId,
-    ) -> Option<&'a McpTool> {
-        self.observations
-            .mcp_tool_call(tool_id)
-            .and_then(|index| app_sources::mcp_tool_call(record.events[index].update()))
-            .map(|(_, tool)| tool)
+    ) -> Option<(usize, &'a McpTool)> {
+        self.observations.mcp_tool_call(tool_id).and_then(|index| {
+            app_sources::mcp_tool_call(record.events[index].update()).map(|(_, tool)| (index, tool))
+        })
     }
     pub(super) fn retained_bytes(&self) -> usize {
         self.observations
@@ -211,11 +211,26 @@ pub(super) fn continuation(
     // against those before it, through each one's observation index.
     let mut positions = HashMap::with_capacity(snapshot.invocations.len());
     for invocation in &snapshot.invocations {
-        app_sources::validate_app_sources(&invocation.request.user_message, |execution, tool| {
-            positions.get(execution).and_then(|&index: &usize| {
-                InvocationContinuation::mcp_tool(&states[index], &snapshot.invocations[index], tool)
-            })
-        })
+        // The snapshot holds a steered message's target whole, so the offset
+        // bounds which of its calls came before the message.
+        let steered = invocation
+            .scheduling
+            .first()
+            .and_then(|edge| edge.target.as_ref())
+            .zip(invocation.target_event_offset);
+        app_sources::validate_saved(
+            &invocation.request.user_message,
+            steered,
+            |execution, tool| {
+                positions.get(execution).and_then(|&index: &usize| {
+                    InvocationContinuation::mcp_tool(
+                        &states[index],
+                        &snapshot.invocations[index],
+                        tool,
+                    )
+                })
+            },
+        )
         .map_err(corrupt)?;
         if let Some(offset) = invocation.target_event_offset {
             let target = invocation
