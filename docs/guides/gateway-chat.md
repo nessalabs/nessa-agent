@@ -194,9 +194,12 @@ a restart. `mcpServers.list` reads the file, so a hand edit to it is listed
 at once but reaches new conversations only at the next save or remove, or the
 next start. Editing a server's variables alone is a change like any other: a
 conversation still running the old one is refused it and starts a new
-session. A change or inspection already under way when the gateway begins
-to stop finishes and is recorded before the MCP servers stop; one asked for
-after that is refused `mcp_servers_stopping`. `mcpServers.inspect` starts a saved server once,
+session. A variable named twice in one entry is refused, at startup and on a
+write, rather than one value kept. A change already under way when the
+gateway begins to stop finishes and is recorded before the MCP servers stop;
+an inspection under way is cut at once — its server stopped and the cut
+recorded — rather than finished; one asked for after that is refused
+`mcp_servers_stopping`. `mcpServers.inspect` starts a saved server once,
 outside any conversation, lists its tools with their hints and each MCP App's
 CSP and permissions, then stops it; it is bounded in time and size, runs at
 most two at a time, and is audited, because it runs the server's executable

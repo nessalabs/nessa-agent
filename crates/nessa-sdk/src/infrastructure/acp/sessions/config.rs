@@ -22,25 +22,28 @@ use std::{
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StdioMcpServer {
-    /// Unique ASCII server name (letters, digits, hyphen, underscore; at most 64 bytes).
+    /// Unique ASCII server name (letters, digits, hyphen, underscore; at most
+    /// [`MAX_MCP_SERVER_NAME_BYTES`]).
     pub name: String,
     /// Absolute UTF-8 executable path, launched directly without shell interpolation.
     pub command: PathBuf,
-    /// Ordered UTF-8 arguments. Never put credentials here; these enter the context fingerprint.
+    /// Ordered UTF-8 arguments. Never put credentials here: any process list shows them.
     #[serde(default)]
     pub args: Vec<String>,
 }
 impl StdioMcpServer {
     /// Why this server cannot be launched as configured, or `None` when it
-    /// can: a name of ASCII letters, digits, `-` and `_`, 1–64 bytes, without
+    /// can: a name of ASCII letters, digits, `-` and `_`, 1 to
+    /// [`MAX_MCP_SERVER_NAME_BYTES`] bytes, without
     /// `__` and neither starting nor ending with `_` (a harness names a tool
     /// `mcp__<server>__<tool>`, so the server's name must not run into the
     /// separators on either side); an absolute UTF-8
-    /// executable; at most 64 arguments of at most 8192 bytes, none holding
-    /// NUL. The rules for one server; [`Self::problem_in`] adds the set's.
+    /// executable; at most [`MAX_MCP_SERVER_ARGS`] arguments of at most
+    /// [`MAX_MCP_SERVER_ARG_BYTES`] bytes, none holding NUL. The rules for
+    /// one server; [`Self::problem_in`] adds the set's.
     pub fn problem(&self) -> Option<McpServerProblem> {
         if self.name.is_empty()
-            || self.name.len() > 64
+            || self.name.len() > MAX_MCP_SERVER_NAME_BYTES
             || self.name.contains("__")
             || self.name.starts_with('_')
             || self.name.ends_with('_')
@@ -58,11 +61,11 @@ impl StdioMcpServer {
                 server: self.name.clone(),
             });
         }
-        if self.args.len() > 64
+        if self.args.len() > MAX_MCP_SERVER_ARGS
             || self
                 .args
                 .iter()
-                .any(|arg| arg.len() > 8192 || arg.contains('\0'))
+                .any(|arg| arg.len() > MAX_MCP_SERVER_ARG_BYTES || arg.contains('\0'))
         {
             return Some(McpServerProblem::Arguments {
                 server: self.name.clone(),
@@ -98,6 +101,14 @@ impl StdioMcpServer {
 /// The most MCP servers one set may hold: what an ACP binding is given and
 /// what the MCP client runs ([`StdioMcpServer::problem_in`]).
 pub const MAX_MCP_SERVERS: usize = 16;
+/// The most bytes in an MCP server's name ([`StdioMcpServer::problem`]).
+pub const MAX_MCP_SERVER_NAME_BYTES: usize = 64;
+/// The most arguments an MCP server is started with
+/// ([`StdioMcpServer::problem`]).
+pub const MAX_MCP_SERVER_ARGS: usize = 64;
+/// The most bytes in one of an MCP server's arguments
+/// ([`StdioMcpServer::problem`]).
+pub const MAX_MCP_SERVER_ARG_BYTES: usize = 8192;
 
 /// Why a server, or a set of servers, cannot be launched as configured. The
 /// one owner of those rules is [`StdioMcpServer::problem_in`] (with
@@ -115,7 +126,7 @@ pub enum McpServerProblem {
         /// The name configured twice.
         server: String,
     },
-    /// The name is empty, longer than 64 bytes, holds `__`, starts or ends
+    /// The name is empty, longer than [`MAX_MCP_SERVER_NAME_BYTES`], holds `__`, starts or ends
     /// with `_`, or holds anything but ASCII letters, digits, `-` and `_`.
     Name {
         /// The name as it is configured.
@@ -126,16 +137,22 @@ pub enum McpServerProblem {
         /// The server's name.
         server: String,
     },
-    /// More than 64 arguments, or one longer than 8192 bytes or holding NUL.
+    /// More than [`MAX_MCP_SERVER_ARGS`] arguments, or one longer than
+    /// [`MAX_MCP_SERVER_ARG_BYTES`] or holding NUL.
     Arguments {
         /// The server's name.
         server: String,
     },
-    /// An environment variable's name is empty, longer than 256 bytes, starts
-    /// with a digit, or holds anything but ASCII letters, digits and `_`.
+    /// An environment variable's name is empty, longer than
+    /// [`MAX_MCP_ENVIRONMENT_NAME_BYTES`](crate::infrastructure::mcp::MAX_MCP_ENVIRONMENT_NAME_BYTES),
+    /// starts with a digit, or holds anything but ASCII letters, digits and
+    /// `_`.
     EnvironmentName {
-        /// The server's name; the variable's is not UTF-8 or not one to print.
+        /// The server's name.
         server: String,
+        /// The variable's name, any byte that is not UTF-8 replaced; never
+        /// its value.
+        name: String,
     },
     /// An environment variable's name is one a server may not be given:
     /// [`MCP_SESSION_VARIABLE`](crate::infrastructure::mcp::MCP_SESSION_VARIABLE),
@@ -170,9 +187,9 @@ impl fmt::Display for McpServerProblem {
             Self::Arguments { server } => {
                 write!(f, "invalid arguments for the MCP server {server:?}")
             }
-            Self::EnvironmentName { server } => write!(
+            Self::EnvironmentName { server, name } => write!(
                 f,
-                "invalid environment variable name for the MCP server {server:?}"
+                "invalid environment variable name {name:?} for the MCP server {server:?}"
             ),
             Self::ReservedEnvironmentName { server, name } => write!(
                 f,

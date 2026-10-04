@@ -171,20 +171,21 @@ pub(super) fn configure(
     // gains it (`composed_settings_publish_privately_under_the_lock_and_audit_without_values`).
     // User-configured MCP servers retain their settings.
     agents.mcp_servers.retain(|server| !server.managed());
-    agents.mcp_servers.push(ConfiguredMcpServer {
-        server: StdioServer {
-            name: MANAGED_SERVER_NAME.into(),
-            command: mcp,
-            args: vec![
-                "--workspace".into(),
-                agents.workspace.to_string_lossy().into_owned(),
-                "--audit-directory".into(),
-                data.join("process-audit").to_string_lossy().into_owned(),
-            ],
-        },
-        enabled: true,
-        env: Default::default(),
-    });
+    let managed = StdioServer::new(
+        MANAGED_SERVER_NAME,
+        mcp,
+        vec![
+            "--workspace".into(),
+            agents.workspace.to_string_lossy().into_owned(),
+            "--audit-directory".into(),
+            data.join("process-audit").to_string_lossy().into_owned(),
+        ],
+    );
+    // No variables of its own, so none is named twice.
+    agents.mcp_servers.push(
+        ConfiguredMcpServer::new(managed, true, [])
+            .expect("a server with no variables names none twice"),
+    );
     Ok(())
 }
 

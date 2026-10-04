@@ -2412,6 +2412,15 @@ mod tests {
                     "server": input(json!([{"name": "API_TOKEN"}]))}),
                 json!({"code": "invalid_request", "details": null}),
             ),
+            // A bad variable name is named.
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "1BAD", "value": "v"}]))}),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_name", "server": "mcptest",
+                        "name": "1BAD"}}),
+            ),
         ];
         for (method, params, expected) in refusals {
             assert_eq!(
@@ -2420,6 +2429,50 @@ mod tests {
                 "{method} {params}"
             );
         }
+        // The configuration not published: nothing applied. Published, but
+        // its directory not synced: applied, and said so.
+        files
+            .fail_publish
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": kept["revision"], "server": input(json!([]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_storage_unavailable",
+                    "details": {"applied": false}})
+            )
+        );
+        files
+            .fail_publish
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        files
+            .fail_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "API_TOKEN", "value": null}]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_storage_unavailable",
+                    "details": {"applied": true}})
+            )
+        );
+        files
+            .fail_sync
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let kept = list(&state).await;
         audit
             .fail_outcome
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -2501,7 +2554,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_servers_inspect_answers_typed_tools_and_typed_failures() {
         use crate::mcp_servers::application::{
-            InspectCut, InspectFailure, InspectedTool, InspectedUi, Inspection,
+            InspectCut, InspectFailure, InspectedTool, InspectedUi, Inspection, ServerProblem,
         };
         use crate::mcp_servers::infrastructure::settings_test_support::{
             config, entry, inspected_over, LeapingClock, MemoryFiles, RecordingAudit,
@@ -2589,6 +2642,15 @@ mod tests {
             (
                 InspectFailure::Stopping,
                 json!({"code": "mcp_servers_stopping", "details": null}),
+            ),
+            // A stored server the SDK refuses to start: its problem, named.
+            (
+                InspectFailure::Invalid(ServerProblem::EnvironmentName {
+                    server: "a".into(),
+                    name: "1BAD".into(),
+                }),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_name", "server": "a", "name": "1BAD"}}),
             ),
             (
                 InspectFailure::RemoteError {

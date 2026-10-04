@@ -257,7 +257,10 @@ fn every_problem_about_one_server_names_it() {
             with(|launch| {
                 launch.environment.insert("1A".into(), "v".into());
             }),
-            McpServerProblem::EnvironmentName { server: server() },
+            McpServerProblem::EnvironmentName {
+                server: server(),
+                name: "1A".into(),
+            },
         ),
         (
             with(|launch| {
@@ -429,7 +432,10 @@ fn the_sets_count_and_each_servers_environment_are_checked_by_one_owner() {
     for name in ["", "1A", "A-B", "A=B", "Ä", &"N".repeat(257)] {
         assert_eq!(
             with_environment("s", &[(name, b"value")]).problem(),
-            Some(McpServerProblem::EnvironmentName { server: "s".into() }),
+            Some(McpServerProblem::EnvironmentName {
+                server: "s".into(),
+                name: name.to_owned(),
+            }),
             "{name:?}"
         );
     }
@@ -456,7 +462,10 @@ fn the_sets_count_and_each_servers_environment_are_checked_by_one_owner() {
     );
     assert_eq!(
         problem(&[launch("ok"), with_environment("s", &[("1", b"")])]),
-        Some(McpServerProblem::EnvironmentName { server: "s".into() })
+        Some(McpServerProblem::EnvironmentName {
+            server: "s".into(),
+            name: "1".into(),
+        })
     );
 }
 

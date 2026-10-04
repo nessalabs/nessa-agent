@@ -15,10 +15,10 @@ mod settings;
 
 pub use ports::{
     AuditUnavailable, AuditedServer, InspectBounds, InspectCut, InspectFailure, InspectFuture,
-    InspectStop, InspectedTool, InspectedUi, Inspection, LiveServerSet, LiveSetKept,
-    McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+    InspectStop, InspectedTool, InspectedUi, Inspection, LaunchBegun, LiveServerSet, LiveSetKept,
+    McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord, McpServerCause,
     McpServerChangeRequest, McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector,
-    ServerNames, ServerProblem, StoreError, StoreFuture, StoreLock, StoredServers,
+    ServerNames, ServerProblem, StoreError, StoreFuture, StoreLock, StoredServers, Written,
 };
 pub use settings::{
     drain_bound, EditProblem, ListedServer, McpServerSettings, McpServerSettingsError, ServerList,

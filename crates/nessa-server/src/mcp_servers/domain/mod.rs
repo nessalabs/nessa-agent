@@ -12,7 +12,8 @@ pub use app_call::{
     MAX_APP_RESULT_BYTES,
 };
 pub use configured_server::{
-    ConfiguredMcpServer, EditRefusal, ServerEdit, ServerSave, StdioServer, MANAGED_SERVER_NAME,
+    ConfiguredMcpServer, EditRefusal, EnvironmentNameRepeated, ServerEdit, ServerSave, StdioServer,
+    MANAGED_SERVER_NAME,
 };
 pub use resource_ticket::{resource_ticket, ResourceTicketDigest};
 pub use session_token::{session_token, TokenDigest};

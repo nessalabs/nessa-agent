@@ -26,9 +26,9 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 /// `server` as the SDK holds it.
 pub fn sdk_server(server: &StdioServer) -> StdioMcpServer {
     StdioMcpServer {
-        name: server.name.clone(),
-        command: server.command.clone(),
-        args: server.args.clone(),
+        name: server.name().to_owned(),
+        command: server.command().to_owned(),
+        args: server.args().to_vec(),
     }
 }
 
@@ -53,7 +53,7 @@ impl std::fmt::Debug for LaunchSettings {
         f.debug_struct("LaunchSettings")
             .field(
                 "managed",
-                &self.managed.as_ref().map(|managed| &managed.server.name),
+                &self.managed.as_ref().map(|managed| managed.server().name()),
             )
             .field("working_directory", &self.working_directory)
             .field("environment", &self.environment.keys().collect::<Vec<_>>())
@@ -82,11 +82,11 @@ impl LaunchSettings {
     /// live set and an inspection both start.
     pub(super) fn launch(&self, server: &ConfiguredMcpServer) -> McpServerLaunch {
         let mut environment = self.environment.clone();
-        for (name, value) in &server.env {
+        for (name, value) in server.env() {
             environment.insert(name.into(), value.into());
         }
         McpServerLaunch {
-            server: sdk_server(&server.server),
+            server: sdk_server(server.server()),
             working_directory: self.working_directory.clone(),
             environment,
         }
@@ -111,7 +111,7 @@ impl LaunchSettings {
             .chain(
                 stored
                     .iter()
-                    .filter(|server| server.server.name != MANAGED_SERVER_NAME),
+                    .filter(|server| server.server().name() != MANAGED_SERVER_NAME),
             )
             .collect();
         let launches: Vec<McpServerLaunch> =
@@ -122,7 +122,7 @@ impl LaunchSettings {
         Ok(every
             .iter()
             .zip(launches)
-            .filter(|(server, _)| server.enabled)
+            .filter(|(server, _)| server.enabled())
             .map(|(_, launch)| launch)
             .collect())
     }
@@ -157,14 +157,16 @@ impl LiveServerSet for LiveMcpServers {
 }
 
 /// The SDK's problem as the application names it.
-fn problem(problem: McpServerProblem) -> ServerProblem {
+pub(super) fn problem(problem: McpServerProblem) -> ServerProblem {
     match problem {
         McpServerProblem::TooMany => ServerProblem::TooMany,
         McpServerProblem::DuplicateName { server } => ServerProblem::DuplicateName { server },
         McpServerProblem::Name { server } => ServerProblem::Name { server },
         McpServerProblem::Command { server } => ServerProblem::Command { server },
         McpServerProblem::Arguments { server } => ServerProblem::Arguments { server },
-        McpServerProblem::EnvironmentName { server } => ServerProblem::EnvironmentName { server },
+        McpServerProblem::EnvironmentName { server, name } => {
+            ServerProblem::EnvironmentName { server, name }
+        }
         McpServerProblem::ReservedEnvironmentName { server, name } => {
             ServerProblem::ReservedEnvironmentName { server, name }
         }

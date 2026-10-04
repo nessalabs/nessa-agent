@@ -5,9 +5,15 @@
 //! other audits beside it are. A record names servers and variables, never a
 //! variable's value
 //! (`composed_settings_publish_privately_under_the_lock_and_audit_without_values`).
+//!
+//! Records carry no sequence number. An operation's requested record is
+//! made durable before its outcome; between operations — and across a
+//! restart — the only order is `observedAtMs`, on the wall clock, which may
+//! step backwards. The operation's id, not the time, is what pairs a
+//! requested record with its outcome.
 use crate::mcp_servers::application::{
     AuditUnavailable, AuditedServer, InspectCut, McpServerAction, McpServerAudit,
-    McpServerAuditPhase, McpServerAuditRecord, McpServerOutcome, ServerNames,
+    McpServerAuditPhase, McpServerAuditRecord, McpServerCause, McpServerOutcome, ServerNames,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
@@ -80,6 +86,7 @@ fn stored(record: &McpServerAuditRecord) -> Value {
             before,
             after,
             live_set_replaced,
+            durable,
         }) => (
             "outcome",
             json!({
@@ -87,6 +94,7 @@ fn stored(record: &McpServerAuditRecord) -> Value {
                 "before": names(before),
                 "after": names(after),
                 "liveSetReplaced": live_set_replaced,
+                "durable": durable,
             }),
         ),
         McpServerAuditPhase::Outcome(McpServerOutcome::Refused { reason, before }) => (
@@ -117,6 +125,20 @@ fn stored(record: &McpServerAuditRecord) -> Value {
             }),
         ),
     };
+    // The operation's cause, and who set it off: the caller, or the gateway
+    // stopping, for an inspection shutdown ended.
+    let (cause, initiator) = match &record.cause {
+        McpServerCause::CallerRequested(caller) => (
+            "caller_requested",
+            json!({
+                "kind": "caller",
+                "organizationId": caller.organization_id,
+                "principalId": caller.principal_id,
+                "credentialId": caller.credential_id,
+            }),
+        ),
+        McpServerCause::GatewayStopping => ("gateway_stopping", json!({"kind": "system"})),
+    };
     json!({
         "kind": "mcp_servers",
         "operationId": record.operation_id,
@@ -128,13 +150,8 @@ fn stored(record: &McpServerAuditRecord) -> Value {
         },
         "target": {"name": request.target, "previousName": request.previous_name},
         "transition": transition,
-        "cause": "caller_requested",
-        "initiator": {
-            "kind": "caller",
-            "organizationId": record.initiator.organization_id,
-            "principalId": record.initiator.principal_id,
-            "credentialId": record.initiator.credential_id,
-        },
+        "cause": cause,
+        "initiator": initiator,
     })
 }
 

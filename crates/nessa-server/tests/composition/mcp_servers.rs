@@ -34,14 +34,9 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
         workspace: std::env::temp_dir(),
         mcp_servers: servers
             .into_iter()
-            .map(|server| ConfiguredMcpServer {
-                server: StdioServer {
-                    name: server.name,
-                    command: server.command,
-                    args: server.args,
-                },
-                enabled: true,
-                env: BTreeMap::new(),
+            .map(|server| {
+                let server = StdioServer::new(server.name, server.command, server.args);
+                ConfiguredMcpServer::new(server, true, []).unwrap()
             })
             .collect(),
         stand_ins: Default::default(),
@@ -373,9 +368,10 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming
     ] {
         let mut config = agents(vec![server("ok", &[]), configured]);
         if let Some(variable) = variable {
-            config.mcp_servers[1]
-                .env
-                .insert(variable.into(), "value".into());
+            let server = config.mcp_servers[1].server().clone();
+            config.mcp_servers[1] =
+                ConfiguredMcpServer::new(server, true, [(variable.into(), "value".into())])
+                    .unwrap();
         }
         let refused = compose(
             &mut config,
@@ -543,7 +539,7 @@ async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_laun
     let rows: Vec<_> = config
         .mcp_servers
         .iter()
-        .map(|each| (each.server.name.as_str(), each.enabled, each.env_names()))
+        .map(|each| (each.server().name(), each.enabled(), each.env_names()))
         .collect();
     assert_eq!(
         rows,
@@ -620,11 +616,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
     assert!(list.servers[0].managed);
     let save = ServerEdit::Save(ServerSave {
         previous_name: None,
-        server: StdioServer {
-            name: "mcptest".into(),
-            command: "/usr/bin/python3".into(),
-            args: vec!["/s.mjs".into()],
-        },
+        server: StdioServer::new("mcptest", "/usr/bin/python3", vec!["/s.mjs".into()]),
         env: vec![("API_TOKEN".into(), Some("secret-value".into()))],
         enabled: true,
     });
@@ -658,7 +650,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
     let stored: Vec<_> = agents
         .mcp_servers
         .iter()
-        .map(|each| each.server.name.as_str())
+        .map(|each| each.server().name())
         .collect();
     assert_eq!(stored, ["mcptest"]);
     let live: Vec<_> = composed
@@ -690,6 +682,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         .find(|record| record["transition"]["outcome"] == "applied")
         .expect("an applied outcome");
     assert_eq!(applied["transition"]["after"]["revision"], revision);
+    assert_eq!(applied["transition"]["durable"], true);
     assert_eq!(
         applied["transition"]["after"]["names"],
         serde_json::json!(["mcptest"])
@@ -819,11 +812,7 @@ fn caller() -> crate::mcp_servers::application::McpServerInitiator {
 fn saved(name: &str, args: Vec<String>) -> crate::mcp_servers::domain::ServerEdit {
     crate::mcp_servers::domain::ServerEdit::Save(crate::mcp_servers::domain::ServerSave {
         previous_name: None,
-        server: StdioServer {
-            name: name.into(),
-            command: "/usr/bin/python3".into(),
-            args,
-        },
+        server: StdioServer::new(name, "/usr/bin/python3", args),
         env: vec![],
         enabled: true,
     })
@@ -852,7 +841,10 @@ impl crate::mcp_servers::infrastructure::ConfigFiles for Held {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.files.read(limit)
     }
-    fn publish(&self, bytes: &[u8]) -> std::io::Result<()> {
+    fn publish(
+        &self,
+        bytes: &[u8],
+    ) -> std::io::Result<crate::mcp_servers::infrastructure::Published> {
         self.publishing
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let gate = self.gate.lock().unwrap().take();
@@ -1200,6 +1192,12 @@ async fn shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_
     assert_eq!(outcome["transition"]["outcome"], "inspected");
     assert_eq!(outcome["transition"]["cut"], "stopping");
     assert_eq!(outcome["transition"]["tools"], 0);
+    // Ended by the gateway stopping: the system's, its caller on the
+    // requested record.
+    assert_eq!(outcome["cause"], "gateway_stopping");
+    assert_eq!(outcome["initiator"], serde_json::json!({"kind": "system"}));
+    assert_eq!(records[2]["cause"], "caller_requested");
+    assert_eq!(records[2]["operationId"], outcome["operationId"]);
     // Killed with its group.
     within("the server and its child are gone", || {
         !alive(pid) && !alive(child)
@@ -1220,7 +1218,7 @@ async fn shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_
 #[test]
 fn a_stopping_record_says_the_server_was_not_started() {
     use crate::mcp_servers::application::{
-        McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+        McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord, McpServerCause,
         McpServerChangeRequest, McpServerOutcome,
     };
     use crate::mcp_servers::infrastructure::DurableMcpServerAudit;
@@ -1233,7 +1231,7 @@ fn a_stopping_record_says_the_server_was_not_started() {
     .unwrap()
     .record(&McpServerAuditRecord {
         operation_id: "operation".into(),
-        initiator: caller(),
+        cause: McpServerCause::GatewayStopping,
         request: McpServerChangeRequest {
             action: McpServerAction::Inspect,
             target: "fixture".into(),
@@ -1251,5 +1249,141 @@ fn a_stopping_record_says_the_server_was_not_started() {
     assert_eq!(
         records[0]["transition"],
         serde_json::json!({"outcome": "failed", "reason": "stopping", "started": false})
+    );
+    // Ended by the gateway stopping, not by its caller.
+    assert_eq!(records[0]["cause"], "gateway_stopping");
+    assert_eq!(
+        records[0]["initiator"],
+        serde_json::json!({"kind": "system"})
+    );
+}
+
+/// C-dup: a variable named twice in a stored server's `env` is refused, in
+/// either order — at startup, by the runtime configuration's parse, and on
+/// a write, by the store's check of the file it reads — before decoding into
+/// a map could keep one value silently.
+#[tokio::test]
+async fn a_repeated_variable_name_in_the_file_is_refused_in_either_order() {
+    use super::super::runtime_config::RuntimeConfig;
+    use super::settings;
+    use crate::mcp_servers::application::McpServerSettingsError;
+    for env in [
+        r#"{"TOKEN":"first","TOKEN":"second"}"#,
+        r#"{"TOKEN":"second","TOKEN":"first"}"#,
+    ] {
+        let file = format!(
+            r#"{{"agents":{{"catalog":"/m.json","workspace":"/w","mcpServers":[
+                {{"name":"dup","command":"/usr/bin/python3","env":{env}}}]}}}}"#
+        );
+        let Err(refused) = RuntimeConfig::parse(file.as_bytes()) else {
+            panic!("started with {env}")
+        };
+        let said = format!("{refused:?}");
+        assert!(said.contains("TOKEN") && said.contains("dup"), "{said}");
+        assert!(
+            !said.contains("first") && !said.contains("second"),
+            "{said}"
+        );
+        let (root, config_path, composed, config) = composed_in(file.as_bytes()).await;
+        let settings = settings(
+            &composed,
+            &config,
+            config_path.clone(),
+            root.path().join("audit"),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.list().await,
+            Err(McpServerSettingsError::ConfigInvalid)
+        );
+        assert_eq!(
+            settings
+                .edit(caller(), "any".into(), saved("other", vec![]))
+                .await,
+            Err(McpServerSettingsError::ConfigInvalid)
+        );
+        // Never repaired.
+        assert_eq!(std::fs::read(&config_path).unwrap(), file.as_bytes());
+    }
+}
+
+/// C-null: `"agents": null` is absent to the reader — the runtime
+/// configuration starts with no agents block — and to the writer, which
+/// lists no stored server and writes a block from the running catalog and
+/// workspace that the runtime configuration then starts with.
+#[tokio::test]
+async fn c_null_agents_is_read_and_written_as_absent() {
+    use super::super::runtime_config::RuntimeConfig;
+    use super::settings;
+    let file = br#"{"session":{"writeTimeoutMs":75},"agents":null}"#;
+    assert!(RuntimeConfig::parse(file).unwrap().agents.is_none());
+    let (root, config_path, composed, config) = composed_in(file).await;
+    let settings = settings(
+        &composed,
+        &config,
+        config_path.clone(),
+        root.path().join("audit"),
+    )
+    .unwrap();
+    let list = settings.list().await.unwrap();
+    assert!(list.servers.is_empty());
+    settings
+        .edit(caller(), list.revision, saved("mcptest", vec![]))
+        .await
+        .unwrap();
+    let agents = RuntimeConfig::parse(&std::fs::read(&config_path).unwrap())
+        .unwrap()
+        .agents
+        .unwrap();
+    assert_eq!(agents.catalog, config.catalog);
+    assert_eq!(agents.workspace, config.workspace);
+    let stored: Vec<_> = agents
+        .mcp_servers
+        .iter()
+        .map(|each| each.server().name())
+        .collect();
+    assert_eq!(stored, ["mcptest"]);
+}
+
+/// `config.json.lock` planted as a FIFO is refused, not waited on: opened
+/// without blocking, so `open` returns at once with no reader on the other
+/// end, and refused as not a regular file when one is there.
+#[test]
+fn a_lock_that_is_not_a_regular_file_is_refused_without_blocking() {
+    use crate::mcp_servers::infrastructure::{ConfigFiles, OsConfigFiles};
+    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let config_path = root.path().join("config.json");
+    let lock_path = root.path().join("config.json.lock");
+    let fifo = std::ffi::CString::new(lock_path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: mkfifo reads the NUL-terminated path only.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    // On a thread of its own, so a lock that blocks fails the test rather
+    // than hanging it.
+    let try_lock = |path: PathBuf| {
+        let (answer, answered) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = answer.send(
+                OsConfigFiles::new(path)
+                    .try_lock()
+                    .map(|lock| lock.is_some()),
+            );
+        });
+        answered
+            .recv_timeout(Duration::from_secs(5))
+            .expect("answered without blocking")
+    };
+    // No reader: the open itself is refused.
+    assert!(try_lock(config_path.clone()).is_err());
+    // A reader: opened, then refused as not a regular file — before any
+    // `flock`, which some systems would take on a FIFO.
+    let _reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&lock_path)
+        .unwrap();
+    assert_eq!(
+        try_lock(config_path).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
     );
 }

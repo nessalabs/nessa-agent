@@ -2222,6 +2222,8 @@ impl HostWatchFixture {
         }
     }
     /// No watch admitted: the host's watch drain has nothing to wait for.
+    /// Only the MCP stop's tests, on Unix, use it.
+    #[cfg(unix)]
     pub(crate) async fn idle() -> Self {
         Self {
             inner: WatchFixture::new().await,

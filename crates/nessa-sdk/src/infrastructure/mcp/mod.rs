@@ -49,8 +49,9 @@ mod wire;
 
 pub use error::McpError;
 pub use servers::{
-    ListedPages, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS,
-    MAX_TOOL_PAGES, MCP_SESSION_VARIABLE, REQUEST_TIMEOUT,
+    ListedPages, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT,
+    MAX_MCP_ENVIRONMENT_NAME_BYTES, MAX_TOOLS, MAX_TOOL_PAGES, MCP_SESSION_VARIABLE,
+    REQUEST_TIMEOUT,
 };
 pub(crate) use wire::structured_result;
 #[cfg(test)]

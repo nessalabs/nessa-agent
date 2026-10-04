@@ -134,6 +134,42 @@ mcpServerInspect.requestDeadlineMs =
 if (mcpServerInspect.requestDeadlineMs > 2_147_483_647)
   throw new Error("MCP server inspection deadline exceeds the runtime timer range")
 
+// The rules for a stored MCP server, owned by the SDK (StdioMcpServer::problem,
+// problem_in and McpServerLaunch::problem) and published as schema data so the
+// schema's prose and a client name the same numbers: each value must equal the
+// SDK constant it names, or generation fails.
+const mcpServerRules = {}
+{
+  const rules = schema["x-mcpServerRules"]
+  const owners = {
+    maxServers: ["acp/sessions/config.rs", "MAX_MCP_SERVERS"],
+    nameMaxBytes: ["acp/sessions/config.rs", "MAX_MCP_SERVER_NAME_BYTES"],
+    maxArgs: ["acp/sessions/config.rs", "MAX_MCP_SERVER_ARGS"],
+    argMaxBytes: ["acp/sessions/config.rs", "MAX_MCP_SERVER_ARG_BYTES"],
+    environmentNameMaxBytes: ["mcp/servers.rs", "MAX_MCP_ENVIRONMENT_NAME_BYTES"],
+  }
+  if (!rules || Object.keys(rules).length !== Object.keys(owners).length)
+    throw new Error("MCP server rules must name exactly the SDK's bounds")
+  for (const [name, [file, constant]] of Object.entries(owners)) {
+    const source = readFileSync(
+      resolve(root, `crates/nessa-sdk/src/infrastructure/${file}`),
+      "utf8",
+    )
+    const owned = Number(
+      source
+        .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+        .replaceAll("_", ""),
+    )
+    if (
+      !Object.hasOwn(rules, name) ||
+      !Number.isSafeInteger(owned) ||
+      rules[name] !== owned
+    )
+      throw new Error(`x-mcpServerRules.${name} drifted from the SDK's ${constant}`)
+    mcpServerRules[name] = owned
+  }
+}
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -518,6 +554,9 @@ ts += `${doc(
 ts += `${doc(
   "How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response.",
 )}export const mcpServerInspect = ${JSON.stringify(mcpServerInspect)} as const\n`
+ts += `${doc(
+  "The SDK's rules for a stored MCP server, as x-mcpServerRules publishes them: at most maxServers servers, the managed one included; a name of 1 to nameMaxBytes bytes; at most maxArgs arguments of at most argMaxBytes bytes each; a variable name of 1 to environmentNameMaxBytes bytes. The gateway refuses past them (mcp_servers_invalid); a client may refuse early by reading these.",
+)}export const mcpServerRules = ${JSON.stringify(mcpServerRules)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`

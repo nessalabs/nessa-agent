@@ -335,9 +335,11 @@ pub(super) fn settings_over(
 }
 
 /// The gateway's MCP stop, in its one order: `settings` — when this gateway
-/// manages its stored servers — admits no more changes or inspections, stops
-/// the inspections under way, and drains every admitted one to its outcome
-/// record ([`McpServerSettings::shutdown`]); then `servers` stop, whatever
+/// manages its stored servers — admits no more changes or inspections and
+/// stops the inspections under way (done already as cleanup began,
+/// `ProductRouteState::close_mcp_server_admission`), and drains every
+/// admitted one to its outcome record ([`McpServerSettings::shutdown`]);
+/// then `servers` stop, whatever
 /// the drain answered. Called once, by the gateway's cleanup
 /// (`root::cleanup_product`), after conversations
 /// (`the_mcp_stop_drains_admitted_writes_before_the_servers_stop`).

@@ -10,8 +10,8 @@
 //!         ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
 //! inspect ─▶ a slot (or busy) ─▶ read ─▶ the stored server ─▶ audit requested
 //!         ─▶ ServerInspector::inspect (deadline, caps, the stop; stopped after) ─▶ audit outcome
-//! shutdown ─▶ admit no more ─▶ stop the inspections ─▶ wait for every admitted task (bounded)
-//!          ─▶ the servers may stop
+//! close    ─▶ admit no more ─▶ stop the inspections        (as the gateway's cleanup begins)
+//! shutdown ─▶ close ─▶ wait for every admitted task (bounded) ─▶ the servers may stop
 //! ```
 //!
 //! Arrows are order. An admitted save, remove or inspection has one owner:
@@ -20,21 +20,34 @@
 //! A caller gone mid-write leaves a change that still publishes, replaces
 //! the live set and records its outcome
 //! (`a_caller_gone_mid_write_still_replaces_the_live_set_and_records_the_outcome`),
-//! so the file and the live set never disagree and no record depends on the
-//! response. Shutdown admits no more — a later request is refused
-//! [`McpServerSettingsError::Stopping`], unaudited, as it starts nothing —
-//! stops the inspections under way at once, as they change nothing (one not
-//! yet started is recorded `stopping`, one started `cut: stopping`, its
-//! process group killed), and then waits for every admitted task, bounded by
-//! the store's lock wait and a grace for the file system ([`drain_bound`])
+//! so no record depends on the response, and an admitted change that runs
+//! to completion leaves the file and the live set agreeing — one published
+//! while the gateway stops excepted, which the next start reads
+//! (`a_publish_during_stop_answers_success_and_leaves_the_live_set`). A
+//! publish whose directory sync fails is applied all the same: the file is
+//! new, so the live set is replaced, and the outcome says `durable: false`
+//! (`s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable`).
+//!
+//! Closing — as the gateway's cleanup begins, before the conversations
+//! drain (`ProductRouteState::close_mcp_server_admission`) — admits no more:
+//! a later request is refused [`McpServerSettingsError::Stopping`],
+//! unaudited, as it starts nothing. It stops the inspections under way at
+//! once, as they change nothing (one not yet started is recorded
+//! `stopping`, one started `cut: stopping`, its process group killed)
+//! (`x_early_admission_closes_and_inspections_are_cut_while_conversations_drain`).
+//! Shutdown closes, if that has not happened, and then waits for every
+//! admitted task, bounded by the store's lock wait and a grace for the file
+//! system ([`drain_bound`])
 //! (`shutdown_during_a_save_returns_after_its_outcome_is_recorded`,
 //! `shutdown_stops_a_running_inspection_and_records_it_cut`). The gateway
 //! drains it before it stops the servers (`composition::mcp_servers::stop`).
 //!
 //! A task that panics answers by how far it got, which it marks as it goes:
-//! past the publish — or, for an inspection, past asking for the start — it is
-//! `AuditUnavailable { applied: true }`, as its outcome record was not
-//! written; before it, `StorageUnavailable`
+//! past the publish — or, for an inspection, once its server's launch has
+//! begun — it is `AuditUnavailable { applied: true }`, as its outcome record
+//! was not written; before it, `StorageUnavailable { applied: false }`, with
+//! a `failed` outcome record, reason `panicked`, written for it once its
+//! requested record was
 //! (`a_panic_after_the_publish_answers_applied_and_before_it_storage_unavailable`).
 //!
 //! The lock is held from the read to the replacement, so two changes publish
@@ -57,10 +70,11 @@
 //! unreadable configuration, a gateway stopping before admission. When its
 //! first record cannot be written, nothing is started.
 use super::ports::{
-    AuditUnavailable, AuditedServer, InspectBounds, InspectFailure, InspectStop, Inspection,
-    LiveServerSet, McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
-    McpServerChangeRequest, McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector,
-    ServerNames, ServerProblem, StoreError, StoreLock, StoredServers,
+    AuditUnavailable, AuditedServer, InspectBounds, InspectCut, InspectFailure, InspectStop,
+    Inspection, LaunchBegun, LiveServerSet, McpServerAction, McpServerAudit, McpServerAuditPhase,
+    McpServerAuditRecord, McpServerCause, McpServerChangeRequest, McpServerInitiator,
+    McpServerOutcome, McpServerStore, ServerInspector, ServerNames, ServerProblem, StoreError,
+    StoreLock, StoredServers,
 };
 use crate::mcp_servers::domain::{
     ConfiguredMcpServer, EditRefusal, ServerEdit, ServerSave, StdioServer, MANAGED_SERVER_NAME,
@@ -73,7 +87,7 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex, PoisonError,
     },
     time::Duration,
 };
@@ -143,24 +157,31 @@ pub enum McpServerSettingsError {
     Busy,
     ConfigInvalid,
     ConfigTooLarge,
-    /// The configuration could not be read, locked or published — or the
-    /// task that owned the request panicked before it published, or before
-    /// it asked for the inspected server to be started.
-    StorageUnavailable,
+    /// The configuration could not be read, locked or published, and
+    /// nothing was applied (`applied: false`) — or the task that owned the
+    /// request panicked before it published, or before the inspected
+    /// server's launch began, and its outcome was recorded `failed`,
+    /// `panicked`. `applied: true` is a change published — the file
+    /// replaced and the live set with it — whose directory sync failed, so
+    /// it may not survive a crash; its outcome says `durable: false`.
+    StorageUnavailable {
+        applied: bool,
+    },
     /// The gateway is stopping: the request was not admitted, and nothing
     /// was started, written or recorded.
     Stopping,
     /// A record could not be made durable — or the task that owned the
-    /// request panicked after it published, or after it asked for the
-    /// inspected server to be started, so the outcome was not recorded
-    /// (`applied: true`).
+    /// request panicked after it published, or after the inspected server's
+    /// launch began, so the outcome was not recorded (`applied: true`).
     /// `applied` says whether the change
     /// was published all the same — the live set may not have been replaced
     /// if the gateway is stopping; `cause` is
     /// what it would have been answered otherwise — the refusal or failure
-    /// that stopped it — so neither cause is lost
-    /// (`s7_an_unwritable_outcome_after_a_publish_says_it_applied`). Never
-    /// itself an `AuditUnavailable`.
+    /// that stopped it, or `StorageUnavailable { applied: true }` for a
+    /// change published but not made durable — so neither cause is lost
+    /// (`s7_an_unwritable_outcome_after_a_publish_says_it_applied`,
+    /// `s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable`).
+    /// Never itself an `AuditUnavailable`.
     AuditUnavailable {
         applied: bool,
         cause: Option<Box<McpServerSettingsError>>,
@@ -182,10 +203,11 @@ impl McpServerSettingsError {
             Self::Busy => "busy",
             Self::ConfigInvalid => "config_invalid",
             Self::ConfigTooLarge => "config_too_large",
-            Self::StorageUnavailable => "storage_unavailable",
+            Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::Stopping => "stopping",
             Self::AuditUnavailable { .. } => "audit_unavailable",
             Self::Inspect(failure) => match failure {
+                InspectFailure::Invalid(_) => "invalid",
                 InspectFailure::StartFailed => "start_failed",
                 InspectFailure::TimedOut => "timed_out",
                 InspectFailure::Gone => "gone",
@@ -201,7 +223,7 @@ impl McpServerSettingsError {
         !matches!(
             self,
             Self::Busy
-                | Self::StorageUnavailable
+                | Self::StorageUnavailable { .. }
                 | Self::Stopping
                 | Self::AuditUnavailable { .. }
                 | Self::Inspect(_)
@@ -216,7 +238,7 @@ impl From<StoreError> for McpServerSettingsError {
             StoreError::ConfigTooLarge => Self::ConfigTooLarge,
             StoreError::Busy => Self::Busy,
             StoreError::RevisionConflict { revision } => Self::RevisionConflict { revision },
-            StoreError::Unavailable => Self::StorageUnavailable,
+            StoreError::Unavailable => Self::StorageUnavailable { applied: false },
         }
     }
 }
@@ -239,8 +261,8 @@ struct Operations {
     /// One permit per inspection that may run at once
     /// (`i6_a_third_inspection_at_once_is_busy`).
     inspections: Arc<Semaphore>,
-    /// Shutdown's stop for the inspections, given once by
-    /// [`McpServerSettings::shutdown`]; each inspection observes it
+    /// Shutdown's stop for the inspections, given by
+    /// [`McpServerSettings::close`]; each inspection observes it
     /// ([`InspectStop`]).
     stop: watch::Sender<bool>,
 }
@@ -307,9 +329,8 @@ impl McpServerSettings {
     /// well as one turned on. The process stops before the answer whatever
     /// the answer; it is recorded before it is started and after it stops.
     /// Once admitted, it runs to its outcome record on a task of its own;
-    /// shutdown stops it — not started, `Inspect(Stopping)`; started, an
-    /// inspection cut [`InspectCut::Stopping`](super::InspectCut::Stopping)
-    /// with no tools.
+    /// closing stops it — not started, `Inspect(Stopping)`; started, an
+    /// inspection cut [`InspectCut::Stopping`] with no tools.
     ///
     /// # Errors
     ///
@@ -318,7 +339,8 @@ impl McpServerSettings {
     /// `NotFound`, the store's errors, and none of those starts anything or
     /// is audited; `AuditUnavailable { applied: false }` when the first
     /// record cannot be written, and nothing is started; `Inspect` with the
-    /// server's failure, or [`InspectFailure::Stopping`] when the SDK
+    /// server's failure, [`InspectFailure::Invalid`] when the stored server
+    /// breaks the SDK's rules, or [`InspectFailure::Stopping`] when the SDK
     /// refused to start it; and `AuditUnavailable` with whether the server
     /// was started, and the failure as its cause, when the outcome cannot be
     /// recorded.
@@ -336,10 +358,14 @@ impl McpServerSettings {
             .await
     }
 
-    /// Admit no more changes or inspections: each later one is refused
-    /// [`McpServerSettingsError::Stopping`]. Those admitted already run on.
+    /// Admit no more changes or inspections — each later one is refused
+    /// [`McpServerSettingsError::Stopping`] — and stop every inspection
+    /// under way ([`InspectStop`]), as they change nothing. The changes
+    /// admitted already run on. Called as the gateway's cleanup begins
+    /// (`ProductRouteState::close_mcp_server_admission`).
     pub fn close(&self) {
         self.admissions.close();
+        self.operations.stop.send_replace(true);
     }
 
     /// How long [`Self::shutdown`] waits at most: [`drain_bound`] of the
@@ -348,24 +374,21 @@ impl McpServerSettings {
         drain_bound(self.operations.store.lock_wait())
     }
 
-    /// [`Self::close`], stop every inspection under way ([`InspectStop`]),
-    /// then wait for every admitted change and inspection to record its
-    /// outcome — at most [`Self::drain_bound`]. Called before the servers
-    /// stop (`composition::mcp_servers::stop`).
+    /// [`Self::close`], then wait for every admitted change and inspection
+    /// to record its outcome — at most [`Self::drain_bound`]. Called before
+    /// the servers stop (`composition::mcp_servers::stop`).
     ///
     /// # Errors
     ///
     /// [`Unfinished`] with how many were still running at the bound.
     pub async fn shutdown(&self) -> Result<(), Unfinished> {
         self.close();
-        self.operations.stop.send_replace(true);
         self.admissions.drained(self.drain_bound()).await
     }
 
-    /// `work` on a task this owns and tracks, when admitted, given the mark
-    /// it sets once it has published or asked for a server to start; its answer — or,
-    /// when it panicked, `AuditUnavailable { applied: true }` past that mark
-    /// and `StorageUnavailable` before it.
+    /// `work` on a task this owns and tracks, when admitted, given the
+    /// marks it sets as it goes; its answer — or, when it panicked, what
+    /// [`Operations::panicked`] makes of how far it got.
     async fn owned<T: Send + 'static, F>(
         &self,
         work: impl FnOnce(Reached) -> F,
@@ -379,35 +402,62 @@ impl McpServerSettings {
             .ok_or(McpServerSettingsError::Stopping)?;
         let reached = Reached::default();
         let work = work(reached.clone());
+        let operations = self.operations.clone();
         // Dropping the handle with the caller's future leaves the task
-        // running; `running` goes with the task, however it ends.
-        let answered = tokio::spawn(async move {
-            let _running = running;
-            work.await
+        // running; `running` goes with the task, however it ends — after a
+        // panic's outcome record, which is the owner's and not the caller's.
+        let answered = tokio::spawn({
+            let reached = reached.clone();
+            async move {
+                let _running = running;
+                match tokio::spawn(work).await {
+                    Ok(answer) => answer,
+                    Err(_) => Err(operations.panicked(&reached).await),
+                }
+            }
         })
         .await;
-        match answered {
-            Ok(answer) => answer,
-            Err(_) if reached.applied() => Err(McpServerSettingsError::AuditUnavailable {
-                applied: true,
-                cause: None,
-            }),
-            Err(_) => Err(McpServerSettingsError::StorageUnavailable),
-        }
+        // The owner itself ended without answering: the runtime is going.
+        answered.unwrap_or(Err(McpServerSettingsError::AuditUnavailable {
+            applied: reached.applied(),
+            cause: None,
+        }))
     }
 }
 
-/// How far an owned task got: set once its change is published, or its
-/// inspected server asked to start, so a panic after that is not answered as if
-/// nothing happened.
+/// How far an owned task got: `applied` set once its change is published, or
+/// its inspected server's launch has begun, so a panic after that is not
+/// answered as if nothing happened; and, once its requested record is
+/// written, the outcome record a panic before that point is to leave.
 #[derive(Clone, Default)]
-struct Reached(Arc<AtomicBool>);
+struct Reached {
+    applied: Arc<AtomicBool>,
+    if_panicked: Arc<Mutex<Option<McpServerAuditRecord>>>,
+}
 impl Reached {
     fn applied(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.applied.load(Ordering::SeqCst)
     }
     fn mark_applied(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.applied.store(true, Ordering::SeqCst);
+    }
+    /// The mark an inspector sets as the launch begins: this one.
+    fn launch(&self) -> LaunchBegun {
+        LaunchBegun::over(self.applied.clone())
+    }
+    /// The requested record is written: a panic before `applied` leaves
+    /// `outcome`.
+    fn requested(&self, outcome: McpServerAuditRecord) {
+        *self
+            .if_panicked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(outcome);
+    }
+    fn panic_outcome(&self) -> Option<McpServerAuditRecord> {
+        self.if_panicked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 }
 
@@ -483,9 +533,9 @@ impl Operations {
             .iter()
             .filter(|server| !server.managed())
             .map(|server| ListedServer {
-                server: server.server.clone(),
+                server: server.server().clone(),
                 env_names: server.env_names(),
-                enabled: server.enabled,
+                enabled: server.enabled(),
                 managed: false,
             })
             .collect();
@@ -495,8 +545,8 @@ impl Operations {
         if let Some(managed) = self.live.managed() {
             servers.push(ListedServer {
                 env_names: managed.env_names(),
-                enabled: managed.enabled,
-                server: managed.server,
+                enabled: managed.enabled(),
+                server: managed.server().clone(),
                 managed: true,
             });
         }
@@ -530,9 +580,11 @@ impl Operations {
             },
         };
         let operation_id = operation_id();
+        // A change is the caller's operation from end to end: shutdown
+        // waits for it rather than ending it.
         let record = |phase| McpServerAuditRecord {
             operation_id: operation_id.clone(),
-            initiator: initiator.clone(),
+            cause: McpServerCause::CallerRequested(initiator.clone()),
             request: request.clone(),
             phase,
         };
@@ -542,12 +594,19 @@ impl Operations {
                 applied: false,
                 cause: None,
             })?;
+        reached.requested(record(McpServerAuditPhase::Outcome(
+            McpServerOutcome::Failed {
+                reason: PANICKED,
+                before: None,
+            },
+        )));
         let result = self.change(&revision, &edit, reached).await;
         let outcome = match &result {
             Ok(change) => McpServerOutcome::Applied {
                 before: change.before.clone(),
                 after: change.after.clone(),
                 live_set_replaced: change.live_set_replaced,
+                durable: change.durable,
             },
             Err((error, before)) if error.refused() => McpServerOutcome::Refused {
                 reason: error.reason(),
@@ -561,11 +620,14 @@ impl Operations {
         let recorded = self
             .record(record(McpServerAuditPhase::Outcome(outcome)))
             .await;
+        // Published but not made durable: applied, and said so.
+        let not_durable = McpServerSettingsError::StorageUnavailable { applied: true };
         match (result, recorded) {
-            (Ok(change), Ok(())) => Ok(change.after.revision),
-            (Ok(_), Err(AuditUnavailable)) => Err(McpServerSettingsError::AuditUnavailable {
+            (Ok(change), Ok(())) if change.durable => Ok(change.after.revision),
+            (Ok(_), Ok(())) => Err(not_durable),
+            (Ok(change), Err(AuditUnavailable)) => Err(McpServerSettingsError::AuditUnavailable {
                 applied: true,
-                cause: None,
+                cause: (!change.durable).then(|| Box::new(not_durable)),
             }),
             (Err((error, _)), Ok(())) => Err(error),
             (Err((error, _)), Err(AuditUnavailable)) => {
@@ -595,12 +657,12 @@ impl Operations {
         let server = stored
             .servers
             .iter()
-            .find(|each| each.server.name == name)
+            .find(|each| each.server().name() == name)
             .ok_or(McpServerSettingsError::NotFound)?;
         let operation_id = operation_id();
-        let record = |phase| McpServerAuditRecord {
+        let record = |cause, phase| McpServerAuditRecord {
             operation_id: operation_id.clone(),
-            initiator: initiator.clone(),
+            cause,
             request: McpServerChangeRequest {
                 action: McpServerAction::Inspect,
                 target: name.to_owned(),
@@ -612,15 +674,34 @@ impl Operations {
             },
             phase,
         };
-        self.record(record(McpServerAuditPhase::Requested))
+        let caller = || McpServerCause::CallerRequested(initiator.clone());
+        self.record(record(caller(), McpServerAuditPhase::Requested))
             .await
             .map_err(|_| McpServerSettingsError::AuditUnavailable {
                 applied: false,
                 cause: None,
             })?;
-        reached.mark_applied();
+        reached.requested(record(
+            caller(),
+            McpServerAuditPhase::Outcome(McpServerOutcome::InspectFailed {
+                reason: PANICKED,
+                started: false,
+            }),
+        ));
         let stop = InspectStop::new(self.stop.subscribe());
-        let result = self.inspector.inspect(server, INSPECT_BOUNDS, stop).await;
+        let result = self
+            .inspector
+            .inspect(server, INSPECT_BOUNDS, stop, reached.launch())
+            .await;
+        // Shutdown ended it — not started, or cut — or the caller's
+        // operation ran its course, a deadline or a failure included.
+        let cause = match &result {
+            Err(InspectFailure::Stopping) => McpServerCause::GatewayStopping,
+            Ok(inspection) if inspection.cut == Some(InspectCut::Stopping) => {
+                McpServerCause::GatewayStopping
+            }
+            Ok(_) | Err(_) => caller(),
+        };
         let outcome = match &result {
             Ok(inspection) => McpServerOutcome::Inspected {
                 tools: inspection.tools.len(),
@@ -632,7 +713,7 @@ impl Operations {
             },
         };
         let recorded = self
-            .record(record(McpServerAuditPhase::Outcome(outcome)))
+            .record(record(cause, McpServerAuditPhase::Outcome(outcome)))
             .await;
         match (result, recorded) {
             (Ok(inspection), Ok(())) => Ok(inspection),
@@ -665,9 +746,10 @@ impl Operations {
             .map_err(|error| (error.into(), None))?;
         let store = self.store.clone();
         // The lock goes into the read and comes back out of it.
-        let (stored, lock) = blocking(move || (store.read(), lock))
-            .await
-            .ok_or((McpServerSettingsError::StorageUnavailable, None))?;
+        let (stored, lock) = blocking(move || (store.read(), lock)).await.ok_or((
+            McpServerSettingsError::StorageUnavailable { applied: false },
+            None,
+        ))?;
         let stored = stored.map_err(|error| (error.into(), None))?;
         let before_target = match edit {
             ServerEdit::Save(save) => save.previous_name.as_deref().unwrap_or(edit.target()),
@@ -676,10 +758,11 @@ impl Operations {
         let before = names(&stored.revision, &stored.servers, Some(before_target));
         let result = self.publish(revision, edit, stored, lock, reached).await;
         match result {
-            Ok((after, live_set_replaced)) => Ok(Change {
+            Ok(published) => Ok(Change {
                 before,
-                after,
-                live_set_replaced,
+                after: published.after,
+                live_set_replaced: published.live_set_replaced,
+                durable: published.durable,
             }),
             Err(error) => Err((error, Some(before))),
         }
@@ -694,7 +777,7 @@ impl Operations {
         stored: StoredServers,
         lock: StoreLock,
         reached: &Reached,
-    ) -> Result<(ServerNames, bool), McpServerSettingsError> {
+    ) -> Result<Published, McpServerSettingsError> {
         if stored.revision != revision {
             return Err(McpServerSettingsError::RevisionConflict {
                 revision: stored.revision,
@@ -728,23 +811,57 @@ impl Operations {
         let expected = stored.revision;
         // The lock goes into the write and comes back out of it: a caller
         // gone mid-write leaves it held until the write has finished.
-        let (after, lock) = blocking(move || (store.write(&expected, &written), lock))
+        let (written, lock) = blocking(move || (store.write(&expected, &written), lock))
             .await
-            .ok_or(McpServerSettingsError::StorageUnavailable)?;
-        let after = after?;
+            .ok_or(McpServerSettingsError::StorageUnavailable { applied: false })?;
+        // Published, durable or not: the file is new, and the live set
+        // follows it.
+        let written = written?;
         reached.mark_applied();
         // Published: the live set follows, under the same lock. Refused only
         // once the gateway is stopping: the change still answers success,
         // its outcome record says the live set was not replaced, and the
         // next start reads the file
         // (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
+        // The lock is let go only after the replacement, so two changes
+        // replace in the order they published
+        // (`a_second_writer_waits_for_the_first_writers_live_replace`).
         let live_set_replaced = self.live.replace(&edited).is_ok();
         drop(lock);
         let after_target = match edit {
-            ServerEdit::Save(save) => Some(save.server.name.as_str()),
+            ServerEdit::Save(save) => Some(save.server.name()),
             ServerEdit::Remove { .. } => None,
         };
-        Ok((names(&after, &edited, after_target), live_set_replaced))
+        Ok(Published {
+            after: names(&written.revision, &edited, after_target),
+            live_set_replaced,
+            durable: written.durable,
+        })
+    }
+
+    /// What an owned task that panicked answers: past its mark,
+    /// `AuditUnavailable { applied: true }`, its outcome unrecorded; before
+    /// it, `StorageUnavailable { applied: false }`, with the `panicked`
+    /// outcome its requested record left written — or, when that cannot be,
+    /// `AuditUnavailable` with that as its cause.
+    async fn panicked(&self, reached: &Reached) -> McpServerSettingsError {
+        if reached.applied() {
+            return McpServerSettingsError::AuditUnavailable {
+                applied: true,
+                cause: None,
+            };
+        }
+        let failed = McpServerSettingsError::StorageUnavailable { applied: false };
+        let Some(outcome) = reached.panic_outcome() else {
+            return failed;
+        };
+        match self.record(outcome).await {
+            Ok(()) => failed,
+            Err(AuditUnavailable) => McpServerSettingsError::AuditUnavailable {
+                applied: false,
+                cause: Some(Box::new(failed)),
+            },
+        }
     }
 
     async fn record(&self, record: McpServerAuditRecord) -> Result<(), AuditUnavailable> {
@@ -761,10 +878,10 @@ fn names(revision: &str, servers: &[ConfiguredMcpServer], target: Option<&str>) 
         revision: revision.to_owned(),
         names: servers
             .iter()
-            .map(|each| each.server.name.clone())
+            .map(|each| each.server().name().to_owned())
             .collect(),
         target: target
-            .and_then(|name| servers.iter().find(|each| each.server.name == name))
+            .and_then(|name| servers.iter().find(|each| each.server().name() == name))
             .map(|each| Box::new(AuditedServer::of(each))),
     }
 }
@@ -777,9 +894,9 @@ fn requested(save: &ServerSave) -> AuditedServer {
     let mut env_names: Vec<String> = save.env.iter().map(|(name, _)| name.clone()).collect();
     env_names.sort();
     AuditedServer {
-        name: save.server.name.clone(),
-        command: save.server.command.clone(),
-        args: save.server.args.clone(),
+        name: save.server.name().to_owned(),
+        command: save.server.command().to_owned(),
+        args: save.server.args().to_vec(),
         enabled: save.enabled,
         env_names,
     }
@@ -790,7 +907,20 @@ struct Change {
     before: ServerNames,
     after: ServerNames,
     live_set_replaced: bool,
+    durable: bool,
 }
+
+/// What a publish left: the names after it, whether the live set followed,
+/// and whether the file was made durable.
+struct Published {
+    after: ServerNames,
+    live_set_replaced: bool,
+    durable: bool,
+}
+
+/// The reason an outcome record names for a task that panicked before its
+/// change was published, or before its inspected server's launch began.
+const PANICKED: &str = "panicked";
 
 /// A new change's identity.
 fn operation_id() -> String {
