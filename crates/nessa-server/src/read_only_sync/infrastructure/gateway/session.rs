@@ -126,19 +126,14 @@ impl Channel {
             }
         }
     }
-    /// A deadline or cancellation the stream refused with comes first; a
-    /// connection that ended without TLS close is an untyped close.
+    /// The cause the stream recorded comes first (a deadline, cancellation,
+    /// or physical error it saw); otherwise the error TLS returned, such as
+    /// an end without TLS close, by the same classification.
     fn io_failure(&mut self, error: &std::io::Error) -> GatewayError {
         self.transport
             .stream_mut()
             .take_failure()
-            .unwrap_or_else(|| match error.kind() {
-                ErrorKind::UnexpectedEof
-                | ErrorKind::ConnectionReset
-                | ErrorKind::ConnectionAborted
-                | ErrorKind::BrokenPipe => GatewayError::Closed(None),
-                _ => io_cause(error),
-            })
+            .unwrap_or_else(|| io_cause(error))
     }
 }
 
