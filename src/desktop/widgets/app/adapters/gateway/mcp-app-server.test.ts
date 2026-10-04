@@ -1,14 +1,17 @@
 /**
- * `McpAppServer` over a fake `client.mcpApps` that can give every answer the
- * gateway can, to a call and to a read: every `ConversationErrorCode` is swept
- * over both ("A3–A11, R5b: every code…"). Each test names its row of the
- * state table on #384 (A1–A14, D1, R1–R8 with R5b-1 to R5b-7, M2, M5–M5d),
- * and the last group holds #349's L14 and L24, and #384's J1–J5, through the
- * real bridge over this adapter. Cases the real client cannot produce (R7,
- * R8, A14 on a read) say so in their names. The size and SHA-256 check is
- * the client's own
- * (`packages/nessa-client`, `mcp-apps-api.test.ts`); here a mismatch is what
- * the client throws for it, `integrity`.
+ * `McpAppServer` over a fake `client.mcpApps`: what the adapter answers for
+ * each thing the client resolves or throws on a call, a read, a redemption
+ * and a release, and — in the last group — what an app is told through the
+ * real bridge over this adapter.
+ *
+ * The rule for every test here: its name starts with the row(s) it holds, of
+ * the state table on #384 or #349's, and where its input is one the real
+ * client or gateway cannot produce, its own name says so. Nothing else in
+ * this file lists rows or cases.
+ *
+ * The size and SHA-256 check is the client's own (`packages/nessa-client`,
+ * `mcp-apps-api.test.ts`); here a mismatch is what the client throws for it,
+ * `integrity`.
  */
 import {
   ConversationErrorCode,
@@ -311,7 +314,7 @@ describe("tools/call", () => {
     },
   )
 
-  it("A11: every other answer is a failure, server-gone and refused kept apart from it", async () => {
+  it("A11: every other answer is a failure, server-gone and refused kept apart from it (the stray non-error value is one the real client cannot throw)", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const thrown: unknown[] = [
       // mcp_remote_error without details: an answer that was no MCP answer.
@@ -323,7 +326,8 @@ describe("tools/call", () => {
       // A code this build does not know, and one that names a prototype's key.
       refusal("mcp_something_new"),
       refusal("constructor"),
-      // No answer at all, and something that is no error of the client's.
+      // No answer at all, and something that is no error of the client's
+      // (unreachable: the client only throws its own errors and TypeError).
       new NessaMcpAppError(conversationId, "r", app, new Error("socket closed")),
       "a string",
     ]
@@ -338,11 +342,11 @@ describe("tools/call", () => {
     expect(error).toHaveBeenCalledTimes(4)
   })
 
-  // A read is opened, resolved and recorded as a call is, so it can be
-  // refused with any code too (`conversation_capacity`, `audit_unavailable`,
-  // `agent_unsupported`, …): both are swept.
+  // `outcomes` is a total table, read the same way for both methods. This
+  // checks that totality over every code. Many are codes the gateway never
+  // sends to a given method; for those, the input is unreachable.
   it.each(["callTool", "readResource"] as const)(
-    "A3–A11, R5b: every code the gateway can send to %s has an outcome, the same for both (gate 11)",
+    "A3–A11, R5b: outcomes is total over every ConversationErrorCode on %s, the same for both methods, including codes the gateway never sends to it (gate 11)",
     async (method) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {})
       const kinds = new Map<string, ServerAnswer["kind"]>()
@@ -450,7 +454,8 @@ describe("resources/read and the ticket", () => {
   })
 
   // Each as the client builds it (`mcp-apps-api.ts` `fetchResource`): the
-  // route's status when there was one, the cause when there was no answer.
+  // route's status when it answered, the transport's error as the cause when
+  // the transport failed, and neither for a deadline that passed.
   it.each<[McpResourceFailureCode, () => NessaMcpResourceError]>([
     ["not_found", () => new NessaMcpResourceError("not_found", 404)],
     ["unavailable", () => new NessaMcpResourceError("unavailable", 503)],
@@ -658,7 +663,7 @@ describe("a read whose mount is released (R6)", () => {
 })
 
 describe("whatever the client throws", () => {
-  it("A11, R4: callTool and readResource never reject: whatever the client throws is an outcome", async () => {
+  it("A11, R4: callTool and readResource never reject, whatever is thrown — values the real client cannot throw (undefined, null, 0, a string, a plain object, a plain Error, a symbol) included", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
     for (const thrown of [undefined, null, 0, "x", {}, new Error("x"), Symbol("x")]) {
       const reject = () => Promise.reject(thrown)
