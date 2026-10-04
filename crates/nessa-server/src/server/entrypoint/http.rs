@@ -61,6 +61,7 @@ async fn product_upgrade(
     }
     ws.max_message_size(MAX_PAYLOAD_BYTES as usize)
         .max_frame_size(MAX_PAYLOAD_BYTES as usize)
+        .write_buffer_size(crate::product::WEBSOCKET_WRITE_BUFFER_BYTES)
         .on_upgrade(move |socket| crate::product::handle_socket(socket, state))
         .into_response()
 }
@@ -98,6 +99,7 @@ async fn browser_upgrade(
     state.browser_session_origin = Some(request_origin.to_owned());
     ws.max_message_size(MAX_PAYLOAD_BYTES as usize)
         .max_frame_size(MAX_PAYLOAD_BYTES as usize)
+        .write_buffer_size(crate::product::WEBSOCKET_WRITE_BUFFER_BYTES)
         .on_upgrade(move |socket| crate::product::handle_socket(socket, state))
         .into_response()
 }
