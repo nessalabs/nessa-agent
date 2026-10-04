@@ -75,10 +75,9 @@ end of input (Nessa's own shell server) still does.
   initialized once. `resources/subscribe` and `resources/unsubscribe` are
   refused (`-32601`): their updates are not routed back. Every other request
   is forwarded with a fresh upstream id and answered with the harness's own
-  id, verbatim — except that a `tools/list` answer leaves out a tool whose
-  `_meta.ui.visibility` does not include `model` (a `visibility` that is not
-  an array of strings counts as leaving it out), and a `tools/call` naming a
-  tool hidden so is refused (`-32602`) — hidden by the session's own latest
+  id, verbatim — except that a `tools/list` answer leaves out a tool
+  that [who a tool is for](#who-a-tool-is-for) hides from the model, and a
+  `tools/call` naming a tool hidden so is refused (`-32602`) — hidden by the session's own latest
   list, or by the latest list this stand-in forwarded, by the order they were
   asked in: having declared MCP Apps, the host keeps an app's own tools from
   the model. The harness's `initialize` is answered with the protocol version
@@ -94,12 +93,11 @@ end of input (Nessa's own shell server) still does.
   answered ([forwarded results](#forwarded-results), #435).
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
   `_meta.ui`: an optional `resourceUri` (a `ui://` URI) and `visibility`
-  (`model`, `app`; both when absent, or when there is no `_meta.ui`), each
-  read on its own. A tool whose `resourceUri` is absent or cannot be read is
-  kept without a UI, and keeps its `visibility` (#412); one whose
-  `visibility` is not an array of strings (`null` included) is no one's —
-  hidden from the model, and an app's `tools/call` to it is refused
-  `tool_not_for_app` — and keeps a readable `resourceUri` as its UI. A tool
+  (`model`, `app`), each read on its own. Who may see and call the tool is
+  [who a tool is for](#who-a-tool-is-for). A tool whose `resourceUri` is
+  absent or cannot be read is kept without a UI, and keeps that visibility
+  (#412); one whose visibility cannot be read keeps a readable `resourceUri`
+  as its UI. A `_meta.ui` that is not an object has no URI to keep. A tool
   whose name cannot be one is left out. A session's list is read when it
   opens and again on `notifications/tools/list_changed`.
 - **UI resources.** `resources/read` of a `ui://` URI must answer one content
@@ -121,6 +119,23 @@ end of input (Nessa's own shell server) still does.
   takes the filled URIs into account, so a window holding the same revision
   holds the same URIs. The desktop maps a gateway tool to a `widget` part with
   `toolWidget`.
+
+## Who a tool is for
+
+One reading of a listed tool's `_meta.ui`, for the model and for an app.
+Absence of `_meta.ui`, or of `visibility` inside an object, is both: the
+server did not say. A `_meta.ui` or a `visibility` that is present and cannot
+be read is no one's — hidden from the model, and an app's `tools/call` is
+refused `tool_not_for_app` — because it cannot be read to include either.
+A `resourceUri` that cannot be read is no UI, and does not change who.
+
+| What `tools/list` gives | Who |
+| --- | --- |
+| no `_meta`, or no `_meta.ui` | both |
+| `_meta.ui` an object, `visibility` absent | both |
+| `_meta.ui` an object, `visibility` an array of strings | who it names (`model`, `app`) |
+| `_meta.ui` an object, `visibility` not an array of strings (`null` included) | no one's (#412) |
+| `_meta.ui` present and not an object: a string, an array, a number, a boolean, or `null` | no one's (#424) |
 
 ## Bounds
 
@@ -208,7 +223,7 @@ its own, and so a new stand-in.
 | Opening | opening fails | Closed | refused `unavailable` with the typed reason; the relay exits 1, so the harness sees its server fail to start |
 | Serving | harness `initialize` | Serving | answered from the upstream's `initialize` result, less `resources.subscribe` |
 | Serving | harness request | Serving | forwarded; the answer comes back with the harness's id |
-| Serving | `tools/list` answer | Serving | forwarded without the tools whose visibility excludes the model; of two lists answered out of order, the one asked later decides |
+| Serving | `tools/list` answer | Serving | forwarded without the tools that [who a tool is for](#who-a-tool-is-for) hides from the model; of two lists answered out of order, the one asked later decides |
 | Serving | `tools/call` for a tool the session's latest list, or the stand-in's, hid — or any tool before a list has said anything — | Serving | refused `-32602`, nothing forwarded; a name a list gives twice is hidden if either says so |
 | Serving | the stand-in falls behind the server's change notices | Serving | sent all three `*/list_changed` notices |
 | Serving | `resources/subscribe`, `resources/unsubscribe` | Serving | refused `-32601`, nothing forwarded |
@@ -336,7 +351,8 @@ Each row above has at least one test, named after it:
 - SDK, in-process fixture servers over in-memory pipes and a manual clock
   (`crates/nessa-sdk/tests/infrastructure/mcp/`): the handshake and declared
   extension, version refusal, list with pages and `_meta.ui`, a tool without
-  UI, unreadable `_meta.ui`, list bounds and order, read of an app resource,
+  UI, unreadable `_meta.ui`, a `_meta.ui` that is not an object
+  (`a_meta_ui_that_is_not_an_object_is_no_ones`), list bounds and order, read of an app resource,
   wrong MIME, oversize HTML and frame, `Timeout` and the late answer,
   `Remote`, `Busy`, the stand-in's `initialize`, forwarding with id rewriting,
   cancellation both ways, id reuse, hidden tools, subscriptions, server
