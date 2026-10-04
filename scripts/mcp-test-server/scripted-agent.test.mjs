@@ -300,6 +300,7 @@ function lingering(
   {
     answers = () => true,
     refuses = () => false,
+    exits = () => false,
     delayMs = 0,
     deafAfterInitialize = false,
     name = "lingering",
@@ -307,14 +308,16 @@ function lingering(
 ) {
   const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
   // `answers(method)`: whether it answers; `refuses(method)`: with an error;
-  // `delayMs`: after how long; `deafAfterInitialize`: it stops reading its
-  // input once it has answered initialize, but keeps running.
+  // `exits(method)`: by exiting instead; `delayMs`: after how long;
+  // `deafAfterInitialize`: it stops reading its input once it has answered
+  // initialize, but keeps running.
   const script = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line)
   if (m.id === undefined || !(${answers.toString()})(m.method)) return
   const answer = (${refuses.toString()})(m.method) ? { error: { code: -32000, message: "refused " + m.method } } : { result: {} }
   setTimeout(() => {
+    if ((${exits.toString()})(m.method)) process.exit(1)
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, ...answer }) + "\\n")
     if (${deafAfterInitialize} && m.method === "initialize") {
       process.stdin.destroy()
@@ -460,6 +463,58 @@ test("a cancel while the call is in flight ends the turn cancelled even when the
   assert.equal(await exited(agent.child, 5000), true)
 })
 
+test("a cancel while the call is in flight ends the turn cancelled even when the call's deadline passes", async (t) => {
+  const silent = lingering(t, {
+    answers: (method) => method === "initialize",
+    name: "mcptest",
+  })
+  const agent = start("codex", codexEnv)
+  const { sessionId } = (
+    await agent.request("session/new", { cwd: here, mcpServers: [silent.server] })
+  ).result
+  // The request's own 20 s outlasts the call's 10 s deadline.
+  const turn = agent.request("session/prompt", { sessionId, prompt: [] })
+  await sleep(300)
+  agent.notify("session/cancel", { sessionId })
+  const answered = await turn
+  assert.equal(answered.error, undefined, answered.error?.message)
+  assert.deepEqual(answered.result, { stopReason: "cancelled" })
+  assert.equal(answered.notes.length, 0)
+  // The stand-in is kept, still silent: the next prompt's call meets its own
+  // deadline, with no cancel to decide it.
+  const next = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.match(next.error.message, /did not answer tools\/call within/)
+  assert.equal(next.notes.length, 0)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("a cancel while the call is in flight ends the turn cancelled even when the stand-in exits", async (t) => {
+  const exiting = lingering(t, {
+    name: "mcptest",
+    delayMs: 1500,
+    exits: (method) => method === "tools/call",
+  })
+  const agent = start("codex", codexEnv)
+  const { sessionId } = (
+    await agent.request("session/new", { cwd: here, mcpServers: [exiting.server] })
+  ).result
+  const turn = agent.request("session/prompt", { sessionId, prompt: [] })
+  await sleep(300)
+  agent.notify("session/cancel", { sessionId })
+  const answered = await turn
+  assert.equal(answered.error, undefined, answered.error?.message)
+  assert.deepEqual(answered.result, { stopReason: "cancelled" })
+  assert.equal(answered.notes.length, 0)
+  assert.equal(await gone(exiting.pid()), true, "the stand-in did not exit")
+  // The session's stand-in is gone: the next prompt fails at once.
+  const next = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.match(next.error.message, /the stand-in exited \(1\)/)
+  assert.equal(next.notes.length, 0)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
 test("a cancel for another session leaves the prompt in flight alone", async (t) => {
   const refusing = lingering(t, {
     name: "mcptest",
@@ -566,7 +621,7 @@ test("two MCP servers of one name are refused before either starts", async () =>
     cwd: here,
     mcpServers: [mcptest, { ...mcptest, command: join(here, "no-such-command") }],
   })
-  assert.match(opened.error.message, /two MCP servers named mcptest/)
+  assert.equal(opened.error.message, "two MCP servers named mcptest")
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })
@@ -578,7 +633,7 @@ test("two MCP servers with no name are refused as alike", async () => {
     cwd: here,
     mcpServers: [nameless, { ...nameless, command: join(here, "no-such-command") }],
   })
-  assert.match(opened.error.message, /two MCP servers named/)
+  assert.equal(opened.error.message, "two MCP servers with no name")
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })

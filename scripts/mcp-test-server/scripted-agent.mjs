@@ -163,7 +163,12 @@ const handlers = {
     const values = initialOptions(agent, process.env, params)
     const names = (params.mcpServers ?? []).map((server) => server.name)
     const twice = names.findIndex((name, index) => names.indexOf(name) !== index)
-    if (twice !== -1) throw new Error(`two MCP servers named ${names[twice]}`)
+    if (twice !== -1)
+      throw new Error(
+        names[twice] === undefined
+          ? "two MCP servers with no name"
+          : `two MCP servers named ${names[twice]}`,
+      )
     const servers = new Map()
     try {
       for (const server of params.mcpServers ?? [])
