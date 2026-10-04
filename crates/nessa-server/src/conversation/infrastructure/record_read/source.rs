@@ -108,7 +108,6 @@ impl RecordReadSource for NessaRecordReadSource {
             // deadline answered read_timeout). A disconnected socket detaches
             // its read task instead, so that read stops at the budget.
             let stop = Arc::new(AtomicBool::new(false));
-            let _waiter = StopWhenDropped(stop.clone());
             let stopped: Box<dyn Fn() -> bool + Send> = {
                 let stop = stop.clone();
                 let workers = self.workers.clone();
@@ -152,6 +151,9 @@ impl RecordReadSource for NessaRecordReadSource {
                 result.map(|value| RecordReadResponse { value, lease })
             });
             let mut work = std::pin::pin!(work);
+            // Declared after `work`, so it is dropped first: a dropped waiter
+            // publishes `stop` before the worker's answer channel is released.
+            let _waiter = StopWhenDropped(stop.clone());
             let finished = tokio::select! {
                 biased;
                 finished = &mut work => finished,
