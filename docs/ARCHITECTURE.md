@@ -820,6 +820,13 @@ adapter reads bytes by content through the SDK's image port, and its frame bound
 is derived from the message's image budget. Closing a conversation releases its
 holds, with audit evidence for every transition. See the
 [attachments module map](../crates/nessa-server/src/attachments/mod.rs).
+Local held-registration manifest facts and bounded range reads are implemented
+through `AttachmentArtifacts`, using the shared tracked read-worker owner; their
+retained retirement metadata and later protected-network activation are described
+in [artifact sync](design/artifact-sync.md). The hold domain's `RetiredFrom` supplies
+the Pending/Held predecessor shared by discard results, reversal audit and saved
+retirement. The local port supplies no access grant
+and is not yet wired into composed gateway shutdown.
 
 What happens to an attached file is decided by its type and never by the
 gesture that attached it: an image is uploaded and normalised wherever it came
@@ -854,6 +861,15 @@ provider adapters remain separate features. Existing design proposals do not rep
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
+The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. The server `device_pairing` consumer implements native enrollment on top of it: the
+JSON codec and framing, the gateway runtime and listener, and the device client —
+owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
+It ends at Approved. When `config.json` names `native.listenAddress`, composition
+restores the gateway key before any bind, mounts the listener and joins its drain
+into the shutdown report, and the owner `pairing.*` product methods drive it;
+otherwise nothing native is opened. Receiver staging and Active publication are
+later slices. See [device pairing](design/auth/device-pairing.md).
+
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
 **Local agent credential values** (`crates/nessa-agent-credentials`) — pure

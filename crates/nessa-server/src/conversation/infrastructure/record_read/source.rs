@@ -5,15 +5,19 @@ use crate::conversation::application::{
     ReadRefusal, ReceiverReadScope, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
-use crate::conversation::infrastructure::read_workers::{ReadWorkerError, ReadWorkers};
 use crate::conversation::infrastructure::record_scope_from_identity;
+use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
 use nessa_sdk::{
     domain::agent_execution::sessions::SessionId, infrastructure::session_storage::RecordStorage,
 };
 use nessa_sync::replication::domain::Id;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 #[cfg(test)]
 use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 use tokio::runtime::Handle;
 #[cfg(test)]
 use tokio::sync::Notify;
@@ -24,9 +28,19 @@ pub struct NessaRecordReadSource {
     origin: Id,
     runtime: Handle,
     workers: Arc<ReadWorkers>,
+    discovery_steps: usize,
+    work_budget: Duration,
     #[cfg(test)]
     before_identity: Option<Arc<TestReadGate>>,
+    /// Called with the stop condition at each step boundary; a test may hold
+    /// the worker there until the condition it is driving has been set.
+    #[cfg(test)]
+    between_steps: Option<BetweenSteps>,
 }
+
+/// A test hold at each step boundary, given the read's stop condition.
+#[cfg(test)]
+type BetweenSteps = Arc<dyn Fn(&dyn Fn() -> bool) + Send + Sync>;
 
 #[cfg(test)]
 struct TestReadGate {
@@ -60,8 +74,12 @@ impl NessaRecordReadSource {
             origin,
             runtime,
             workers: ReadWorkers::new(),
+            discovery_steps: operation::DISCOVERY_STEPS_PER_READ,
+            work_budget: operation::READ_WORK_BUDGET,
             #[cfg(test)]
             before_identity: None,
+            #[cfg(test)]
+            between_steps: None,
         }
     }
 
@@ -85,34 +103,77 @@ impl RecordReadSource for NessaRecordReadSource {
             let storage = self.storage.clone();
             let runtime = self.runtime.clone();
             let origin = self.origin.clone();
+            let steps = self.discovery_steps;
+            // Set when the budget passes or this waiter is dropped (the product
+            // deadline answered read_timeout). A disconnected socket detaches
+            // its read task instead, so that read stops at the budget.
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopped: Box<dyn Fn() -> bool + Send> = {
+                let stop = stop.clone();
+                let workers = self.workers.clone();
+                Box::new(move || stop.load(Ordering::SeqCst) || workers.is_closed())
+            };
+            #[cfg(test)]
+            let stopped: Box<dyn Fn() -> bool + Send> = match self.between_steps.clone() {
+                Some(hold) => Box::new(move || {
+                    hold(&*stopped);
+                    stopped()
+                }),
+                None => stopped,
+            };
             #[cfg(test)]
             let before_identity = self.before_identity.clone();
-            self.workers
-                .run("nessa-record-read", move || {
-                    debug_assert!(Handle::try_current().is_err());
-                    #[cfg(test)]
-                    if let Some(gate) = before_identity {
-                        gate.wait();
+            let work = self.workers.run("nessa-record-read", move || {
+                debug_assert!(Handle::try_current().is_err());
+                #[cfg(test)]
+                if let Some(gate) = before_identity {
+                    gate.wait();
+                }
+                let identity = runtime
+                    .block_on(storage.record_identity(&session, origin))
+                    .map_err(operation::storage_error)?
+                    .ok_or(RecordReadError::IdentityChanged)?;
+                let observed = record_scope_from_identity(&admitted, &identity)
+                    .map_err(RecordReadError::Admission)?;
+                if let RecordReadOperation::Page(request) = &operation {
+                    if request.scope != observed {
+                        return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
                     }
-                    let identity = runtime
-                        .block_on(storage.record_identity(&session, origin))
-                        .map_err(operation::storage_error)?
-                        .ok_or(RecordReadError::IdentityChanged)?;
-                    let observed = record_scope_from_identity(&admitted, &identity)
-                        .map_err(RecordReadError::Admission)?;
-                    if let RecordReadOperation::Page(request) = &operation {
-                        if request.scope != observed {
-                            return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
-                        }
-                    }
-                    let result = operation::execute(
-                        storage, runtime, session, identity, admitted, observed, operation,
-                    );
-                    result.map(|value| RecordReadResponse { value, lease })
-                })
-                .await
-                .map_err(worker_error)?
+                }
+                let work = operation::ReadWork {
+                    operation,
+                    steps,
+                    stopped,
+                };
+                let result = operation::execute(
+                    storage, runtime, session, identity, admitted, observed, work,
+                );
+                result.map(|value| RecordReadResponse { value, lease })
+            });
+            let mut work = std::pin::pin!(work);
+            // Declared after `work`, so it is dropped first: a dropped waiter
+            // publishes `stop` before the worker's answer channel is released.
+            let _waiter = StopWhenDropped(stop.clone());
+            let finished = tokio::select! {
+                biased;
+                finished = &mut work => finished,
+                () = tokio::time::sleep(self.work_budget) => {
+                    // The worker stops at its next step boundary.
+                    stop.store(true, Ordering::SeqCst);
+                    work.await
+                }
+            };
+            finished.map_err(worker_error)?
         })
+    }
+}
+
+/// Stops the read's discovery calls once nobody waits for its answer.
+struct StopWhenDropped(Arc<AtomicBool>);
+
+impl Drop for StopWhenDropped {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 

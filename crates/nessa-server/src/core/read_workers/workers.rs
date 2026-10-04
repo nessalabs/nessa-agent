@@ -1,28 +1,23 @@
 use std::panic;
 use std::panic::AssertUnwindSafe;
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{Builder, JoinHandle};
 use tokio::sync::watch::Receiver;
 use tokio::sync::{oneshot, watch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::conversation::infrastructure) enum ReadWorkerError {
+pub(crate) enum ReadWorkerError {
     Unavailable,
     WorkerPanicked,
 }
-pub(in crate::conversation::infrastructure) struct ReadWorkers {
-    pub(in crate::conversation::infrastructure) state: Mutex<ReadWorkerState>,
-    #[cfg(test)]
-    pub(in crate::conversation::infrastructure) joining: AtomicUsize,
+pub(crate) struct ReadWorkers {
+    state: Mutex<ReadWorkerState>,
 }
-pub(in crate::conversation::infrastructure) struct ReadWorkerState {
-    pub(in crate::conversation::infrastructure) closed: bool,
-    pub(in crate::conversation::infrastructure) joins: Vec<JoinHandle<()>>,
+struct ReadWorkerState {
+    closed: bool,
+    joins: Vec<JoinHandle<()>>,
     failure: Option<ReadWorkerError>,
-    pub(in crate::conversation::infrastructure) drain:
-        Option<Receiver<Option<Result<(), ReadWorkerError>>>>,
+    drain: Option<Receiver<Option<Result<(), ReadWorkerError>>>>,
 }
 impl ReadWorkerState {
     fn admit(&self) -> Result<(), ReadWorkerError> {
@@ -48,7 +43,7 @@ impl ReadWorkerState {
     }
 }
 impl ReadWorkers {
-    pub(in crate::conversation::infrastructure) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(ReadWorkerState {
                 closed: false,
@@ -56,20 +51,23 @@ impl ReadWorkers {
                 failure: None,
                 drain: None,
             }),
-            #[cfg(test)]
-            joining: AtomicUsize::new(0),
         })
     }
-    pub(in crate::conversation::infrastructure) fn admit(&self) -> Result<(), ReadWorkerError> {
+    pub(crate) fn admit(&self) -> Result<(), ReadWorkerError> {
         self.state.lock().unwrap().admit()
     }
+    /// Whether shutdown has started or a worker fault has fenced new reads.
+    /// Running work may read this between its own bounded steps to stop early.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.state.lock().unwrap().closed
+    }
     /// Preserve an inner source worker panic in the same lifecycle owner.
-    pub(in crate::conversation::infrastructure) fn worker_panicked(&self) {
+    pub(crate) fn worker_panicked(&self) {
         let mut state = self.state.lock().unwrap();
         state.failure = Some(ReadWorkerError::WorkerPanicked);
         state.closed = true;
     }
-    pub(in crate::conversation::infrastructure) async fn run<T: Send + 'static>(
+    pub(crate) async fn run<T: Send + 'static>(
         self: &Arc<Self>,
         name: &str,
         read: impl FnOnce() -> T + Send + 'static,
@@ -102,9 +100,7 @@ impl ReadWorkers {
             ReadWorkerError::WorkerPanicked
         })
     }
-    pub(in crate::conversation::infrastructure) async fn shutdown(
-        self: &Arc<Self>,
-    ) -> Result<(), ReadWorkerError> {
+    pub(crate) async fn shutdown(self: &Arc<Self>) -> Result<(), ReadWorkerError> {
         let mut completion = {
             let mut state = self.state.lock().unwrap();
             state.closed = true;
@@ -118,8 +114,6 @@ impl ReadWorkers {
                     tokio::task::spawn_blocking(move || {
                         let mut panicked = false;
                         for join in joins {
-                            #[cfg(test)]
-                            owner.joining.fetch_add(1, Ordering::SeqCst);
                             panicked |= join.join().is_err();
                         }
                         let result = {
@@ -146,3 +140,7 @@ impl ReadWorkers {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/core/read_workers.rs"]
+mod tests;

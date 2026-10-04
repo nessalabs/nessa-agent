@@ -25,6 +25,8 @@ const genericOutputs = [
   "crates/nessa-server/src/protocol/generated_types.rs",
 ]
 const productOutputs = [
+  "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs",
+  "protocol/product/pairing-values.generated.json",
   "packages/nessa-client/src/generated/product.ts",
   "crates/nessa-server/src/product/generated.rs",
   "crates/nessa-server/src/product_contract/generated.rs",
@@ -42,6 +44,7 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs",
       "crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs",
       "crates/nessa-server/src/protocol/encode.rs",
+      "crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json",
     ]) {
       mkdirSync(dirname(join(path, name)), { recursive: true })
       cpSync(join(root, name), join(path, name), { recursive: true })
@@ -67,8 +70,8 @@ function edit(path, name, change) {
   change(value)
   writeFileSync(target, JSON.stringify(value))
 }
-function generate(path, script) {
-  return spawnSync(process.execPath, [`scripts/${script}.mjs`], {
+function generate(path, script, args = []) {
+  return spawnSync(process.execPath, [`scripts/${script}.mjs`, ...args], {
     cwd: path,
     encoding: "utf8",
     timeout: 120_000,
@@ -143,8 +146,14 @@ test("passive timing publishes changed phase values and their derived client flo
     })
     const result = generate(path, "generate-product-protocol")
     assert.equal(result.status, 0, result.stderr)
-    const ts = readFileSync(join(path, productOutputs[0]), "utf8")
-    const rust = readFileSync(join(path, productOutputs[1]), "utf8")
+    const ts = readFileSync(
+      join(path, "packages/nessa-client/src/generated/product.ts"),
+      "utf8",
+    )
+    const rust = readFileSync(
+      join(path, "crates/nessa-server/src/product/generated.rs"),
+      "utf8",
+    )
     assert.match(ts, /readTimeoutMs: 61/)
     assert.match(ts, /deliveryTimeoutMs: 73/)
     assert.match(ts, /clientAllowanceMs: 89/)
@@ -170,7 +179,10 @@ test("MCP App call timing publishes its parts, the client's deadline, and the ga
     })
     const result = generate(path, "generate-product-protocol")
     assert.equal(result.status, 0, result.stderr)
-    const ts = readFileSync(join(path, productOutputs[0]), "utf8")
+    const ts = readFileSync(
+      join(path, "packages/nessa-client/src/generated/product.ts"),
+      "utf8",
+    )
     const contract = readFileSync(
       join(path, "crates/nessa-server/src/product_contract/generated.rs"),
       "utf8",
@@ -236,3 +248,90 @@ for (const [name, value] of [
       )
       assert.match(result.stderr, /Invalid passive read timing|deadline exceeds/)
     }))
+
+test("pairing owner changes derive auth constants and published shape before drift check", () =>
+  fixture((path) => {
+    edit(
+      path,
+      "crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json",
+      (values) => {
+        values.identityBytes += 1
+        values.deviceKeyBytes += 2
+        values.manualCodeBytes += 3
+      },
+    )
+    const values = JSON.parse(
+      readFileSync(
+        join(path, "crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json"),
+        "utf8",
+      ),
+    )
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const rust = readFileSync(
+      join(path, "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs"),
+      "utf8",
+    )
+    assert.match(rust, new RegExp(`IDENTITY_BYTES: usize = ${values.identityBytes};`))
+    assert.match(rust, new RegExp(`DEVICE_KEY_BYTES: usize = ${values.deviceKeyBytes};`))
+    assert.match(
+      rust,
+      new RegExp(`MANUAL_CODE_BYTES: usize = ${values.manualCodeBytes};`),
+    )
+    const publication = JSON.parse(
+      readFileSync(join(path, "protocol/product/pairing-values.generated.json"), "utf8"),
+    )
+    assert.equal(publication.$defs.InvitationId.maxItems, values.identityBytes)
+    assert.equal(publication.$defs.DeviceKey.maxItems, values.deviceKeyBytes)
+    assert.equal(
+      publication.$defs.ManualCodeDisplay.maxLength,
+      values.manualCodeBytes + 1,
+    )
+    // The owner routes' schema takes the same widths, and their Rust fields
+    // name the owner's constant rather than a number.
+    const product = JSON.parse(
+      readFileSync(join(path, "protocol/product/v1.json"), "utf8"),
+    ).$defs
+    assert.equal(
+      product.PairingApproveParams.properties.invitationId.maxItems,
+      values.identityBytes,
+    )
+    assert.equal(
+      product.PairingApproveParams.properties.deviceKey.minItems,
+      values.deviceKeyBytes,
+    )
+    assert.equal(
+      product.PairingCreateResult.properties.code.maxLength,
+      values.manualCodeBytes + 1,
+    )
+    const routes = readFileSync(
+      join(path, "crates/nessa-server/src/product/generated.rs"),
+      "utf8",
+    )
+    assert.match(routes, /pub device_key: \[u8; DeviceKey::LENGTH\],/)
+    assert.match(routes, /pub invitation_id: \[u8; InvitationId::LENGTH\],/)
+    assert.equal(generate(path, "generate-product-protocol", ["--check"]).status, 0)
+    writeFileSync(
+      join(path, "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs"),
+      "stale publication\n",
+    )
+    const refused = unchanged(path, productOutputs, () =>
+      generate(path, "generate-product-protocol", ["--check"]),
+    )
+    assert.match(refused.stderr, /Generated product protocol is stale/)
+  }))
+
+test("invalid pairing publication refuses every output before writes", () =>
+  fixture((path) => {
+    edit(
+      path,
+      "crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json",
+      (values) => {
+        values.deviceKeyBytes = 0
+      },
+    )
+    const refused = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(refused.stderr, /Invalid pairing owner publication/)
+  }))

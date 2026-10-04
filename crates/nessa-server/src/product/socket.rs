@@ -286,7 +286,11 @@ impl ResponseClass {
             | "conversation.reorder"
             // Releasing an app ends its held calls, so it is never behind
             // them on the app lane.
-            | "mcp.releaseApp" => Self::Control,
+            | "mcp.releaseApp"
+            // Ending an enrollment is never crowded out by ordinary requests
+            // (design row O7).
+            | "pairing.deny"
+            | "pairing.cancel" => Self::Control,
             "mcp.callTool" | "mcp.readResource" => Self::App,
             "conversation.recordsHead"
             | "conversation.recordsPage"
@@ -775,11 +779,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = if ReadRefusal::from(error) == ReadRefusal::Unverifiable {
-        RecordReadErrorCode::Unverifiable
-    } else {
-        RecordReadErrorCode::Unauthorized
-    };
+    let code = RecordReadErrorCode::from(ReadRefusal::from(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -875,6 +875,9 @@ async fn dispatch_authorized(
         }
         method if method.starts_with("mcp.") => {
             super::mcp_apps::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("pairing.") => {
+            super::pairing::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -1060,6 +1063,14 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcp.readResource"
         | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
+        // Enrolling a device creates a credential for it; Auth asks again for
+        // the exact consent inside the runtime.
+        "pairing.create"
+        | "pairing.pending"
+        | "pairing.status"
+        | "pairing.approve"
+        | "pairing.deny"
+        | "pairing.cancel" => Some("credential.manage"),
         _ => None,
     }
 }
@@ -1386,7 +1397,7 @@ mod tests {
     };
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
-        ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+        ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
     };
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
     use nessa_sdk::infrastructure::session_storage::{
@@ -1467,6 +1478,36 @@ mod tests {
             assert!(
                 action_for_method(method).is_some(),
                 "advertised method has no authorization/dispatch path: {method}"
+            );
+        }
+    }
+
+    /// Design row O7: ending an enrollment takes the control lane and its
+    /// capacity, so ordinary requests cannot crowd it out; the other pairing
+    /// methods are ordinary requests, and every one asks Cedar for
+    /// `credential.manage` before it is dispatched.
+    #[test]
+    fn pairing_deny_and_cancel_are_controls() {
+        for method in PRODUCT_READY_METHODS
+            .iter()
+            .filter(|method| method.starts_with("pairing."))
+        {
+            let control = matches!(*method, "pairing.deny" | "pairing.cancel");
+            assert_eq!(
+                matches!(ResponseClass::for_method(method), ResponseClass::Control),
+                control,
+                "{method}"
+            );
+            if !control {
+                assert!(
+                    matches!(ResponseClass::for_method(method), ResponseClass::Ordinary),
+                    "{method}"
+                );
+            }
+            assert_eq!(
+                action_for_method(method),
+                Some("credential.manage"),
+                "{method}"
             );
         }
     }
@@ -1785,7 +1826,7 @@ mod tests {
         let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
         writer
             .save_changes(
-                SessionSaveGeneration::initial(),
+                writer.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
                     id: session_id.clone(),
                     provider: provider.clone(),
@@ -1793,11 +1834,12 @@ mod tests {
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                 },
-                vec![SessionChange::Opened {
+                vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),
                     provider,
                     context: ProviderContext::Absent,
-                }],
+                }])
+                .unwrap()],
             )
             .await
             .unwrap();
@@ -1862,36 +1904,51 @@ mod tests {
             panic!("record reply expected")
         };
         let head_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(head_json["payload"]["head"], "1");
+        assert_eq!(head_json["payload"]["head"], "2");
         assert_eq!(head_json["payload"]["scope"]["accessEpoch"], "epoch-3");
         drop(lease);
-        let mut page_frame = request("page", "conversation.recordsPage");
-        page_frame.params = serde_json::json!({
-            "conversationId": id.to_string(), "accessEpoch": "3",
-            "request": {
-                "scope": scope_json, "after": "0", "target": "1", "maxRecords": 16,
-                "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-                "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-            },
-        });
-        let (page_wire, lease) = dispatch_passive_read(
-            &state,
-            &session,
-            page_frame,
-            RecordReadLease::new(()),
-            Instant::now() + PASSIVE_READ_TIMEOUT,
-        )
-        .await;
-        let WireResponse::Record { text, .. } = page_wire else {
-            panic!("record reply expected")
-        };
-        let page_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(page_json["payload"]["records"][0]["position"], "1");
-        assert_eq!(
-            page_json["payload"]["request"]["scope"]["accessEpoch"],
-            "epoch-3"
-        );
-        drop(lease);
+        for target in ["1", "2"] {
+            let mut page_frame = request("page", "conversation.recordsPage");
+            page_frame.params = serde_json::json!({
+                "conversationId": id.to_string(), "accessEpoch": "3",
+                "request": {
+                    "scope": scope_json.clone(), "after": "0", "target": target, "maxRecords": 16,
+                    "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                    "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                },
+            });
+            let (page_wire, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                page_frame,
+                RecordReadLease::new(()),
+                Instant::now() + PASSIVE_READ_TIMEOUT,
+            )
+            .await;
+            if target == "1" {
+                let WireResponse::Ordinary(message) = page_wire else {
+                    panic!("intermediate Unit target must refuse")
+                };
+                let OutgoingMessage::Response(failure) = *message else {
+                    panic!("refusal expected")
+                };
+                assert_eq!(failure.error.unwrap().code, "invalid_request");
+            } else {
+                let WireResponse::Record { text, .. } = page_wire else {
+                    panic!("record reply expected")
+                };
+                let page_json: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(page_json["payload"]["records"].as_array().unwrap().len(), 2);
+                assert_eq!(page_json["payload"]["records"][0]["position"], "1");
+                assert_eq!(page_json["payload"]["records"][1]["position"], "2");
+                assert_eq!(page_json["payload"]["request"]["target"], "2");
+                assert_eq!(
+                    page_json["payload"]["request"]["scope"]["accessEpoch"],
+                    "epoch-3"
+                );
+            }
+            drop(lease);
+        }
         let mut wrong = request("wrong", "conversation.recordsHead");
         wrong.params = serde_json::json!({
             "conversationId": id.to_string(), "accessEpoch": "3",
@@ -2000,6 +2057,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn passive_socket_preserves_retryable_authority_failures() {
         for (error, expected) in [
+            (AccessError::Denied, "forbidden"),
             (AccessError::Unavailable, "unverifiable"),
             (AccessError::StaleRevision, "unverifiable"),
             (AccessError::InvalidCredential, "unauthorized"),

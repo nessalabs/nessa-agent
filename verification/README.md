@@ -42,6 +42,7 @@ verification/
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
+      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in)
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
         cli.mjs             options, stderr diagnostics, JSON result, exit status
@@ -51,7 +52,10 @@ verification/
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
+        apps.mjs            an MCP App's documents, read through Playwright's frames
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
+        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs: setup's one admitted call, the review a step opened
+        gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table)
 ```
 
 When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a
@@ -116,6 +120,7 @@ ends each step once its motion has, not after a fixed wait.
   something could not run (the server did not start, a browser is missing,
   what a step needs to begin was not on the page, an option or `--only` name
   the check does not have). `run-all` sums its checks by the same rule.
-- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser).
+- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser). CI
+  runs them in the frontend job, through `pnpm frontend:check`.
 
 Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-command-output).

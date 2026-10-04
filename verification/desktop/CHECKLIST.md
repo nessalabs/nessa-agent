@@ -410,6 +410,17 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **In the desktop app** (by hand, `pnpm app`): the proxy loads from the
   `nessa-sandbox` scheme and the fixture app renders in each place.
   _ADR 344._ Not scriptable here: the scripts drive the browser build.
+- [ ] **A real server's app works over a real gateway** (#384): in a browser
+  preview signed in to a gateway of its own, the test MCP server's review app
+  renders inline in the conversation where the agent called `review_rows`, in
+  the sandbox; its calls to tools hidden from apps are refused, and it shows
+  so; its destructive call waits on a review in the conversation's
+  permissions, its origin the app, shown in the window, and the app shows
+  the answer to Allow Once and to Deny; closing the pane of a mount with a
+  call waiting withdraws the review, and the inline mount stays. _#349
+  design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
+  built and the agent, `--agent claude|codex`, signed in on the machine). The
+  refusal of the hidden tool that declares no UI depends on #412.
 
 ## Composer and approval card
 

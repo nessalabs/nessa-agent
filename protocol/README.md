@@ -34,6 +34,7 @@ or schema version bump is needed merely to change this repository's current cont
 | `conversation.archive`, `conversation.unarchive`, `conversation.delete` | Hide or restore a conversation in the list; delete permanently (history, uploads and summary erased, audit kept, identity never reused) |
 | `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
+| `pairing.create`, `pairing.pending`, `pairing.status`, `pairing.approve`, `pairing.deny`, `pairing.cancel` | Owner side of native device pairing (`credential.manage`, then Auth's exact consent check): a one-time code, the unfinished enrollments, one enrollment, and approval of the exact claimed key, denial or cancellation. `pairing_not_configured` unless `config.json` names a native listen address. Refusals are a `PairingErrorCode` or the session's own codes. See [device pairing](../docs/design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a) |
 | `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with

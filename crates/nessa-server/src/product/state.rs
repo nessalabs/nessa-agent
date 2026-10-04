@@ -6,6 +6,7 @@ use crate::conversation::application::{
     CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
     ReceiverAuthority, RecordReadSource,
 };
+use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::mcp_servers::{entrypoint::http::ResourceRoute, infrastructure::ResourceTicketStore};
 use axum::extract::FromRef;
 use nessa_auth::{
@@ -70,6 +71,10 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    /// Owner pairing commands, composed only when `config.json` names a native
+    /// listen address. `None` answers every pairing method
+    /// `pairing_not_configured`.
+    pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
@@ -149,6 +154,7 @@ impl ProductRouteState {
             clock: dependencies.clock,
             policy: dependencies.policy,
             admin: None,
+            pairing: None,
             conversations: None,
             passive_read: None,
             record_source: None,
@@ -179,6 +185,13 @@ impl ProductRouteState {
     /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
+        self
+    }
+
+    /// Register the owner pairing commands of this gateway's native enrollment
+    /// runtime. Without them the pairing methods answer `pairing_not_configured`.
+    pub fn with_pairing(mut self, pairing: Arc<PairingOwnerCommands>) -> Self {
+        self.pairing = Some(pairing);
         self
     }
 

@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 
 use super::{AgentError, AgentFuture};
+use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::sessions::attachment::AttachmentLease;
 use std::{error::Error, fmt, sync::Arc};
 
@@ -49,13 +50,20 @@ impl AgentInitializationError {
     /// [`Self::cause`]. Once resources are confirmed released, repeats return the
     /// retained report without I/O, including any audit failure. The original
     /// [`Self::cause`] never changes.
+    ///
+    /// A panic raised by the polling task's `Waker` is logged and loses that
+    /// one wake; it does not affect the cleanup. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub fn retry_cleanup(&self) -> AgentFuture<'_, ()> {
-        Box::pin(async move {
-            match &self.recovery {
-                Some(recovery) => recovery.cleanup().await.into_result().map(|_| ()),
-                None => Ok(()),
-            }
-        })
+        Box::pin(contain_caller_wake(
+            CallerWaiter::InitializationCleanup,
+            async move {
+                match &self.recovery {
+                    Some(recovery) => recovery.cleanup().await.into_result().map(|_| ()),
+                    None => Ok(()),
+                }
+            },
+        ))
     }
 }
 impl fmt::Debug for AgentInitializationError {

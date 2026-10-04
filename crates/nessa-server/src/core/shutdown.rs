@@ -1,5 +1,7 @@
 //! Typed cleanup evidence preserved by process composition.
 use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
+use crate::device_pairing::infrastructure::PairingRuntimeError;
+use nessa_auth::application::pairing::PairingWorkerFault;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -65,6 +67,19 @@ impl PassiveReaderShutdownFailure {
     }
 }
 
+/// Native pairing's stop did not confirm. The listener stops admission, wakes
+/// and collects its peers and drains its connection owner on its own task; a
+/// fault of that task leaves the drain unknown. After the drains, ended
+/// enrollments' receivers are settled, and that can fail on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeShutdownFailure {
+    /// The listener task ended unexpectedly before its drain was observed.
+    ListenerFault(PairingWorkerFault),
+    /// Every drain returned, but an ended enrollment's receiver cleanup did
+    /// not complete; the registry keeps it pending (design row D6).
+    Cleanup(PairingRuntimeError),
+}
+
 /// Cleanup failures retain each reader's operation and cause.
 #[derive(Debug)]
 pub enum ShutdownFailure {
@@ -88,6 +103,17 @@ pub enum ShutdownFailure {
         readers: PassiveReaderShutdownFailure,
         conversations: ConversationError,
     },
+    /// Every earlier stage returned; native pairing's drain remains unknown.
+    NativeUnreported {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+        conversations: Result<(), ConversationError>,
+    },
+    /// Native pairing's drain failed, beside whatever the earlier stages said.
+    Native {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+        conversations: Result<(), ConversationError>,
+        native: NativeShutdownFailure,
+    },
 }
 impl Display for ShutdownFailure {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -98,6 +124,8 @@ impl Display for ShutdownFailure {
             Self::Readers(error) => write!(f, "passive reader cleanup: {error:?}"),
             Self::Conversations(error) => write!(f, "conversation cleanup: {error}"),
             Self::Both { readers, conversations } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations}"),
+            Self::NativeUnreported { readers, conversations } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations:?}; native pairing drain unreported"),
+            Self::Native { readers, conversations, native } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations:?}; native pairing drain: {native:?}"),
         }
     }
 }

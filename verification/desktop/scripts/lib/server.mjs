@@ -36,7 +36,7 @@ async function waitFor(url, ms, child) {
   return false
 }
 
-function freePort() {
+export function freePort() {
   return new Promise((ok, fail) => {
     const server = createServer()
     server.once("error", fail)
@@ -48,11 +48,11 @@ function freePort() {
 }
 
 /** Runs a child with its output kept off stdout; the tail is kept for errors. */
-function child(command, args, options) {
+function child(command, args, options, env = process.env) {
   const proc = spawn(command, args, {
     cwd: repoRoot,
     stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
+    env,
   })
   const tail = []
   const keep = (chunk) => {
@@ -71,6 +71,36 @@ function exited(proc) {
   return new Promise((ok) =>
     proc.exitCode !== null ? ok(proc.exitCode) : proc.once("exit", ok),
   )
+}
+
+/**
+ * Starts a dev server of its own on a free port, with `env` added to its
+ * environment — never reusing one already running, whose environment is not
+ * this caller's (a check that points the dev server's `/browser` proxy at a
+ * gateway of its own, `NESSA_BROWSER_GATEWAY_URL`). Returns `{ url, close }`.
+ */
+export async function startDevServer(options, env) {
+  const port = await freePort()
+  const url = `http://127.0.0.1:${port}/desktop.html`
+  log(`starting a dev server of its own at ${url}…`)
+  const proc = child(
+    vite,
+    ["--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+    options,
+    { ...process.env, ...env },
+  )
+  if (!(await waitFor(url, 60_000, proc))) {
+    proc.kill()
+    await exited(proc)
+    throw new CannotRun(`dev server did not answer at ${url}\n${proc.tail()}`)
+  }
+  return {
+    url,
+    close: async () => {
+      proc.kill()
+      await exited(proc)
+    },
+  }
 }
 
 /**

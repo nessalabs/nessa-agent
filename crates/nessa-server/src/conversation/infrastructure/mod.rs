@@ -7,8 +7,11 @@
 //!
 //! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
 //! epochs and transition evidence in its own private SQLite dataset. It supplies
-//! passive admission; `exact_record_scope` combines its admitted receiver and
-//! epoch with the SDK source's physical identity before a bounded read.
+//! passive admission, and device pairing pairs a receiver with an issued device
+//! credential and fences it, as the system, once that enrollment has ended
+//! (`device_pairing::infrastructure::ConversationReceivers`).
+//! `exact_record_scope` combines its admitted receiver and epoch with the SDK
+//! source's physical identity before a bounded read.
 //! `record_read` checks that identity from metadata before worker creation,
 //! runs each SDK source on a tracked non-entered thread, and joins those threads
 //! before storage shutdown.
@@ -47,7 +50,6 @@ pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;
-mod read_workers;
 mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::NessaRecordReadSource;

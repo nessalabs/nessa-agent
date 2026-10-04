@@ -1,10 +1,12 @@
 //! Generated from protocol/product/v1.json. Do not edit.
 //! Bounds are validated at the transport boundary; these are payload types only.
-#![allow(dead_code)]
+//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.
+#![allow(dead_code, clippy::enum_variant_names)]
 use crate::product_contract::generated::SessionCloseReason;
 use nessa_auth::application::dto::{
     CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, PrincipalInputDto,
 };
+use nessa_auth::domain::pairing::{ConsentIntentId, DeviceKey, InvitationId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[derive(Deserialize, Serialize)]
@@ -1223,6 +1225,177 @@ pub struct ConversationCatalogueResolveResult {
     pub entry: CatalogueDescriptor,
     pub payload: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingInvitationParams {
+    pub invitation_id: [u8; InvitationId::LENGTH],
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingApproveParams {
+    pub invitation_id: [u8; InvitationId::LENGTH],
+    pub device_key: [u8; DeviceKey::LENGTH],
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingOwnerPhase {
+    Available,
+    Claimed,
+    Approved,
+    Staging,
+    Active,
+    Terminal,
+}
+impl PairingOwnerPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Claimed => "claimed",
+            Self::Approved => "approved",
+            Self::Staging => "staging",
+            Self::Active => "active",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingTerminalCause {
+    CredentialRevoked,
+    Denied,
+    Cancelled,
+    Expired,
+    Restarted,
+}
+impl PairingTerminalCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CredentialRevoked => "credential_revoked",
+            Self::Denied => "denied",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+            Self::Restarted => "restarted",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingInitiatorKind {
+    LocalOperator,
+    Principal,
+    Device,
+    System,
+}
+impl PairingInitiatorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalOperator => "local_operator",
+            Self::Principal => "principal",
+            Self::Device => "device",
+            Self::System => "system",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingInitiator {
+    pub kind: PairingInitiatorKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_key: Option<[u8; DeviceKey::LENGTH]>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingTerminal {
+    pub cause: PairingTerminalCause,
+    pub initiator: PairingInitiator,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingReceiver {
+    pub receiver_id: String,
+    pub access_epoch: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingOwnerStatus {
+    pub invitation_id: [u8; InvitationId::LENGTH],
+    pub consent_id: [u8; ConsentIntentId::LENGTH],
+    pub generation: u64,
+    pub class: String,
+    pub grant: CredentialGrantDto,
+    pub created_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub phase: PairingOwnerPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_device_key: Option<[u8; DeviceKey::LENGTH]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<PairingReceiver>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<PairingTerminal>,
+    pub cleanup_pending: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingActivationStop {
+    Retryable,
+    Permanent,
+}
+impl PairingActivationStop {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::Permanent => "permanent",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingApproveResult {
+    pub status: PairingOwnerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_stopped: Option<PairingActivationStop>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingCreateResult {
+    pub code: String,
+    pub status: PairingOwnerStatus,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingPendingResult {
+    pub items: Vec<PairingOwnerStatus>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingErrorCode {
+    PairingNotConfigured,
+    PairingNotFound,
+    PairingSlotOccupied,
+    PairingCapacity,
+    PairingConflict,
+    PairingIneligible,
+    PairingBusy,
+    PairingUnavailable,
+}
+impl PairingErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PairingNotConfigured => "pairing_not_configured",
+            Self::PairingNotFound => "pairing_not_found",
+            Self::PairingSlotOccupied => "pairing_slot_occupied",
+            Self::PairingCapacity => "pairing_capacity",
+            Self::PairingConflict => "pairing_conflict",
+            Self::PairingIneligible => "pairing_ineligible",
+            Self::PairingBusy => "pairing_busy",
+            Self::PairingUnavailable => "pairing_unavailable",
+        }
+    }
+}
 /// Published bound from the product schema.
 pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
 /// Published bound from the product schema.
@@ -1281,6 +1454,12 @@ pub mod product_method {
     pub const MCP_CALL_TOOL: &str = "mcp.callTool";
     pub const MCP_READ_RESOURCE: &str = "mcp.readResource";
     pub const MCP_RELEASE_APP: &str = "mcp.releaseApp";
+    pub const PAIRING_CREATE: &str = "pairing.create";
+    pub const PAIRING_PENDING: &str = "pairing.pending";
+    pub const PAIRING_STATUS: &str = "pairing.status";
+    pub const PAIRING_APPROVE: &str = "pairing.approve";
+    pub const PAIRING_DENY: &str = "pairing.deny";
+    pub const PAIRING_CANCEL: &str = "pairing.cancel";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -1433,7 +1612,7 @@ pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 32
+                items.len() <= 38
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1490,6 +1669,12 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcp.callTool",
     "mcp.readResource",
     "mcp.releaseApp",
+    "pairing.create",
+    "pairing.pending",
+    "pairing.status",
+    "pairing.approve",
+    "pairing.deny",
+    "pairing.cancel",
 ];
 pub const PRODUCT_VERSION: u64 = 1;
 pub const PRODUCT_SESSION_PATH: &str = "/session";

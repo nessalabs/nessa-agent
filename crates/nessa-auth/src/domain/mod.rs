@@ -24,6 +24,8 @@ mod auth_context;
 mod error;
 mod identifiers;
 mod models;
+/// One-use native device enrollment rules and replayed causal evidence.
+pub mod pairing;
 mod transition;
 
 pub use auth_context::AuthContext;

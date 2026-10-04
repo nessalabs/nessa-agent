@@ -352,13 +352,13 @@ own current lifecycle and API contracts.
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
@@ -367,6 +367,36 @@ and processes out of the domain. Do not create empty counterpart modules or spli
 a live session's tool/permission consistency boundary into independent aggregates.
 
 ## Identity and access library
+
+The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
+
+The native server consumer is `nessa-server/src/device_pairing/`. `application/`
+holds the owner use cases (`owner.rs`), approval through to an issued credential
+(`activation.rs`), cleanup of ended stages (`cleanup.rs`), the receiver port
+(`receivers.rs`) and the device status query and its projection
+(`read_status.rs`, `status.rs`). `infrastructure/` holds the pure JSON
+codec (`wire/`), framing (`enrollment_channel.rs`), the gateway runtime
+(`runtime.rs`, with the single code-registration worker in `registration.rs`),
+connection workers and their shutdown wake-ups (`connection.rs`,
+`connection/wake.rs`), the listener, the device client, gateway identity
+restore, `receivers.rs` (the receiver port over the conversation context's
+`LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
+product socket holds, and `owner_admission.rs`, the lease every owner command
+holds until shutdown drains it.
+The owner product methods are `nessa-server/src/product/pairing.rs`; mounting is
+`nessa-server/src/composition/native_pairing.rs`, only when `config.json` names a
+native listen address. Public tests are under
+`nessa-server/tests/device_pairing/infrastructure/`, the owner routes in
+`tests/device_pairing/owner_routes.rs`, activation and cleanup in
+`tests/device_pairing/infrastructure/activation.rs` and the composed process in
+`tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
+`tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`, the
+socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`
+and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
+composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
+Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
+[owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
+and [activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
@@ -512,6 +542,12 @@ replies; `product/socket.rs` reserves independent record capacity and retains
 it until both physical source work and delivery/drop have finished. The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
+`core/read_workers/` owns tracked blocking source threads, sticky faults and the
+retained join-all drain used by record/catalogue infrastructure. It grants no
+source permission or socket capacity. Its lifecycle tests live under
+`tests/core/read_workers.rs`; record-specific admission tests stay with their
+source adapter. Attachment adapters consume this owner when activated.
+
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
@@ -559,7 +595,7 @@ marker. The finite pass order is in [conversation catalogue](design/conversation
 `LocalConversationStore` publishes after visible metadata transaction commits,
 inside the retained blocking owner. SDK `sessions/committed_changes.rs` and
 `session_storage/record_changes.rs` separately own record interest and publish
-complete reconciled semantic facts and reset receipts. Neither producer starts
+outer save completions and reset receipts. Neither producer starts
 a read or changes receiver progress. [Committed change watches](design/committed-change-watches.md)
 owns their registration/recheck and accounting contract; wire activation remains #298.
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
@@ -632,13 +668,15 @@ Nessa is also an MCP client, holding the connection to each configured server
 for each harness session (ADR 344, [design](design/mcp-connections.md)). The
 SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
 bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
-cancellation, `stand_in` for what a harness sees, `servers` for the open
-sessions and their tool lists, `process` for a server's process group, `wire`
-for MCP's JSON), tested in
+cancellation, `stand_in` for what a harness sees, and for keeping a
+forwarded `tools/call` result's `structuredContent` for the ACP worker to
+attach, `servers` for the open sessions and their tool lists, `process` for a
+server's process group, `wire` for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
 the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
-grants that tie each stand-in to its conversation, the store an MCP App's
+grants that tie each stand-in to its conversation (each the owner's own
+grant, carrying what its stand-ins forward), the store an MCP App's
 resources wait in behind their tickets, and the view's tool UI lookup
 (`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
 (`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
@@ -656,7 +694,8 @@ deadline clock, and how one request ends), and an app's calls are
 `presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
 `application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
 (`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
-entry. The desktop's
+entry; its worker attaches the grant's forwarded results to the completed
+calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part.
 
@@ -1048,6 +1087,18 @@ for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
 an `image/*` `attachment.begin` on such a gateway is refused with
 `image_input_unsupported` rather than answered with a ticket for bytes no
 message could name.
+
+`domain/value_objects/artifact_id.rs` derives an immutable held-registration
+identity from its saved minted generation. `application/artifacts.rs` owns the
+local `AttachmentArtifacts` facts/range/drain port and immutable range/byte types.
+`domain/entities/hold.rs` publishes `RetiredFrom`, the Pending/Held predecessor
+consumed by successful discard outcomes, reversal audit and saved retirement.
+`infrastructure/hold_record.rs` owns the typed Pending/Kept/Retired saved codec;
+`store/artifacts.rs` scans exact identities incrementally and archives retirement
+metadata. `store/source.rs` consumes `core::read_workers` with one shared,
+nonwaiting manifest/range slot. The source is local and not composed into protected
+transport or gateway shutdown. State order and remaining activation boundaries
+are owned by [artifact sync](design/artifact-sync.md).
 `src-tauri/src/attachments/` is the desktop half: the file a person picks, as
 a path rather than as bytes. `FilePicker` is the operating system's own dialog,
 `ChosenFiles` is the filesystem — a chosen file's kind, length and bytes —
@@ -1422,6 +1473,14 @@ product error/close values and their schema-derived policy. The product schema
 remains their owner. Generated product DTOs, the product socket and read-only
 sync application ports consume this publication; it contains no routing, IO or
 runtime state. Generic frame protocol types remain under `protocol/`.
+
+### Record read benchmark
+
+`crates/nessa-server/examples/record_read_bench.rs` times SDK saves and cold
+and warm reads through `NessaRecordReadSource` after a storage restart, printing
+one JSON report. It is a measurement tool, not run in CI; the
+[steps per admitted read](design/bounded-terminal-discovery.md#steps-per-admitted-read)
+cite its numbers.
 
 ### Retained read-only example
 

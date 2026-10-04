@@ -91,11 +91,6 @@ impl CommittedTranscript {
             .saturating_add(self.continuation.derived_bytes)
     }
     #[cfg(test)]
-    pub(crate) fn assert_snapshot_allocation(&self, actual: usize) {
-        assert_eq!(self.continuation.snapshot_bytes, actual);
-        self.assert_retained_accounting();
-    }
-    #[cfg(test)]
     pub(crate) fn assert_retained_accounting(&self) {
         assert_eq!(
             self.continuation.snapshot_bytes,
@@ -119,9 +114,6 @@ impl CommittedTranscript {
                     .fold(0usize, usize::saturating_add),
             );
         assert_eq!(self.continuation.derived_bytes, expected);
-    }
-    pub(crate) fn key(&self, changes: &[SessionChange]) -> Result<records::FactKey, StorageError> {
-        self.continuation.key(changes, self.applied)
     }
     pub(crate) fn begin_transaction(&self) -> CommittedTransactionState {
         CommittedTransactionState {

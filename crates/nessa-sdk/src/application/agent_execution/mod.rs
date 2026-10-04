@@ -13,6 +13,7 @@
 //! audit remains separate from session snapshots and optional UI subscribers.
 
 pub mod agents;
+mod caller_wake;
 pub mod executions;
 pub mod hooks;
 pub mod permissions;

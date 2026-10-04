@@ -27,5 +27,6 @@ pub use wire::{SessionAuthenticateParams, SessionChallenge, SessionReady};
 
 mod conversation;
 mod mcp_apps;
+mod pairing;
 
 mod agent_install;

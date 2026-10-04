@@ -36,7 +36,7 @@
 //! on exactly the record it wrote, and only that claim confirms it or takes it
 //! back. So an upload whose evidence failed undoes its own write and nothing
 //! else: not a later upload of the same file that was recorded and answered,
-//! and not a record a release already removed. A release removes pending holds
+//! and not a record already retired. A release retires pending holds
 //! too, and the upload waiting on one is told its file was not kept. A creation
 //! that may have reached the trail and did not last is followed by
 //! `attachment_hold_reverted`, so the trail never ends on "held" for a hold
@@ -87,10 +87,18 @@
 //! and re-deciding access there would be a second, weaker copy of the socket's
 //! authorization. A pending hold left by a crash stays invisible and protects
 //! its bytes until the same file is uploaded again or its conversation closes.
-//! Bytes whose removal failed stay until a later upload of the same bytes is
-//! held and released. Transfers are bounded across all callers, not per
+//! Unheld bytes whose removal failed can be retried by a later release.
+//! Storage cleanup and audit failures are reported independently. Transfers are bounded across all callers, not per
 //! organization: this gateway serves exactly one. Nothing bounds how much one
 //! owner keeps.
+//!
+//! The local artifact source exposes exact registration facts through
+//! `application::AttachmentArtifacts`. `domain::ArtifactId` encodes the minted
+//! generation; `infrastructure::store/artifacts.rs` incrementally reads exact
+//! lifetimes and archives Retired metadata before reupload. `store/source.rs`
+//! consumes the shared tracked-worker owner for bounded manifest/range reads. The feature design
+//! and ordering table are in `docs/design/artifact-sync.md`. This local source
+//! does not register produced paths or activate protected content transport.
 pub mod application;
 pub mod domain;
 pub mod entrypoint;

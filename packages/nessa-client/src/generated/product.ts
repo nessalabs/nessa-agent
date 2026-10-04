@@ -1316,6 +1316,137 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Wire input for pairing.status, pairing.deny and pairing.cancel: the invitation the owner names. The owner, organization and gateway come from the session, never from the request. */
+export interface PairingInvitationParams {
+  /** Random identity of the invitation, as its bytes. */
+  invitationId: number[]
+}
+/** Wire input for pairing.approve. Approval records consent to this exact key, then stages, pairs a receiver and publishes the device's credential. */
+export interface PairingApproveParams {
+  /** Random identity of the invitation, as its bytes. */
+  invitationId: number[]
+  /** The exact device key the owner was shown as claimed, as its bytes. Any other key is refused. */
+  deviceKey: number[]
+}
+/** Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging: a credential and receiver are being prepared for it. active: the credential is issued; this is historical enrollment, not read authority. terminal: ended; see terminal. */
+export const PairingOwnerPhase = {
+  Available: "available",
+  Claimed: "claimed",
+  Approved: "approved",
+  Staging: "staging",
+  Active: "active",
+  Terminal: "terminal",
+} as const
+export type PairingOwnerPhase = (typeof PairingOwnerPhase)[keyof typeof PairingOwnerPhase]
+/** The first cause that ended the enrollment, kept across later cleanup. */
+export const PairingTerminalCause = {
+  CredentialRevoked: "credential_revoked",
+  Denied: "denied",
+  Cancelled: "cancelled",
+  Expired: "expired",
+  Restarted: "restarted",
+} as const
+export type PairingTerminalCause =
+  (typeof PairingTerminalCause)[keyof typeof PairingTerminalCause]
+/** Who ended the enrollment: the local operator, an authenticated principal, the enrolling device, or the gateway itself (expiry, restart). */
+export const PairingInitiatorKind = {
+  LocalOperator: "local_operator",
+  Principal: "principal",
+  Device: "device",
+  System: "system",
+} as const
+export type PairingInitiatorKind =
+  (typeof PairingInitiatorKind)[keyof typeof PairingInitiatorKind]
+/** The actor that ended an enrollment. Exactly the field its kind names is present. */
+export interface PairingInitiator {
+  /** Which kind of actor. */
+  kind: PairingInitiatorKind
+  /** The principal, when kind is principal. */
+  principalId?: string
+  /** The device key, when kind is device. */
+  deviceKey?: number[]
+}
+/** How an enrollment ended. */
+export interface PairingTerminal {
+  /** First cause that ended the enrollment. */
+  cause: PairingTerminalCause
+  /** Who caused it. */
+  initiator: PairingInitiator
+}
+/** Receiver paired for an enrollment, with the access epoch of its original pair receipt; absent before a receiver is paired. */
+export interface PairingReceiver {
+  /** Receiver the device's reads are admitted through. */
+  receiverId: string
+  /** Receiver access epoch recorded with the enrollment. */
+  accessEpoch: number
+}
+/** An owner's view of one enrollment. This is historical enrollment, not read authority: every later read is authorized again. */
+export interface PairingOwnerStatus {
+  /** Random identity of the invitation, as its bytes. */
+  invitationId: number[]
+  /** Identity of the immutable consent the invitation carries. */
+  consentId: number[]
+  /** Consent generation the device enrolls under. */
+  generation: number
+  /** Fixed class of access the consent is for. */
+  class: string
+  /** The exact action and resource the consent covers. */
+  grant: ProductGrant
+  /** When the invitation was created, Unix milliseconds. */
+  createdAtMs: number
+  /** Exclusive deadline for presenting the code, Unix milliseconds. */
+  expiresAtMs: number
+  /** Where the enrollment stands. */
+  phase: PairingOwnerPhase
+  /** The device key that claimed the invitation, once one has. Approval must name exactly this key. */
+  claimedDeviceKey?: number[]
+  /** Credential reserved for the device, once staging has begun. */
+  credentialId?: string
+  /** Receiver recorded for the enrollment, once known. */
+  receiver?: PairingReceiver
+  /** How the enrollment ended, when phase is terminal. */
+  terminal?: PairingTerminal
+  /** Whether physical cleanup of a staged receiver is still owed. Read from the record, never stored separately. */
+  cleanupPending: boolean
+}
+/** Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress, or the owner's session expired or membership is inactive, cleared by signing in again or an admin re-enabling the membership); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again. */
+export const PairingActivationStop = {
+  Retryable: "retryable",
+  Permanent: "permanent",
+} as const
+export type PairingActivationStop =
+  (typeof PairingActivationStop)[keyof typeof PairingActivationStop]
+/** Result of pairing.approve: the enrollment after approval and activation, and why activation stopped if it did. */
+export interface PairingApproveResult {
+  /** The enrollment as it now stands. The approval itself is committed whatever else happened. */
+  status: PairingOwnerStatus
+  /** Present when activation stopped before active: whether approving again can finish it. */
+  activationStopped?: PairingActivationStop
+}
+/** Result of pairing.create: a code for one device, valid until status.expiresAtMs. */
+export interface PairingCreateResult {
+  /** The one-time code in its grouped display form, two groups joined by a hyphen. Shown once: it is not stored and cannot be read again. A lost code means cancelling the invitation and creating another. */
+  code: string
+  /** The invitation as committed. */
+  status: PairingOwnerStatus
+}
+/** Result of pairing.pending: the enrollments an owner can still act on, without any code. */
+export interface PairingPendingResult {
+  /** The caller's unfinished enrollments, including ended ones still owed cleanup. Bounded by the registry's configured capacity rather than a wire constant. */
+  items: PairingOwnerStatus[]
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later. */
+export const PairingErrorCode = {
+  PairingNotConfigured: "pairing_not_configured",
+  PairingNotFound: "pairing_not_found",
+  PairingSlotOccupied: "pairing_slot_occupied",
+  PairingCapacity: "pairing_capacity",
+  PairingConflict: "pairing_conflict",
+  PairingIneligible: "pairing_ineligible",
+  PairingBusy: "pairing_busy",
+  PairingUnavailable: "pairing_unavailable",
+} as const
+export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
 /** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
 export const passiveReadTiming = {
   readTimeoutMs: 10000,
@@ -1335,7 +1466,7 @@ export const mcpAppCallTiming = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 32,
+  maxReadyMethods: 38,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1420,6 +1551,12 @@ export const ProductMethod = {
   McpCallTool: "mcp.callTool",
   McpReadResource: "mcp.readResource",
   McpReleaseApp: "mcp.releaseApp",
+  PairingCreate: "pairing.create",
+  PairingPending: "pairing.pending",
+  PairingStatus: "pairing.status",
+  PairingApprove: "pairing.approve",
+  PairingDeny: "pairing.deny",
+  PairingCancel: "pairing.cancel",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
@@ -1456,6 +1593,12 @@ export const productReadyMethods = [
   "mcp.callTool",
   "mcp.readResource",
   "mcp.releaseApp",
+  "pairing.create",
+  "pairing.pending",
+  "pairing.status",
+  "pairing.approve",
+  "pairing.deny",
+  "pairing.cancel",
 ] as const
 export const catalogueWireSchemas = {
   RecordScope: {

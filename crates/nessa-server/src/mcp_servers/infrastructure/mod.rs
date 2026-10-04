@@ -1,5 +1,6 @@
 //! The relay socket, the `mcp-relay` command on its other end, the grants
-//! that tie each stand-in to its conversation, the resource tickets an MCP
+//! that tie each stand-in to its conversation (and hand the binding the
+//! results its stand-ins forward), the resource tickets an MCP
 //! App redeems, and the view's tool UI lookup over the SDK's `McpServers`.
 mod apps;
 mod grants;
