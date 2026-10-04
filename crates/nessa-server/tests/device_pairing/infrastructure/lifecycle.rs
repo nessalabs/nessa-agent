@@ -378,17 +378,9 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     connections.shutdown().await;
     let (address, stop, listener, connections) = fixture.listener().await;
     let resumed = NativeEnrollmentClient::new(state.clone(), RuntimeDependencies::default().clock);
-    let status = tokio::time::timeout(
-        WAIT,
-        resumed.status(TcpStream::connect(address).unwrap(), None),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(status.public(), public);
-    assert!(matches!(status, NativePairingStatus::Unclaimed { .. }));
+    // `retry` reads the original status itself and keeps the record for its
+    // new attempt; `status` would remove it (slice 2b row A16).
     assert_eq!(state.load_pending().unwrap().unwrap().intent(), public);
-    let original = status.clone();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     let retried = tokio::time::timeout(
         WAIT,
@@ -402,7 +394,15 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(retried.original, original);
+    let original = retried.original.clone();
+    assert_eq!(original.public(), public);
+    assert!(
+        matches!(
+            original,
+            NativePairingStatus::Unclaimed { terminal: None, .. }
+        ),
+        "{original:?}"
+    );
     assert!(matches!(retried.retried, NativePairingStatus::Claimed(_)));
     let renewed = retried.retried.public();
     assert_ne!(renewed.attempt(), public.attempt());

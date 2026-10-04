@@ -1409,7 +1409,7 @@ export interface PairingOwnerStatus {
   /** Whether physical cleanup of a staged receiver is still owed. Read from the record, never stored separately. */
   cleanupPending: boolean
 }
-/** Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress, or the owner's session expired, in which case sign in again first); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again. */
+/** Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress, or the owner's session expired or membership is inactive, cleared by signing in again or an admin re-enabling the membership); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again. */
 export const PairingActivationStop = {
   Retryable: "retryable",
   Permanent: "permanent",

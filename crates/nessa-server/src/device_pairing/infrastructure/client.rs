@@ -197,9 +197,10 @@ impl NativeEnrollmentClient {
     /// fails the pending record stays, and the next status delivers the same
     /// credential again. A credential other than the one already saved is
     /// refused as a storage conflict. A Terminal status for this enrollment, or
-    /// an Unclaimed one whose invitation has ended, removes the device's
-    /// record, pending or credential, before it is returned (design rows A14,
-    /// A16), so the device can enroll again.
+    /// an Unclaimed one (this device's attempt failed or was superseded),
+    /// removes the device's record, pending or credential, before it is
+    /// returned (design rows A14, A16), so the device can enroll again. Only a
+    /// Pending attempt keeps it; `retry` reads the original status itself.
     pub async fn status(
         &self,
         stream: TcpStream,
@@ -237,16 +238,15 @@ impl NativeEnrollmentClient {
                     .map_err(NativeClientError::Storage)?,
                 // Authenticated end of this enrollment: the record goes, and
                 // the returned status is the trusted end signal (row A14).
-                // An attempt left unclaimed by an invitation that has ended
-                // can never claim it either (row A16).
-                NativePairingStatus::Terminal { .. }
-                | NativePairingStatus::Unclaimed {
-                    terminal: Some(_), ..
-                } => pending
-                    .end_enrollment(public)
-                    .map_err(NativeClientError::Storage)?,
+                // This device's attempt is no longer pending (failed or
+                // superseded): it can never claim, so the person enters a code
+                // again and enroll reserves a new attempt (row A16).
+                NativePairingStatus::Terminal { .. } | NativePairingStatus::Unclaimed { .. } => {
+                    pending
+                        .end_enrollment(public)
+                        .map_err(NativeClientError::Storage)?
+                }
                 NativePairingStatus::Pending(_)
-                | NativePairingStatus::Unclaimed { terminal: None, .. }
                 | NativePairingStatus::Claimed(_)
                 | NativePairingStatus::Approved(_)
                 | NativePairingStatus::Staging(_) => {}

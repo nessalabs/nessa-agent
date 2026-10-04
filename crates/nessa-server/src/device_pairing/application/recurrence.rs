@@ -5,21 +5,38 @@
 //! derive from these functions, so the owner and the relaunch decision cannot
 //! disagree (design rows A11, S8, S16).
 use super::receivers::ReceiverError;
-use nessa_auth::application::{
-    pairing::{PairingStoreError, PrivateStateError},
-    ports::AccessError,
+use nessa_auth::{
+    application::{
+        pairing::{PairingStoreError, PrivateStateError},
+        ports::AccessError,
+    },
+    domain::pairing::PairingError,
 };
 
 /// A registry failure that refuses the same way on the same records.
 pub fn store_error_recurs(error: PairingStoreError) -> bool {
     match error {
+        // The record's own state refuses: the same refusal next time.
         PairingStoreError::GatewayKeyHistoryExists
         | PairingStoreError::NotFound
-        | PairingStoreError::Domain(_)
+        | PairingStoreError::Domain(
+            PairingError::Conflict
+            | PairingError::Ineligible
+            | PairingError::WrongActor
+            | PairingError::Expired
+            | PairingError::AttemptsExhausted
+            | PairingError::StaleGeneration,
+        )
         | PairingStoreError::PrivateState(
             PrivateStateError::Corrupt | PrivateStateError::Conflict,
         ) => true,
-        PairingStoreError::StageOccupied
+        // Capacity and an occupied slot clear when another enrollment ends;
+        // `Invalid` is also a clock behind the record (reset before NTP),
+        // which clears on its own.
+        PairingStoreError::Domain(
+            PairingError::Capacity | PairingError::AvailableSlotOccupied | PairingError::Invalid,
+        )
+        | PairingStoreError::StageOccupied
         | PairingStoreError::WorkerFault(_)
         | PairingStoreError::StaleRevision
         | PairingStoreError::Unavailable
@@ -45,8 +62,9 @@ pub fn receiver_error_recurs(error: ReceiverError) -> bool {
     }
 }
 
-/// An owner authorization failure that re-authenticating cannot clear. An
-/// expired session or inactive membership can: the owner signs in again.
+/// An owner authorization failure that cannot clear without a new pairing. An
+/// expired session or an inactive membership can: by signing in again, or an
+/// admin re-enabling the membership.
 pub fn access_error_recurs(error: AccessError) -> bool {
     match error {
         AccessError::Denied

@@ -285,6 +285,19 @@ mod tests {
             assert_eq!(relaunch == Restart::Worthwhile, retry, "{error:?}");
             assert_eq!(retry, !error.recurs(), "{error:?}");
         }
+        // A clock behind the record (Invalid) and freed capacity clear on
+        // their own; the record's own state refuses again.
+        for (error, recurs) in [
+            (PairingError::Invalid, false),
+            (PairingError::Capacity, false),
+            (PairingError::AvailableSlotOccupied, false),
+            (PairingError::Conflict, true),
+            (PairingError::Ineligible, true),
+            (PairingError::StaleGeneration, true),
+        ] {
+            let cleanup = CleanupError::Enrollment(PairingStoreError::Domain(error));
+            assert_eq!(cleanup.recurs(), recurs, "{error:?}");
+        }
         // An owner who can sign in again can approve again; a denial cannot.
         use crate::device_pairing::application::OwnerError;
         use nessa_auth::application::ports::AccessError;
