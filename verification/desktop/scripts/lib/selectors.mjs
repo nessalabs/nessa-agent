@@ -50,6 +50,7 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
+  message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user or agent
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
@@ -74,6 +75,9 @@ export const css = {
   widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
+  workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
+  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
+  workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
@@ -108,8 +112,11 @@ export const css = {
 
   // Approval card (arranged by its own width)
   approvalCard: ".workspace-approval", // class
+  appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
+  approvalHead: ".workspace-approval-head", // class: who asks, and what
+  approvalHeadWords: ".workspace-approval-head-words", // class: the head's words, without its icon
 
   // Agents overview (always offered: the sidebar's entry and ⌘0)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
@@ -210,6 +217,8 @@ export const safeAreaTokens = {
  */
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
+  /** The gateway source's poll and reconnect timing (`defaultGatewayTiming`). */
+  gatewaySource: "/src/desktop/workspace/adapters/gateway/gateway-source.ts",
   /** What a widget host says in each case (`hostLines`). */
   hostTable: "/src/desktop/widgets/model/host-table.ts",
 }
@@ -293,6 +302,8 @@ export const zoneSaid = {
 /** Accessible names, for getByRole / getByText. */
 export const names = {
   agentsEntry: "Agents",
+  /** An app's review card's head: the app by its server, and the tool it asked to run (`approvalHead`). */
+  appAsks: (server, tool) => `The ${server} app wants to run ${tool}`,
   /** A pane's "…" menu: the header picture's two choices (issue #320). */
   chooseHeaderPicture: "Choose Header Picture…",
   useNightScene: "Use Night Scene",
@@ -408,4 +419,24 @@ export const readinessVerification = {
   retryButton: "Check again",
   readyObservation: "false:ready",
   buttons: "button",
+}
+
+/**
+ * The app-review fixture (`fixtures/app-review/`, #436): the window over a
+ * fake gateway whose one conversation holds an MCP App's call, which asks for
+ * a review when the page calls a tool (`__appReview.call`). The longest
+ * tool's name is the page's (`__appReview.longestTool`), from the client's
+ * own bound.
+ */
+export const appReview = {
+  page: "verification/desktop/fixtures/app-review/index.html",
+  session: "Clean up the stale rows",
+  sessionId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+  /** The card's head: the app by its server, and the tool it named. */
+  head: (tool) => names.appAsks("mcptest", tool),
+  /** The overview row's accessible name: the title, then the app asking. */
+  row: (tool) => `Clean up the stale rows. ${names.appAsks("mcptest", tool)} {}.`,
+  tool: "app_delete_row",
+  /** The fixture page's title, by which the script knows it is served. */
+  title: "Nessa: an app's review",
 }

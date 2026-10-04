@@ -7,10 +7,11 @@ import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import type { Approval } from "../../model/transcript"
 import { failureCopy } from "../failure-copy"
-import { ApprovalActions, ApprovalCommand } from "./approval-request"
+import { ApprovalActions, ApprovalCommand, approvalHead } from "./approval-request"
 
 /**
- * The one warm thing on the page: a command the agent waits to run, and its
+ * The one warm thing on the page: a command the agent — or an MCP App, which
+ * the head then names (`approvalHead`) — waits to run, and its
  * answers, arranged for the card's width (`approval-request.tsx`). While an
  * answer is on its way the buttons rest; a failed answer says why.
  */
@@ -29,10 +30,17 @@ export const ApprovalCard = memo(function ApprovalCard({
   )
   const waiting = answering(answer, approval.id)
   return (
-    <div className="workspace-approval" role="group" aria-label="Approval needed">
+    <div
+      className="workspace-approval"
+      role="group"
+      aria-label="Approval needed"
+      data-origin={approval.origin.kind}
+    >
       <div className="workspace-approval-head">
         <DesktopIcon name="needsYou" />
-        <span>{agentName(agentOf(model))} wants to run a command</span>
+        <span className="workspace-approval-head-words">
+          {approvalHead(approval.origin, agentName(agentOf(model)))}
+        </span>
       </div>
       <ApprovalCommand command={approval.command} />
       <p className="workspace-approval-reason">{approval.reason}</p>

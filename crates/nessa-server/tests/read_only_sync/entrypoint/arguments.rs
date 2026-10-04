@@ -56,3 +56,24 @@ fn device_commands_take_only_a_profile() {
     let bare = ["status"].map(str::to_owned);
     assert!(matches!(parse(&bare), Err(CommandError::Arguments)));
 }
+
+/// Row W13: the recheck pass is mandatory and counts, so a run of zero passes
+/// is an argument error; counts are the same digits-only grammar as pages.
+#[test]
+fn watch_requires_a_positive_pass_count() {
+    let target = Uuid::new_v4().to_string();
+    let parsed = parse(&["watch", "profile", &target, "100", "2"].map(str::to_owned));
+    assert!(matches!(
+        parsed,
+        Ok(Command::Watch { pages: 100, max_passes, .. }) if max_passes.get() == 2
+    ));
+    for passes in ["0", "", "-1", "+1", "1.0"] {
+        let args = ["watch", "profile", &target, "1", passes].map(str::to_owned);
+        assert!(
+            matches!(parse(&args), Err(CommandError::Arguments)),
+            "{passes:?}"
+        );
+    }
+    let missing = ["watch", "profile", &target, "1"].map(str::to_owned);
+    assert!(matches!(parse(&missing), Err(CommandError::Arguments)));
+}

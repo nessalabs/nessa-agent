@@ -1,4 +1,5 @@
 //! Stable sanitized JSON values preserve each typed refusal owner.
+use crate::product_contract::generated::ChangeWatchEndReason;
 use crate::read_only_sync::application::{CacheError, GatewayError};
 use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sync::replication::{
@@ -32,8 +33,13 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
         GatewayError::Busy => ("busy", None),
         GatewayError::Record(reason) => ("record", Some(reason.as_str())),
         GatewayError::Catalogue(reason) => ("catalogue", Some(reason.as_str())),
+        GatewayError::Watch(reason) => ("watch", Some(reason.as_str())),
     };
     json!({"code":code,"productCode":product})
+}
+/// The gateway's end of a watch, with its product reason.
+pub(crate) fn watch_ended(reason: ChangeWatchEndReason) -> Value {
+    json!({"code":"watchEnded","productCode":reason})
 }
 fn storage_failure(error: &StorageError) -> Value {
     let code = match error {

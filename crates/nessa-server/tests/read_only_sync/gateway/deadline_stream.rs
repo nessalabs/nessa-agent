@@ -22,13 +22,13 @@ struct Physical {
     clock: Arc<Time>,
     reads: Arc<AtomicUsize>,
     shutdowns: Arc<AtomicUsize>,
-    timeout: bool,
+    failure: Option<ErrorKind>,
 }
 impl Read for Physical {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        if self.timeout {
-            return Err(ErrorKind::TimedOut.into());
+        if let Some(kind) = self.failure {
+            return Err(kind.into());
         }
         bytes[0] = 1;
         self.clock.0.fetch_add(4, Ordering::SeqCst);
@@ -65,7 +65,7 @@ fn trickled_reads_share_absolute_deadline_and_stop_before_fourth_physical_read()
         clock: clock.clone(),
         reads: reads.clone(),
         shutdowns: shutdowns.clone(),
-        timeout: false,
+        failure: None,
     };
     let mut stream = DeadlineStream::new(
         Box::new(physical),
@@ -94,7 +94,7 @@ fn cancellation_and_os_timeout_retain_typed_cause_without_extra_io() {
             clock: clock.clone(),
             reads: reads.clone(),
             shutdowns: shutdowns.clone(),
-            timeout: expected == GatewayError::TimedOut,
+            failure: (expected == GatewayError::TimedOut).then_some(ErrorKind::TimedOut),
         };
         let mut stream = DeadlineStream::new(Box::new(physical), clock, cancel, 10);
         assert!(stream.read(&mut [0; 1]).is_err());
@@ -179,5 +179,33 @@ fn admitted_io_cancellation_and_partial_writes_stop_before_later_effects() {
         }
         drop(stream);
         assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+}
+/// Row W11: the peer ending the connection is an untyped close however the
+/// platform reports it; Windows reports a reset or abort, not end of stream.
+#[test]
+fn peer_reset_or_abort_is_an_untyped_close_and_other_errors_stay_transport() {
+    for (kind, expected) in [
+        (ErrorKind::ConnectionReset, GatewayError::Closed(None)),
+        (ErrorKind::ConnectionAborted, GatewayError::Closed(None)),
+        (ErrorKind::BrokenPipe, GatewayError::Closed(None)),
+        (ErrorKind::UnexpectedEof, GatewayError::Closed(None)),
+        (ErrorKind::PermissionDenied, GatewayError::Transport),
+    ] {
+        let clock = Arc::new(Time(AtomicU64::new(0)));
+        let physical = Physical {
+            clock: clock.clone(),
+            reads: Arc::new(AtomicUsize::new(0)),
+            shutdowns: Arc::new(AtomicUsize::new(0)),
+            failure: Some(kind),
+        };
+        let mut stream = DeadlineStream::new(
+            Box::new(physical),
+            clock,
+            Arc::new(Cancel(AtomicBool::new(false))),
+            10,
+        );
+        assert!(stream.read(&mut [0; 1]).is_err());
+        assert_eq!(stream.take_failure(), Some(expected), "{kind:?}");
     }
 }

@@ -23,10 +23,13 @@ This skill is how to use them; it restates neither.
 | keys, `focus.ts`, panes being added/closed/focused, dialogs, the overview | `focus.mjs` |
 | widgets: `src/desktop/widgets/`, a widget's pane or the window, Escape for the widget in front, the edge peek's Escape | `widgets.mjs` |
 | MCP Apps: `src/desktop/widgets/app/`, the sandbox proxy, `src-tauri/src/app_sandbox.rs` | `mcp-apps.mjs` |
+| an app's review: reading it while the app's call waits (`appCall` and `stale()` in `gateway-source.ts`, the `callTool` routing in `dependencies.ts`), and who asks on the card or in the overview (`approval-request.tsx`, `gateway-views.ts`) | `app-review.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
+| where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the failure sentences (`workspace/ui/failure-copy.ts`), the empty workspace | `gateway-states.mjs` |
+| the same, once the window does read a gateway: its handshake, the conversation list, a transcript, a turn made elsewhere (needs the agent signed in on this machine; not in `run-all.mjs`) | `gateway-window.mjs` |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |
-| a UI branch before hand-off | `run-all.mjs` (all of the above) |
+| a UI branch before hand-off | `run-all.mjs` (all of the above but `gateway-window.mjs`, which needs a signed-in agent: run it on its own) |
 
 Then walk the CHECKLIST groups the change touches and do their manual items.
 A behaviour the change adds or alters that no script covers is a gap: add the

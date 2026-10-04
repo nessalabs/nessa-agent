@@ -1,5 +1,5 @@
 use crate::product_contract::generated::{
-    CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
+    CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
 use std::io::{Read, Result as IoResult, Write};
 use std::net::SocketAddr;
@@ -83,6 +83,8 @@ pub(crate) enum GatewayError {
     Busy,
     Record(RecordReadErrorCode),
     Catalogue(CatalogueReadErrorCode),
+    /// The gateway refused a change-watch request with its typed code.
+    Watch(ChangeWatchErrorCode),
 }
 
 /// One driver attempt's consumed evidence; no durable authentication decision.

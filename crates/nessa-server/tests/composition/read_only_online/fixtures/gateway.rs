@@ -17,7 +17,9 @@ use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, NessaRecordWatches,
 };
-use crate::device_pairing::infrastructure::{wire::NativePairingStatus, NativeEnrollmentClient};
+use crate::device_pairing::infrastructure::{
+    wire::NativePairingStatus, NativeEnrollmentClient, PairingOwnerCommands,
+};
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -28,7 +30,7 @@ use nessa_auth::application::dto::{
     OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
 };
 use nessa_auth::application::ports::Clock;
-use nessa_auth::application::session::AuthenticateSession;
+use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
@@ -66,7 +68,23 @@ struct GatedRead {
     initiator: PrincipalId,
     mode: String,
     pages: AtomicUsize,
-    heads: AtomicUsize,
+    heads: Arc<HeadHold>,
+}
+/// Live mode's held head read: the head reads counted so far, the one
+/// `hold` named (zero for none), and the `release` that lets it answer.
+#[derive(Default)]
+struct HeadHold {
+    count: AtomicUsize,
+    held: AtomicUsize,
+    release: tokio::sync::Notify,
+}
+impl HeadHold {
+    /// Hold the second head read from now: a `watch`'s discovery reads the
+    /// first, its recheck pass the second.
+    fn hold_recheck(&self) {
+        let next = self.count.load(Ordering::SeqCst) + 2;
+        self.held.store(next, Ordering::SeqCst);
+    }
 }
 impl RecordReadSource for GatedRead {
     fn read<'a>(
@@ -77,11 +95,17 @@ impl RecordReadSource for GatedRead {
     ) -> RecordReadFuture<'a, RecordReadResponse> {
         let page = matches!(&operation, RecordReadOperation::Page(_));
         Box::pin(async move {
-            let head = (!page).then(|| self.heads.fetch_add(1, Ordering::SeqCst) + 1);
+            let head = (!page).then(|| self.heads.count.fetch_add(1, Ordering::SeqCst) + 1);
             // Source latency exercises the real socket phase owner (B1), not a
             // fabricated timeout reply. Successful reads still use SDK storage.
             match (self.mode.as_str(), head) {
                 ("delayed-head", Some(1)) => tokio::time::sleep(Duration::from_secs(6)).await,
+                // The recheck pass `hold` named answers only after `release`,
+                // so a commit acknowledged in between lands while it reads
+                // the head (committed change watches L9).
+                ("live", Some(count)) if count == self.heads.held.load(Ordering::SeqCst) => {
+                    self.heads.release.notified().await
+                }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
                 ("cumulative-head", Some(count)) if count > 1 => {
                     tokio::time::sleep(Duration::from_secs(3)).await
@@ -258,6 +282,7 @@ async fn gateway_child() {
     let mode = std::env::var("NESSA_ONLINE_GATE").unwrap_or_default();
     // Gated reads need the receiver, known after the first start pairs.
     let receiver_slot = Arc::new(OnceLock::new());
+    let heads = Arc::new(HeadHold::default());
     let state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
         OrganizationId::new(organization.clone()).unwrap(),
@@ -286,7 +311,7 @@ async fn gateway_child() {
         initiator: PrincipalId::new(owner.clone()).unwrap(),
         mode: mode.clone(),
         pages: AtomicUsize::new(0),
-        heads: AtomicUsize::new(0),
+        heads: heads.clone(),
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
@@ -312,38 +337,32 @@ async fn gateway_child() {
             .execute(&evidence, &AudienceId::new(gateway.clone()).unwrap())
             .await
             .unwrap();
-            let created = commands.create(&session).await.unwrap();
-            let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-            nessa_local_storage::create_directory_beneath(root, Path::new("device")).unwrap();
-            let device = Arc::new(FilePairingState::open(root, Path::new("device")).unwrap());
-            let client =
-                NativeEnrollmentClient::new(device.clone(), RuntimeDependencies::default().clock);
-            let claimed = client
-                .enroll(TcpStream::connect(native).unwrap(), code, OsEntropy)
-                .await
-                .unwrap();
-            assert!(matches!(claimed, NativePairingStatus::Claimed(_)));
-            let id = created.record().id();
-            let record = commands.status(&session, id).await.unwrap();
-            let (_, key) = record.claim_binding().unwrap();
-            let approved = commands.approve(&session, id, key).await.unwrap().record;
-            let (receiver, epoch) = approved.receiver_binding().unwrap();
-            let credential = approved.credential().unwrap().as_str().to_owned();
-            let active = client
-                .status(TcpStream::connect(native).unwrap(), None)
-                .await
-                .unwrap();
-            assert!(matches!(active, NativePairingStatus::Active { .. }));
-            client.shutdown().await;
-            drop(client);
-            drop(device);
+            let (receiver, epoch, credential) =
+                pair_device(&commands, &session, root, native, "device").await;
+            // Live mode follows two devices on this one gateway (L8); only
+            // it pays for the second pairing.
+            let second_receiver = if mode == "live" {
+                let (receiver, _, _) =
+                    pair_device(&commands, &session, root, native, "device-b").await;
+                private_write(
+                    &root.join("profile-b.json"),
+                    &serde_json::to_vec(&json!({"stateRoot":root,"stateDirectory":"device-b",
+                        "cache":root.join("device-b-cache.sqlite3"),
+                        "gatewayAddress":native.to_string()}))
+                    .unwrap(),
+                );
+                Some(receiver)
+            } else {
+                None
+            };
             let setup = Setup {
                 gateway: gateway.clone(),
                 organization: organization.clone(),
                 owner: owner.clone(),
                 credential,
-                receiver: receiver.as_str().to_owned(),
+                receiver,
                 epoch,
+                second_receiver,
                 conversation: uuid(),
                 empty: uuid(),
             };
@@ -439,8 +458,12 @@ async fn gateway_child() {
             storage.clone(),
             SessionId::new(setup.conversation.clone()).unwrap(),
             receivers.clone(),
-            setup.receiver.clone(),
+            [
+                setup.receiver.clone(),
+                setup.second_receiver.clone().unwrap(),
+            ],
             PrincipalId::new(setup.owner.clone()).unwrap(),
+            heads,
         ));
     }
     println!("ONLINE_READY");
@@ -452,13 +475,16 @@ async fn gateway_child() {
 /// Live mode's control lines, each answered with `DONE <line>` once its effect
 /// is durable: `commit` appends one provider-context save to the conversation
 /// through this process's own storage owner, so its committed-change watch
-/// publishes; `revoke` removes the receiver's binding, as an owner would.
+/// publishes; `revoke` removes the first device's receiver binding, as an
+/// owner would, and `revoke b` the second device's. `hold` makes the next
+/// `watch`'s recheck pass wait at its head read until `release`.
 async fn live_control(
     storage: Arc<RecordStorage>,
     conversation: SessionId,
     receivers: Arc<LocalReceiverAuthority>,
-    receiver: String,
+    [receiver, second]: [String; 2],
     owner: PrincipalId,
+    heads: Arc<HeadHold>,
 ) {
     let mut lines = BufReader::new(stdin()).lines();
     let mut commits = 0_u64;
@@ -489,15 +515,53 @@ async fn live_control(
                     .unwrap();
                 drop(lease);
             }
-            "revoke" => {
+            "revoke" | "revoke b" => {
+                let target = if line == "revoke" { &receiver } else { &second };
                 receivers
-                    .change(receiver.clone(), None, false, owner.clone(), uuid())
+                    .change(target.clone(), None, false, owner.clone(), uuid())
                     .await
                     .unwrap();
             }
+            "hold" => heads.hold_recheck(),
+            "release" => heads.release.notify_one(),
             other => panic!("unknown live control {other}"),
         }
         println!("DONE {line}");
         io::stdout().flush().unwrap();
     }
+}
+
+/// Pair one device through the real listener, its private state under
+/// `directory`: create a code, enroll the device's key with it, approve the
+/// claimed key and read Active. Returns its receiver, epoch and credential.
+async fn pair_device(
+    commands: &PairingOwnerCommands,
+    session: &AuthenticatedSession,
+    root: &Path,
+    native: SocketAddr,
+    directory: &str,
+) -> (String, u64, String) {
+    let created = commands.create(session).await.unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    nessa_local_storage::create_directory_beneath(root, Path::new(directory)).unwrap();
+    let device = Arc::new(FilePairingState::open(root, Path::new(directory)).unwrap());
+    let client = NativeEnrollmentClient::new(device.clone(), RuntimeDependencies::default().clock);
+    let claimed = client
+        .enroll(TcpStream::connect(native).unwrap(), code, OsEntropy)
+        .await
+        .unwrap();
+    assert!(matches!(claimed, NativePairingStatus::Claimed(_)));
+    let id = created.record().id();
+    let record = commands.status(session, id).await.unwrap();
+    let (_, key) = record.claim_binding().unwrap();
+    let approved = commands.approve(session, id, key).await.unwrap().record;
+    let (receiver, epoch) = approved.receiver_binding().unwrap();
+    let credential = approved.credential().unwrap().as_str().to_owned();
+    let active = client
+        .status(TcpStream::connect(native).unwrap(), None)
+        .await
+        .unwrap();
+    assert!(matches!(active, NativePairingStatus::Active { .. }));
+    client.shutdown().await;
+    (receiver.as_str().to_owned(), epoch, credential)
 }

@@ -4,7 +4,7 @@
 mod client;
 #[path = "fixtures/gateway.rs"]
 mod gateway;
-pub(super) use client::{command, Frame, WireClient};
+pub(super) use client::{command, Frame, WatchChild, WireClient};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -27,12 +27,19 @@ pub(super) struct Setup {
     pub(super) epoch: u64,
     pub(super) conversation: String,
     pub(super) empty: String,
+    /// The second paired device's receiver; `live` mode only.
+    pub(super) second_receiver: Option<String>,
 }
 /// A profile for this gateway's paired device whose cache is `cache`: the
 /// fixture's own profile with that one field, in a new private file.
 pub(super) fn profile_for(root: &Path, cache: &Path) -> String {
+    profile_for_device(root, "profile.json", cache)
+}
+/// The same for the device whose fixture profile is `device` under `root`
+/// (`profile-b.json` is live mode's second device).
+pub(super) fn profile_for_device(root: &Path, device: &str, cache: &Path) -> String {
     let mut profile: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(root.join(device)).unwrap()).unwrap();
     profile["cache"] = serde_json::json!(cache);
     let path = root.join(format!("profile-{}.json", uuid()));
     private_write(&path, &serde_json::to_vec(&profile).unwrap());

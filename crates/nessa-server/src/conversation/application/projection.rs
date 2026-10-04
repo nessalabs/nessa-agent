@@ -22,7 +22,10 @@ use nessa_sdk::domain::agent_execution::{
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 const MAX_MESSAGES: usize = 24;
@@ -67,6 +70,12 @@ pub(super) struct Projection {
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
+    /// The calls that have a part in their turn, by execution and clipped tool
+    /// id, so a call's later updates find it without scanning the turn's
+    /// parts. A call goes in only when its part is pushed, and an execution
+    /// leaves when its parts do: cleared for a replayed record, or its message
+    /// let go.
+    tool_parts: HashMap<String, HashSet<String>>,
     /// Exact local execution identity supplied by Agent for this replacement.
     /// It supplies action locality, never semantic completion or freshness.
     live_here: HashSet<String>,
@@ -196,6 +205,7 @@ impl Projection {
             resolved_permissions: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
+            tool_parts: HashMap::new(),
             live_here: live_here.clone(),
             tool_uis: Arc::new(NoMcpToolUis),
             view: ConversationView {
@@ -418,7 +428,8 @@ impl Projection {
             return index;
         }
         if self.view.messages.len() == MAX_MESSAGES {
-            self.view.messages.remove(0);
+            let evicted = self.view.messages.remove(0);
+            self.tool_parts.remove(&evicted.execution_id);
             self.view.truncated = true;
         }
         self.view.messages.push(ConversationMessage {
@@ -688,14 +699,23 @@ impl Projection {
                 tool_id: String::new(),
                 notice_id: String::new(),
             }),
-            ExecutionUpdate::Tool(update) => Some(ConversationPart {
-                message_id: None,
-                offset,
-                kind: "tool".into(),
-                text: String::new(),
-                tool_id: clipped(update.id().as_str(), 256),
-                notice_id: String::new(),
-            }),
+            // One part per tool call, where it was first seen: a call's later
+            // updates change its `tools` entry, not the turn's parts.
+            ExecutionUpdate::Tool(update) => {
+                let tool_id = clipped(update.id().as_str(), 256);
+                let seen = self
+                    .tool_parts
+                    .get(id)
+                    .is_some_and(|calls| calls.contains(&tool_id));
+                (!seen).then(|| ConversationPart {
+                    message_id: None,
+                    offset,
+                    kind: "tool".into(),
+                    text: String::new(),
+                    tool_id,
+                    notice_id: String::new(),
+                })
+            }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 let notice_id = observation.id().as_str();
                 let text = decline_notice(observation.decline(), observation.stage());
@@ -741,6 +761,12 @@ impl Projection {
                     + part.text.len()
                     <= MAX_TEXT * 2
             {
+                if part.kind == "tool" {
+                    self.tool_parts
+                        .entry(id.to_owned())
+                        .or_default()
+                        .insert(part.tool_id.clone());
+                }
                 message.parts.push(part);
             } else {
                 self.view.truncated = true;
@@ -892,6 +918,7 @@ impl Projection {
             .map(Into::into)
             .collect();
         self.view.messages[index].parts.clear();
+        self.tool_parts.remove(id);
         self.view.messages[index].event_count = 0;
         self.view.messages[index].steering_offset = record.target_event_offset;
         self.view.messages[index].status = ConversationMessageStatus::Running;
