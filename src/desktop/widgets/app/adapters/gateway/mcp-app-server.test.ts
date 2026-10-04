@@ -906,7 +906,7 @@ describe("the release", () => {
     ])
   })
 
-  it("release, applied false: a release the gateway acknowledges as already applied is done, not asked again", async () => {
+  it("M8: a release acknowledged applied false (an input the gateway does not send) is done, not asked again", async () => {
     waited = []
     const releaseApp = vi.fn<McpAppsApi["releaseApp"]>(async () => ({
       requestId: "release-1",
