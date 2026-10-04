@@ -15,14 +15,14 @@ mod settings;
 
 pub use ports::{
     AuditUnavailable, AuditedServer, InspectBounds, InspectCut, InspectFailure, InspectFuture,
-    InspectedTool, InspectedUi, Inspection, LiveServerSet, LiveSetKept, McpServerAction,
-    McpServerAudit, McpServerAuditPhase, McpServerAuditRecord, McpServerChangeRequest,
-    McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
-    ServerProblem, StoreError, StoreFuture, StoreLock, StoredServers,
+    InspectStop, InspectedTool, InspectedUi, Inspection, LiveServerSet, LiveSetKept,
+    McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+    McpServerChangeRequest, McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector,
+    ServerNames, ServerProblem, StoreError, StoreFuture, StoreLock, StoredServers,
 };
 pub use settings::{
-    EditProblem, ListedServer, McpServerSettings, McpServerSettingsError, ServerList, Unfinished,
-    DRAIN_GRACE, INSPECT_BOUNDS,
+    drain_bound, EditProblem, ListedServer, McpServerSettings, McpServerSettingsError, ServerList,
+    Unfinished, DRAIN_GRACE, INSPECT_BOUNDS,
 };
 
 #[cfg(all(test, unix))]

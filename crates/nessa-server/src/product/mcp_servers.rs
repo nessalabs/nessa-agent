@@ -148,6 +148,7 @@ pub(super) fn fitted(request_id: &str, inspection: Inspection) -> OutgoingMessag
             InspectCut::Tools => McpServersInspectCut::Tools,
             InspectCut::Ui => McpServersInspectCut::Ui,
             InspectCut::Bytes => McpServersInspectCut::Bytes,
+            InspectCut::Stopping => McpServersInspectCut::Stopping,
         }),
         tools: inspection
             .tools

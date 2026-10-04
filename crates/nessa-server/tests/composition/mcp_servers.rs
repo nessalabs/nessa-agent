@@ -1089,3 +1089,167 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     assert!(compact(&file()));
     assert!(size() < MAX_CONFIG_BYTES);
 }
+
+/// Whether `pid` is still running: a zombie is not.
+fn alive(pid: i64) -> bool {
+    // SAFETY: signal 0 only asks whether the process exists.
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+        return false;
+    }
+    let state = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let state = String::from_utf8_lossy(&state.stdout);
+    !state.trim().is_empty() && !state.trim_start().starts_with('Z')
+}
+
+/// The process id written to `file`, once written, within five real seconds.
+async fn pid_in(file: &Path) -> i64 {
+    let read = || {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| text.parse().ok())
+    };
+    within("the pid is written", || read().is_some()).await;
+    read().unwrap()
+}
+
+/// The records in `audit`, in the order they were observed.
+fn records_in(audit: &Path) -> Vec<serde_json::Value> {
+    let mut records: Vec<serde_json::Value> = std::fs::read_dir(audit)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    records.sort_by_key(|record| record["observedAtMs"].as_u64());
+    records
+}
+
+/// LS3e, on the composed gateway: shutdown while an inspection is blocked
+/// mid-read — a real server that answered `initialize`, is asked for its
+/// tools, never answers and ignores its stdin closing. The MCP stop cuts the
+/// inspection, writes its outcome (`inspected`, `cut: stopping`, no tools)
+/// before it returns, kills the server's process group, and returns well
+/// within the drain's bound — not after the inspection's deadline.
+#[tokio::test]
+async fn shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_stop() {
+    use super::{settings, stop};
+    use crate::mcp_servers::application::{InspectCut, Inspection};
+    let (root, config_path, composed, config) =
+        composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
+    let audit = root.path().join("audit");
+    let settings = Arc::new(settings(&composed, &config, config_path, audit.clone()).unwrap());
+    let pid_file = root.path().join("pid");
+    let child_pid_file = root.path().join("child");
+    let listed_file = root.path().join("listed");
+    let fixture = format!(
+        "{}/../nessa-sdk/tests/infrastructure/mcp/fixtures/server.py",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let arguments = [
+        fixture.as_str(),
+        "--silent-on-list",
+        "--ignore-eof",
+        "--child",
+        "--pid-file",
+        pid_file.to_str().unwrap(),
+        "--child-pid-file",
+        child_pid_file.to_str().unwrap(),
+        "--listed-file",
+        listed_file.to_str().unwrap(),
+    ];
+    let revision = settings.list().await.unwrap().revision;
+    settings
+        .edit(
+            caller(),
+            revision,
+            saved(
+                "fixture",
+                arguments.iter().map(|&each| each.into()).collect(),
+            ),
+        )
+        .await
+        .unwrap();
+    let inspecting = tokio::spawn({
+        let settings = settings.clone();
+        async move { settings.inspect(caller(), "fixture").await }
+    });
+    let pid = pid_in(&pid_file).await;
+    let child = pid_in(&child_pid_file).await;
+    within("the tools are asked for", || listed_file.exists()).await;
+    assert!(!inspecting.is_finished());
+    let bound = settings.drain_bound();
+    let started = std::time::Instant::now();
+    assert_eq!(
+        tokio::time::timeout(bound, stop(Some(&settings), &composed.servers))
+            .await
+            .expect("stopped within the drain's bound"),
+        Ok(())
+    );
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(2), "{took:?}");
+    // Written before the stop returned: the inspection's two records, after
+    // the save's two.
+    let records = records_in(&audit);
+    assert_eq!(records.len(), 4);
+    let outcome = &records[3];
+    assert_eq!(outcome["action"], "inspect");
+    assert_eq!(outcome["phase"], "outcome");
+    assert_eq!(outcome["transition"]["outcome"], "inspected");
+    assert_eq!(outcome["transition"]["cut"], "stopping");
+    assert_eq!(outcome["transition"]["tools"], 0);
+    // Killed with its group.
+    within("the server and its child are gone", || {
+        !alive(pid) && !alive(child)
+    })
+    .await;
+    assert_eq!(
+        joined(inspecting).await,
+        Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        })
+    );
+}
+
+/// An inspection that was not started — shutdown before its launch, or the
+/// client refusing it — is recorded `failed`, `stopping`, with
+/// `started: false` in so many words.
+#[test]
+fn a_stopping_record_says_the_server_was_not_started() {
+    use crate::mcp_servers::application::{
+        McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
+        McpServerChangeRequest, McpServerOutcome,
+    };
+    use crate::mcp_servers::infrastructure::DurableMcpServerAudit;
+    let root = tempfile::tempdir().unwrap();
+    let audit = root.path().join("audit");
+    DurableMcpServerAudit::new(
+        audit.clone(),
+        Arc::new(super::super::local_auth::SystemClock),
+    )
+    .unwrap()
+    .record(&McpServerAuditRecord {
+        operation_id: "operation".into(),
+        initiator: caller(),
+        request: McpServerChangeRequest {
+            action: McpServerAction::Inspect,
+            target: "fixture".into(),
+            previous_name: None,
+            revision: "revision".into(),
+            server: None,
+        },
+        phase: McpServerAuditPhase::Outcome(McpServerOutcome::InspectFailed {
+            reason: "stopping",
+            started: false,
+        }),
+    })
+    .unwrap();
+    let records = records_in(&audit);
+    assert_eq!(
+        records[0]["transition"],
+        serde_json::json!({"outcome": "failed", "reason": "stopping", "started": false})
+    );
+}

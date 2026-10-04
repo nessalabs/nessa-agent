@@ -2495,8 +2495,8 @@ mod tests {
 
     /// `mcpServers.inspect` on the wire: the tools with their hints and each
     /// app's CSP and permissions in `mcp.readResource`'s shapes; each failure
-    /// typed, a server's JSON-RPC error with its details; and a stored name
-    /// required.
+    /// typed, a server's JSON-RPC error with its details; an inspection cut
+    /// by shutdown; and a stored name required.
     #[tokio::test]
     async fn mcp_servers_inspect_answers_typed_tools_and_typed_failures() {
         use crate::mcp_servers::application::{
@@ -2608,6 +2608,18 @@ mod tests {
             *inspector.answer.lock().unwrap() = Err(failure);
             assert_eq!(inspect("a").await, (false, expected));
         }
+        // Cut by shutdown after the server was started: incomplete, no tools.
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        });
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "stopping", "tools": []})
+            )
+        );
         assert_eq!(
             inspect("unknown").await,
             (

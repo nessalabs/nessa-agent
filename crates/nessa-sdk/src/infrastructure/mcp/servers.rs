@@ -361,6 +361,11 @@ impl McpServers {
     /// [`McpError::InvalidConfiguration`] with the first problem
     /// [`McpServerLaunch::problem_in`] finds, and [`McpError::Stopped`] once
     /// [`McpServers::stop`] has begun; the set is unchanged on both.
+    ///
+    /// # Panics
+    ///
+    /// When another thread panicked while holding the live sessions' lock or
+    /// the configured set's, which leaves them poisoned.
     pub fn replace(&self, servers: Vec<McpServerLaunch>) -> Result<(), McpError> {
         let launches = Arc::new(by_name(servers)?);
         // Under the lock `stop` sets `stopping` under: a replacement either

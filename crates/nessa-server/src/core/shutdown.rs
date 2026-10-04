@@ -8,9 +8,9 @@
 //! `docs/design/authorized-record-reads.md`.
 use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
 use crate::device_pairing::infrastructure::PairingRuntimeError;
+use crate::mcp_servers::application::Unfinished;
 use crate::product::WatchTaskFault;
 use nessa_auth::application::pairing::PairingWorkerFault;
-use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
@@ -111,9 +111,11 @@ impl WatchDrain {
     }
 }
 
-/// MCP stop returns unit, so the only facts are "returned" and "not yet";
-/// `Failed` cannot be constructed.
-pub type ServersOutcome = Outcome<Infallible>;
+/// MCP stop (`composition::mcp_servers::stop`): the servers stop whatever
+/// happens, so `Failed` says the drain before it ran out of time — admitted
+/// changes or inspections still running, their outcomes perhaps unrecorded —
+/// and the report is not confirmed.
+pub type ServersOutcome = Outcome<Unfinished>;
 
 /// Native pairing's stop did not confirm. The listener stops admission, wakes
 /// and collects its peers and drains its connection owner on its own task; a
@@ -222,8 +224,8 @@ impl ShutdownReport {
     pub(crate) fn observe_conversations(&mut self, result: Result<(), ConversationError>) {
         self.conversations.observe(result);
     }
-    pub(crate) fn observe_servers(&mut self) {
-        self.servers.observe(Ok(()));
+    pub(crate) fn observe_servers(&mut self, result: Result<(), Unfinished>) {
+        self.servers.observe(result);
     }
     pub(crate) fn observe_native(&mut self, result: Result<(), NativeShutdownFailure>) {
         self.native.observe(result);
@@ -246,7 +248,7 @@ impl ShutdownReport {
         if self.confirmed() {
             Ok(())
         } else {
-            Err(ShutdownFailure(self))
+            Err(ShutdownFailure(Box::new(self)))
         }
     }
 }
@@ -301,9 +303,10 @@ fn write_outcome<E: Debug>(
 
 /// A report that did not confirm: at least one outcome unknown, failed, or
 /// past its deadline. Only [`ShutdownReport::into_result`] constructs it, so
-/// an all-confirmed failure cannot exist.
+/// an all-confirmed failure cannot exist. Boxed: the report is one outcome
+/// per cleanup owner, too large to carry inline in every `Result`.
 #[derive(Debug)]
-pub struct ShutdownFailure(ShutdownReport);
+pub struct ShutdownFailure(Box<ShutdownReport>);
 impl ShutdownFailure {
     /// Everything shutdown established before the report was read.
     pub fn report(&self) -> &ShutdownReport {
@@ -338,7 +341,7 @@ mod tests {
         if stage == ShutdownStage::Servers {
             return report;
         }
-        report.observe_servers();
+        report.observe_servers(Ok(()));
         if stage == ShutdownStage::Native {
             return report;
         }
@@ -393,7 +396,7 @@ mod tests {
         report.observe_catalogue(Ok(()));
         report.observe_watches(Ok(()));
         report.observe_conversations(Ok(()));
-        report.observe_servers();
+        report.observe_servers(Ok(()));
         assert_eq!(report.stage(), ShutdownStage::Native);
         assert!(
             !report.confirmed(),

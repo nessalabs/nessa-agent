@@ -151,9 +151,9 @@ impl ProductRouteState {
     }
 
     /// Admit no more `mcpServers.save`, `.remove` or `.inspect`: each later
-    /// one answers `mcp_servers_stopping`. Those admitted run on; the
-    /// server lifecycle waits for them before the MCP servers stop
-    /// ([`McpServerSettings::shutdown`]).
+    /// one answers `mcp_servers_stopping`. Those admitted run on until the
+    /// MCP stop, which stops the inspections and drains them all before the
+    /// servers stop ([`McpServerSettings::shutdown`]).
     pub(crate) fn close_mcp_server_admission(&self) {
         if let Some(settings) = &self.mcp_server_settings {
             settings.close();

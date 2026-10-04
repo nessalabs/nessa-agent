@@ -105,10 +105,10 @@ impl ConfigJsonStore {
         }
     }
 
-    /// `document` as it is written: pretty-printed, or compact when only
-    /// that fits the bound — the bound is on the bytes written, so a file
-    /// read within it, made no larger, is written within it, and a remove
-    /// can always shrink it (`a_result_that_fits_only_compact_is_written_compact`).
+    /// `document` as it is written, with its closing newline: pretty-printed,
+    /// or compact when only that fits the bound. The bound is on the bytes
+    /// written, so a remove can always shrink the file
+    /// (`the_configuration_bound_holds_at_exactly_its_edge`).
     fn serialised(&self, document: &Value) -> Result<Vec<u8>, StoreError> {
         let mut bytes =
             serde_json::to_vec_pretty(document).map_err(|_| StoreError::ConfigInvalid)?;

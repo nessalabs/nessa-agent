@@ -988,6 +988,7 @@ pub enum McpServersInspectCut {
     Tools,
     Ui,
     Bytes,
+    Stopping,
 }
 impl McpServersInspectCut {
     pub fn as_str(self) -> &'static str {
@@ -995,6 +996,7 @@ impl McpServersInspectCut {
             Self::Tools => "tools",
             Self::Ui => "ui",
             Self::Bytes => "bytes",
+            Self::Stopping => "stopping",
         }
     }
 }

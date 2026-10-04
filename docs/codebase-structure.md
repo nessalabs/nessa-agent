@@ -1579,7 +1579,9 @@ then carries their outcomes through conversation/storage, MCP and the native joi
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
 `tests/composition/watch_shutdown.rs`, using the watch fixture in
-`tests/product/socket/watches.rs`. The separate-process replay-to-live tests, with
+`tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
+`composition/mcp_servers.rs::stop` draining stored-server changes before the
+servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with
 the probe client and with the example's own `watch` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.

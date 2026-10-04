@@ -2221,6 +2221,16 @@ impl HostWatchFixture {
             socket: Some(socket),
         }
     }
+    /// No watch admitted: the host's watch drain has nothing to wait for.
+    pub(crate) async fn idle() -> Self {
+        Self {
+            inner: WatchFixture::new().await,
+            authority: None,
+            cancellation_owner: None,
+            peer: None,
+            socket: None,
+        }
+    }
     pub(crate) async fn cancelled_task() -> Self {
         let inner = WatchFixture::new().await;
         inner.commit().await;
