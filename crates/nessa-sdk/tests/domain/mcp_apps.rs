@@ -291,3 +291,21 @@ fn a_tool_is_destructive_unless_it_says_it_only_reads_or_destroys_nothing() {
     assert!(!reads.hints().destructive());
     assert_eq!(reads.tool(), &tool("s", "t"));
 }
+
+#[test]
+fn hints_read_back_exactly_as_the_tool_gave_them() {
+    // Every pairing, so each getter is shown to read its own hint and not
+    // the other's.
+    let said = [Some(true), Some(false), None];
+    for read_only in said {
+        for destructive in said {
+            let hints = ToolHints::new(read_only, destructive);
+            assert_eq!(hints.read_only_hint(), read_only, "readOnlyHint");
+            assert_eq!(hints.destructive_hint(), destructive, "destructiveHint");
+        }
+    }
+    // A tool listed without hints said nothing of either.
+    let listed = ListedTool::new(tool("s", "t"), ToolUi::default());
+    assert_eq!(listed.hints().read_only_hint(), None);
+    assert_eq!(listed.hints().destructive_hint(), None);
+}

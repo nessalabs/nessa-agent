@@ -226,10 +226,24 @@ impl ServerInspector for ScriptedInspector {
     }
 }
 
+/// `unix`, a path written from the root, as an absolute path on the
+/// platform the tests run on: unchanged on Unix, and on drive `C:` on
+/// Windows, where a path naming no drive is not absolute and the SDK refuses
+/// it as a server's command (`StdioMcpServer::problem`). Every fixture
+/// command that reaches that rule is written through this; the tests that
+/// read a command back compare it with this too, so they hold on both.
+pub(crate) fn absolute(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{unix}")
+    } else {
+        unix.to_owned()
+    }
+}
+
 pub(crate) fn server(name: &str) -> StdioServer {
     StdioServer {
         name: name.into(),
-        command: PathBuf::from("/usr/bin/python3"),
+        command: PathBuf::from(absolute("/usr/bin/python3")),
         args: vec![format!("/{name}.py")],
     }
 }
@@ -238,7 +252,7 @@ pub(crate) fn managed() -> ConfiguredMcpServer {
     ConfiguredMcpServer {
         server: StdioServer {
             name: MANAGED_SERVER_NAME.into(),
-            command: PathBuf::from("/bundle/nessa-mcp"),
+            command: PathBuf::from(absolute("/bundle/nessa-mcp")),
             args: vec!["--workspace".into(), "/w".into()],
         },
         enabled: true,
@@ -248,7 +262,8 @@ pub(crate) fn managed() -> ConfiguredMcpServer {
 
 /// A stored entry as `config.json` has it.
 pub(crate) fn entry(name: &str) -> Value {
-    json!({"name": name, "command": "/usr/bin/python3", "args": [format!("/{name}.py")]})
+    json!({"name": name, "command": absolute("/usr/bin/python3"),
+        "args": [format!("/{name}.py")]})
 }
 
 /// A configuration whose `agents.mcpServers` is `servers`.
