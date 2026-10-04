@@ -88,14 +88,21 @@ export async function openPage(browser, o) {
     [storage.layout]: o.layout ?? "columns",
     ...(o.prefs ?? {}),
   }
-  await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
-  for (const script of o.initScripts ?? []) {
-    if (Array.isArray(script)) await context.addInitScript(script[0], script[1])
-    else await context.addInitScript(script)
+  let page
+  try {
+    await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
+    for (const script of o.initScripts ?? []) {
+      if (Array.isArray(script)) await context.addInitScript(script[0], script[1])
+      else await context.addInitScript(script)
+    }
+    // What a check sets up before the page loads, such as a socket it
+    // answers or the clock it holds.
+    await o.beforeLoad?.(context)
+    page = await context.newPage()
+  } catch (error) {
+    await context.close()
+    throw error
   }
-  // What a check routes before the page loads, such as a socket it answers.
-  await o.beforeLoad?.(context)
-  const page = await context.newPage()
   const errors = []
   const harmless = []
   page.on("pageerror", (error) => {

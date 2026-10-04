@@ -377,7 +377,10 @@ await main(
           })
         } catch (error) {
           // Could not run, or failed: reported either way, and the next
-          // layout and engine still run.
+          // layout and engine still run. A failure that is not "could not
+          // run" is a fault: its stack goes to stderr, as the result keeps
+          // only its first line.
+          if (!(error instanceof CannotRun)) log(error?.stack ?? String(error))
           rep.add(resultOfThrown({ name: "open", engine, layout }, error))
           for (const name of only)
             rep.add({

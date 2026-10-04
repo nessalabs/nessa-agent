@@ -16,9 +16,14 @@
  * where the browser's own line that the connection failed is the one console
  * error expected.
  *
- * The poller's wait it checks against is the gateway source's own
- * (`defaultGatewayTiming`), and the gap one connect can leave between its
- * asks comes from the client's own retry policy (`resolveConnectRetry`), each
+ * Try Again is checked on a clock the script holds (C0–C4, #419 comment
+ * 5977020094). Playwright's clock is installed before the page's scripts, so
+ * the poller's rounds and a connect's retry backoff run on its timers; it
+ * runs in real time until the script pauses it for the click. While it is
+ * paused no timer fires, so a host ask after the click is Try Again's own
+ * connect, with no timing number to say so.
+ *
+ * The poller's numbers are the gateway source's own (`defaultGatewayTiming`),
  * read in the page from the dev server's module; a production build has none
  * to read, so each scenario there is "could not run" — the script needs
  * --mode dev (the default).
@@ -31,18 +36,16 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css, modules } from "./lib/selectors.mjs"
-import { inside, modelRule, modelValue } from "./lib/workspace.mjs"
+import { inside, modelValue } from "./lib/workspace.mjs"
 
 const fakeGateway = "ws://127.0.0.1:7499"
 // Nothing listens here and nothing routes it: the connection is refused.
 const noGateway = "ws://127.0.0.1:7498"
 const unread = "Nessa couldn’t read the local server’s conversations just now."
 const signedOut = "This window isn’t signed in to the local server."
-// Try Again's ask comes this soon after the click, or it isn't counted.
-const retryAskMs = 1_000
-// An endpoint ask at most this old is fresh enough to click after
-// (T0, comment 5976195060).
-const freshAskMs = 1_000
+// How long, in real time, the paused page has to show Try Again's ask (C1).
+// It only ends the wait: with the clock paused nothing else asks the host.
+const pausedAskWaitMs = 3_000
 
 /**
  * Each of `numbers` is a positive finite number, or the check could not run
@@ -70,6 +73,14 @@ function positive(source, numbers) {
  *   is at most `reconnectRounds + 1` rounds after the failure (S16), and two
  *   rounds are left for the rounds' own time. It has asked exactly once by
  *   then, as the ask after it is a whole wait later still.
+ * - `unaskedMs`, two rounds: how long the host goes unasked before the clock
+ *   pauses (C1), so the last connect's attempts have ended. A connect still
+ *   in flight would stop on its paused backoff, and Try Again would join it
+ *   (S6) and not ask: a correct product failing C2, not a broken one passing.
+ * - `pauseLeadMs`, a tenth of a round: `pauseAt` takes a time no earlier
+ *   than the clock's own, which moves on between the script reading it and
+ *   the pause. The timers due in that lead fire as the clock pauses, before
+ *   the click; an ask they make is caught by the check at the pause.
  */
 function cadenceOf({ pollMs, reconnectRounds }) {
   positive("defaultGatewayTiming", { pollMs, reconnectRounds })
@@ -80,38 +91,9 @@ function cadenceOf({ pollMs, reconnectRounds }) {
     pollerWaitMs,
     quietMs: pollerWaitMs - pollMs,
     recoveredMs: pollerWaitMs + 3 * pollMs,
+    unaskedMs: 2 * pollMs,
+    pauseLeadMs: pollMs / 10,
   }
-}
-
-/**
- * `settleMs`, how long the host goes unasked before the click (T0′, comment
- * 5976651213): the longest gap one connect can leave between its asks, so
- * the connect that asked has ended and Try Again starts its own rather than
- * joining it (S6).
- *
- * The window's connect is `connectDevSession` as `hostGateway` composes it,
- * which passes the client no `config`; so `establishManagedSession` retries
- * with `new NessaClientConfig().retry`, which is `resolveConnectRetry()` with
- * no options — `policy` here, read from the client's source. After a failed
- * attempt `index` (from 0) that is not the last (`index + 1 < maxAttempts`),
- * `retryProductConnection` waits at most the ceiling `min(maxDelayMs,
- * initialDelayMs × 2^min(index, 31))`: jitter only shortens it, and a refused
- * socket carries no `retryAfterMs`. The ceiling never shrinks as `index`
- * grows, so the largest is the last retry's, `index = maxAttempts − 2`; with
- * no retries there is none. A quarter of `pollMs` more is for an attempt's
- * own time, a refused socket's.
- */
-function settleOf(policy, pollMs) {
-  const { maxAttempts, initialDelayMs, maxDelayMs } = policy ?? {}
-  positive("resolveConnectRetry()", { maxAttempts, initialDelayMs, maxDelayMs })
-  positive("defaultGatewayTiming", { pollMs })
-  const backoffMs =
-    maxAttempts < 2
-      ? 0
-      : Math.min(maxDelayMs, initialDelayMs * 2 ** Math.min(maxAttempts - 2, 31))
-  const settleMs = backoffMs + pollMs / 4
-  positive("the settle", { settleMs })
-  return { maxAttempts, initialDelayMs, maxDelayMs, backoffMs, pollMs, settleMs }
 }
 
 const scenarios = [
@@ -281,26 +263,25 @@ It reads the poller's wait from the gateway source in the page, so it needs
             // Either answer: the status this check is for, or a listed
             // session — the sample in disguise, which `check` fails.
             readySelector: `${css.workspaceEmpty}, ${css.sessionRow}`,
-            beforeLoad: (context) =>
-              context.routeWebSocket(`${fakeGateway}/**`, refuseCredential),
+            beforeLoad: async (context) => {
+              // C0: the page's timers are the clock's, running in real time.
+              await context.clock.install()
+              await context.routeWebSocket(`${fakeGateway}/**`, refuseCredential)
+            },
           })
           try {
-            const { page } = opened
+            const { page, context } = opened
             const timing = cadenceOf(
               await modelValue(page, modules.gatewaySource, "defaultGatewayTiming"),
             )
-            const { pollerWaitMs, quietMs, recoveredMs } = timing
-            const settle = settleOf(
-              await modelRule(page, modules.connectRetry, "resolveConnectRetry"),
-              timing.pollMs,
-            )
-            const { settleMs } = settle
+            const { quietMs, recoveredMs, unaskedMs, pauseLeadMs } = timing
             const first = await measure(page)
             const failures = check(scenario, first)
-            if (!first.button) return { failures, measured: { timing, settle, first } }
+            if (!first.button) return { failures, measured: { timing, first } }
             // The poller waits out a failed connect (S10): for `quietMs` after
             // the last ask — a round short of the poller's wait — nothing asks
-            // the host.
+            // the host. The page's `performance.now()` is the clock's, which
+            // runs in real time until the pause below.
             let quiet
             let recovered
             if (scenario.cadence) {
@@ -327,83 +308,84 @@ It reads the poller's wait from the gateway source in the page, so it needs
             // Try Again reads the index again — the status goes while it reads,
             // which no poll does — and connects at once though the poller
             // waits (S12). Then it says the same while nothing changed.
-            await page.evaluate(
-              ([empty, retry]) => {
-                window.__statusLeft = false
-                new MutationObserver(() => {
-                  if (!document.querySelector(empty)) window.__statusLeft = true
-                }).observe(document.body, { childList: true, subtree: true })
-                // The click's time, taken before React's own handler, which
-                // runs from the root.
-                window.__retryClickedAt = null
-                window.addEventListener(
-                  "click",
-                  (event) => {
-                    if (window.__retryClickedAt === null && event.target.closest?.(retry))
-                      window.__retryClickedAt = performance.now()
-                  },
-                  { capture: true },
-                )
-              },
-              [css.workspaceEmpty, css.workspaceEmptyRetry],
-            )
-            // T0′: the click placed early in a fresh poller wait — after the
-            // last endpoint ask if it is at most `freshAskMs` old, else after
-            // the next one — once the connect that asked has ended, so T3's
-            // bound is far off and Try Again's connect is its own.
-            const last = await page.evaluate(() => ({
-              count: window.__fakeHostAskTimes.length,
-              age: performance.now() - window.__fakeHostAskTimes.at(-1),
-            }))
-            const waitedForAsk = last.count > 0 && !(last.age <= freshAskMs)
-            if (waitedForAsk) {
-              const asked = await page
-                .waitForFunction(
-                  (count) => window.__fakeHostAskTimes.length > count,
-                  last.count,
-                  { polling: "raf", timeout: recoveredMs },
-                )
-                .then(
-                  () => true,
-                  () => false,
-                )
-              if (!asked)
-                failures.push(
-                  `the window did not ask the host again within ${recoveredMs}ms, unprompted`,
-                )
-            }
-            // The page clicks in the frame that sees the host unasked for
-            // `settleMs`: no step of the script's sits between the two.
-            // `click()` dispatches the click a pointer's would — bubbling to
-            // React's root listener, which runs Try Again's `onClick` — and
-            // the capture listener above times it.
-            const clicked = await page
+            await page.evaluate((empty) => {
+              window.__statusLeft = false
+              new MutationObserver(() => {
+                if (!document.querySelector(empty)) window.__statusLeft = true
+              }).observe(document.body, { childList: true, subtree: true })
+            }, css.workspaceEmpty)
+            // C1: once the host has gone unasked for `unaskedMs`, the clock
+            // pauses, and no timer fires until it resumes.
+            const quietAt = await page
               .waitForFunction(
-                ([quiet, retry]) => {
-                  if (window.__retryClickSent) return true
-                  const times = window.__fakeHostAskTimes
-                  // With no ask at all there is nothing to settle: T4 fails it.
-                  if (times.length > 0 && performance.now() - times.at(-1) < quiet)
+                (unasked) => {
+                  const last = window.__fakeHostAskTimes.at(-1)
+                  if (last !== undefined && performance.now() - last < unasked)
                     return false
-                  const button = document.querySelector(retry)
-                  if (!button) return false
-                  window.__retryClickSent = true
-                  button.click()
-                  return true
+                  return Date.now()
                 },
-                [settleMs, css.workspaceEmptyRetry],
-                { polling: "raf", timeout: recoveredMs },
+                unaskedMs,
+                { timeout: recoveredMs },
+              )
+              .then(
+                (handle) => handle.jsonValue(),
+                () => null,
+              )
+            if (quietAt === null) {
+              failures.push(
+                `the host was never unasked for ${unaskedMs}ms within ${recoveredMs}ms, so the clock was not paused for Try Again`,
+              )
+              return { failures, measured: { timing, first, quiet, recovered } }
+            }
+            await context.clock.pauseAt(quietAt + pauseLeadMs)
+            const atPause = await page.evaluate(() => {
+              const times = window.__fakeHostAskTimes
+              return {
+                asked: times.length,
+                unaskedMs: times.length === 0 ? null : performance.now() - times.at(-1),
+              }
+            })
+            // C3, as T4: with no failed connect before it, there is nothing
+            // for Try Again to beat.
+            if (atPause.asked === 0)
+              failures.push("no failed connect came before Try Again for it to beat")
+            else if (!(atPause.unaskedMs >= unaskedMs))
+              failures.push(
+                `the host was asked ${Math.round(atPause.unaskedMs)}ms before the clock paused, under ${unaskedMs}ms: Try Again may join that connect`,
+              )
+            // A real click, so Playwright's own checks (visible, stable, not
+            // painted over) come first.
+            const clicked = await page
+              .click(css.workspaceEmptyRetry, { timeout: 5_000 })
+              .then(
+                () => null,
+                (error) => error.message.split("\n")[0],
+              )
+            if (clicked !== null) {
+              failures.push(`Try Again could not be clicked: ${clicked}`)
+              return { failures, measured: { timing, first, quiet, recovered, atPause } }
+            }
+            const clickedAt = Date.now()
+            // C1 and C2: the clock still paused, an ask after the click is Try
+            // Again's own connect; with none, it did not connect.
+            const asked = await page
+              .waitForFunction(
+                (count) => window.__fakeHostAskTimes.length > count,
+                atPause.asked,
+                { timeout: pausedAskWaitMs },
               )
               .then(
                 () => true,
                 () => false,
               )
-            if (!clicked) {
-              failures.push(
-                `Try Again was not clicked: within ${recoveredMs}ms the host was never unasked for ${settleMs}ms with Try Again drawn`,
-              )
-              return { failures, measured: { timing, settle, first, quiet, recovered } }
+            const tryAgain = {
+              ...atPause,
+              askSeenMs: asked ? Date.now() - clickedAt : null,
             }
+            if (!asked)
+              failures.push(
+                `Try Again did not connect: no host ask within ${pausedAskWaitMs}ms of the click with the clock paused. Either Try Again does not connect, or it joined a connect still in flight (S6)`,
+              )
             const read = await page
               .waitForFunction(() => window.__statusLeft, null, { timeout: 5_000 })
               .then(
@@ -411,65 +393,8 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 () => false,
               )
             if (!read) failures.push("Try Again did not read the index again")
-            // Only an ask within `retryAskMs` of the click counts as Try
-            // Again's, and only while the poller's wait since the last ask
-            // before the click can't explain it (T1–T4, comment 5975998645).
-            const retry = await page
-              .waitForFunction(
-                (windowMs) => {
-                  const clickedAt = window.__retryClickedAt
-                  if (clickedAt === null) return false
-                  const times = window.__fakeHostAskTimes
-                  if (
-                    !times.some((t) => t >= clickedAt) &&
-                    performance.now() <= clickedAt + windowMs
-                  )
-                    return false
-                  return {
-                    lastBefore: times.filter((t) => t < clickedAt).at(-1) ?? null,
-                    clickedAt,
-                    firstAfter: times.find((t) => t >= clickedAt) ?? null,
-                  }
-                },
-                retryAskMs,
-                { timeout: 5_000 },
-              )
-              .then(
-                (handle) => handle.jsonValue(),
-                () => null,
-              )
-            const retryTiming = retry && {
-              waitedForAsk,
-              sinceLastAsk:
-                retry.lastBefore === null ? null : retry.clickedAt - retry.lastBefore,
-              askAfterClick:
-                retry.firstAfter === null ? null : retry.firstAfter - retry.clickedAt,
-            }
-            // How far T3's bound is from where the click landed.
-            if (retryTiming && retryTiming.sinceLastAsk !== null)
-              retryTiming.margin = pollerWaitMs - (retryTiming.sinceLastAsk + retryAskMs)
-            // T5: a click too soon after an ask may have joined the connect
-            // that asked; whatever came after it is not Try Again's own.
-            if (
-              retryTiming &&
-              retryTiming.sinceLastAsk !== null &&
-              retryTiming.sinceLastAsk < settleMs
-            )
-              failures.push(
-                `Try Again was clicked ${Math.round(retryTiming.sinceLastAsk)}ms after the last ask, under the ${settleMs}ms settle: the click may have joined a connect in flight`,
-              )
-            if (!retry) failures.push("the click on Try Again was never seen")
-            else if (retry.lastBefore === null)
-              failures.push("no failed connect came before Try Again for it to beat")
-            else if (retryTiming.sinceLastAsk + retryAskMs >= pollerWaitMs)
-              failures.push(
-                `Try Again was clicked ${Math.round(retryTiming.sinceLastAsk)}ms after the last ask, too late in the poller's ${pollerWaitMs}ms wait to tell its ask from the poller's`,
-              )
-            else if (
-              retryTiming.askAfterClick === null ||
-              retryTiming.askAfterClick > retryAskMs
-            )
-              failures.push("Try Again did not connect while the poller waited")
+            // C4: the clock runs again, and the window settles as before.
+            await context.clock.resume()
             await page.waitForSelector(css.workspaceEmpty, { timeout: 10_000 })
             const again = await measure(page)
             failures.push(
@@ -485,12 +410,11 @@ It reads the poller's wait from the gateway source in the page, so it needs
               failures,
               measured: {
                 timing,
-                settle,
                 first,
                 again,
                 quiet,
                 recovered,
-                retry: retryTiming,
+                tryAgain,
               },
             }
           } finally {
