@@ -414,7 +414,8 @@ the relay admits a hello against the digests, then opens what it admitted
 with `McpServers::open_as`, which refuses `ConfigurationChanged` (or
 `NotConfigured`) when the set was replaced in between. So a stand-in is never
 served by a different configuration under the same name, which is what makes
-it honest to keep the server list out of the restoration identity.
+what [MCP servers and the restoration identity](#mcp-servers-and-the-restoration-identity)
+relies on.
 
 The digest covers what a server is started with: its command, its
 arguments, and its whole environment, names and values
@@ -426,7 +427,8 @@ under a key drawn for each gateway process (`ConfigurationKey`) and held only
 in its memory: a stand-in's arguments, which a process list shows, carry
 neither a value nor anything a guessed value could be checked against. Its
 digest changes from run to run, which nothing minds: a restart ends every
-stand-in, and the restoration identity reads none of it.
+stand-in, and the restoration identity reads none of it
+([MCP servers and the restoration identity](#mcp-servers-and-the-restoration-identity)).
 
 ### Managing the stored servers
 
@@ -772,10 +774,12 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   provider context. Adding, editing or removing a server, or a stand-in's
   command (the gateway's executable) moving, keeps a saved conversation's
   identity, and the conversation resumes with the current list.
-- **Read once per run.** The gateway reads the list when it starts, so at this
-  head the list changes only across a restart, which ends every provider
-  session. A stand-in from an earlier run is refused `unknown-session`, since
-  grants are held in memory.
+- **Read at each provider open.** A provider open reads the live set and
+  keeps it for that provider session's life. `mcpServers.save` and `.remove`
+  replace the live set, so they reach the next open
+  ([the live server set](#the-live-server-set-391)). A restart ends every
+  provider session, and a stand-in from an earlier run is refused
+  `unknown-session`, since grants are held in memory.
 - **`configuration-changed` guards live changes.** A stand-in's arguments carry
   the server's name and a digest of its configured command, arguments and
   environment, keyed per gateway process, which the relay compares with the

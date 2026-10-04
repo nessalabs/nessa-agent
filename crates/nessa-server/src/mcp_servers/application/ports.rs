@@ -427,8 +427,11 @@ pub type InspectFuture<'a> =
 /// Starts one stored server once, outside any conversation, reads what it
 /// offers within `bounds` — or until `stop` is given — and stops it with
 /// its process group before answering, however the reading ended. It marks
-/// `launch` just before it asks for the server to be started, and not when
-/// it starts nothing.
+/// `launch` just before it asks for the server to be opened, and not when it
+/// is stopped first. The opening is also what refuses an invalid server, so a
+/// refused opening can follow the mark: a fault after it is then answered as
+/// a server that may have run, the side that over-reports rather than hides
+/// a launch. Its outcome is left unrecorded, since the task never reached it.
 pub trait ServerInspector: Send + Sync {
     fn inspect(
         &self,

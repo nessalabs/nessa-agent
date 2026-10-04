@@ -118,6 +118,7 @@ fn a_configured_server_refuses_a_repeated_variable_name() {
     for env in [
         [("TOKEN", "first"), ("TOKEN", "second")],
         [("TOKEN", "second"), ("TOKEN", "first")],
+        [("TOKEN", "first"), ("TOKEN", "first")],
     ] {
         let env = env
             .iter()

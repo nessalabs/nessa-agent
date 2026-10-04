@@ -453,6 +453,20 @@ impl Reached {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(outcome);
     }
+    /// The store has been read: a panic from here on records what it held.
+    fn read(&self, stored: &ServerNames) {
+        let mut armed = self
+            .if_panicked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(McpServerAuditRecord {
+            phase: McpServerAuditPhase::Outcome(McpServerOutcome::Failed { before, .. }),
+            ..
+        }) = armed.as_mut()
+        {
+            *before = Some(stored.clone());
+        }
+    }
     fn panic_outcome(&self) -> Option<McpServerAuditRecord> {
         self.if_panicked
             .lock()
@@ -756,6 +770,7 @@ impl Operations {
             ServerEdit::Remove { name } => name,
         };
         let before = names(&stored.revision, &stored.servers, Some(before_target));
+        reached.read(&before);
         let result = self.publish(revision, edit, stored, lock, reached).await;
         match result {
             Ok(published) => Ok(Change {

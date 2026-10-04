@@ -1367,18 +1367,25 @@ async fn a_panic_after_the_publish_answers_applied_and_before_it_storage_unavail
             },
         );
         let revision = settings.list().await.unwrap().revision;
-        let answered = settings.edit(initiator(), revision, save("b")).await;
+        let answered = settings
+            .edit(initiator(), revision.clone(), save("b"))
+            .await;
         if before {
             assert_eq!(
                 answered,
                 Err(McpServerSettingsError::StorageUnavailable { applied: false })
             );
             assert_eq!(files.publishes.load(Ordering::SeqCst), 0);
+            // The store was read before the panic: its state is recorded.
             assert_eq!(
                 outcome(&audit),
                 McpServerOutcome::Failed {
                     reason: "panicked",
-                    before: None,
+                    before: Some(ServerNames {
+                        revision: revision.clone(),
+                        names: vec!["a".into()],
+                        target: None,
+                    }),
                 }
             );
         } else {

@@ -169,8 +169,10 @@ Build `cargo build -p nessa-server -p nessa-mcp` before starting the gateway.
 `toolsEnabled: true` exposes Claude's native tool preset, including WebSearch and
 WebFetch. All Nessa-owned tools are supplied through the configured MCP servers;
 `nessa-mcp` currently supplies `shell`, backed by Shepherd. Server executables and
-arguments come only from trusted local configuration, read once per run, so a
-change takes a restart and strands no saved conversation
+arguments come only from trusted local configuration. A change made through
+`mcpServers.save` or `.remove` reaches new conversations at once, a hand edit to
+`config.json` at the next such change or a restart, and none strands a saved
+conversation
 ([MCP servers and the restoration identity](../design/mcp-connections.md#mcp-servers-and-the-restoration-identity)).
 There are no automatically discovered MCP servers.
 

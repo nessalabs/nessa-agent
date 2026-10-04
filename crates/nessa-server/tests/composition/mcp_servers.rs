@@ -1267,9 +1267,12 @@ async fn a_repeated_variable_name_in_the_file_is_refused_in_either_order() {
     use super::super::runtime_config::RuntimeConfig;
     use super::settings;
     use crate::mcp_servers::application::McpServerSettingsError;
+    // Both orders, and the same value twice: a repetition is refused for
+    // its name, never compared by value.
     for env in [
         r#"{"TOKEN":"first","TOKEN":"second"}"#,
         r#"{"TOKEN":"second","TOKEN":"first"}"#,
+        r#"{"TOKEN":"first","TOKEN":"first"}"#,
     ] {
         let file = format!(
             r#"{{"agents":{{"catalog":"/m.json","workspace":"/w","mcpServers":[
