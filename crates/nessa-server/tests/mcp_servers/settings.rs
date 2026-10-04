@@ -816,8 +816,14 @@ async fn i6_a_third_inspection_at_once_is_busy() {
     while inspector.asked.lock().unwrap().len() < 2 {
         tokio::task::yield_now().await;
     }
+    // Answered at once: a third that started would wait at the gate.
     assert_eq!(
-        settings.inspect(initiator(), "a").await,
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            settings.inspect(initiator(), "a")
+        )
+        .await
+        .expect("a third inspection is answered at once"),
         Err(McpServerSettingsError::Busy)
     );
     assert_eq!(inspector.asked.lock().unwrap().len(), 2);

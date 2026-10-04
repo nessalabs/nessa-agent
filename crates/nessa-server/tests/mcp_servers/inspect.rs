@@ -158,7 +158,12 @@ async fn i2_a_server_that_never_initializes_times_out_and_its_group_is_killed() 
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!inspecting.is_finished());
     clock.advance(Duration::from_millis(1));
-    assert_eq!(inspecting.await.unwrap(), Err(InspectFailure::TimedOut));
+    // Promptly, on the injected clock: not by the SDK's own real-time
+    // initialize budget, which would also answer `TimedOut`.
+    let answered = tokio::time::timeout(Duration::from_secs(5), inspecting)
+        .await
+        .expect("timed out at the injected deadline");
+    assert_eq!(answered.unwrap(), Err(InspectFailure::TimedOut));
     gone(pid).await;
 }
 
