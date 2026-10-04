@@ -231,7 +231,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       const noticeId = text(part, "noticeId", 20)
       if (kind === "tool") {
         if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
-        toolPartIds.add(JSON.stringify([executionId, toolId]))
+        const key = JSON.stringify([executionId, toolId])
+        // A tool call is one part, however many updates it has (#418).
+        if (toolPartIds.has(key))
+          throw new Error("Conversation response repeats a tool call part")
+        toolPartIds.add(key)
       } else if (toolId.length) {
         throw new Error("Conversation non-tool part has a tool identity")
       }

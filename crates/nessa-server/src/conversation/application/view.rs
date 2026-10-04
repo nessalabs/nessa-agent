@@ -591,6 +591,8 @@ pub struct ConversationRuntime {
 }
 
 /// Ordered provider output and local notices at their retained execution-local offsets.
+/// A tool call is one part, at its first update's offset; its state is its `tools` entry
+/// (`tests/conversation/tool_parts.rs`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPart {
