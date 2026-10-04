@@ -6,6 +6,8 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+#[cfg(unix)]
+use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::generated::AgentsListResult;
 #[cfg(unix)]
 use crate::product::generated::{
@@ -43,9 +45,7 @@ use crate::{
         ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
         WatchCatalogue, WatchRecords,
     },
-    conversation::infrastructure::{
-        NessaCatalogueReadSource, NessaRecordReadSource, NessaRecordWatches,
-    },
+    conversation::infrastructure::{NessaCatalogueReadSource, NessaRecordReadSource},
     core::RunError,
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
