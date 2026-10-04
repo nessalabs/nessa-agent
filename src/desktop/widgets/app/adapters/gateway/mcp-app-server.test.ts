@@ -126,11 +126,15 @@ const releaseRefused = (code: string, requestId = "release-1") =>
     new NessaRpcError(code, `refused: ${code}`),
   )
 
-/** The gateway's acknowledgement of a release: the request id it was sent, applied. */
-const acknowledged: McpAppsApi["releaseApp"] = async (_conversation, _app, options) => ({
-  requestId: options!.requestId!,
-  applied: true,
-})
+/**
+ * The gateway's acknowledgement of a release, applied, under the request id it
+ * was sent: the caller's, or one the client mints when none is given.
+ */
+const acknowledged: McpAppsApi["releaseApp"] = async (
+  _conversation,
+  _app,
+  options = {},
+) => ({ requestId: options.requestId ?? "minted-1", applied: true })
 
 /** A fake `client.mcpApps`: every method a spy, each answering as the test says. */
 function fakeApps(overrides: Partial<McpAppsApi> = {}) {
@@ -249,7 +253,7 @@ describe("tools/call", () => {
       Promise.reject(
         new NessaMcpAppError(
           conversationId,
-          "r",
+          "request-1",
           app,
           new NessaRequestTooLargeError("mcp.callTool", 70_000),
         ),
@@ -813,7 +817,13 @@ describe("the release", () => {
 
   it("M5a: a release the client could not send is not asked again", async () => {
     waited = []
-    const releaseApp = vi.fn(() => Promise.reject(new TypeError("not an app reference")))
+    const releaseApp = vi.fn(() =>
+      Promise.reject(
+        new TypeError(
+          "Invalid app: an app's instance ID must be a canonical lowercase UUID",
+        ),
+      ),
+    )
     await expect(
       gatewayAppServer(fakeApps({ releaseApp })).release(address),
     ).rejects.toBeInstanceOf(TypeError)
