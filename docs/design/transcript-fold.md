@@ -45,12 +45,29 @@ validated snapshot.
 
 The gateway renders transcript, input, receipts, terminal status and interactions
 from committed state. Broadcasts and receipt callbacks have no transcript write
-path. Exact local active execution identity separately identifies which unfinished
-committed execution this process can answer for; it may select running versus
-unresolved display and actionable interactions, but supplies no terminal result,
-receipt, completeness or applied position. Runtime capability and lifecycle fields
-come from Agent. Deletion comes from the metadata tombstone. A different execution
-or incarnation grants no interaction authority.
+path. The active execution is the one this process can answer for. It selects
+which unfinished record may offer an interaction. It does not, by itself, decide
+that every other unfinished record was interrupted. A projection remembers the
+unfinished executions present when it first accepted a snapshot, and only those
+read as unresolved. A record admitted after that — saved but not yet active, or
+no longer active while its result is not yet committed — stays running, and
+offers nothing until it is the active execution. The active id supplies no
+terminal result, receipt, completeness or applied position. Runtime capability
+and lifecycle fields come from Agent. Deletion comes from the metadata tombstone.
+A different execution or incarnation grants no interaction authority.
+
+| Projection | Record | Passed as active | Status | Interactions | Regression |
+| --- | --- | --- | --- | --- | --- |
+| Opened on a snapshot that already holds the record | no result | no | unresolved | none | `a_restarted_turn_stays_unresolved_beside_one_admitted_later`, `an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart` |
+| Empty projection; the first replacement is that snapshot | no result | no, or a different id | unresolved | none | `the_first_snapshot_folded_into_an_empty_projection_is_a_restart`, `only_the_exact_live_execution_can_offer_a_committed_interaction` |
+| Opened before the record existed | no result, not pending | no | running | none | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| Opened before the record existed | no result, in the pending order | no | queued | none | `a_queued_turn_admitted_after_open_is_queued_then_running` |
+| Opened before the record existed | no result | that id | running | offered while it is active | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| Was active; the replacement omits it; result still absent | no result | no | running | none | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| First accepted as a restart, then this process runs it, then active is omitted before the result | no result | was that id, then no | running | offered only while it was active | `a_turn_this_process_runs_stays_running_after_it_stops_being_active` |
+| Result committed | completed, failed, or cancelled | no | that result | none | `a_committed_result_is_the_turn_status_while_nothing_is_active` |
+| Tool saved, result absent, admitted after open | no result | no | running; the tool stays pending | none | `a_pending_tool_does_not_make_an_admitted_turn_unresolved` |
+| Restarted record beside a later admission | restarted record has no result | no | restarted stays unresolved; the later record runs | none while not active | `a_restarted_turn_stays_unresolved_beside_one_admitted_later` |
 
 | State | Input | Decision / regression |
 | --- | --- | --- |

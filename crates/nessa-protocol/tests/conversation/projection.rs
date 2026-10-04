@@ -560,6 +560,277 @@ fn an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart() {
         Some(&snapshot),
     );
     assert!(restored.read().questions.is_empty());
+    assert_eq!(
+        restored.read().messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
+}
+
+fn opened_on(snapshot: &SessionSnapshot) -> Projection {
+    Projection::new(
+        "conversation".into(),
+        projection().view.capabilities.clone(),
+        Some(snapshot),
+    )
+}
+
+fn empty_history() -> SessionSnapshot {
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations.clear();
+    snapshot
+}
+
+fn status_of(view: &ConversationView, id: &str) -> ConversationMessageStatus {
+    view.messages
+        .iter()
+        .find(|message| message.execution_id == id)
+        .expect("message")
+        .status
+}
+
+/// The order in docs/design/transcript-fold.md: a turn this projection did
+/// not open onto stays running through the gaps around the active execution,
+/// and offers an interaction only while that execution is active.
+#[test]
+fn a_turn_admitted_after_open_stays_running_until_its_result() {
+    let mut admitted = review_snapshot(vec![asked("execution", "1"), review("{}".into())]);
+    let mut projection = opened_on(&empty_history());
+    let execution = ExecutionId::new("execution").unwrap();
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&admitted)),
+        &[],
+        None,
+    ));
+    let saved = projection.read();
+    assert_eq!(saved.messages[0].status, ConversationMessageStatus::Running);
+    assert!(saved.questions.is_empty());
+    assert!(saved.permissions.is_empty());
+
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&admitted)),
+        &[],
+        Some(&execution),
+    ));
+    let live = projection.read();
+    assert_eq!(live.messages[0].status, ConversationMessageStatus::Running);
+    assert_eq!(live.questions.len(), 1);
+    assert_eq!(live.permissions.len(), 1);
+
+    assert!(projection.replace_committed(
+        &committed("incarnation", 3, 3, 3, Some(&admitted)),
+        &[],
+        None,
+    ));
+    let gap = projection.read();
+    assert_eq!(gap.messages[0].status, ConversationMessageStatus::Running);
+    assert!(gap.questions.is_empty());
+    assert!(gap.permissions.is_empty());
+
+    admitted.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
+    assert!(projection.replace_committed(
+        &committed("incarnation", 4, 4, 4, Some(&admitted)),
+        &[],
+        None,
+    ));
+    let done = projection.read();
+    assert_eq!(
+        done.messages[0].status,
+        ConversationMessageStatus::Completed
+    );
+    assert!(done.questions.is_empty());
+    assert!(done.permissions.is_empty());
+}
+
+#[test]
+fn a_queued_turn_admitted_after_open_is_queued_then_running() {
+    let snapshot = review_snapshot(Vec::new());
+    let mut projection = opened_on(&empty_history());
+    let id = ExecutionId::new("execution").unwrap();
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        std::slice::from_ref(&id),
+        None,
+    ));
+    assert_eq!(
+        projection.read().messages[0].status,
+        ConversationMessageStatus::Queued
+    );
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    let view = projection.read();
+    assert_eq!(view.messages[0].status, ConversationMessageStatus::Running);
+    assert!(view.questions.is_empty());
+    assert!(view.pending.is_empty());
+}
+
+#[test]
+fn a_pending_tool_does_not_make_an_admitted_turn_unresolved() {
+    let snapshot = review_snapshot(vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("shell").unwrap(),
+        Some("Shell".into()),
+        None,
+        None,
+        None,
+        None,
+    )))]);
+    let mut projection = opened_on(&empty_history());
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    let view = projection.read();
+    assert_eq!(view.messages[0].status, ConversationMessageStatus::Running);
+    assert_eq!(view.tools[0].status, "pending");
+}
+
+#[test]
+fn a_committed_result_is_the_turn_status_while_nothing_is_active() {
+    let cases = [
+        (
+            Some(Ok(ExecutionOutcome::Completed)),
+            ConversationMessageStatus::Completed,
+        ),
+        (
+            Some(Ok(ExecutionOutcome::Cancelled)),
+            ConversationMessageStatus::Cancelled,
+        ),
+        (
+            Some(Err(AgentError::AuditFailure)),
+            ConversationMessageStatus::Failed,
+        ),
+    ];
+    for (result, status) in cases {
+        let mut snapshot = review_snapshot(vec![asked("execution", "1"), review("{}".into())]);
+        snapshot.invocations[0].result = result;
+        let mut projection = opened_on(&empty_history());
+        assert!(projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            None,
+        ));
+        let view = projection.read();
+        assert_eq!(view.messages[0].status, status);
+        assert!(view.questions.is_empty());
+        assert!(view.permissions.is_empty());
+    }
+}
+
+#[test]
+fn a_restarted_turn_stays_unresolved_beside_one_admitted_later() {
+    let restarted = review_snapshot(vec![asked("execution", "1")]);
+    let mut projection = opened_on(&restarted);
+    assert_eq!(
+        projection.read().messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
+    assert!(projection.read().questions.is_empty());
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&restarted)),
+        &[],
+        None,
+    ));
+    assert_eq!(
+        projection.read().messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
+
+    let mut both = restarted.clone();
+    let mut later = review_snapshot(Vec::new()).invocations.remove(0);
+    later.request.execution_id = ExecutionId::new("later").unwrap();
+    both.invocations.push(later);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&both)),
+        &[],
+        None,
+    ));
+    let view = projection.read();
+    assert_eq!(
+        status_of(&view, "execution"),
+        ConversationMessageStatus::Unresolved
+    );
+    assert_eq!(
+        status_of(&view, "later"),
+        ConversationMessageStatus::Running
+    );
+    assert!(view.questions.is_empty());
+}
+
+/// A turn the first fold called a restart, which this process then runs,
+/// stays running after it stops being active and before its result is saved.
+#[test]
+fn a_turn_this_process_runs_stays_running_after_it_stops_being_active() {
+    let snapshot = review_snapshot(vec![asked("execution", "1"), review("{}".into())]);
+    let mut projection = projection();
+    let execution = ExecutionId::new("execution").unwrap();
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    assert_eq!(
+        projection.read().messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
+
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        Some(&execution),
+    ));
+    let live = projection.read();
+    assert_eq!(live.messages[0].status, ConversationMessageStatus::Running);
+    assert_eq!(live.questions.len(), 1);
+    assert_eq!(live.permissions.len(), 1);
+
+    assert!(projection.replace_committed(
+        &committed("incarnation", 3, 3, 3, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    let gap = projection.read();
+    assert_eq!(gap.messages[0].status, ConversationMessageStatus::Running);
+    assert!(gap.questions.is_empty());
+    assert!(gap.permissions.is_empty());
+}
+
+#[test]
+fn the_first_snapshot_folded_into_an_empty_projection_is_a_restart() {
+    let mut projection = projection();
+    let snapshot = review_snapshot(vec![asked("execution", "1")]);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    let view = projection.read();
+    assert_eq!(
+        view.messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
+    assert!(view.questions.is_empty());
+
+    let mut both = snapshot.clone();
+    let mut later = review_snapshot(Vec::new()).invocations.remove(0);
+    later.request.execution_id = ExecutionId::new("later").unwrap();
+    both.invocations.push(later);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&both)),
+        &[],
+        None,
+    ));
+    let view = projection.read();
+    assert_eq!(
+        status_of(&view, "execution"),
+        ConversationMessageStatus::Unresolved
+    );
+    assert_eq!(
+        status_of(&view, "later"),
+        ConversationMessageStatus::Running
+    );
 }
 
 #[test]
@@ -699,6 +970,10 @@ fn only_the_exact_live_execution_can_offer_a_committed_interaction() {
         Some(&unrelated),
     );
     projection.transcript_state(ConversationTranscriptState::Complete);
+    assert_eq!(
+        projection.read().messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
     assert!(projection.read().questions.is_empty());
     assert!(projection.read().permissions.is_empty());
     let exact = ExecutionId::new("execution").unwrap();
