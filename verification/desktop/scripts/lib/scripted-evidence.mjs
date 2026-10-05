@@ -67,7 +67,7 @@ export function relevantLines({ results = [], gatewayLog = "", verdict = "pass" 
     for (const failure of result.failures ?? []) lines.push(`${where}: ${failure}`)
     if (result.error) lines.push(`${where}: ${result.error}`)
     for (const line of result.harmless ?? [])
-      if (PAGE_LINE.test(line)) lines.push(`${where}: ${line}`)
+      if (PAGE_LINE.test(line)) lines.push(`${where}: ${line} (harmless)`)
   }
   if (verdict !== "pass" && gatewayLog.trim())
     lines.push(...gatewayLog.trim().split("\n").slice(-20))

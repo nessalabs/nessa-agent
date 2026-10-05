@@ -289,6 +289,7 @@ const checks = {
       },
     )
     const failures = []
+    let closed
     if (
       turn?.status !== "running" ||
       !replyText(turn).includes(stack.script.beforeCancel)
@@ -324,7 +325,6 @@ const checks = {
         failures.push(
           `the window does not show ${JSON.stringify(stack.script.beforeCancel)}`,
         )
-      let closed
       try {
         await stack.client.conversation.close(conversationId)
         closed = await stack.client.conversation.read(conversationId)
@@ -342,10 +342,10 @@ const checks = {
     return {
       seen: {
         before: turn?.status ?? null,
-        after: failures.length === 0 ? "cancelled" : null,
+        after: closed?.messages?.at(-1)?.status ?? null,
       },
       failures,
-      view,
+      view: closed ?? view,
     }
   },
 }

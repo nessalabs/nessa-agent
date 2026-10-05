@@ -671,7 +671,7 @@ says why where the conversations would be.
   whose endpoint and credential commands answer with a real gateway's, started
   by `lib/gateway-stack.mjs` with a real agent; needs the agent signed in).
   With `--scripted` the same steps run signed out against
-  `scenarios/text-reply.json` (the reply is `Ready.`), including `--mode prod`.
+  `scenarios/text-reply.json`, including `--mode prod`.
   _Not in a browser:_ the native host's side — readiness, endpoint discovery,
   the credential file read and its refusals — is the Rust host tests'
   (`src-tauri/src/surface_credential.rs`,

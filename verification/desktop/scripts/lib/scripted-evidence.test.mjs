@@ -102,7 +102,7 @@ test("engines and page lines come from the check's own results", () => {
   assert.equal(lines.includes("allow chromium: the card was missing"), true)
   assert.equal(lines.includes("allow chromium: console.error: boom"), true)
   assert.equal(
-    lines.some((line) => line.includes("requestfailed:")),
+    lines.some((line) => line.includes("requestfailed:") && line.endsWith("(harmless)")),
     true,
   )
   assert.equal(lines.at(-1), "b")
@@ -118,7 +118,7 @@ test("engines and page lines come from the check's own results", () => {
     verdict: "pass",
     gatewayLog: "secret gateway line",
   })
-  assert.deepEqual(quiet, ["allow chromium: requestfailed: http://x net::ERR"])
+  assert.deepEqual(quiet, ["allow chromium: requestfailed: http://x net::ERR (harmless)"])
 })
 
 test("the summary names the verdict, each engine, and the lines", () => {
