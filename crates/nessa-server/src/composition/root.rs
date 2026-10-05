@@ -1086,6 +1086,65 @@ mod tests {
             only_conversations_failed(compose_run_result(Ok(()), None, &unconfirmed, Err(join))),
             ConversationError::Audit
         ));
+
+        // A browser serve error keeps the published failure. The join does not
+        // replace either fact.
+        let both = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
+        let join = tokio::spawn(async { panic!("cleanup fault") })
+            .await
+            .expect_err("panic");
+        let error = compose_run_result(
+            Err(std::io::Error::other("listener died")),
+            None,
+            &both,
+            Err(join),
+        )
+        .unwrap_err();
+        let RunError::ServeAndShutdown(failure) = &error else {
+            panic!("expected the browser error beside the published failure: {error:?}");
+        };
+        assert_eq!(failure.serve().to_string(), "listener died");
+        let Some(shutdown) = failure.shutdown() else {
+            panic!("the published failure must stay beside the browser error");
+        };
+        assert!(matches!(
+            shutdown.report().conversations().failed(),
+            Some(ConversationError::Audit)
+        ));
+
+        // A native listener failure is the result when browser serving
+        // succeeded, for a confirmed report and for one that is not. The join
+        // is discarded either way.
+        for (report, confirmed) in [
+            (confirmed_slot(), true),
+            (
+                Mutex::new(Some(report_with(Err(ConversationError::Audit)))),
+                false,
+            ),
+        ] {
+            let join = tokio::spawn(async { panic!("cleanup fault") })
+                .await
+                .expect_err("panic");
+            let error = compose_run_result(
+                Ok(()),
+                Some(std::io::ErrorKind::InvalidInput),
+                &report,
+                Err(join),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                RunError::Native(NativeFailure::Listener(std::io::ErrorKind::InvalidInput))
+            ));
+            if confirmed {
+                assert!(shutdown_result(&report).is_ok());
+            } else {
+                assert!(matches!(
+                    shutdown_result(&report),
+                    Err(RunError::Shutdown(None))
+                ));
+            }
+        }
     }
 
     #[tokio::test]
