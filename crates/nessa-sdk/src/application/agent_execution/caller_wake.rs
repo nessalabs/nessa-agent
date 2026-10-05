@@ -8,7 +8,8 @@
 //! without this boundary the caller's panic would unwind the SDK's task.
 //!
 //! The ownership table, its sites and tests are in "Caller wakers" in
-//! docs/agent_execution/lifecycle.md.
+//! docs/agent_execution/lifecycle.md. Infrastructure waits use this same
+//! function; their rows are in that table.
 use crate::domain::agent_execution::{executions::ExecutionId, sessions::SessionId};
 use std::{
     fmt,
@@ -148,7 +149,15 @@ impl fmt::Display for CallerWaiter {
 /// Polls `future` with a waker that wakes the caller's waker inside
 /// `catch_unwind`, so a caller's waker panic stays out of whichever task
 /// wakes it. The wait loses that one wake; its result is unaffected.
-pub(crate) async fn contain_caller_wake<F: Future>(waiter: CallerWaiter, future: F) -> F::Output {
+///
+/// `waiter` is the wait's identity, logged when the caller's waker panics.
+/// Agent waits pass [`CallerWaiter`]. Infrastructure waits pass their own
+/// label. This function is the only owner of that fault.
+pub(crate) async fn contain_caller_wake<F, W>(waiter: W, future: F) -> F::Output
+where
+    F: Future,
+    W: fmt::Display + Send + Sync + 'static,
+{
     let waiter = Arc::new(waiter);
     let mut future = pin!(future);
     poll_fn(|context| {
@@ -161,11 +170,14 @@ pub(crate) async fn contain_caller_wake<F: Future>(waiter: CallerWaiter, future:
     .await
 }
 
-struct ContainedWake {
+struct ContainedWake<W> {
     caller: Waker,
-    waiter: Arc<CallerWaiter>,
+    waiter: Arc<W>,
 }
-impl Wake for ContainedWake {
+impl<W> Wake for ContainedWake<W>
+where
+    W: fmt::Display + Send + Sync + 'static,
+{
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }

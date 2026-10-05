@@ -1,5 +1,6 @@
 //! Admission and full storage shutdown share one owner.
 
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::application::agent_execution::sessions::{StorageError, StorageShutdownFailure};
 use std::{
     collections::HashSet,
@@ -121,15 +122,18 @@ impl ShutdownCompletion {
         self.ready.notify_waiters();
     }
     pub async fn wait(&self) -> Result<(), StorageError> {
-        loop {
-            let ready = self.ready.notified();
-            tokio::pin!(ready);
-            ready.as_mut().enable();
-            if let Some(result) = self.outcome.lock().map_err(poisoned)?.clone() {
-                return result;
+        contain_caller_wake("record storage shutdown", async {
+            loop {
+                let ready = self.ready.notified();
+                tokio::pin!(ready);
+                ready.as_mut().enable();
+                if let Some(result) = self.outcome.lock().map_err(poisoned)?.clone() {
+                    return result;
+                }
+                ready.await;
             }
-            ready.await;
-        }
+        })
+        .await
     }
 }
 pub(super) fn join(task: ReadTask) -> Result<(), StorageError> {

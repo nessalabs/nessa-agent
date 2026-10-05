@@ -12,10 +12,8 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use uuid::Uuid;
 
-const GATEWAY: &str =
-    "composition::read_only_example::online::tests::fixtures::gateway::gateway_child";
-const CLIENT: &str =
-    "composition::read_only_example::online::tests::fixtures::client::client_child";
+const GATEWAY: &str = "composition::read_only_online_tests::fixtures::gateway::gateway_child";
+const CLIENT: &str = "composition::read_only_online_tests::fixtures::client::client_child";
 #[derive(Serialize, Deserialize)]
 pub(super) struct Setup {
     pub(super) gateway: String,

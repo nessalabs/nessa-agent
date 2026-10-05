@@ -1,4 +1,5 @@
 use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::application::agent_execution::providers::CloseOutcome;
 #[cfg(all(test, unix))]
 use std::{collections::VecDeque, sync::Mutex};
@@ -293,6 +294,14 @@ impl ProcessScope {
     }
 
     pub async fn cleanup(
+        &mut self,
+        grace: Duration,
+        kill_timeout: Duration,
+    ) -> Result<CloseOutcome, AgentError> {
+        contain_caller_wake("process cleanup", self.cleanup_owned(grace, kill_timeout)).await
+    }
+
+    async fn cleanup_owned(
         &mut self,
         grace: Duration,
         kill_timeout: Duration,

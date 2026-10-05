@@ -1106,6 +1106,70 @@ async fn deleting_the_conversation_withdraws_its_waiting_calls_as_the_deleter() 
 }
 
 #[tokio::test]
+async fn a_persons_delete_names_that_person_on_the_records_it_still_causes() {
+    // The agent is not in this run's slots, so the delete itself — not the
+    // stop — ends the open review and lets the ticket go. Both name the
+    // person on the deletion record.
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    fixture
+        .service
+        .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+        .await
+        .unwrap();
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    fixture
+        .service
+        .inner
+        .conversations
+        .lock()
+        .await
+        .remove(&fixture.id);
+    let deleted = fixture
+        .service
+        .delete(fixture.id.clone(), caller("delete"))
+        .await;
+    let stopped = match &deleted {
+        Ok(_) => true,
+        Err(ConversationError::DeletionIncomplete(failures)) => failures.stop.is_none(),
+        Err(_) => false,
+    };
+    assert!(stopped, "{deleted:?}");
+    assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
+    let deleter = person_by("delete");
+    let withdrawals: Vec<_> = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.phase,
+                McpAppAuditPhase::Withdrawn {
+                    cause: McpAppWithdrawal::ConversationEnded,
+                    ..
+                }
+            )
+        })
+        .map(|record| record.initiator.clone())
+        .collect();
+    assert_eq!(withdrawals.as_slice(), std::slice::from_ref(&deleter));
+    assert!(fixture.audit.records.lock().unwrap().iter().any(|record| {
+        record.initiator == deleter
+            && record.phase
+                == McpAppAuditPhase::Withdrawn {
+                    permission_id: review.permission_id.clone(),
+                    cause: McpAppWithdrawal::ConversationEnded,
+                }
+    }));
+    assert_eq!(
+        *fixture.tickets.released_conversations.lock().unwrap(),
+        std::slice::from_ref(&deleter)
+    );
+}
+
+#[tokio::test]
 async fn a_release_is_kept_across_a_close_and_before_the_conversation_is_open() {
     let fixture = Fixture::new().await;
     // Closed, then released while nothing of it is open: kept all the same.
@@ -1784,7 +1848,9 @@ async fn a_conversation_deleted_with_no_apps_in_this_run_has_them_deleted() {
     // build them afresh.
     let fixture = Fixture::new().await;
     let never = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
-    fixture.service.close_apps_for_good(&never);
+    fixture
+        .service
+        .close_apps_for_good(&never, &McpAppInitiator::System);
     let apps = fixture.service.apps_of(&never);
     let opening = apps.begin();
     assert_eq!(
