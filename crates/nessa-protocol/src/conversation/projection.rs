@@ -3,8 +3,8 @@ use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
-    ConversationPending, ConversationPendingMode, ConversationPermission,
+    ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
+    ConversationPart, ConversationPending, ConversationPendingMode, ConversationPermission,
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
     MAX_STRUCTURED_CONTENT_BYTES,
@@ -404,6 +404,7 @@ impl Projection {
                             .iter()
                             .map(Into::into)
                             .collect(),
+                        app: ConversationMessageApp::of(&record.request.user_message),
                         mode,
                     });
                 } else {
@@ -519,6 +520,7 @@ impl Projection {
             user_text: String::new(),
             attachments: Vec::new(),
             files: Vec::new(),
+            app: None,
             steering_target: None,
             status: ConversationMessageStatus::Running,
             error: None,
@@ -990,6 +992,7 @@ impl Projection {
             .iter()
             .map(Into::into)
             .collect();
+        self.view.messages[index].app = ConversationMessageApp::of(&record.request.user_message);
         self.view.messages[index].parts.clear();
         self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);

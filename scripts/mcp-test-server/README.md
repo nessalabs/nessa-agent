@@ -16,6 +16,10 @@ answers `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list` and
 `resources/read`, and has no side effects. Every answer is fixed, so one
 recording can be compared with another.
 
+`--initialize-delay-ms <ms>` holds its answer to `initialize` that long, every
+answer still in order, so a check can see a host while the server is starting
+(`mcp-servers-gateway.mjs`'s `inspect` step).
+
 | Tool | What it returns | What it exercises |
 | --- | --- | --- |
 | `report_rows` | a text block and `structuredContent` (with an `outputSchema`) | a structured result beside its text |

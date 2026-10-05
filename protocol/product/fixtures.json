@@ -427,5 +427,31 @@
       "instanceId": "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"
     }
   },
+  "McpSendMessageParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "app": {
+      "executionId": "execution",
+      "toolId": "tool",
+      "instanceId": "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"
+    },
+    "server": "charts",
+    "text": "Plot May next to April"
+  },
+  "McpSendMessageResult": {
+    "executionId": "app-0123456789abcdef0123456789abcdef"
+  },
+  "McpUpdateModelContextParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "app": {
+      "executionId": "execution",
+      "toolId": "tool",
+      "instanceId": "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"
+    },
+    "server": "charts",
+    "text": "Showing April, zoomed to the second week",
+    "structuredContentJson": "{\"month\":4,\"week\":2}"
+  },
   "McpRemoteErrorDetails": { "code": -32602, "message": "Invalid params" }
 }

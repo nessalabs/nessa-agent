@@ -20,10 +20,7 @@ async fn retirement_joins_admitted_commands_and_never_reopens_admission() {
     assert!(!task.is_finished());
     drop(admitted);
     task.await.unwrap().unwrap();
-    assert!(matches!(
-        service.admit().await,
-        Err(ConversationError::Unavailable)
-    ));
+    assert!(matches!(service.admit().await, Err(Halt::Retired)));
     service
         .retire("gateway_upgrade", "upgrade-one")
         .await

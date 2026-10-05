@@ -328,7 +328,6 @@ export const settingsEntries = [
   // Connections › Integrations
   {
     id: "mcp-servers",
-    pending: true,
     tab: "integrations",
     label: "MCP servers",
     keywords: "tools model context protocol",

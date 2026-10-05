@@ -4,7 +4,8 @@ use nessa_sdk::application::agent_execution::{
 };
 use std::{error::Error, fmt};
 
-/// Service errors retain internal SDK evidence. Wire adapters expose safe error codes.
+/// Service errors retain internal SDK evidence. Each is answered by one safe
+/// protocol code (`error_code`), which the wire adapters expose.
 #[derive(Clone, Debug)]
 pub enum ConversationError {
     InvalidInput,

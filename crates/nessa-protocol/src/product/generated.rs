@@ -475,6 +475,8 @@ pub struct ConversationMessage {
     pub user_text: String,
     pub attachments: Vec<ImageAttachment>,
     pub files: Vec<LinkedFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<ConversationMessageApp>,
     pub status: ConversationMessageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -491,7 +493,17 @@ pub struct ConversationPending {
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
     pub files: Vec<LinkedFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<ConversationMessageApp>,
     pub mode: ConversationPendingMode,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMessageApp {
+    pub execution_id: String,
+    pub tool_id: String,
+    pub server: String,
+    pub tool: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -797,6 +809,32 @@ pub struct McpReleaseAppParams {
     pub conversation_id: String,
     pub request_id: String,
     pub app: McpAppReference,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpSendMessageParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+    pub server: String,
+    pub text: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpSendMessageResult {
+    pub execution_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpUpdateModelContextParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+    pub server: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content_json: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1591,6 +1629,10 @@ pub const MAX_RECORD_PAGE_RECORDS: usize = 16;
 pub const MAX_RECORD_PAGE_PAYLOAD_BYTES: usize = 65546;
 /// Published bound from the product schema.
 pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
+/// Published bound from the product schema.
+pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
+/// Published bound from the product schema.
+pub const MIN_MCP_MESSAGE_CHARACTERS: usize = 1;
 /// Published passive read timing from the product schema, in milliseconds.
 pub const PASSIVE_READ_TIMEOUT_MS: u64 = 10000;
 /// Published passive read timing from the product schema, in milliseconds.
@@ -1633,6 +1675,8 @@ pub mod product_method {
     pub const MCP_CALL_TOOL: &str = "mcp.callTool";
     pub const MCP_READ_RESOURCE: &str = "mcp.readResource";
     pub const MCP_RELEASE_APP: &str = "mcp.releaseApp";
+    pub const MCP_SEND_MESSAGE: &str = "mcp.sendMessage";
+    pub const MCP_UPDATE_MODEL_CONTEXT: &str = "mcp.updateModelContext";
     pub const MCP_SERVERS_LIST: &str = "mcpServers.list";
     pub const MCP_SERVERS_SAVE: &str = "mcpServers.save";
     pub const MCP_SERVERS_REMOVE: &str = "mcpServers.remove";
@@ -1800,7 +1844,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 45
+                items.len() <= 47
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1857,6 +1901,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcp.callTool",
     "mcp.readResource",
     "mcp.releaseApp",
+    "mcp.sendMessage",
+    "mcp.updateModelContext",
     "mcpServers.list",
     "mcpServers.save",
     "mcpServers.remove",

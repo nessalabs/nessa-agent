@@ -13,7 +13,7 @@ use nessa_sdk::{
     },
     domain::agent_execution::{
         permissions::PermissionEffect,
-        prompts::{ImageReference, LinkedFile},
+        prompts::{ImageReference, LinkedFile, MessageSender, UserMessage},
     },
 };
 use serde::Serialize;
@@ -161,6 +161,10 @@ pub struct ConversationMessage {
     pub user_text: String,
     pub attachments: Vec<ConversationAttachment>,
     pub files: Vec<ConversationLinkedFile>,
+    /// The app that wrote this turn on the person's behalf; absent when the
+    /// person wrote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<ConversationMessageApp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub status: ConversationMessageStatus,
@@ -174,7 +178,34 @@ pub struct ConversationPending {
     pub text: String,
     pub attachments: Vec<ConversationAttachment>,
     pub files: Vec<ConversationLinkedFile>,
+    /// As [`ConversationMessage::app`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<ConversationMessageApp>,
     pub mode: ConversationPendingMode,
+}
+/// The MCP App that wrote a turn on the person's behalf: the tool call whose
+/// UI it is, and the server and tool that call was to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMessageApp {
+    pub execution_id: String,
+    pub tool_id: String,
+    pub server: String,
+    pub tool: String,
+}
+impl ConversationMessageApp {
+    /// The app that wrote `message`, or `None` when the person did.
+    pub fn of(message: &UserMessage) -> Option<Self> {
+        match message.sender() {
+            MessageSender::Person => None,
+            MessageSender::App(app) => Some(Self {
+                execution_id: app.execution_id().as_str().into(),
+                tool_id: app.tool_id().as_str().into(),
+                server: app.tool().server().into(),
+                tool: app.tool().tool().into(),
+            }),
+        }
+    }
 }
 /// One image a turn referred to. The view never carries its bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

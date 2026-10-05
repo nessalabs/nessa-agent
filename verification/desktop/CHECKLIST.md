@@ -533,6 +533,108 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
   `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in
   both families.
 
+### Integrations: the gateway's MCP servers
+
+#391 PR 3's design (the issue's comments of its state table, rows U1–U31,
+U32–U43 from its review, U44–U50 for a list too large to show, and S1–S8,
+G1–G9 and F8–F12 for the secret field and names stored more than once):
+Settings › Connections › Integrations manages the gateway's stored MCP
+servers over `client.mcpServers`. Every row is a test of
+`settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
+or the script below. Gate 13: the window shows no limit the protocol does not
+publish, and refuses nothing the gateway would judge.
+
+- [ ] **With no gateway, Integrations is pending** — the sample preview,
+  whose workspace is the in-memory one (U1); the app window and the
+  `?gateway` preview have one. _Check:_ unit test `integrations-tab.test.tsx`.
+- [ ] **Each write is the gateway's, and the list is what is shown** (gate 16):
+  added with a variable, one row, its switch on, "1 variable", and the
+  variable's value nowhere in the page — markup or field — after the save
+  (U7, U8, U31); inspected, seen running — the test server slow to start
+  (`--initialize-delay-ms`), so the running state is read, not raced — with
+  Inspect and Close resting, then `show_chart` badged UI and `app_delete_row`
+  destructive, complete (U22, U23); the switch
+  rests while its save is in flight and shows the new list's state (U12);
+  renamed, one row, its variable kept, the stored value "Stored value kept"
+  (U10, U11); given another command, the gateway refusing a kept value under
+  it, the value asked for again, why said, and Save held until it is typed,
+  then saved with the row showing the new command (U33); a conflict made by
+  another writer first is refused, said, the list reloaded, what was typed
+  kept and what was not refilled from the reload (U15, U42); removal asked first, nothing
+  sent until confirmed, then the row gone (U13, U14), and an inspection
+  running as its server is removed says the server is gone; Inspect rests
+  while a write is in flight (U21). Each write is exactly
+  one `mcpServers` request and one list after it. _Check:_
+  `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,relaunch,conflict,remove`
+  (needs the gateway built and an agent's harness installed).
+- [ ] **Focus follows what opens and closes** — Add and Edit put it on the
+  form's first field; Remove on the confirm's Cancel, which its sentence
+  describes; Inspect on the panel's heading; Cancel, Escape, Save and Close
+  put it back on the row's button that opened the part, or on Add (a save's
+  once the list after it is read). Escape closes the form and the confirm,
+  and never Settings. _Check:_ `mcp-servers-gateway.mjs --only focus`
+  (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
+  (`focus`).
+- [ ] **Arguments and values are kept as typed** — one field per argument,
+  so an empty argument and one with a line break are each one argument;
+  Enter adds the next argument after it, Shift+Enter is a line break, marked
+  under its field; removing an argument or variable focuses the next one, or
+  Add (F11, F12). A variable's value is a password field, so a typed value is
+  in no accessibility tree; a paste with line breaks is held and never drawn,
+  "Pasted value: N lines", a trailing line break pointed out and trimmed only
+  when asked, Clear to drop it (S3–S6). A stored value not edited is kept; edited
+  to empty, it is cleared, said so, with "Keep stored value" (S1, S2, Codex
+  P1). _Check:_ `mcp-servers-gateway.mjs --only secret` (the accessibility
+  tree over CDP in Chromium, the ARIA snapshot in WebKit); unit tests
+  `mcp-servers.test.ts`, `integrations-tab.test.tsx`.
+- [ ] **A name stored more than once is one read-only group** — config.json
+  edited to store three servers under one name: "3 servers share this name",
+  each read-only with no Edit, Inspect or switch, and one action "Remove the
+  first server named …", asked first in those words; each removal takes the
+  first stored, focus staying on the group while it lasts, then on the row
+  left (G3–G6). _Check:_ `mcp-servers-gateway.mjs --only duplicate-names`;
+  unit tests (G1–G9).
+- [ ] **What the gateway says is read out** — the notices, each field's
+  problem and the inspection's status are live regions drawn before their
+  text arrives, a field naming its problem with `aria-describedby`; no
+  variable value is in the markup, after a refused save too (U9, U31).
+  _Check:_ unit tests `integrations-tab.test.tsx`.
+- [ ] **A failed list's notice goes once a list succeeds** — config.json made
+  unreadable and the connection dropped, the failure is said; restored and
+  dropped again, the list is shown with no notice. A write's "not confirmed"
+  stays through the lists after it until the next action. _Check:_
+  `mcp-servers-gateway.mjs --only reconnect`; unit tests `mcp-servers.test.ts`.
+- [ ] **A list too large to show offers a remove by name** — config.json
+  edited by hand to 15 servers with long arguments, under its own 64 KiB, whose
+  list will not fit one frame (the gateway refuses it
+  `mcp_servers_config_too_large` with a revision): the panel says "The server
+  list is too large to show. Removing a server fixes it: enter its name.", the
+  name field described by it, no row, no Add, and Remove resting until a name
+  is typed; a server removed by name is asked first, nothing sent until
+  confirmed, then one remove and one list, and the list shown again without it
+  (U44, U45). A save that would push the list past the bound, the file still
+  under its own, is refused: the form stays open with "This would make the
+  server list too large; remove a server or shorten its arguments.", what was
+  typed kept, no notice, nothing listed again and config.json unchanged (U48).
+  _Check:_ `mcp-servers-gateway.mjs --only too-large,save-too-large`; unit
+  tests `mcp-servers.test.ts`, `integrations-tab.test.tsx` (U46, U47, U49, U50).
+- [ ] **A credential without `credential.manage` sees "Only an administrator
+  can manage MCP servers", no control, and sends no `mcpServers` request**
+  (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.
+- [ ] **It fits at 800 and 390px** — nothing outside its card, nothing
+  clipped (a field's value included: the command wraps), Settings not
+  scrolling sideways, the fold held, and under a 420px page a server row's
+  actions under its text (U29, U30). _Check:_ `responsive.mjs --only
+  integrations-narrow` (whatever the page shows); with a row, the form and the
+  inspection open over a real gateway, `mcp-servers-gateway.mjs --only narrow`.
+  _Harmless:_ at 390px the window under Settings scrolls 90px sideways (its
+  own 480px minimum), reported as `windowScroll`; Settings itself does not.
+- [ ] **A server added here reaches a new conversation** (the issue's
+  Done-when): added again from the window, its switch on, the agent asked for `show_chart`
+  in a new conversation, its app frame renders the chart, once. _Check:_
+  `mcp-servers-gateway.mjs --only done-when` (needs the agent signed in on the
+  machine). "Once" depends on #418's fix (#421) being in the tree.
+
 ## Menus and tooltips
 
 _ADR 238 › Interaction and visual rules_ holds the rules; check each by hand,
