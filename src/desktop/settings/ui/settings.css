@@ -1280,3 +1280,28 @@ html:not(.dark) .settings-glass {
 .desktop-identity-button:hover > :last-child {
   color: var(--foreground);
 }
+
+/* Linked devices: the UI kit's groups, with the orbs stacked so a narrow page fits them. */
+.linked-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.settings-group[data-found] [data-slot="settings-group-card"] {
+  animation: settings-found 1600ms ease-out;
+}
+
+.linked-orbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+}
+
+.linked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}

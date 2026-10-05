@@ -251,7 +251,11 @@ writing the full defaults on first launch is buying.
   (#391): the reducer and its sentences in `model/mcp-servers.ts`, the
   window's client read into them in `adapters/mcp-servers-gateway.ts`, and
   the tab in `ui/integrations-tab.tsx`, given by composition
-  (`dependencies.ts`, `main.tsx`) only where the window has a gateway. See
+  (`dependencies.ts`, `main.tsx`) only where the window has a gateway.
+  Linked devices (#462) is the same shape: `model/linked-devices.ts` and
+  `model/device-key.ts`, `adapters/linked-devices-gateway.ts`, and
+  `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
+  switch, pairing code, fingerprint and orbs. See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
 - Widgets are the desktop window's vertical for what a plugin draws
   ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is

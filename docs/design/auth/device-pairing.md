@@ -2143,3 +2143,60 @@ keeps that, and the command's output reports the status it read.
   `cargo build -p nessa-client-core --example read_only_sync`; CI covers
   the same flow through the composition tests' gateway process and real
   client subprocesses, and the listener tests above.
+
+## Desktop linked devices
+
+Settings › Connections › Linked devices (#462) is the owner's window over
+slices 2a and 2b. The code, the fingerprint and the orbs are the UI kit's
+(`SettingsGroup`, `SettingsRow`, `Switch`, `PairingCode`, `KeyFingerprint`,
+`SignalOrb`, `QrOrb`). They take plain props and do not know `pairing.*`.
+This window wires them, and it owns every sentence. The phone's scanner, and
+how a phone finds the gateway, are not this screen: an orb carries only the
+8-character code.
+
+Native linking is on only when `pairing.pending` succeeds. `pairing_not_configured`
+is off: the switch is shown off and disabled, because nothing here writes
+`config.json`, and the footnote says to add or remove `native.listenAddress`
+(a numeric address; the example is `127.0.0.1:47650`) and restart. No method
+returns the address. `forbidden` is a refused owner, named as recovering
+with `auth recover-owner`. A wire code is never the sentence.
+
+`pairing.pending` does not list an Active device. `credential.list` has no
+device marker. A linked device here is a non-revoked credential that is not
+the session credential and whose only grant is `conversation.read`. A
+credential issued by hand with only that grant looks the same. The
+fingerprint is SHA-256 of the RFC 8410 Ed25519 SubjectPublicKeyInfo, joined
+from an enrollment that still names the credential. Without a fingerprint,
+Approve is withheld; Deny remains. Revoke is `credential.revoke`. The window
+says an open connection ends the next time it reads.
+
+One request is in flight. A poll does not clear what an action said. A
+create that was not answered shows no code; a later available invitation
+with no code held says the code was not shown. Refresh is cancel, then
+create, and a failed cancel does not create. `activationStopped: retryable`
+is "try again"; `permanent` is "cancel and pair again". The approval is
+already saved either way.
+
+| Row | Event or ordering | Result | Test |
+| --- | --- | --- | --- |
+| L1 | No gateway (the sample preview) | Pending card, no pair control | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pending` |
+| L2 | Read answers linking off | Switch off and disabled, how to turn it on, no pair | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` `off` |
+| L3 | Read answers refused | Recover-owner sentence, no devices, no pair | `linked-devices.test.ts`; `linked-devices.mjs` `refused` |
+| L4 | Linking on, nothing open | Pair a device | `linked-devices.test.ts` |
+| L5 | Create answers with a code | Code once, both orbs, Cancel focused once it can be used | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
+| L6 | Create answers slot occupied | No new code; the open one can be cancelled | `linked-devices.test.ts` |
+| L7 | Cancel answers | Code cleared | `linked-devices.test.ts`; `linked-devices.mjs` `pair` |
+| L8 | Refresh | Cancel then create; a failed cancel does not create; a failed create clears the code | `linked-devices.test.ts`; `linked-devices-gateway.test.ts` |
+| L9 | Create is not answered, then an available invitation is read | No code; the open invitation says the code was not shown | `linked-devices.test.ts` |
+| L10 | A device has claimed | Fingerprint, Approve, Deny | `linked-devices.test.ts` |
+| L11 | Approve stops, retryable | "Try again"; Approve stays | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `approve` |
+| L12 | Approve stops, permanent | "Cancel this request and pair again" | `linked-devices.test.ts` |
+| L13 | Approve reaches active, then the list has the credential | Device row, revoke | `linked-devices.test.ts` |
+| L14 | Deny answers | Waiting row gone | `linked-devices.test.ts` |
+| L15 | Revoke answers, then the list omits it | Device gone; access ends on the next read | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `revoke` |
+| L16 | Revoke is not answered | May or may not still be linked; the list is read again | `linked-devices.test.ts` |
+| L17 | The clock or status says expired | The code is expired | `linked-devices.test.ts`; `linked-devices.mjs` `expired` |
+| L18 | Every refusal this window knows | A sentence, and the wire code is not in it | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` |
+| L19 | An answer whose `seq` is not the request in flight | Nothing changes | `linked-devices.test.ts` |
+| L20 | The session credential, a revoked credential, or any other grant | Not listed as a device | `linked-devices-gateway.test.ts`; `linked-devices.mjs` `revoke` |
+| L21 | The gateway cannot be reached | Said; pairing is not offered | `linked-devices.test.ts` |

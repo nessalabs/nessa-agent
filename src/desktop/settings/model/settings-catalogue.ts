@@ -56,6 +56,11 @@ export const settingsCategories = [
       { id: "agents", label: "Agents", keywords: "claude code codex opencode installed" },
       { id: "accounts", label: "Accounts", keywords: "sign in github login" },
       { id: "integrations", label: "Integrations", keywords: "mcp servers tools" },
+      {
+        id: "devices",
+        label: "Linked devices",
+        keywords: "pair phone fingerprint approve revoke native",
+      },
     ],
   },
   {
@@ -331,6 +336,13 @@ export const settingsEntries = [
     tab: "integrations",
     label: "MCP servers",
     keywords: "tools model context protocol",
+  },
+  // Connections › Linked devices
+  {
+    id: "linked-devices",
+    tab: "devices",
+    label: "Linked devices",
+    keywords: "pair pairing phone fingerprint approve revoke native listener",
   },
   // Privacy & Permissions › Access
   {

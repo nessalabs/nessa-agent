@@ -6,7 +6,13 @@
  * the plugins it is given, and two under one id stop it. With a gateway,
  * real servers' apps are registered as the views name them.
  */
-import type { McpAppsApi, McpServersApi } from "@nessa/client"
+import type {
+  AuthApi,
+  CredentialApi,
+  McpAppsApi,
+  McpServersApi,
+  PairingApi,
+} from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
 import {
@@ -22,6 +28,9 @@ import { fakeSource } from "./workspace/testing"
 /** What a fake client holds for Settings' servers: nothing these tests ask of it. */
 const settingsParts = {
   mcpServers: {} as McpServersApi,
+  pairing: {} as PairingApi,
+  credentials: {} as CredentialApi,
+  auth: {} as AuthApi,
 }
 
 describe("the window's widget plugins", () => {

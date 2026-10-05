@@ -8,7 +8,7 @@ import { connectBrowserSession, createBrowserAuth } from "../session"
 import { createDesktopDependencies } from "./dependencies"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
-import { McpServersProvider } from "./settings"
+import { LinkedDevicesProvider, McpServersProvider } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
@@ -80,11 +80,13 @@ createRoot(container).render(
           {/* Every icon in the window resolves through the family chosen in Settings. */}
           <DesktopIconFamilyProvider>
             <McpServersProvider gateway={dependencies.mcpServers}>
-              <DesktopWindow
-                hostKind={host.kind}
-                browserSurface={host.kind === "browser"}
-                inspectable={import.meta.env.DEV}
-              />
+              <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                <DesktopWindow
+                  hostKind={host.kind}
+                  browserSurface={host.kind === "browser"}
+                  inspectable={import.meta.env.DEV}
+                />
+              </LinkedDevicesProvider>
             </McpServersProvider>
           </DesktopIconFamilyProvider>
         </ClockProvider>
