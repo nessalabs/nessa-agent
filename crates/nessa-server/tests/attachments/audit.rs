@@ -473,7 +473,7 @@ fn substitutable_retirement_reports_refuse_contradictory_inputs() {
 }
 
 #[tokio::test]
-async fn a_write_that_outlives_its_deadline_keeps_its_admission_slot() {
+async fn a_write_that_outlives_its_deadline_releases_its_admission_slot() {
     use crate::attachments::application::BulkAuditSlot;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -483,21 +483,17 @@ async fn a_write_that_outlives_its_deadline_keeps_its_admission_slot() {
     use tokio::{sync::Semaphore, time::timeout};
 
     let slots = Arc::new(Semaphore::new(1));
-    let in_flight = Arc::new(AtomicUsize::new(0));
-    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(AtomicUsize::new(0));
     let mut joins = Vec::new();
     for _ in 0..4 {
         let slots = Arc::clone(&slots);
-        let in_flight = Arc::clone(&in_flight);
-        let max_in_flight = Arc::clone(&max_in_flight);
+        let started = Arc::clone(&started);
         joins.push(tokio::spawn(async move {
             let slot = BulkAuditSlot::new(slots.acquire_owned().await.unwrap());
             let _ = timeout(Duration::from_millis(40), async move {
                 super::spawn_held(Some(slot), move || {
-                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                    max_in_flight.fetch_max(now, Ordering::SeqCst);
+                    started.fetch_add(1, Ordering::SeqCst);
                     std::thread::sleep(Duration::from_millis(120));
-                    in_flight.fetch_sub(1, Ordering::SeqCst);
                 })
                 .await
                 .unwrap();
@@ -505,8 +501,23 @@ async fn a_write_that_outlives_its_deadline_keeps_its_admission_slot() {
             .await;
         }));
     }
+    for _ in 0..50 {
+        if started.load(Ordering::SeqCst) >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        1,
+        "the slot was released before the deadline"
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        started.load(Ordering::SeqCst) >= 2,
+        "a write that outlived its deadline still held the only slot"
+    );
     for join in joins {
         join.await.unwrap();
     }
-    assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
 }

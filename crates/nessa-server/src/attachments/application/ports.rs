@@ -5,9 +5,9 @@ use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{future::Future, pin::Pin};
 use tokio::sync::OwnedSemaphorePermit;
 
-/// One bulk-delivery admission. The sink holds it until that attempt's work
-/// finishes, including a durable write that continues after the caller stops
-/// waiting. Dropping it frees the slot for the next record.
+/// One bulk-delivery admission. The sink holds it for the awaited attempt.
+/// Dropping that future — the record's deadline — frees the slot. A write that
+/// has already moved to the blocking pool does not keep it.
 pub struct BulkAuditSlot {
     _permit: OwnedSemaphorePermit,
 }
@@ -523,8 +523,8 @@ pub enum AttachmentAuditRecord {
 /// Durable evidence of attachment transitions, committed before success is reported.
 ///
 /// `slot` is present only for a bulk phase. The implementation holds it until
-/// the attempt's work finishes. A single-record write passes no slot and does
-/// not take a bulk admission.
+/// this future is dropped, and not inside work that continues after that. A
+/// single-record write passes no slot and does not take a bulk admission.
 pub trait AttachmentAudit: Send + Sync {
     fn record(
         &self,

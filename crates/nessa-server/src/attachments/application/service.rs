@@ -9,6 +9,7 @@ use crate::attachments::domain::{
     Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
     TicketLimits, UploadMismatch, UploadTicket,
 };
+use futures_util::future::FutureExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use nessa_auth::{
     application::ports::Clock,
@@ -18,6 +19,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
@@ -246,12 +248,16 @@ impl AttachmentService {
     }
 
     /// Hand one phase's records to the sink. Each gets [`AttachmentLimits::audit_deadline`],
-    /// taken only once a delivery slot is free. The caller waits at most
-    /// [`AttachmentLimits::audit_budget`] and then returns how many were not yet
-    /// acknowledged. The attempts keep going: an earlier timeout does not spend
-    /// a later record's deadline, and the caller stopping — or being dropped —
-    /// does not cancel them. A sink that answers after the caller has returned
-    /// does not change the count. The order is the bulk-audit table in
+    /// taken only once a delivery slot is free. The slot is released when that
+    /// deadline drops the wait, including when a durable write keeps running.
+    /// The caller waits at most [`AttachmentLimits::audit_budget`] and then
+    /// returns how many were not yet acknowledged. The attempts keep going: an
+    /// earlier timeout does not spend a later record's deadline, and the caller
+    /// stopping — or being dropped — does not cancel them. A sink that answers
+    /// after the caller has returned does not change the count. A refusal or a
+    /// deadline is logged from the delivery task, so it stays visible when the
+    /// caller is already gone. One record panicking does not skip the rest of
+    /// the phase. The order is the bulk-audit table in
     /// `docs/design/artifact-sync.md`.
     async fn audit_all(&self, records: Vec<AttachmentAuditRecord>) -> usize {
         let total = records.len();
@@ -272,6 +278,7 @@ impl AttachmentService {
         let supervisor = tokio::spawn(async move {
             let mut pending = records.into_iter();
             let mut in_flight = FuturesUnordered::new();
+            let mut panic_payload = None;
             loop {
                 while in_flight.len() < admission {
                     let Some(record) = pending.next() else {
@@ -280,29 +287,54 @@ impl AttachmentService {
                     let audit = Arc::clone(&audit);
                     let slots = Arc::clone(&slots);
                     let tally_task = Arc::clone(&tally_task);
-                    in_flight.push(async move {
-                        // A closed semaphore has no slot to give. Do not call
-                        // the sink: a call with no slot would be another write
-                        // past the admission cap. The record stays unacknowledged.
-                        let Ok(permit) = slots.acquire_owned().await else {
-                            return;
-                        };
-                        let delivered = timeout(
-                            deadline,
-                            audit.record(record, Some(BulkAuditSlot::new(permit))),
-                        )
-                        .await;
-                        if matches!(delivered, Ok(Ok(()))) {
-                            tally_task
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .acknowledge();
+                    in_flight.push(
+                        AssertUnwindSafe(async move {
+                            // A closed semaphore has no slot to give. Do not call
+                            // the sink: a call with no slot would be another write
+                            // past the admission cap. The record stays unacknowledged.
+                            let Ok(permit) = slots.acquire_owned().await else {
+                                tracing::error!(
+                                    "attachment bulk audit admission is closed; the record was not handed to the sink"
+                                );
+                                return;
+                            };
+                            match timeout(
+                                deadline,
+                                audit.record(record, Some(BulkAuditSlot::new(permit))),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {
+                                    tally_task
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                        .acknowledge();
+                                }
+                                Ok(Err(_)) => {
+                                    tracing::error!("attachment audit record was refused");
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        "attachment audit record was not acknowledged before its deadline"
+                                    );
+                                }
+                            }
+                        })
+                        .catch_unwind(),
+                    );
+                }
+                match in_flight.next().await {
+                    None => break,
+                    Some(Ok(())) => {}
+                    Some(Err(payload)) => {
+                        if panic_payload.is_none() {
+                            panic_payload = Some(payload);
                         }
-                    });
+                    }
                 }
-                if in_flight.next().await.is_none() {
-                    break;
-                }
+            }
+            if let Some(payload) = panic_payload {
+                std::panic::resume_unwind(payload);
             }
             let _ = finished_tx.send(());
         });

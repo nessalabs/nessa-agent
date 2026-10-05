@@ -1,7 +1,8 @@
 //! Durable attachment evidence: one private file per record, synced with its
 //! directory before the record is acknowledged. Separate files cannot tear
-//! each other. A bulk attempt's admission slot stays inside the blocking write
-//! until that write returns, so a caller that stops waiting does not free it.
+//! each other. A bulk attempt's admission slot stays with the awaited write.
+//! A deadline that drops that wait frees the slot while a write already on
+//! the blocking pool can still finish.
 //!
 //! The record's identity and the time it was observed are assigned here, from
 //! the injected clock. `requestedAtMs` is when the request that caused the
@@ -47,8 +48,8 @@ impl AttachmentAudit for DurableAttachmentAudit {
         value["observedAtMs"] = json!(self.clock.unix_milliseconds());
         let directory = self.directory.clone();
         Box::pin(async move {
-            // The blocking task owns the write, and the bulk slot, even if its
-            // caller stops waiting. The slot is released when the write returns.
+            // The slot stays with this wait. Dropping it — the bulk deadline —
+            // frees admission while a write already on the blocking pool finishes.
             spawn_held(slot, move || {
                 let mut file = PrivateTempFile::new_in(&directory)?;
                 serde_json::to_writer(file.as_file_mut(), &value)?;
@@ -67,19 +68,18 @@ impl AttachmentAudit for DurableAttachmentAudit {
     }
 }
 
-/// Run `work` on the blocking pool. `slot` stays inside that work until it
-/// returns, including when the caller stops waiting and drops the join handle.
-pub(crate) fn spawn_held<T>(
+/// Run `work` on the blocking pool. `slot` stays with this future, not with
+/// the blocking task. Dropping the future — a deadline — releases the slot
+/// while a write already started keeps running.
+pub(crate) async fn spawn_held<T>(
     slot: Option<BulkAuditSlot>,
     work: impl FnOnce() -> T + Send + 'static,
-) -> tokio::task::JoinHandle<T>
+) -> Result<T, tokio::task::JoinError>
 where
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || {
-        let _slot = slot;
-        work()
-    })
+    let _slot = slot;
+    tokio::task::spawn_blocking(work).await
 }
 
 fn hold_state(state: HoldState) -> &'static str {

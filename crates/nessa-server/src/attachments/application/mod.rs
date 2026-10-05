@@ -10,8 +10,9 @@
 //! expired tickets) gives every record its own deadline; the caller waits at
 //! most the phase budget and does not cancel the attempts by returning or by
 //! being dropped. Dropping the service aborts attempts not yet in the sink. A
-//! write that already holds its admission slot finishes and keeps that slot.
-//! The order is `docs/design/artifact-sync.md`.
+//! write that has already started finishes without keeping its admission slot,
+//! so a later record still gets its attempt. The order is
+//! `docs/design/artifact-sync.md`.
 //!
 //! ```text
 //! begin   -> ConversationOwnership, AttachmentStore::find_upload, TicketSecrets -> TicketBook

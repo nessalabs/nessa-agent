@@ -327,9 +327,9 @@ audit delivery. Bulk delivery order and its resource bounds are
 Owner: [#383](https://github.com/nessalabs/nessa-agent/issues/383). The
 application service is the only owner of this order. `AttachmentLimits` owns
 the three numbers: `audit_deadline` (one attempt), `audit_budget` (how long the
-caller waits), and `audit_admission` (how many sink calls are in flight). A
-constructed service admits at least one call; a configured zero is raised to
-one so a phase cannot be left with no slot.
+caller waits), and `audit_admission` (how many bulk attempts are awaited at
+once). A constructed service admits at least one call; a configured zero is
+raised to one so a phase cannot be left with no slot.
 
 This covers two bulk phases: `release` (withdrawn tickets, then retired holds,
 then removed blobs) and the expiry sweep. `begin` fails when that sweep's
@@ -344,29 +344,34 @@ One phase moves its records into one delivery task. That task is not one task
 per record, and it is not a queue that accepts further work. It admits the
 next record only when a service-wide slot is free, then waits at most
 `audit_deadline`. The slot's wait is not part of the deadline. The slot stays
-with that attempt until the sink's work finishes. A durable write that
-continues after the deadline keeps the slot, so the next record waits and then
-gets a full deadline of its own. The caller waits until every record in the
-phase has been acknowledged or `audit_budget` elapses, whichever comes first,
-and then returns. The delivery task keeps going. Dropping the caller does not
-cancel it. Dropping the service aborts the delivery task: a record not yet
-handed to the sink is not attempted. A durable write that has already taken
-its slot still finishes; the slot stays with that write until it returns.
+with that awaited attempt, in the future the deadline can drop, not inside a
+blocking write. When the deadline drops the wait, the slot is released and the
+next record starts its own full deadline. A durable write already running on
+the blocking pool keeps running and does not keep the slot. The caller waits
+until every record in the phase has been acknowledged or `audit_budget`
+elapses, whichever comes first, and then returns. The delivery task keeps
+going. Dropping the caller does not cancel it. A refusal or a deadline after
+the caller is gone is logged from that task; it does not change a count the
+caller already took. Dropping the service aborts the delivery task: a record
+not yet handed to the sink is not attempted. A durable write that has already
+started still finishes, and it does not keep the slot.
 
 The count returned to the caller is how many records were not yet acknowledged
 when the caller stopped waiting. That snapshot is taken under the same lock
 that records an acknowledgement, before the phase reaps an older task. A sink
 that accepts a record after that is late. The caller's failure stays, and the
-stored record keeps the cause and caller it was built with. Nothing reconciles the two into exactly-once
-delivery. A refusal and a deadline are the same count as a record the caller
-did not see acknowledged: not acknowledged in time. Storage failures stay a
-separate count.
+stored record keeps the cause and caller it was built with. Nothing reconciles
+the two into exactly-once delivery. A refusal and a deadline are the same
+count as a record the caller did not see acknowledged: not acknowledged in
+time. Storage failures stay a separate count.
 
 The records are the phase's metadata, not blob bytes. The task retains that
 list until it has handed each record over. At most `audit_admission` bulk
-attempts are in the sink at once, counting a durable write that has continued
-past its deadline. The current phase's records are owned by its delivery task
-before an older panicked task is resumed. An empty phase still resumes one.
+attempts are awaited at once. A write that continued past its deadline does
+not take one of those places. One record panicking does not skip the rest of
+its phase; the panic is resumed after those records have been handed over.
+The current phase's records are owned by its delivery task before an older
+panicked task is resumed. An empty phase still resumes one.
 
 ```mermaid
 sequenceDiagram
@@ -383,7 +388,7 @@ sequenceDiagram
         Task-->>Caller: Unacknowledged count is zero
     else Caller stops waiting
         Caller-->>Caller: Count everything not yet acknowledged
-        Note over Task,Sink: The attempt continues for its own deadline
+        Note over Task,Sink: The attempt continues for its own deadline, then releases its slot
         Sink-->>Task: Late accept or refusal
         Note over Caller,Sink: The caller's count is unchanged
     end
@@ -400,7 +405,10 @@ sequenceDiagram
 | Sink accepts only after the caller has returned | The returned failure count stays. The stored record keeps the original cause and caller | `a_record_acknowledged_after_the_caller_gave_up_stays_a_failure` |
 | More records than `audit_admission` | Only that many sink calls are in flight. The next record starts when a slot frees | `bulk_delivery_does_not_admit_more_than_its_limit` |
 | `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |
-| Durable write outlives its deadline | The admission slot stays with that write. A second write does not overlap it. The next record's deadline starts after the slot is free | `a_write_that_outlives_its_deadline_keeps_its_admission_slot`, `a_bulk_write_that_outlives_its_deadline_keeps_the_admission_slot` |
+| Durable write outlives its deadline | The deadline releases the admission slot while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only `audit_admission` attempts are in the sink | `a_write_that_outlives_its_deadline_releases_its_admission_slot`, `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
+| Caller dropped, then the sink refuses | The delivery task logs the refusal. The caller is no longer there to return it | `a_lost_caller_still_logs_a_refusal` |
+| Caller dropped, then a record's deadline passes | The delivery task logs the deadline. The caller is no longer there to return it | `a_lost_caller_still_logs_a_deadline` |
+| One record in a phase panics | The rest of that phase is still handed to the sink. The panic is resumed after that | `a_panicked_record_does_not_skip_the_rest_of_its_phase` |
 | Service dropped after the first attempt has started | Attempts not yet inside the sink stop. The one already inside is not followed by the rest | `dropping_the_service_stops_bulk_attempts_that_have_not_started` |
 | A delivery task panicked, then another phase has records | The new phase's task owns its records before the older panic is resumed, and those records are still handed to the sink | `a_panicked_delivery_does_not_drop_the_next_phase_s_records` |
 | A delivery task panicked, then an empty phase | The empty phase still resumes the panic | `an_empty_phase_surfaces_a_panicked_delivery` |

@@ -18,10 +18,11 @@ use futures_util::FutureExt;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use serde_json::Value;
 use std::{
+    io::Write,
     panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex, PoisonError,
     },
     time::Duration,
 };
@@ -1384,6 +1385,139 @@ async fn an_empty_phase_surfaces_a_panicked_delivery() {
     assert!(caught.is_err());
 }
 
+#[tokio::test]
+async fn a_panicked_record_does_not_skip_the_rest_of_its_phase() {
+    let fixture = fixture();
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    fixture.audit.panic_in_record.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) >= attempts + 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+    fixture.audit.panic_in_record.store(false, Ordering::SeqCst);
+
+    let caught = AssertUnwindSafe(fixture.service.release(release_request(OTHER_CONVERSATION)))
+        .catch_unwind()
+        .await;
+    assert!(caught.is_err());
+}
+
+#[derive(Clone)]
+struct LogCapture(Arc<Mutex<Vec<u8>>>);
+impl LogCapture {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Vec::new())))
+    }
+    fn text(&self) -> String {
+        String::from_utf8(
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        )
+        .unwrap()
+    }
+}
+impl Write for LogCapture {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self {
+        self.clone()
+    }
+}
+
+fn error_log() -> (LogCapture, tracing::subscriber::DefaultGuard) {
+    let captured = LogCapture::new();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::ERROR)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    (captured, guard)
+}
+
+#[tokio::test]
+async fn a_lost_caller_still_logs_a_refusal() {
+    let (captured, _guard) = error_log();
+    let fixture = fixture();
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, true);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        captured
+            .text()
+            .contains("attachment audit record was refused"),
+        "{}",
+        captured.text()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_caller_still_logs_a_deadline() {
+    let (captured, _guard) = error_log();
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    fixture.audit.stalled.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) > attempts {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(fixture.audit.attempts.load(Ordering::SeqCst) > attempts);
+    caller.abort();
+    let _ = caller.await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert!(
+        captured
+            .text()
+            .contains("attachment audit record was not acknowledged before its deadline"),
+        "{}",
+        captured.text()
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged() {
     let fixture = Fixture::new(AttachmentLimits {
@@ -1426,15 +1560,15 @@ async fn an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged() {
         .any(|record| matches!(record, AttachmentAuditRecord::TicketExpired { .. })));
 }
 
-/// A bulk sink whose write keeps running after the deadline, holding the slot
-/// it was given. Single-record calls pass no slot and return at once.
+/// A bulk sink whose write keeps running after the deadline. The admission
+/// slot stays with [`spawn_held`], so the deadline releases it while the
+/// write is still on the blocking pool. Single-record calls pass no slot and
+/// return at once.
 struct DetachedAudit {
     in_flight: Arc<AtomicUsize>,
     max_in_flight: Arc<AtomicUsize>,
     measured_attempts: Arc<AtomicUsize>,
     /// Set once the uploads are done, so only the bulk release is measured.
-    /// A bulk call that arrives without its slot still counts: that is the
-    /// failure where the slot was dropped instead of being held.
     measure: Arc<AtomicBool>,
 }
 impl AttachmentAudit for DetachedAudit {
@@ -1466,7 +1600,7 @@ impl AttachmentAudit for DetachedAudit {
 }
 
 #[tokio::test]
-async fn a_bulk_write_that_outlives_its_deadline_keeps_the_admission_slot() {
+async fn a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot() {
     let store = Arc::new(MemoryStore::default());
     let audit = Arc::new(DetachedAudit {
         in_flight: Arc::new(AtomicUsize::new(0)),
@@ -1523,7 +1657,22 @@ async fn a_bulk_write_that_outlives_its_deadline_keeps_the_admission_slot() {
             audit_failures: 4
         })
     );
-    for _ in 0..50 {
+    for _ in 0..20 {
+        if audit.measured_attempts.load(Ordering::SeqCst) >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        audit.measured_attempts.load(Ordering::SeqCst) >= 2,
+        "a write that outlived its deadline still held the only slot"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "the next record waited {:?} for a write that should have released its slot",
+        started.elapsed()
+    );
+    for _ in 0..40 {
         if audit.measured_attempts.load(Ordering::SeqCst) == 4
             && audit.in_flight.load(Ordering::SeqCst) == 0
         {
@@ -1532,7 +1681,6 @@ async fn a_bulk_write_that_outlives_its_deadline_keeps_the_admission_slot() {
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
     assert_eq!(audit.measured_attempts.load(Ordering::SeqCst), 4);
-    assert_eq!(audit.max_in_flight.load(Ordering::SeqCst), 1);
     assert_eq!(audit.in_flight.load(Ordering::SeqCst), 0);
 }
 
