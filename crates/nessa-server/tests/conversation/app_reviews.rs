@@ -444,15 +444,15 @@ async fn a_deleted_conversations_apps_take_nothing_and_keep_nothing() {
     let reviews = reviews();
     let waiting = open(&reviews, "i1").unwrap();
     let mut released = 0;
-    reviews.delete(|| released += 1);
+    reviews.delete(&releaser(), || released += 1);
     assert_eq!(released, 1);
-    assert!(matches!(
+    assert_eq!(
         waiting.ended(APP_REVIEW_DEADLINE).await,
         ReviewEnd::Withdrawn {
             cause: McpAppWithdrawal::ConversationEnded,
-            ..
+            by: Some(releaser()),
         }
-    ));
+    );
     // No opening begins again, and a release racing it keeps nothing.
     let after = reviews.begin();
     assert_eq!(reviews.admit(after, &app("i2")), Err(ReviewRefusal::Ended));
@@ -463,7 +463,7 @@ async fn a_deleted_conversations_apps_take_nothing_and_keep_nothing() {
     let epoch = ended.begin();
     ended.end(epoch, &McpAppInitiator::System, || {});
     let mut again = 0;
-    ended.delete(|| again += 1);
+    ended.delete(&releaser(), || again += 1);
     assert_eq!(again, 0);
 }
 
