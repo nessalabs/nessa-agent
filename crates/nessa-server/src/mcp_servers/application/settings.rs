@@ -869,10 +869,11 @@ impl Operations {
         // follows it.
         let written = written?;
         reached.mark_applied();
-        // Published: the live set follows, under the same lock. Refused only
-        // once the gateway is stopping: the change still answers success,
-        // its outcome record says the live set was not replaced, and the
-        // next start reads the file
+        // Published: the live set follows, under the same lock. Refused once
+        // the gateway is stopping, or when a remove left a hand-edited list
+        // still past a bound: the change still answers success, and its
+        // outcome record says the live set was not replaced. The next start,
+        // or a change that brings the list within its bounds, reads the file
         // (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
         // The lock is let go only after the replacement, so two changes
         // replace in the order they published

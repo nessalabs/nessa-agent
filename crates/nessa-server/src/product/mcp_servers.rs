@@ -156,8 +156,9 @@ pub(super) fn answered(request_id: &str, list: ServerList) -> OutgoingMessage {
 
 /// Whether `list` is answered whole for any request id: what a save must
 /// leave ([`ListFits`](crate::mcp_servers::application::ListFits)).
-// Its one caller, the settings' composition, is Unix-only, as the MCP relay is.
-#[cfg(unix)]
+// Its callers are the settings' composition, Unix-only as the MCP relay is,
+// and the settings' test support on every platform.
+#[cfg(any(unix, test))]
 pub(crate) fn list_fits(list: &ServerList) -> bool {
     // The longest request id a frame is taken with (`socket`): 256 bytes,
     // each written as six (`\u0001`).

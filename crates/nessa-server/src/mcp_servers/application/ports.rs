@@ -207,9 +207,12 @@ pub enum McpServerAuditPhase {
 /// How a change ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpServerOutcome {
-    /// Published. `live_set_replaced` is false only when the gateway was
-    /// stopping, so its live set was not replaced; the next start reads the
-    /// file. `durable` is false when the file was replaced but its
+    /// Published. `live_set_replaced` is false when the live set was not
+    /// replaced: the gateway was stopping (the next start reads the file),
+    /// or a remove left a hand-edited list still past a bound, so the live
+    /// set is kept until a later change brings the list within it
+    /// (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
+    /// `durable` is false when the file was replaced but its
     /// directory could not be synced ([`Written::durable`]).
     Applied {
         before: ServerNames,
