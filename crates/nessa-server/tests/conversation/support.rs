@@ -606,6 +606,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
+    /// Return the controller's actual confirmed selection for successful corpus fixtures.
+    pub(crate) answer_succeeds: AtomicBool,
     pub(crate) answer_started: Notify,
     pub(crate) answer_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) answer_failure: Mutex<Option<(AgentError, PermissionSelectionState)>>,
@@ -1188,6 +1190,20 @@ impl ProviderSessionBackend for Backend {
         answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async move {
+            if self.factory.answer_succeeds.load(Ordering::SeqCst) {
+                return self
+                    .controller
+                    .lock()
+                    .unwrap()
+                    .answer_permission(answer)
+                    .map_err(|error| {
+                        ProviderOperationFailure::permission_answer(
+                            error,
+                            ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
+                        )
+                    });
+            }
             let consume_first = self
                 .factory
                 .consume_before_answer_gate
