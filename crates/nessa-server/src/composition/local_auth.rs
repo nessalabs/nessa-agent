@@ -61,6 +61,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_local_database::OpenError;
 use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
@@ -464,10 +465,13 @@ async fn conversations(
 /// The file is `receiver-access/receiver-access.sqlite3`, not a file under
 /// [`conversation_root`]: that directory's absence is how retirement reports
 /// conversation data gone (ADR 221), and a gateway with only native pairing
-/// has none. When the file is absent and an enrollment still owes receiver
-/// cleanup, this does not create one. An empty journal would make the owed
+/// has none. When an enrollment still owes receiver cleanup, the existing
+/// file is opened and a missing one is not created, including when the file
+/// disappears after it was last seen. An empty journal would make the owed
 /// fence a missing receiver, which startup then refuses for good
-/// (`a_missing_journal_is_not_recreated_while_cleanup_is_owed`).
+/// (`a_missing_journal_is_not_recreated_while_cleanup_is_owed`). A failed
+/// pending-pairings read is authentication setup, and creates nothing
+/// (`a_failed_pending_pairings_read_is_authentication_and_creates_no_journal`).
 fn receiver_access(
     namespace: &Path,
     store: &LocalCredentialStore,
@@ -485,12 +489,10 @@ fn open_receiver_journal(
     // Also when the database is already at `path`: a previous start may have
     // moved it and left the rollback file under `conversations/`.
     adopt_legacy_journal(namespace, &path)?;
+    if cleanup_owed {
+        return open_owed_journal(&path, policy_revision);
+    }
     if journal_absent(&path)? {
-        if cleanup_owed {
-            return Err(RunError::ReceiverJournal(
-                crate::core::MissingReceiverJournal::new(path),
-            ));
-        }
         let root = path
             .parent()
             .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
@@ -500,6 +502,30 @@ fn open_receiver_journal(
     LocalReceiverAuthority::open(&path, policy_revision, Arc::new(SystemClock))
         .map(Arc::new)
         .map_err(|cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &path, cause))
+}
+
+/// Open the journal that cleanup still has to read. The file is opened as it
+/// is: a path that is not there stays absent, rather than a check followed by
+/// a create that can fill the gap with an empty database.
+fn open_owed_journal(
+    path: &Path,
+    policy_revision: &str,
+) -> Result<Arc<LocalReceiverAuthority>, RunError> {
+    match LocalReceiverAuthority::open_existing(path, policy_revision, Arc::new(SystemClock)) {
+        Ok(authority) => Ok(Arc::new(authority)),
+        Err(OpenError::File(error) | OpenError::Directory(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Err(RunError::ReceiverJournal(
+                crate::core::MissingReceiverJournal::new(path.to_path_buf()),
+            ))
+        }
+        Err(cause) => Err(RunError::opening(
+            crate::core::Dataset::ReceiverAccess,
+            path,
+            cause,
+        )),
+    }
 }
 
 /// Suffixes SQLite writes beside the database file: the rollback journal, and

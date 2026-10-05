@@ -240,6 +240,30 @@ fn a_missing_journal_is_not_recreated_while_cleanup_is_owed() {
     assert!(journal.is_file());
 }
 
+/// The owed-cleanup decision is read before any journal is created. A store
+/// that cannot answer that read fails authentication and leaves the namespace
+/// without a journal file.
+#[test]
+fn a_failed_pending_pairings_read_is_authentication_and_creates_no_journal() {
+    let directory = tempfile::tempdir().unwrap();
+    let namespace = directory.path().join("namespace");
+    nessa_local_storage::create_directory(&namespace.join("auth")).unwrap();
+    let store = LocalCredentialStore::open(namespace.join("auth"), "credentials.json").unwrap();
+    assert!(!store.is_initialized());
+    let Err(error) = receiver_access(&namespace, &store, "policy") else {
+        panic!("a journal was opened without a pairing read");
+    };
+    assert!(matches!(error, RunError::Authentication(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("could not read whether receiver cleanup is owed"),
+        "{error}"
+    );
+    assert!(!receiver_journal(&namespace).exists());
+    assert!(!conversation_root(&namespace).exists());
+}
+
 /// A journal already stored under `conversations/` is moved once. The old
 /// path is not what later opens. An empty conversation directory goes with
 /// it; one that still holds another file stays.
