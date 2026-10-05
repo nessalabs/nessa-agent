@@ -3,7 +3,7 @@ use super::change_watch::{
 };
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
 use super::record_read::refusal_code;
-use super::state::ProductRouteState;
+use super::state::{note_limit, ProductRouteState};
 use super::wire::ready_frame;
 use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
@@ -54,6 +54,7 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::time::error::Elapsed;
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
 
@@ -208,6 +209,7 @@ where
         return Err((String::new(), "handshake_timeout"));
     }
     if text.len() > MAX_PAYLOAD_BYTES as usize {
+        note_limit("product.max_payload_bytes");
         return Err((String::new(), "unauthorized"));
     }
     let frame = RequestFrame::decode(&text).map_err(|_| (String::new(), "unauthorized"))?;
@@ -456,7 +458,10 @@ async fn write_authenticated<S>(
         let deadline = retained_delivery_deadline(&pending_record, &watches);
         let next = tokio::select! {
             biased;
-            () = wait_for_record_deadline(deadline), if deadline.is_some() => break,
+            () = wait_for_record_deadline(deadline), if deadline.is_some() => {
+                note_elapsed_delivery(&pending_record, &watches);
+                break;
+            },
             Some(response) = records.recv(), if pending_record.is_none() => {
                 pending_record = Some(response);
                 continue;
@@ -525,7 +530,10 @@ async fn write_authenticated<S>(
                 biased;
                 // Abandon this sink; a second frame must not follow a cancelled
                 // physical write. Also observe a record arriving during it.
-                () = wait_for_record_deadline(deadline), if deadline.is_some() => return,
+                () = wait_for_record_deadline(deadline), if deadline.is_some() => {
+                    note_elapsed_delivery(&pending_record, &watches);
+                    return;
+                },
                 Some(response) = records.recv(), if pending_record.is_none() =>
                     pending_record = Some(response),
                 () = watches.changed(), if !watches.is_closed() => {},
@@ -580,6 +588,37 @@ async fn within_deadline<F: Future>(deadline: Instant, work: F) -> Option<F::Out
         .ok()
         .flatten()
         .filter(|_| Instant::now() < deadline)
+}
+
+fn missed_record_deadline<T>(value: Option<T>) -> Option<T> {
+    if value.is_none() {
+        note_limit("socket.record_delivery_deadline");
+    }
+    value
+}
+
+fn note_elapsed_delivery(record: &Option<QueuedRecordResponse>, watches: &WatchDeliveries) {
+    let now = Instant::now();
+    if queued_record_deadline(record).is_some_and(|deadline| now >= deadline) {
+        note_limit("socket.record_delivery_deadline");
+    }
+    if watches.deadline().is_some_and(|deadline| now >= deadline) {
+        note_limit("socket.watch_delivery_deadline");
+    }
+}
+
+fn rejected_lane<T>(
+    limit: &'static str,
+    result: Result<(), tokio::sync::mpsc::error::TrySendError<T>>,
+) -> bool {
+    match result {
+        Ok(()) => false,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            note_limit(limit);
+            true
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => true,
+    }
 }
 
 enum AuthenticatedInput {
@@ -655,13 +694,30 @@ where
                 break;
             }
             _ = state.change_watches.closed() => {
-                let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable));
+                let _ = rejected_lane(
+                    "socket.control_lane",
+                    control_send
+                        .try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable)),
+                );
                 break;
             }
             outcome = watches.next(&state, &session), if watches.has_pending() => {
                 match outcome {
-                    WatchOutcome::Reply(reply) => { if ordinary_send.try_send(queued_watch(*reply)).is_err() { break; } }
-                    WatchOutcome::Close(reason) => { let _ = control_send.try_send(ControlOutput::Close(reason)); break; }
+                    WatchOutcome::Reply(reply) => {
+                        if rejected_lane(
+                            "socket.ordinary_lane",
+                            ordinary_send.try_send(queued_watch(*reply)),
+                        ) {
+                            break;
+                        }
+                    }
+                    WatchOutcome::Close(reason) => {
+                        let _ = rejected_lane(
+                            "socket.control_lane",
+                            control_send.try_send(ControlOutput::Close(reason)),
+                        );
+                        break;
+                    }
                     WatchOutcome::Progress => {},
                 }
                 None
@@ -669,16 +725,30 @@ where
             Some(result) = requests.next(), if !requests.is_empty() => {
                 let Ok((message, class, slot, record_work)) = result else { break };
                 let queued = QueuedResponse { message, _slot: slot, _record_work: record_work };
-                let sent = match class {
-                    ResponseClass::Control => control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok(),
-                    ResponseClass::Ordinary | ResponseClass::App => ordinary_send.try_send(queued).is_ok(),
-                    ResponseClass::Record => record_send.try_send(QueuedRecordResponse::new(queued)).is_ok(),
+                let rejected = match class {
+                    ResponseClass::Control => rejected_lane(
+                        "socket.control_lane",
+                        control_send.try_send(ControlOutput::Response(Box::new(queued))),
+                    ),
+                    ResponseClass::Ordinary | ResponseClass::App => rejected_lane(
+                        "socket.ordinary_lane",
+                        ordinary_send.try_send(queued),
+                    ),
+                    ResponseClass::Record => rejected_lane(
+                        "socket.record_lane",
+                        record_send.try_send(QueuedRecordResponse::new(queued)),
+                    ),
                 };
-                if !sent { break; }
+                if rejected {
+                    break;
+                }
                 None
             }
             _ = &mut expiry => {
-                let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired));
+                let _ = rejected_lane(
+                    "socket.control_lane",
+                    control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired)),
+                );
                 break;
             }
             current = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
@@ -689,7 +759,10 @@ where
                     // passive-read admission (row A3).
                     Ok(current) => watches.recheck(&state, &current),
                     Err(error) => {
-                        let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                        let _ = rejected_lane(
+                            "socket.control_lane",
+                            control_send.try_send(ControlOutput::Close(close_reason(error))),
+                        );
                         break;
                     }
                 }
@@ -702,13 +775,18 @@ where
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
                 input_check = None;
                 if let Some(error) = error {
-                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                    let _ = rejected_lane(
+                        "socket.control_lane",
+                        control_send.try_send(ControlOutput::Close(close_reason(error))),
+                    );
                     break;
                 }
                 match pending_input.take().expect("input check owns one input") {
                     AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
                     AuthenticatedInput::Refusal(response) => {
-                        if refusal_send.try_send(response).is_err() { break; }
+                        if rejected_lane("socket.refusal_lane", refusal_send.try_send(response)) {
+                            break;
+                        }
                         None
                     }
                 }
@@ -719,7 +797,10 @@ where
                     if matches!(message, Message::Close(_)) { break; }
                     continue;
                 };
-                if text.len() > MAX_PAYLOAD_BYTES as usize { break; }
+                if text.len() > MAX_PAYLOAD_BYTES as usize {
+                    note_limit("product.max_payload_bytes");
+                    break;
+                }
                 let frame: RequestFrame = match RequestFrame::decode(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
@@ -760,13 +841,20 @@ where
             &ordinary_slots
         };
         let Ok(slot) = slots.clone().try_acquire_owned() else {
+            note_limit(match class {
+                ResponseClass::Control => "socket.control_slots",
+                ResponseClass::Record => "socket.record_slot",
+                ResponseClass::App => "socket.app_calls",
+                ResponseClass::Ordinary => "socket.ordinary_slots",
+            });
             let response = failure(&frame.id, "temporarily_unavailable");
             let refused = if record {
-                record_send
-                    .try_send(QueuedRecordResponse::refusal(response))
-                    .is_err()
+                rejected_lane(
+                    "socket.record_lane",
+                    record_send.try_send(QueuedRecordResponse::refusal(response)),
+                )
             } else {
-                refusal_send.try_send(response).is_err()
+                rejected_lane("socket.refusal_lane", refusal_send.try_send(response))
             };
             if refused {
                 break;
@@ -782,7 +870,10 @@ where
                 slot,
                 received_at + RECORD_SEND_TIMEOUT,
             ) {
-                if ordinary_send.try_send(queued_watch(reply)).is_err() {
+                if rejected_lane(
+                    "socket.ordinary_lane",
+                    ordinary_send.try_send(queued_watch(reply)),
+                ) {
                     break;
                 }
             }
@@ -791,39 +882,42 @@ where
         // An app call's capacity across sockets is the conversation
         // service's, held by the call's own task until it ends: a permit held
         // here would be let go when the socket went, while the call ran on.
-        let capacity = if control {
-            Some(&state.controls)
+        let (capacity, limit_id) = if control {
+            (Some(&state.controls), "server.controls")
         } else if record {
-            Some(&state.record_reads)
+            (Some(&state.record_reads), "server.record_reads")
         } else if app {
-            None
+            (None, "socket.app_calls")
         } else if frame.method == "conversation.delete" {
-            Some(&state.deletions)
+            (Some(&state.deletions), "server.deletions")
         } else if frame.method == "attachment.begin" {
-            Some(&state.upload_begins)
+            (Some(&state.upload_begins), "server.upload_begins")
         } else {
-            Some(&state.requests)
+            (Some(&state.requests), "server.requests")
         };
         let permit = capacity.map(|capacity| capacity.clone().try_acquire_owned());
         let Ok(permit) = permit.transpose() else {
+            note_limit(limit_id);
             let response = failure(&frame.id, "temporarily_unavailable");
             let queued = QueuedResponse {
                 message: WireResponse::ordinary(response),
                 _slot: slot,
                 _record_work: None,
             };
-            let sent = if control {
-                control_send
-                    .try_send(ControlOutput::Response(Box::new(queued)))
-                    .is_ok()
+            let rejected = if control {
+                rejected_lane(
+                    "socket.control_lane",
+                    control_send.try_send(ControlOutput::Response(Box::new(queued))),
+                )
             } else if record {
-                record_send
-                    .try_send(QueuedRecordResponse::new(queued))
-                    .is_ok()
+                rejected_lane(
+                    "socket.record_lane",
+                    record_send.try_send(QueuedRecordResponse::new(queued)),
+                )
             } else {
-                ordinary_send.try_send(queued).is_ok()
+                rejected_lane("socket.ordinary_lane", ordinary_send.try_send(queued))
             };
-            if !sent {
+            if rejected {
                 break;
             }
             continue;
@@ -1481,15 +1575,22 @@ async fn send<S: Sink<Message> + Unpin>(
     message: OutgoingMessage,
 ) -> Result<(), ()> {
     let text = ordinary_text(message)?;
-    timeout(write_timeout, send_text(socket, text))
-        .await
-        .map_err(|_| ())?
+    write_budget(timeout(write_timeout, send_text(socket, text)).await)?
+}
+
+/// An elapsed write is `socket.write_timeout`. A finished send keeps its result.
+/// `a_stalled_write_names_the_write_timeout`, `a_stalled_close_names_the_write_timeout`.
+fn write_budget<T>(result: Result<T, Elapsed>) -> Result<T, ()> {
+    result.map_err(|_| {
+        note_limit("socket.write_timeout");
+    })
 }
 
 /// An ordinary message's wire text, refused past the ordinary encoded ceiling.
 fn ordinary_text(message: OutgoingMessage) -> Result<String, ()> {
     let text = message.to_wire_text().map_err(|_| ())?;
     if text.len() > MAX_PAYLOAD_BYTES as usize {
+        note_limit("product.max_payload_bytes");
         return Err(());
     }
     Ok(text)
@@ -1516,6 +1617,7 @@ async fn send_queued<S: Sink<Message> + Unpin>(
             // typed close, never a silent end (row B6). Expiry during the
             // write abandons the socket like any cancelled write.
             if Instant::now() >= deadline {
+                note_limit("socket.watch_delivery_deadline");
                 close_session(
                     write_timeout,
                     socket,
@@ -1524,14 +1626,18 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 .await;
                 return Err(());
             }
-            within_deadline(deadline, send(write_timeout, socket, *message))
-                .await
-                .ok_or(())??;
+            let Some(sent) = within_deadline(deadline, send(write_timeout, socket, *message)).await
+            else {
+                note_limit("socket.watch_delivery_deadline");
+                return Err(());
+            };
+            sent?;
             let _ = completed.send(());
             Ok(())
         }
         WireResponse::Record { text } => {
             if text.len() > MAX_RECORD_RESPONSE_BYTES {
+                note_limit("product.max_record_response_bytes");
                 return Err(());
             }
             socket
@@ -1563,10 +1669,15 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         WireResponse::Ordinary(message) => {
             let text = ordinary_text(*message)?;
             drop((slot, record_work));
-            return within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
+            return match within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
                 .await
-                .ok_or(())?
-                .map_err(|_| ())?;
+            {
+                None => {
+                    note_limit("socket.record_delivery_deadline");
+                    Err(())
+                }
+                Some(timed) => write_budget(timed)?.map_err(|_| ()),
+            };
         }
         WireResponse::Record { text } => text,
         // The record lane carries the five passive methods' answers only:
@@ -1575,18 +1686,18 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // would, under this response's deadline, rather than dropped.
         message @ WireResponse::Watch(_) => {
             drop((slot, record_work));
-            return within_deadline(deadline, send_queued(write_timeout, socket, message))
-                .await
-                .ok_or(())?;
+            return missed_record_deadline(
+                within_deadline(deadline, send_queued(write_timeout, socket, message)).await,
+            )
+            .ok_or(())?;
         }
     };
     if text.len() > MAX_RECORD_RESPONSE_BYTES {
+        note_limit("product.max_record_response_bytes");
         return Err(());
     }
     drop((slot, record_work));
-    within_deadline(deadline, send_text(socket, text))
-        .await
-        .ok_or(())?
+    missed_record_deadline(within_deadline(deadline, send_text(socket, text)).await).ok_or(())?
 }
 
 /// Send one text frame and flush it.
@@ -1628,7 +1739,7 @@ async fn close_session<S: Sink<Message> + Unpin>(
         .expect("fixed termination serializes")
         .into(),
     }));
-    let _ = timeout(write_timeout, socket.send(close)).await;
+    let _ = write_budget(timeout(write_timeout, socket.send(close)).await);
 }
 
 #[cfg(test)]
@@ -4087,6 +4198,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_send_uses_its_absolute_deadline_and_encoded_ceiling() {
+        let (captured, _guard) = limit_log();
         let (mut socket, mut peer) = test_socket(None);
         assert!(send_queued(
             Duration::from_secs(1),
@@ -4096,6 +4208,11 @@ mod tests {
         .await
         .is_err());
         assert!(peer.writing.try_recv().is_err());
+        assert!(
+            limit_text(&captured).contains("product.max_record_response_bytes"),
+            "{}",
+            limit_text(&captured)
+        );
 
         let (_release, gate) = tokio::sync::oneshot::channel();
         let (mut stalled, mut stalled_peer) = test_socket(Some(gate));
@@ -4119,6 +4236,11 @@ mod tests {
         .is_err());
         assert!(stalled_peer.writing.try_recv().is_err());
         assert!(stalled_peer.output.try_recv().is_err());
+        assert!(
+            limit_text(&captured).contains("socket.record_delivery_deadline"),
+            "{}",
+            limit_text(&captured)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -4789,6 +4911,361 @@ mod tests {
             .unwrap()
             .unwrap();
     }
+    #[derive(Clone)]
+    struct LimitLog(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LimitLog {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("limit log").extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LimitLog {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+    fn limit_log() -> (LimitLog, tracing::subscriber::DefaultGuard) {
+        let captured = LimitLog(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        (captured, tracing::subscriber::set_default(subscriber))
+    }
+    fn limit_text(captured: &LimitLog) -> String {
+        String::from_utf8(captured.0.lock().expect("limit log").clone()).unwrap()
+    }
+    fn named(captured: &LimitLog, limit: &str) {
+        let text = limit_text(captured);
+        assert!(text.contains(limit), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_closed_server_limit_is_named_on_the_refusal() {
+        for (method, limit, assign) in [
+            ("server.health", "server.requests", AssignLimit::Requests),
+            (
+                "conversation.cancel",
+                "server.controls",
+                AssignLimit::Controls,
+            ),
+            (
+                "conversation.recordsHead",
+                "server.record_reads",
+                AssignLimit::RecordReads,
+            ),
+            (
+                "conversation.delete",
+                "server.deletions",
+                AssignLimit::Deletions,
+            ),
+            (
+                "attachment.begin",
+                "server.upload_begins",
+                AssignLimit::Uploads,
+            ),
+        ] {
+            let (captured, _guard) = limit_log();
+            let (mut state, _) = fixture(MembershipRole::Member);
+            let closed = Arc::new(Semaphore::new(0));
+            match assign {
+                AssignLimit::Requests => state.requests = closed,
+                AssignLimit::Controls => state.controls = closed,
+                AssignLimit::RecordReads => state.record_reads = closed,
+                AssignLimit::Deletions => state.deletions = closed,
+                AssignLimit::Uploads => state.upload_begins = closed,
+            }
+            let session = authenticate(&state).await;
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(run_authenticated(socket, state, session));
+            peer.input
+                .send(Ok(Message::Text(
+                    json!({"type": "req", "id": "busy", "method": method, "params": {}})
+                        .to_string()
+                        .into(),
+                )))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("refusal expected for {method}")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "busy");
+            assert_eq!(value["error"]["code"], "temporarily_unavailable");
+            named(&captured, limit);
+            task.abort();
+        }
+    }
+
+    async fn admit(peer: &TestPeer, method: &str, id: &str) {
+        peer.input
+            .send(Ok(Message::Text(
+                json!({"type": "req", "id": id, "method": method, "params": {}})
+                    .to_string()
+                    .into(),
+            )))
+            .unwrap();
+        for _ in 0..24 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_socket_slot_set_names_that_limit() {
+        for (method, held, limit) in [
+            ("server.health", 16, "socket.ordinary_slots"),
+            ("conversation.cancel", 4, "socket.control_slots"),
+            ("conversation.recordsHead", 1, "socket.record_slot"),
+            ("mcp.callTool", 4, "socket.app_calls"),
+        ] {
+            let (captured, _guard) = limit_log();
+            let (state, _) = fixture(MembershipRole::Member);
+            let session = authenticate(&state).await;
+            let (_release, gate) = tokio::sync::oneshot::channel();
+            let (socket, mut peer) = test_socket(Some(gate));
+            let task = tokio::spawn(run_authenticated(socket, state, session));
+            // A record reply gives its slot back before the physical send, so the
+            // writer has to be parked on an earlier frame or that slot is free
+            // again by the time the next record is admitted.
+            let stall = if method == "conversation.recordsHead" {
+                "server.health"
+            } else {
+                method
+            };
+            admit(&peer, stall, "stall").await;
+            timeout(Duration::from_secs(1), peer.writing.recv())
+                .await
+                .unwrap_or_else(|_| panic!("{method} did not reach the stalled writer"));
+            let already = usize::from(stall == method);
+            for id in already..held {
+                admit(&peer, method, &format!("held-{id}")).await;
+            }
+            admit(&peer, method, "overflow").await;
+            let text = limit_text(&captured);
+            assert!(text.contains(limit), "{method} log:\n{text}");
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_refusal_lane_names_that_limit() {
+        let (captured, _guard) = limit_log();
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        admit(&peer, "server.health", "held-0").await;
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .expect("the stalled writer has taken the first response");
+        for id in 1..16 {
+            admit(&peer, "server.health", &format!("held-{id}")).await;
+        }
+        admit(&peer, "server.health", "overflow").await;
+        admit(&peer, "server.health", "dropped").await;
+        named(&captured, "socket.ordinary_slots");
+        named(&captured, "socket.refusal_lane");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_expired_watch_reply_names_the_delivery_limit() {
+        let (captured, _guard) = limit_log();
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let owners = state.change_watches.clone();
+        let permit = Arc::new(
+            owners
+                .try_acquire(&super::super::change_watch::WatchPrincipal::of(&session))
+                .expect("one watch permit"),
+        );
+        let (completed, _done) = tokio::sync::oneshot::channel();
+        let (mut socket, mut peer) = test_socket(None);
+        let result = send_queued(
+            Duration::from_secs(1),
+            &mut socket,
+            WireResponse::Watch(Box::new(QueuedWatch {
+                message: Box::new(success("watch", &json!({}))),
+                acknowledgement: WatchAcknowledgement {
+                    deadline: Instant::now() - Duration::from_millis(1),
+                    completed,
+                    owner: permit,
+                },
+            })),
+        )
+        .await;
+        assert!(result.is_err());
+        named(&captured, "socket.watch_delivery_deadline");
+        assert!(
+            !limit_text(&captured).contains("socket.write_timeout"),
+            "{}",
+            limit_text(&captured)
+        );
+        let Message::Close(Some(close)) = peer.message().await else {
+            panic!("expired watch reply closes")
+        };
+        assert_eq!(
+            close.code,
+            SessionCloseReason::TemporaryUnavailable.web_socket_code()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_frame_names_the_payload_limit() {
+        let (captured, _guard) = limit_log();
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.input
+            .send(Ok(Message::Text(
+                "x".repeat(MAX_PAYLOAD_BYTES as usize + 1).into(),
+            )))
+            .unwrap();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("an oversized frame ends the session")
+            .unwrap();
+        named(&captured, "product.max_payload_bytes");
+        assert!(peer.output.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_ordinary_record_reply_names_the_write_timeout() {
+        let (captured, _guard) = limit_log();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let response = QueuedRecordResponse {
+            message: WireResponse::ordinary(success("read", &json!({}))),
+            _slot: Some(
+                Arc::new(Semaphore::new(1))
+                    .try_acquire_owned()
+                    .unwrap()
+                    .into(),
+            ),
+            _record_work: None,
+            deadline: Instant::now() + Duration::from_secs(30),
+        };
+        let task = tokio::spawn(async move {
+            send_record_queued(Duration::from_secs(5), &mut socket, response).await
+        });
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(task
+            .await
+            .expect("the stalled record reply finishes")
+            .is_err());
+        let logged = limit_text(&captured);
+        assert!(logged.contains("socket.write_timeout"), "{logged}");
+        assert!(
+            !logged.contains("socket.record_delivery_deadline"),
+            "{logged}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_watch_reply_that_expires_while_sending_names_that_deadline() {
+        let (captured, _guard) = limit_log();
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let owners = state.change_watches.clone();
+        let permit = Arc::new(
+            owners
+                .try_acquire(&super::super::change_watch::WatchPrincipal::of(&session))
+                .expect("one watch permit"),
+        );
+        let (completed, _done) = tokio::sync::oneshot::channel();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let task = tokio::spawn(async move {
+            send_queued(
+                Duration::from_secs(30),
+                &mut socket,
+                WireResponse::Watch(Box::new(QueuedWatch {
+                    message: Box::new(success("watch", &json!({}))),
+                    acknowledgement: WatchAcknowledgement {
+                        deadline: Instant::now() + Duration::from_secs(2),
+                        completed,
+                        owner: permit,
+                    },
+                })),
+            )
+            .await
+        });
+        tokio::time::advance(Duration::from_secs(2)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(task
+            .await
+            .expect("the expiring watch reply finishes")
+            .is_err());
+        let logged = limit_text(&captured);
+        assert!(
+            logged.contains("socket.watch_delivery_deadline"),
+            "{logged}"
+        );
+        assert!(!logged.contains("socket.write_timeout"), "{logged}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_write_names_the_write_timeout() {
+        let (captured, _guard) = limit_log();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let task = tokio::spawn(async move {
+            send(
+                Duration::from_secs(5),
+                &mut socket,
+                success("id", &json!({})),
+            )
+            .await
+        });
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let result = task.await.expect("the stalled write finishes");
+        assert!(result.is_err());
+        named(&captured, "socket.write_timeout");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_close_names_the_write_timeout() {
+        let (captured, _guard) = limit_log();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let task = tokio::spawn(async move {
+            close_session(
+                Duration::from_secs(5),
+                &mut socket,
+                SessionCloseReason::CredentialExpired,
+            )
+            .await
+        });
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        task.await.expect("the stalled close finishes");
+        named(&captured, "socket.write_timeout");
+    }
+
+    enum AssignLimit {
+        Requests,
+        Controls,
+        RecordReads,
+        Deletions,
+        Uploads,
+    }
+
     include!("../../tests/conversation/gateway.rs");
     mod catalogue_receiver {
         include!("../../tests/conversation/catalogue_receiver/product.rs");

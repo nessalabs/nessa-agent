@@ -1363,6 +1363,7 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
 
 #[tokio::test(start_paused = true)]
 async fn original_pending_watch_deadline_expires_during_another_physical_frame() {
+    let (captured, _guard) = limit_log();
     let owners = Arc::new(WatchOwners::new(1, 1));
     let deliveries = Arc::new(WatchDeliveries::new());
     let original = Arc::new(owners.try_acquire(&watch_principal("a")).unwrap());
@@ -1413,6 +1414,15 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
     assert!(peer.writing.try_recv().is_err()); // No hint or later error send.
     assert_eq!(slots.available_permits(), 1);
     assert_eq!(owners.available_permits(), 0); // Pending authority/source interest is separately owned.
+    let logged = limit_text(&captured);
+    assert!(
+        logged.contains("socket.watch_delivery_deadline"),
+        "{logged}"
+    );
+    assert!(
+        !logged.contains("socket.record_delivery_deadline"),
+        "{logged}"
+    );
     deliveries.close();
     assert_eq!(owners.available_permits(), 1);
 }

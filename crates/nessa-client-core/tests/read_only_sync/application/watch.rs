@@ -404,6 +404,7 @@ fn preparing_pass_is_retried_until_it_succeeds() {
 /// the run explicitly with that cause; it is never reported as success.
 #[test]
 fn preparing_beyond_the_attempt_bound_ends_unavailable() {
+    let (captured, _guard) = limit_log();
     let cause = GatewayError::Record(RecordReadErrorCode::SourcePreparing);
     let mut script = Script::new(
         std::iter::repeat_n(PassResult::Failed(Some(cause)), PREPARING_ATTEMPTS),
@@ -428,6 +429,11 @@ fn preparing_beyond_the_attempt_bound_ends_unavailable() {
         PREPARING_ATTEMPTS
     );
     assert!(!script.calls.contains(&Call::Wait));
+    assert!(
+        limit_text(&captured).contains("client.preparing_attempts"),
+        "{}",
+        limit_text(&captured)
+    );
 }
 
 /// Discovery attempts answering these failures in order, and the attempts
@@ -463,9 +469,45 @@ fn preparing_discovery_is_retried_until_it_succeeds() {
 /// with that cause (row W16's refusal); any other failure is reported at once.
 #[test]
 fn discovery_retries_only_preparing_and_only_up_to_the_bound() {
+    let (captured, _guard) = limit_log();
     let preparing = Some(GatewayError::Record(RecordReadErrorCode::SourcePreparing));
     let answers = vec![preparing; PREPARING_ATTEMPTS + 1];
     assert_eq!(discovery(&answers), (preparing, PREPARING_ATTEMPTS as u64));
+    assert!(
+        limit_text(&captured).contains("client.preparing_attempts"),
+        "{}",
+        limit_text(&captured)
+    );
     let refused = Some(GatewayError::TimedOut);
     assert_eq!(discovery(&[refused, None]), (refused, 1));
+}
+
+#[derive(Clone)]
+struct LimitLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for LimitLog {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("limit log").extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LimitLog {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self {
+        self.clone()
+    }
+}
+fn limit_log() -> (LimitLog, tracing::subscriber::DefaultGuard) {
+    let captured = LimitLog(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    (captured, tracing::subscriber::set_default(subscriber))
+}
+fn limit_text(captured: &LimitLog) -> String {
+    String::from_utf8(captured.0.lock().expect("limit log").clone()).unwrap()
 }
