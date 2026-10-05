@@ -42,7 +42,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-sdk -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -54,7 +54,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366).
   assert.match(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented.
   assert.match(
@@ -63,7 +63,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-sdk --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.

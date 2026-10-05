@@ -1021,7 +1021,7 @@ The native live adapter consumes the existing generic product `run_authenticated
 
 The native mapping consumes manifest-published `session.terminated` with the existing generated SessionTermination shape: write that ordinary event under the directional output deadline, then physically close even if delivery fails. Browser CloseFrame presentation remains current. The same native client reader validates this event and records typed Closed(reason); real EOF without a valid termination retains honest disconnected/unknown meaning. Authentication failure uses the enrollment/auth-pending ceiling and cannot construct ready. Termination does not authorize deleting cached data or infer current scope revocation. Duplicate/malformed termination, every valid reason, delivery failure before actual close and plain EOF require distinct fixtures. WebSocket bytes are never written to this profile.
 
-The calling-side application port lives in `read_only_sync/application/client_session.rs`; product continues owning wire/routing and selectively publishes the same generated DTOs/codec. The port owns the one current GatewayError/Cancellation/attempt outcome meanings; no native duplicate error or renewed per-RPC operation budget. Generated DTOs remain untrusted wire values. Public request/response wrappers validate through current codec/scope owners and retain private fields with immutable access; exposing a generated public-field DTO alone is not this application contract.
+The calling-side application port lives in `crates/nessa-client-core/src/read_only_sync/application/gateway.rs`; product continues owning wire/routing and selectively publishes the same generated DTOs/codec. The port owns the one current GatewayError/Cancellation/attempt outcome meanings; no native duplicate error or renewed per-RPC operation budget. Generated DTOs remain untrusted wire values. Public request/response wrappers validate through current codec/scope owners and retain private fields with immutable access; exposing a generated public-field DTO alone is not this application contract.
 
 | Consumer ownership state | Borrow and evidence owner | Finish, drop and next pass |
 | --- | --- | --- |
@@ -2032,7 +2032,7 @@ convergence are [slice 3](#protected-reads-over-the-native-channel-slice-3).
 A paired device reads its conversations over the same native TLS listener it
 enrolled on, authenticated by the key the gateway pinned at enrollment and the
 credential identifier slice 2b delivered. No bearer secret is involved. The
-read-only example client (`examples/read_only_sync.rs`) uses this channel and
+read-only example client (`crates/nessa-client-core/examples/read_only_sync.rs`) uses this channel and
 nothing else for its online commands, and it purges a receiver's cached data
 only after the gateway's pinned enrollment status says Terminal.
 
@@ -2128,6 +2128,8 @@ keeps that, and the command's output reports the status it read.
   buffer of at most 65536 bytes and one pending output frame of at most
   131072 bytes plus TLS overhead, on one of the eight permits.
 - Two-device convergence against a real `nessa server` is shown by the
-  `examples/protected_sync_bench.rs` harness, which is not run in CI; CI covers
+  `crates/nessa-server/examples/protected_sync_bench.rs` harness, which is not run
+  in CI. Build its client with
+  `cargo build -p nessa-client-core --example read_only_sync`; CI covers
   the same flow through the composition tests' gateway process and real
   client subprocesses, and the listener tests above.

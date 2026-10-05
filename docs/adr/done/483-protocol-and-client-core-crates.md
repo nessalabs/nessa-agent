@@ -5,7 +5,7 @@
 A phone app has to link the device-side sync client without linking the
 gateway. This record fixes where the code both ends of a gateway connection
 share lives, and which way the crates depend on each other, so the device
-client can leave `nessa-server` (issue
+client links independently of `nessa-server` (issue
 [#483](https://github.com/nessalabs/nessa-agent/issues/483)).
 
 - **Date:** 2026-10-04
@@ -14,7 +14,7 @@ client can leave `nessa-server` (issue
 ## Context
 
 The device client (`crates/nessa-server/src/read_only_sync`) started as test
-scaffolding beside the gateway. It reaches into four other parts of the
+scaffolding beside the gateway. It reached into four other parts of the
 gateway crate, and two of them the gateway needs as well: the product wire
 (frames, generated DTOs, the read codecs, the handshake rules, native pairing
 framing and its deadline socket) and the conversation read model
@@ -47,8 +47,10 @@ package denylist in `scripts/architecture/rust-dependency-graphs.mjs`.
 Gateway-only rules stay in the gateway, including the SDK session for a
 conversation and the mapping from access errors to passive-read refusals.
 
-It lands in two pull requests: the first extracts `nessa-protocol` with
-`read_only_sync` still in `nessa-server`; the second moves the client.
+Implementation has two slices: the first extracted `nessa-protocol`; the
+second moved enrollment, retained sync, matching tests and example composition
+into `nessa-client-core`. Gateway online process tests consume the public client
+entry point.
 
 ## Alternatives considered
 
@@ -73,5 +75,34 @@ the projection's bounds, `DeadlineStream`). A crate named for a contract
 attracts anything shared; the admission rule above is what keeps it to the
 contract, and the sign it has stopped being right is a type in it that only
 one end uses. `scripts/architecture/rust-dependency-graphs.mjs` keeps both
-crates free of the desktop framework; the second pull request adds the rule
-that `nessa-client-core` never reaches `nessa-server`.
+crates free of the desktop framework, rejects every renamed/transitive client
+path to `nessa-server`, and refuses every gateway-to-client path made only of
+normal/build dependency edges. Dev-only edges, including downstream dev edges, are excluded from that
+production path check.
+
+## Policy and test ownership
+
+The two synchronous deadline adapters own different policies. The protocol's
+pairing socket owns TLS/enrollment phase budgets, wake-tick read retries,
+terminal send failure, and transfer to `BufferedIo`. The client's protected
+socket owns operation budgets, cancellation, post-I/O deadline checks, first
+sanitized failure evidence, and shutdown on drop. Similar timeout arithmetic
+is not a second implementation of either policy. The native socket deadline
+suite and the client's gateway deadline suite independently enforce them.
+
+The deterministic saved-output race belongs with the private cache owner and
+production output mapper in the client crate, using the existing private test
+scheduling hook. The gateway keeps real authenticated process and saved-output
+checks against the public client entry point. No production test hook crosses
+the crate boundary.
+The public client surface follows current callers: gateway enrollment tests use
+`pairing::{NativeEnrollmentClient, NativeClientError, NativeRetryOutcome}`;
+gateway online tests and child fixtures use `composition::execute`; the example
+uses `composition::run_read_only_example`. Root `CommandError` is an immutable
+diagnostic facade retaining the original six-variant cause privately;
+Debug/Display stay unchanged and JSON owns machine
+outcomes. This keeps SDK diagnostic strings private rather than widening their
+mutable error representation. `NativeRetryOutcome` keeps receipt fields private
+and exposes borrowed accessors. Retained-sync implementation, SQLite mutation and
+reset APIs remain internal; a future binding is not a current caller requiring
+them to be public.

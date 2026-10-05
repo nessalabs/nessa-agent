@@ -8,8 +8,8 @@
 //! Arrows are construction and calls. The client saves an issued credential
 //! when it sees Active; this module only maps what the gateway said.
 use super::profile::Profile;
-use crate::app::dependencies::RuntimeDependencies;
-use crate::device_pairing::infrastructure::{NativeClientError, NativeEnrollmentClient};
+use crate::composition::clock::MonotonicClock;
+use crate::pairing::{NativeClientError, NativeEnrollmentClient};
 use crate::read_only_sync::application::device::PinnedStatus;
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy},
@@ -49,7 +49,7 @@ impl Device {
             .enable_all()
             .build()?;
         Ok(Self {
-            client: NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock),
+            client: NativeEnrollmentClient::new(store, Arc::new(MonotonicClock::new())),
             runtime,
             gateway: profile.gateway,
         })
@@ -108,7 +108,7 @@ pub(super) fn read_code(input: &mut dyn Read) -> Option<ManualCode> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/composition/read_only_device.rs"]
+#[path = "../../tests/composition/read_only_device.rs"]
 mod tests;
 
 /// What the application decides from; `None` for an Active status whose
