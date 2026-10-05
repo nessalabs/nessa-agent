@@ -2834,6 +2834,20 @@ mod tests {
             r#"{{"type":"req","id":"{long_id}","method":"m","params":{{"a":"\ud800"}}}}"#
         ))
         .is_none());
+        // 128 é is 256 bytes and is answered. 200 é is 200 code points and 400
+        // bytes, so it is not: the table counts UTF-8 bytes.
+        let exact = "é".repeat(128);
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{exact}","method":"m","params":{{"a":"\ud800"}}}}"#
+        )) else {
+            panic!("256-byte id got no answer");
+        };
+        assert_eq!(response.id, exact);
+        let wide = "é".repeat(200);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{wide}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
     }
 
     #[tokio::test]
