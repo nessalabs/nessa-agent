@@ -54,6 +54,7 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::time::error::Elapsed;
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
 
@@ -1565,13 +1566,15 @@ async fn send<S: Sink<Message> + Unpin>(
     message: OutgoingMessage,
 ) -> Result<(), ()> {
     let text = ordinary_text(message)?;
-    match timeout(write_timeout, send_text(socket, text)).await {
-        Ok(result) => result,
-        Err(_) => {
-            note_limit("socket.write_timeout");
-            Err(())
-        }
-    }
+    write_budget(timeout(write_timeout, send_text(socket, text)).await)?
+}
+
+/// An elapsed write is `socket.write_timeout`. A finished send keeps its result.
+/// `a_stalled_write_names_the_write_timeout`, `a_stalled_close_names_the_write_timeout`.
+fn write_budget<T>(result: Result<T, Elapsed>) -> Result<T, ()> {
+    result.map_err(|_| {
+        note_limit("socket.write_timeout");
+    })
 }
 
 /// An ordinary message's wire text, refused past the ordinary encoded ceiling.
@@ -1664,11 +1667,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
                     note_limit("socket.record_delivery_deadline");
                     Err(())
                 }
-                Some(Err(_)) => {
-                    note_limit("socket.write_timeout");
-                    Err(())
-                }
-                Some(Ok(result)) => result.map_err(|_| ()),
+                Some(timed) => write_budget(timed)?.map_err(|_| ()),
             };
         }
         WireResponse::Record { text } => text,
@@ -1731,7 +1730,7 @@ async fn close_session<S: Sink<Message> + Unpin>(
         .expect("fixed termination serializes")
         .into(),
     }));
-    let _ = timeout(write_timeout, socket.send(close)).await;
+    let _ = write_budget(timeout(write_timeout, socket.send(close)).await);
 }
 
 #[cfg(test)]
@@ -4330,6 +4329,11 @@ mod tests {
         .await;
         assert!(result.is_err());
         named(&captured, "socket.watch_delivery_deadline");
+        assert!(
+            !limit_text(&captured).contains("socket.write_timeout"),
+            "{}",
+            limit_text(&captured)
+        );
         let Message::Close(Some(close)) = peer.message().await else {
             panic!("expired watch reply closes")
         };
@@ -4458,6 +4462,27 @@ mod tests {
         }
         let result = task.await.expect("the stalled write finishes");
         assert!(result.is_err());
+        named(&captured, "socket.write_timeout");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_close_names_the_write_timeout() {
+        let (captured, _guard) = limit_log();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let task = tokio::spawn(async move {
+            close_session(
+                Duration::from_secs(5),
+                &mut socket,
+                SessionCloseReason::CredentialExpired,
+            )
+            .await
+        });
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        task.await.expect("the stalled close finishes");
         named(&captured, "socket.write_timeout");
     }
 
