@@ -1,8 +1,6 @@
-use crate::{
-    attachments::domain::{TicketFingerprint, UploadTicket},
-    conversation::domain::ConversationId,
-};
+use crate::attachments::domain::{TicketFingerprint, UploadTicket};
 use nessa_auth::domain::OrganizationId;
+use nessa_protocol::conversation::domain::ConversationId;
 
 /// How many tickets may be outstanding at once. The narrower bounds sit below
 /// the wider ones so one conversation cannot use up its organization's

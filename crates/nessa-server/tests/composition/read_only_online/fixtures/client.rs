@@ -1,18 +1,19 @@
 //! The actual command composition and bounded wire privilege/budget probes.
-use super::super::super::super::profile::Profile;
 use super::CLIENT;
-use crate::composition::read_only_example;
-use crate::device_pairing::infrastructure::{
+use nessa_auth::adapters::pairing::{
+    FilePairingState, GatewayTrust, NativeIdentity, NativeTransport,
+};
+use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_client_core::composition;
+use nessa_protocol::pairing::{
     encode_frame,
     wire::{encode_request as encode_envelope, NativePairingRequest},
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
-use crate::product::generated::{
+use nessa_protocol::product::generated::{
     ProductClientMetadata, SessionAuthenticateParams, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
-use crate::product::passive_read::wire::encode_request;
-use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
-use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_protocol::product::passive_read::encode_request;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -40,9 +41,9 @@ fn client_child() {
     let args: Vec<String> = serde_json::from_str(&args).unwrap();
     let input = &mut io::stdin().lock();
     let result = if std::env::var_os("NESSA_ONLINE_LOSE_OUTPUT").is_some() {
-        read_only_example::execute(&args, input, &mut RefusedOutput)
+        composition::execute(&args, input, &mut RefusedOutput)
     } else {
-        read_only_example::execute(&args, input, &mut io::stdout().lock())
+        composition::execute(&args, input, &mut io::stdout().lock())
     };
     if let Err(error) = &result {
         eprintln!("command failure: {error:?}");
@@ -141,19 +142,27 @@ pub(crate) enum Frame {
 }
 impl WireClient {
     pub(crate) fn connect(root: &Path) -> Self {
-        let profile = Profile::load(&root.join("profile.json")).unwrap();
-        // The private state is held only while the credential is read, so the
-        // example's own commands can open it afterwards.
-        let saved = profile
-            .private_state()
-            .unwrap()
-            .load_credential()
-            .unwrap()
-            .unwrap();
+        let profile: Value =
+            serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+        // The fixture owns this profile and opens its real private state only
+        // while reading the credential, so commands can acquire it afterwards.
+        let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
+        #[cfg(unix)]
+        let state_root = state_root.canonicalize().unwrap();
+        #[cfg(unix)]
+        let state_root = state_root.as_path();
+        let saved = FilePairingState::open(
+            state_root,
+            Path::new(profile["stateDirectory"].as_str().unwrap()),
+        )
+        .unwrap()
+        .load_credential()
+        .unwrap()
+        .unwrap();
         let credential = saved.credential().as_str().to_owned();
         let (key, pin, _) = saved.into_enrollment().into_parts();
         let identity = NativeIdentity::restore(key).unwrap();
-        let socket = TcpStream::connect(profile.gateway).unwrap();
+        let socket = TcpStream::connect(profile["gatewayAddress"].as_str().unwrap()).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

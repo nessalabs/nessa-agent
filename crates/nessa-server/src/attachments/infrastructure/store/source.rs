@@ -9,11 +9,11 @@ use crate::{
         domain::ArtifactId,
         infrastructure::hold_record::{HoldRecord, RecordState},
     },
-    conversation::domain::ConversationId,
     core::read_workers::{ReadWorkerError, ReadWorkers},
 };
 use nessa_auth::domain::OrganizationId;
 use nessa_local_storage::{open_beneath, sync_directory_beneath, OpenMode};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::artifacts::MAX_CHUNK_BYTES;
 #[cfg(test)]
 use std::sync::Mutex;

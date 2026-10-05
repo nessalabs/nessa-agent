@@ -199,6 +199,43 @@ fn a_listed_tools_visibility_is_the_one_the_model_is_hidden_by() {
     }
 }
 
+/// A `_meta.ui` that is present and not an object is no one's (#424): hidden
+/// from the model and not for an app. Absence of `_meta.ui` stays both.
+/// String, array, number, boolean, and `null` are the JSON values that are
+/// not objects.
+#[test]
+fn a_meta_ui_that_is_not_an_object_is_no_ones() {
+    let nobody = UiVisibility::new(false, false);
+    let shapes = [
+        ("string", json!("app")),
+        ("array", json!(["app"])),
+        ("number", json!(1)),
+        ("boolean", json!(true)),
+        ("null", json!(null)),
+    ];
+    let mut tools = vec![
+        json!({ "name": "absent" }),
+        json!({ "name": "empty", "_meta": { "ui": {} } }),
+    ];
+    for (name, ui) in &shapes {
+        tools.push(json!({ "name": name, "_meta": { "ui": ui } }));
+    }
+    let page = wire::tools_page("f", &json!({ "tools": tools })).unwrap();
+    let both = UiVisibility::BOTH;
+    let mut expected = vec![("absent", both), ("empty", both)];
+    expected.extend(shapes.iter().map(|(name, _)| (*name, nobody)));
+    assert_eq!(page.tools.len(), expected.len());
+    for ((tool, (name, hidden)), (want, visibility)) in
+        page.tools.iter().zip(&page.hidden).zip(expected)
+    {
+        assert_eq!(tool.tool().tool(), want);
+        assert_eq!(name, want);
+        assert_eq!(tool.ui().visibility(), visibility, "{want}");
+        assert_eq!(*hidden, !visibility.model(), "{want}");
+        assert!(tool.ui().resource_uri().is_none(), "{want}");
+    }
+}
+
 #[tokio::test]
 async fn a_list_past_its_bounds_or_of_the_wrong_shape_is_refused_and_not_kept() {
     let many = |count: usize| {

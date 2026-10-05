@@ -930,7 +930,7 @@ Owners: [passive admission](../../../crates/nessa-server/src/conversation/applic
 [physical operation](../../../crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs),
 [socket capacity](../../../crates/nessa-server/src/product/socket.rs),
 [product dispatch](../../../crates/nessa-server/src/product/record_read/dispatch.rs),
-[page codec](../../../crates/nessa-server/src/product/record_read/wire.rs),
+[page codec](../../../crates/nessa-protocol/src/product/record_read.rs),
 and [SDK physical source](../../../crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs).
 This path opens no Agent, provider process, or writer lease. Its thread joins the
 SDK source worker before storage shutdown. Timeout delivery does not admit another
@@ -938,7 +938,7 @@ read while the original physical work still owns the socket/global lease.
 
 The SDK source can page up to 64 records and 512 KiB; the product transport is
 stricter: 16 records, 65,546 physical/page payload bytes, and 131,072 encoded response
-bytes, from [generated product constants](../../../crates/nessa-server/src/product/generated.rs)
+bytes, from [generated product constants](../../../crates/nessa-protocol/src/product/generated.rs)
 and their owner [product schema](../../../protocol/product/v1.json). Use the
 smaller applicable ceiling. The one-per-socket and four-global permit owners are
 [socket](../../../crates/nessa-server/src/product/socket.rs) and
@@ -946,9 +946,9 @@ smaller applicable ceiling. The one-per-socket and four-global permit owners are
 
 Tests: [fresh receiver authorization](../../../crates/nessa-server/tests/conversation/passive_read.rs),
 [physical scope and worker cleanup](../../../crates/nessa-server/tests/conversation/record_read/source.rs),
-[gateway session protocol](../../../crates/nessa-server/tests/read_only_sync/gateway/session.rs),
-[deadline streams](../../../crates/nessa-server/tests/read_only_sync/gateway/deadline_stream.rs),
-[durable cache](../../../crates/nessa-server/tests/read_only_sync/infrastructure/cache.rs),
+[gateway session protocol](../../../crates/nessa-client-core/tests/read_only_sync/gateway/session.rs),
+[deadline streams](../../../crates/nessa-client-core/tests/read_only_sync/gateway/deadline_stream.rs),
+[durable cache](../../../crates/nessa-client-core/tests/read_only_sync/infrastructure/cache.rs),
 [protected native sessions](../../../crates/nessa-server/tests/device_pairing/infrastructure/protected.rs)
 and [end-to-end receiver processes](../../../crates/nessa-server/tests/composition/read_only_online.rs).
 Socket capacity/wire-boundary regressions also live in the owning socket/codec files.
@@ -956,7 +956,7 @@ Socket capacity/wire-boundary regressions also live in the owning socket/codec f
 The [authorized reads design](../../design/authorized-record-reads.md) is marked
 implemented; its historical baseline/proposal wording must be read against current
 code. The [read-only receiver design](../../design/read-only-sync-example.md)
-and [receiver implementation](../../../crates/nessa-server/src/read_only_sync/mod.rs)
+and [receiver implementation](../../../crates/nessa-client-core/src/read_only_sync/mod.rs)
 cover retained checkpoints. Downloaded physical position and applied semantic
 position are different facts. The receiver pairs through native device
 pairing and reads over the protected native channel

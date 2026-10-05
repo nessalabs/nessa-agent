@@ -1,13 +1,12 @@
 use super::super::{
-    generated::{
-        product_event, ConversationChanged, ConversationWatchEnded, MAX_CONNECTION_CHANGE_WATCHES,
-    },
-    passive_read::deadlines::RECORD_SEND_TIMEOUT,
-    socket::CHALLENGE_EVENT_SEQUENCE,
+    passive_read::deadlines::RECORD_SEND_TIMEOUT, socket::CHALLENGE_EVENT_SEQUENCE,
 };
 use super::owner::ProductWatchPermit;
-use crate::product_contract::generated::ChangeWatchEndReason;
-use crate::protocol::{EventFrame, OutgoingMessage};
+use nessa_protocol::product::generated::{
+    product_event, ConversationChanged, ConversationWatchEnded, MAX_CONNECTION_CHANGE_WATCHES,
+};
+use nessa_protocol::product_contract::generated::ChangeWatchEndReason;
+use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::{sync::Notify, time::Instant};
 

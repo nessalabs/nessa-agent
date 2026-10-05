@@ -1,8 +1,8 @@
 use crate::cli::application::{
     BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest, MAX_SAFE_TIMESTAMP,
 };
-use crate::product::{SessionChallenge, SessionReady};
 use nessa_auth::application::dto::CredentialMetadataDto;
+use nessa_protocol::product::generated::{ProductSessionReady, SessionChallenge};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
@@ -77,7 +77,7 @@ impl LocalGateway {
         if challenge.min_version > 1 || challenge.max_version < 1 {
             return Err(CliError::Protocol);
         }
-        let ready: SessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":"nessa-cli"}}))?;
+        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":"nessa-cli"}}))?;
         if ready.version != 1
             || ready.gateway_id.is_empty()
             || ready.organization_id.is_empty()

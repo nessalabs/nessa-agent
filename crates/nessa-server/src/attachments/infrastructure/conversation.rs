@@ -14,10 +14,11 @@ use crate::{
             AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
             ConversationFuture, ConversationRepository,
         },
-        domain::{ConversationId, ConversationRefusal},
+        domain::ConversationRefusal,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::prompts::ImageReference;
 use std::sync::Arc;
 

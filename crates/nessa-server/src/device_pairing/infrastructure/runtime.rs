@@ -1,10 +1,9 @@
 //! One volatile setup slot around canonical invitation and authentication owners.
 use super::owner_admission::{OwnerAdmission, OwnerAdmissionRefusal, OwnerLease};
-use super::worker::worker_fault;
 use super::{RegistrationError, RegistrationWorker};
 use crate::device_pairing::application::{
-    Approval, CleanupError, DevicePairingStatus, DeviceStatusError, FreshStage, OwnerError,
-    PairingOwner, PairingReceivers, ReadDevicePairing, ReceiverError, SettleCleanup,
+    Approval, CleanupError, DeviceStatusError, FreshStage, OwnerError, PairingOwner,
+    PairingReceivers, ReadDevicePairing, ReceiverError, SettleCleanup,
 };
 use nessa_auth::{
     adapters::pairing::{
@@ -27,6 +26,8 @@ use nessa_auth::{
         CredentialId, Resource,
     },
 };
+use nessa_protocol::pairing::socket::worker_fault;
+use nessa_protocol::pairing::DevicePairingStatus;
 use std::{
     io::{Read, Write},
     sync::Arc,

@@ -7,8 +7,12 @@ use crate::conversation::application::{
     CatalogueDescriptor, CataloguePageRequest, CatalogueValue, ConversationCaller,
     ConversationCatalogue, ConversationError,
 };
-use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::catalogue_metadata::CatalogueMetadata;
+use nessa_protocol::conversation::catalogue_payload;
+use nessa_protocol::conversation::domain::{
+    conversation_catalogue_schema, conversation_catalogue_stream, ConversationId,
+};
+use nessa_protocol::conversation::read_scope::check_catalogue_scope_identity;
 use nessa_sync::replication::catalogue::{
     validate_catalogue_pass, validate_manifest_request, CataloguePass, CatalogueSource,
     CatalogueSourceError, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
@@ -23,12 +27,7 @@ use std::thread;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use tokio::runtime::{Builder, Runtime};
 
-const SCHEMA: &str = "nessa.conversation-catalogue.v1";
 const QUEUE_CAPACITY: usize = 32;
-
-pub fn conversation_catalogue_schema() -> Id {
-    Id::new(SCHEMA).expect("fixed schema ID")
-}
 
 enum Command {
     Head(Scope, Sender<Result<u64, CatalogueSourceError>>),
@@ -102,20 +101,6 @@ pub struct NessaCatalogueSource {
     worker: Arc<Worker>,
 }
 impl NessaCatalogueSource {
-    /// Check the schema/owner-stream construction relationship without I/O.
-    pub fn check_scope_identity(
-        organization_id: &OrganizationId,
-        principal_id: &PrincipalId,
-        scope: &Scope,
-    ) -> Result<(), CatalogueSourceError> {
-        if scope.schema() != &conversation_catalogue_schema()
-            || scope.stream() != &conversation_catalogue_stream(organization_id, principal_id)
-        {
-            return Err(CatalogueSourceError::IdentityChanged);
-        }
-        Ok(())
-    }
-
     pub fn new(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
@@ -189,7 +174,7 @@ impl NessaCatalogueSource {
             -> Result<Result<(Scope, Option<u64>), CatalogueSourceError>, RecvError>,
     ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
         if let SourceScope::Expected(scope) = &scope {
-            Self::check_scope_identity(&caller.organization_id, &caller.principal_id, scope)
+            check_catalogue_scope_identity(&caller.organization_id, &caller.principal_id, scope)
                 .map_err(CatalogueWorkerError::Source)?;
         }
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
@@ -486,8 +471,21 @@ fn to_entry(descriptor: CatalogueDescriptor) -> ManifestEntry {
     }
 }
 
+/// The entry's payload: its conversation and summary as catalogue metadata,
+/// in the one stored representation the device reads back.
 fn payload(value: &CatalogueValue) -> Result<Vec<u8>, CatalogueSourceError> {
-    super::catalogue_payload::encode(value).map_err(|_| CatalogueSourceError::Unavailable)
+    let conversation = &value.conversation;
+    let metadata = CatalogueMetadata::new(
+        conversation.id().clone(),
+        conversation.creation_requested_at_ms(),
+        conversation.agent(),
+        conversation.model().clone(),
+        conversation.approval_mode(),
+        value.summary.clone(),
+    )
+    .expect("a Conversation's creation time is within LATEST_TIME_MS (a_record_created_past_the_latest_time_is_refused)");
+    catalogue_payload::encode(&value.descriptor.key.id.to_string(), &metadata)
+        .map_err(|_| CatalogueSourceError::Unavailable)
 }
 
 #[cfg(test)]

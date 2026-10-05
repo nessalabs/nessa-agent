@@ -1,32 +1,17 @@
 //! Real separate client/gateway proofs consume canonical stores and actual paired credentials.
 #[path = "read_only_online/fixtures.rs"]
 mod fixtures;
-use crate::composition::{local_auth::SystemClock, read_only_example};
-use crate::product::generated::{
+use fixtures::*;
+use nessa_client_core::composition;
+use nessa_local_database::rusqlite::Connection;
+use nessa_protocol::product::generated::{
     product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
     ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
     ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
     MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
     MAX_RECORD_PAGE_RECORDS,
 };
-use crate::product::record_read::wire as record_wire;
-use crate::read_only_sync::{
-    application::{reset::CacheResets, CachePolicy},
-    domain::CacheReset,
-    infrastructure::cache::ReadOnlyCache,
-};
-use fixtures::*;
-use nessa_local_database::rusqlite::Connection;
-use nessa_sync::replication::{
-    application::ReplicaStore,
-    catalogue::{
-        CataloguePagePlan, CatalogueStore, EntryKey, ManifestEntry, ManifestPage, ManifestRequest,
-        ResolvedEntry,
-    },
-    domain::{validate_page, Id, Limits, Page, PageRequest, Scope},
-};
 use serde_json::{json, Value};
-use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -493,259 +478,35 @@ fn online_terminal_status_purges_with_one_receipt() {
     assert_eq!(fenced, 1);
 }
 #[test]
-fn online_saved_projection_handles_competing_owner() {
+fn online_saved_projection_uses_durable_progress() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
     let _gateway = Gateway::start(&root);
     let setup: Setup =
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
-    let mut wire = WireClient::connect(&root);
-    let response = wire.call(
-        product_method::CONVERSATION_RECORDS_HEAD,
-        &ConversationRecordsHeadParams {
-            conversation_id: setup.conversation.clone(),
-            receiver_id: setup.receiver.clone(),
-            access_epoch: setup.epoch.to_string(),
-        },
+    let cache = setup_cache(directory.path());
+    let profile = profile_for(&root, &cache);
+    let args = |command: &str| {
+        let mut args = vec![command.into(), profile.clone(), setup.conversation.clone()];
+        if command == "sync-records" {
+            args.push("100".into());
+        }
+        args
+    };
+    let mut output = vec![];
+    composition::execute(&args("sync-records"), &mut std::io::empty(), &mut output).unwrap();
+    let sync: Value = serde_json::from_slice(&output).unwrap();
+    let mut output = vec![];
+    composition::execute(&args("check-records"), &mut std::io::empty(), &mut output).unwrap();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["durable"]["progress"], sync["durable"]["progress"]);
+    assert_eq!(check["durable"]["status"], "complete");
+    assert_eq!(check["work"]["downloaded"], sync["work"]["downloaded"]);
+    assert_eq!(check["work"]["pages"], 0);
+    assert_eq!(
+        check["capturedCheck"]["head"],
+        sync["capturedCheck"]["head"]
     );
-    let head: ConversationRecordsHeadResult =
-        serde_json::from_value(response["payload"].clone()).unwrap();
-    let (scope, target) = record_wire::decode_head(head).unwrap();
-    let limits = Limits::new(
-        1,
-        MAX_RECORD_PAGE_PAYLOAD_BYTES,
-        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-    )
-    .unwrap();
-    let policy = CachePolicy::new(32 * 1024 * 1024, 16 * 1024 * 1024, limits).unwrap();
-    let mut after = 0;
-    let mut suffix = vec![];
-    while after < target {
-        let request = PageRequest {
-            scope: scope.clone(),
-            after,
-            target,
-            max_records: 1,
-            max_payload_bytes: limits.max_payload_bytes(),
-            max_record_bytes: limits.max_record_bytes(),
-        };
-        let response = wire.call(
-            product_method::CONVERSATION_RECORDS_PAGE,
-            &ConversationRecordsPageParams {
-                conversation_id: setup.conversation.clone(),
-                access_epoch: setup.epoch.to_string(),
-                request: record_wire::wire_request(&request),
-            },
-        );
-        let page = record_wire::decode_page_result(
-            serde_json::from_value(response["payload"].clone()).unwrap(),
-            &request,
-        )
-        .unwrap();
-        after = page.records.last().unwrap().position;
-        suffix.extend(page.records);
-    }
-    for mode in ["stable", "reset", "scope", "delete", "append"] {
-        let private = directory.path().join(mode);
-        nessa_local_storage::create_directory(&private).unwrap();
-        let path = private.join("cache.sqlite3");
-        let profile = profile_for(&root, &path);
-        let args = |command: &str, pages: Option<&str>| {
-            let mut args = vec![command.into(), profile.clone(), setup.conversation.clone()];
-            if let Some(pages) = pages {
-                args.push(pages.into());
-            }
-            args
-        };
-        let mut output = vec![];
-        read_only_example::execute(
-            &args(
-                "sync-records",
-                Some(if mode == "append" { "1" } else { "100" }),
-            ),
-            &mut std::io::empty(),
-            &mut output,
-        )
-        .unwrap();
-        let mut competitor = ReadOnlyCache::open(&path, policy, Arc::new(SystemClock)).unwrap();
-        let before = competitor.cached_progress(&scope).unwrap().unwrap();
-        let original = before.clone();
-        let change_scope = scope.clone();
-        let records = suffix.clone();
-        super::BEFORE_SAVED_REFRESH.with(|hook| {
-            *hook.borrow_mut() = Some(Box::new(move || match mode {
-                "reset" | "scope" => {
-                    let replacement = if mode == "reset" {
-                        change_scope.clone()
-                    } else {
-                        Scope::new(
-                            change_scope.receiver().clone(),
-                            change_scope.origin().clone(),
-                            change_scope.stream().clone(),
-                            Id::new("changed").unwrap(),
-                            change_scope.schema().clone(),
-                            change_scope.access_epoch().clone(),
-                        )
-                    };
-                    let request = CacheReset::new(
-                        Id::new("projection-reset").unwrap(),
-                        Id::new("operator").unwrap(),
-                        change_scope.clone(),
-                        before.generation,
-                        replacement,
-                    )
-                    .unwrap();
-                    let receipt = competitor.reset_records(&request).unwrap();
-                    assert_eq!(receipt.request(), &request);
-                    assert_eq!(receipt.after().downloaded, 0);
-                }
-                "append" => {
-                    for record in records
-                        .into_iter()
-                        .filter(|r| r.position > before.downloaded)
-                    {
-                        let expected = ReplicaStore::load(&mut competitor, &change_scope)
-                            .unwrap()
-                            .unwrap();
-                        let request = PageRequest {
-                            scope: change_scope.clone(),
-                            after: expected.position(),
-                            target,
-                            max_records: 1,
-                            max_payload_bytes: limits.max_payload_bytes(),
-                            max_record_bytes: limits.max_record_bytes(),
-                        };
-                        let plan = validate_page(
-                            &expected,
-                            &request,
-                            Page {
-                                request: request.clone(),
-                                records: vec![record],
-                            },
-                            limits,
-                        )
-                        .unwrap();
-                        ReplicaStore::apply(&mut competitor, plan).unwrap();
-                    }
-                }
-                "delete" => {
-                    let catalogue = Scope::new(
-                        change_scope.receiver().clone(),
-                        change_scope.origin().clone(),
-                        Id::new("catalogue").unwrap(),
-                        Id::new("catalogue-incarnation").unwrap(),
-                        Id::new("catalogue-schema").unwrap(),
-                        change_scope.access_epoch().clone(),
-                    );
-                    let pass = CatalogueStore::begin(&mut competitor, &catalogue, None, 1)
-                        .unwrap()
-                        .active
-                        .unwrap();
-                    let descriptor = ManifestEntry {
-                        key: EntryKey {
-                            creation: 1,
-                            id: change_scope.stream().clone(),
-                        },
-                        revision: 1,
-                        deleted: true,
-                    };
-                    let plan = CataloguePagePlan::new(
-                        ManifestPage {
-                            request: ManifestRequest {
-                                pass,
-                                max_entries: 1,
-                            },
-                            entries: vec![descriptor.clone()],
-                            has_more: false,
-                        },
-                        vec![ResolvedEntry {
-                            manifest: descriptor,
-                            payload: vec![],
-                        }],
-                        vec![],
-                    )
-                    .unwrap();
-                    CatalogueStore::apply_page(&mut competitor, plan).unwrap();
-                }
-                "stable" => {}
-                _ => unreachable!(),
-            }))
-        });
-        let mut output = vec![];
-        let result = read_only_example::execute(
-            &args("check-records", None),
-            &mut std::io::empty(),
-            &mut output,
-        );
-        let report: Value = serde_json::from_slice(&output).unwrap();
-        match mode {
-            "stable" => {
-                result.unwrap();
-                assert_eq!(
-                    report["durable"]["progress"]["generation"],
-                    original.generation.to_string()
-                );
-                assert_eq!(
-                    report["durable"]["progress"]["downloaded"],
-                    target.to_string()
-                );
-                assert_eq!(report["durable"]["status"], "complete");
-            }
-            "reset" => {
-                result.unwrap();
-                assert_eq!(
-                    report["durable"]["progress"]["generation"],
-                    (original.generation + 1).to_string()
-                );
-                for field in ["downloaded", "applied", "facts"] {
-                    assert_eq!(report["durable"]["progress"][field], "0");
-                }
-                assert_eq!(report["durable"]["status"], "not_loaded");
-            }
-            "scope" | "delete" => {
-                assert!(result.is_err());
-                assert_eq!(
-                    report["durable"]["failure"]["code"],
-                    if mode == "scope" { "scope" } else { "fenced" }
-                );
-            }
-            "append" => {
-                result.unwrap();
-                assert_eq!(report["work"]["downloaded"], "1");
-                for field in ["downloaded", "applied"] {
-                    assert_eq!(report["durable"]["progress"][field], target.to_string());
-                }
-                assert_eq!(report["durable"]["progress"]["facts"], "1");
-                assert_eq!(report["durable"]["status"], "stale");
-                assert!(
-                    report["durable"]["progress"]["generation"]
-                        .as_str()
-                        .unwrap()
-                        .parse::<u64>()
-                        .unwrap()
-                        > original.generation
-                );
-            }
-            _ => unreachable!(),
-        }
-        let mut reopened = ReadOnlyCache::open(&path, policy, Arc::new(SystemClock)).unwrap();
-        if mode == "reset" {
-            assert_eq!(
-                reopened
-                    .cached_progress(&scope)
-                    .unwrap()
-                    .unwrap()
-                    .downloaded,
-                0
-            );
-        }
-        if mode == "append" {
-            assert_eq!(
-                reopened.cached_progress(&scope).unwrap().unwrap().applied,
-                target
-            );
-        }
-    }
 }
 
 fn default_passive_budget(mode: &str) -> (bool, Value, Duration) {

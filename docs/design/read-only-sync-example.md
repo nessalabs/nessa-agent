@@ -31,7 +31,7 @@ Owner: #261. This transport section composes with the separately owned cache des
 | A1 | Borrowed credential/client ID exceeds its published character ceiling | Scan at most ceiling+1 characters before connect or owned DTO allocation; refuse InvalidCredential without effects. Supported scalar ceilings pass this acquisition guard; generated shape still owns remaining validity |
 | H1 | Authentication reply carries temporary, permanent or unknown error code | Existing product/wire authentication_close_reason maps the same code for server close and client typed Authentication cause; unknown retains original AuthenticationFailed fallback. Deadline and offline cache authority unchanged |
 | M1 | Current server advertises 29 ready methods but schema allowed only 16 | Manifest owns handshakeMethod and full inventory; generator publishes ready inventory excluding that own selector and derives schema maxItems. Both producer and decoders consume the publication; no authorization or item-semantic change |
-| S1 | Catalogue identity validation from physical constructor or receiver head | Same published check_scope_identity consumes org/principal domain IDs; caller attribution is not manufactured; wrong org/principal/schema/stream refused before source use |
+| S1 | Catalogue identity validation from physical constructor or receiver head | Same published check_catalogue_scope_identity consumes org/principal domain IDs; caller attribution is not manufactured; wrong org/principal/schema/stream refused before source use |
 | O1 | Driver callback returns or panics while an attempt owns the socket | GatewayConnection::run consumes one outcome; panic records DriverPanicked then physically drops socket before returning; no guessed core success |
 | T16 | Cancellation during physical read/write | Synchronous owner stops by cancellation check/absolute syscall deadline and closes; no detached task, cache publication or success before completion |
 | B1 | Default online CLI receives a valid passive response after five seconds but before the server read deadline, the server's own generated read timeout, or cumulative valid RPCs lasting sixteen seconds (three 3s head RPCs and a 7s page RPC, each within the 10s read phase) | Default composition derives one absolute whole-callback operation budget from shared server read (10s) plus queued delivery (30s) durations plus its existing 5s scheduling/cache allowance (45s). Handshake remains 5s; custom shorter GatewayPolicy stays valid. Finite page count bounds work count, while elapsed budget may stop a cumulative pass retaining confirmed progress: 45s does not promise completion of every allowed maximum-cardinality pass or arbitrary local work. Enforcers: `default_budget_consumes_valid_delayed_source`, `default_budget_preserves_real_server_read_timeout`, and `default_budget_consumes_cumulative_valid_rpcs` in the composition online tests enforce delayed success, genuine server timeout and cumulative success; existing custom deadline and confirmed-page tests retain refusal semantics. |
@@ -47,7 +47,7 @@ core authorization boundary, including catalogue pre-commit refusal and record
 already-admitted immutable page semantics.
 
 
-The adapter consumes core9d ordering: record authorization precedes page acquisition; admitted immutable pages may commit after subsequent revocation. Catalogue consumes its existing final authorization. No store authorization wrapper. Reuse app::ports::Clock; absolute elapsed deadlines are checked at every underlying socket syscall. One synchronous connection owner; no hidden retries or unsolicited event queue.
+The adapter consumes core9d ordering: record authorization precedes page acquisition; admitted immutable pages may commit after subsequent revocation. Catalogue consumes its existing final authorization. No store authorization wrapper. Reuse nessa_protocol::clock::Clock; absolute elapsed deadlines are checked at every underlying socket syscall. One synchronous connection owner; no hidden retries or unsolicited event queue.
 
 
 ## Default elapsed budget
@@ -143,6 +143,10 @@ gateway authentication and current Cedar policy; remote enrollment uses the
 separately owned [device pairing work](https://github.com/nessalabs/nessa-agent/issues/264).
 
 ## Owners and composition
+
+The device client lives in `crates/nessa-client-core/src/read_only_sync/`;
+`crates/nessa-client-core/src/composition/` wires the standalone example.
+The real paired gateway process tests stay in `crates/nessa-server/tests/composition/`.
 
 The sync core owns finite record/catalogue passes and response validation. The
 SDK owns physical fact validation, semantic reduction, checkpoints and read
@@ -323,8 +327,8 @@ Its transient read model asks existing product constructors; the cache stores on
 The standalone Cargo example's retained reads are:
 
 ```sh
-cargo run -p nessa-server --example read_only_sync -- list CACHE RECEIVER ORIGIN CATALOGUE
-cargo run -p nessa-server --example read_only_sync -- show CACHE RECEIVER ORIGIN CONVERSATION
+cargo run -p nessa-client-core --example read_only_sync -- list CACHE RECEIVER ORIGIN CATALOGUE
+cargo run -p nessa-client-core --example read_only_sync -- show CACHE RECEIVER ORIGIN CONVERSATION
 ```
 
 Use the issued receiver and actual gateway/catalogue identities saved by setup.
@@ -339,8 +343,8 @@ shared local-storage permissions contract.
 Local reset commands accept the complete admitted target and expected generation:
 
 ```sh
-cargo run -p nessa-server --example read_only_sync -- reset-records CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
-cargo run -p nessa-server --example read_only_sync -- reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
+cargo run -p nessa-client-core --example read_only_sync -- reset-records CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
+cargo run -p nessa-client-core --example read_only_sync -- reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
 ```
 
 Use the same operation and arguments for an exact retry after output loss. JSON

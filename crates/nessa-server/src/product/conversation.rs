@@ -1,35 +1,34 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
-    generated::{
-        ApprovalMode as WireApprovalMode, ConversationAnswerParams,
-        ConversationAnswerQuestionParams, ConversationArchiveParams, ConversationCancelParams,
-        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
-        ConversationDeleteParams, ConversationErrorCode, ConversationListParams,
-        ConversationListResult, ConversationMutationResult,
-        ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
-        ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
-        ConversationSendParams, ConversationSetApprovalModeParams,
-        ConversationSetApprovalModeResult, ConversationSummary,
-        ConversationView as WireConversationView,
-    },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
-use crate::{
-    agents::domain::AgentId,
-    conversation::{
-        application::{
-            ConversationCaller, ConversationError, ConversationList,
-            ConversationView as ApplicationConversationView, DeletionFailures, McpAppCode,
-            McpAppError, QuestionChoiceInput, RequestedAgent, RequestedConversation,
-            SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-        },
-        domain::{ConversationApprovalMode, ConversationId},
-    },
-    protocol::{OutgoingMessage, RequestFrame},
+use crate::conversation::application::{
+    ConversationCaller, ConversationError, DeletionFailures, McpAppCode, McpAppError,
+    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile,
+    SubmittedImage, SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::conversation::view::{
+    ConversationList, ConversationView as ApplicationConversationView,
+};
+use nessa_protocol::product::generated::{
+    ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
+    ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
+    ConversationCreateParams, ConversationCreateResult, ConversationDeleteParams,
+    ConversationErrorCode, ConversationListParams, ConversationListResult,
+    ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
+    ConversationPermissionSelectionState, ConversationReadParams, ConversationRemoveParams,
+    ConversationReorderParams, ConversationSendParams, ConversationSetApprovalModeParams,
+    ConversationSetApprovalModeResult, ConversationSummary,
+    ConversationView as WireConversationView,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::domain::{ConversationApprovalMode, ConversationId},
+};
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
     permissions::PermissionSelectionState,

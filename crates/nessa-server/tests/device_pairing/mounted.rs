@@ -28,10 +28,10 @@ use nessa_auth::{
     },
     domain::{pairing::TerminalCause, Action, AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_server::{
-    app::dependencies::RuntimeDependencies,
-    conversation::infrastructure::LocalReceiverAuthority,
-    device_pairing::infrastructure::{wire::NativePairingStatus, NativeEnrollmentClient},
+    app::dependencies::RuntimeDependencies, conversation::infrastructure::LocalReceiverAuthority,
 };
 use serde_json::{json, Value};
 use std::{

@@ -1,26 +1,24 @@
 //! Bounded product wire conversion for authorized physical record reads.
 //!
-//! `wire` decodes generated request DTOs, asks sync-engine's public validator
+//! `nessa_protocol::product::record_read` decodes generated request DTOs, asks sync-engine's public validator
 //! about a source page, and writes the response through a capped JSON writer.
 //! It carries no credential, ownership, or stream-incarnation decision.
 
-use super::super::{
-    passive_read::wire::{decode_epoch, ReadEncodeError, ReadWireError},
-    state::ProductRouteState,
-};
-use super::wire;
-use crate::conversation::{
-    application::{
-        AdmitPassiveRead, ReadRecords, ReadRefusal, RecordReadError, RecordReadLease,
-        RecordReadOperation, RecordReadValue,
-    },
-    domain::ConversationId,
+use super::super::state::ProductRouteState;
+use crate::conversation::application::{
+    AdmitPassiveRead, ReadRecords, RecordReadError, RecordReadLease, RecordReadOperation,
+    RecordReadValue,
 };
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
+use nessa_protocol::conversation::{domain::ConversationId, read_scope::ReadRefusal};
+use nessa_protocol::product::passive_read::{decode_epoch, ReadEncodeError, ReadWireError};
+use nessa_protocol::product::record_read;
 
-use super::super::generated::{ConversationRecordsHeadParams, ConversationRecordsPageParams};
-use crate::product_contract::generated::RecordReadErrorCode;
-use crate::protocol::RequestFrame;
+use nessa_protocol::product::generated::{
+    ConversationRecordsHeadParams, ConversationRecordsPageParams,
+};
+use nessa_protocol::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::protocol::RequestFrame;
 
 /// Fresh admission, exact identity, one bounded source operation, then capped
 /// wire encoding. On timeout the source thread retains its global permit.
@@ -47,7 +45,7 @@ pub(crate) async fn dispatch(
         "conversation.recordsPage" => {
             let params: ConversationRecordsPageParams = serde_json::from_value(frame.params)
                 .map_err(|_| RecordReadErrorCode::InvalidRequest)?;
-            let page = wire::decode_page_request(&params.request)
+            let page = record_read::decode_page_request(&params.request)
                 .map_err(|_| RecordReadErrorCode::InvalidRequest)?;
             let receiver_id = page.scope.receiver().as_str().to_owned();
             let epoch = decode_epoch(&params.access_epoch)
@@ -105,11 +103,12 @@ pub(crate) async fn dispatch(
             if expected_page.is_some() {
                 return Err(RecordReadErrorCode::Unverifiable);
             }
-            wire::encode_head(&request_id, &head.scope, head.head).map_err(encode_error_code)?
+            record_read::encode_head(&request_id, &head.scope, head.head)
+                .map_err(encode_error_code)?
         }
         RecordReadValue::Page(page) => {
             let request = expected_page.ok_or(RecordReadErrorCode::Unverifiable)?;
-            wire::encode_page(&request_id, &request, page).map_err(wire_error_code)?
+            record_read::encode_page(&request_id, &request, page).map_err(wire_error_code)?
         }
     };
     Ok((text, response.lease))
@@ -117,7 +116,7 @@ pub(crate) async fn dispatch(
 
 fn error_code(error: RecordReadError) -> RecordReadErrorCode {
     match error {
-        RecordReadError::Admission(refusal) => refusal.into(),
+        RecordReadError::Admission(refusal) => refusal_code(refusal),
         RecordReadError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         RecordReadError::IdentityChanged => RecordReadErrorCode::IdentityChanged,
         RecordReadError::HistoryPruned => RecordReadErrorCode::HistoryPruned,
@@ -127,20 +126,6 @@ fn error_code(error: RecordReadError) -> RecordReadErrorCode {
         }
         RecordReadError::SourcePreparing => RecordReadErrorCode::SourcePreparing,
         RecordReadError::ReadTimeout => RecordReadErrorCode::ReadTimeout,
-    }
-}
-
-impl From<ReadRefusal> for RecordReadErrorCode {
-    fn from(refusal: ReadRefusal) -> Self {
-        match refusal {
-            ReadRefusal::InvalidRequest => Self::InvalidRequest,
-            ReadRefusal::Unauthorized => Self::Unauthorized,
-            ReadRefusal::Forbidden => Self::Forbidden,
-            ReadRefusal::WrongOwner => Self::WrongOwner,
-            ReadRefusal::WrongReceiver => Self::WrongReceiver,
-            ReadRefusal::StaleEpoch => Self::StaleEpoch,
-            ReadRefusal::Unverifiable => Self::Unverifiable,
-        }
     }
 }
 
@@ -156,5 +141,19 @@ fn wire_error_code(error: ReadWireError) -> RecordReadErrorCode {
         ReadWireError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         ReadWireError::InvalidPage => RecordReadErrorCode::Unverifiable,
         ReadWireError::ResponseTooLarge => RecordReadErrorCode::ResponseTooLarge,
+    }
+}
+
+/// The wire code a refused record read answers with. Record dispatch and
+/// socket admission both answer through it.
+pub(in crate::product) fn refusal_code(refusal: ReadRefusal) -> RecordReadErrorCode {
+    match refusal {
+        ReadRefusal::InvalidRequest => RecordReadErrorCode::InvalidRequest,
+        ReadRefusal::Unauthorized => RecordReadErrorCode::Unauthorized,
+        ReadRefusal::Forbidden => RecordReadErrorCode::Forbidden,
+        ReadRefusal::WrongOwner => RecordReadErrorCode::WrongOwner,
+        ReadRefusal::WrongReceiver => RecordReadErrorCode::WrongReceiver,
+        ReadRefusal::StaleEpoch => RecordReadErrorCode::StaleEpoch,
+        ReadRefusal::Unverifiable => RecordReadErrorCode::Unverifiable,
     }
 }
