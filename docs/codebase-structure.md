@@ -1575,8 +1575,12 @@ the probe client and with the example's own `watch` on two paired devices, are i
 ## Provider authentication recovery
 
 `src-tauri/src/provider_authentication/` owns the trusted-window login launch
-command, its injected `ProviderLogin` process boundary, and the macOS terminal
-adapter. The closed provider enum chooses each CLI's default login command.
+command in `commands.rs`, the closed provider values and injected
+`ProviderLogin` port in `contracts.rs`, and the macOS terminal adapter in
+`native.rs`. Named feature tests live in
+`src-tauri/tests/provider_authentication/{commands,native}.rs`; `mod.rs` maps
+ownership and declares/re-exports these modules. The provider enum chooses each
+CLI's default login command.
 `AgentError::authentication_required` reads the explicit adapter-owned refusal;
 the ACP worker translates its protocol’s reserved authentication code into that
 variant. Generic provider errors keep their numeric code and diagnostic.
