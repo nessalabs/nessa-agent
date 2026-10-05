@@ -737,11 +737,11 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
     assert_eq!(content("show_chart")[0], text("Chart of two rows."));
 }
 
-/// A call Codex ran without asking (#500), as recorded live in the fixture's
-/// `toolSearchTurn`: `review_rows` declares `readOnlyHint`, the recording has
-/// no permission request for it, and its two frames have no bare
-/// `in_progress` update between them, which each permitted call in `calls`
-/// has.
+/// The call recorded in the fixture's `toolSearchTurn` (#500): `review_rows`,
+/// which declares `readOnlyHint`, in a turn whose recording has no permission
+/// request. Its two frames have no bare `in_progress` update between them;
+/// each call in `calls`, recorded on another day for tools that declare no
+/// annotations, has one.
 #[test]
 fn a_call_codex_ran_without_asking_is_two_frames_naming_that_servers_tool() {
     let recorded: Value =

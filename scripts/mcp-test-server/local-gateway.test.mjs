@@ -3,8 +3,8 @@
  * (`MCP_LIVE_NESSA`): what the gateway says as it stops is in `log()` once
  * `stop()` returns, and a gateway that fails to start leaves its output on
  * the error. `live-check.mjs` writes either to its evidence. And the prompt
- * both live checks ask with (`toolPrompt`), held to the live Codex turn
- * recorded with it (#500).
+ * both live checks ask with (`toolPrompt`): its one-tool wording held to the
+ * live Codex turn recorded with it (#500), its five-tool wording to itself.
  */
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"

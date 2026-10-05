@@ -1,9 +1,10 @@
 //! One tool call is one part of its turn, however many updates it has (#418).
 //!
 //! A harness reports one call as an announcement and then updates under the
-//! same `toolCallId`: Codex as an announcement, a bare status after an
-//! accepted permission, and a completion (no bare status for a call it ran
-//! without asking); Claude as three to five frames. The desktop draws a card, and
+//! same `toolCallId`: Codex, in the recordings, as an announcement, a bare
+//! status and a completion, or as an announcement and a completion (the
+//! recorded `review_rows` turn, which has no permission request); Claude as
+//! three to five frames. The desktop draws a card, and
 //! for an app a mount, per part, so a part per update was a card per update.
 //!
 //! The recorded frames are the SDK's parser fixtures. Turning a frame into an

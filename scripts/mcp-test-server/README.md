@@ -58,9 +58,9 @@ happened. The message is `toolPrompt` in `local-gateway.mjs`, which the
 desktop's `mcp-apps-gateway.mjs` asks with too: it lets the agent use its own
 tool search, since Codex reaches MCP tools only through it (#500), and forbids
 only other tools of the server. The prompt enforces nothing, and a harness may
-run a tool without asking (Codex runs the read-only `review_rows` unasked), so
-answering permissions does not bound what was called: the calls made are in
-`summary.json` for review.
+run a tool without asking (the recorded Codex turn has no permission request
+for the read-only `review_rows`), so answering permissions does not bound what
+was called: the calls made are in `summary.json` for review.
 
 ```sh
 cargo build -p nessa-server
