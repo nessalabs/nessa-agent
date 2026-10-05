@@ -49,7 +49,17 @@ const sessionReady = {
   audienceId: "gateway",
   expiresAt: 2_000_000_000,
   grants: [grant("conversation.read"), grant("credential.manage")],
-  methods: ["auth.session", "conversation.list", "credential.list", "credential.revoke"],
+  methods: [
+    "server.health",
+    "auth.session",
+    "conversation.list",
+    "credential.list",
+    "credential.revoke",
+    "pairing.pending",
+    "pairing.create",
+    "pairing.cancel",
+    "pairing.approve",
+  ],
 }
 
 function status(patch) {
@@ -95,6 +105,7 @@ function scriptedGateway(scenario) {
   let devices = [...(scenario.devices ?? [])]
   const unexpected = []
   const known = new Set([
+    "server.health",
     "conversation.list",
     "auth.session",
     "credential.list",
@@ -112,6 +123,11 @@ function scriptedGateway(scenario) {
       unexpected.push(method)
       return { ok: false, error: { code: "invalid_request", message: "not this check" } }
     }
+    if (method === "server.health")
+      return {
+        ok: true,
+        payload: { ok: true, runtimeStatus: "ready", uptimeMs: 1 },
+      }
     if (method === "conversation.list")
       return { ok: true, payload: { conversations: [], complete: true } }
     if (method === "auth.session") return { ok: true, payload: sessionReady }
@@ -386,7 +402,9 @@ await main(meta, async ({ options, rep, url }) => {
         css.linkedAction("cancel"),
         { timeout: 10_000 },
       )
-      const text = await panelText(page)
+      const shown = (
+        await page.locator('[data-slot="pairing-code-value"]').innerText()
+      ).replace(/\s+/g, "")
       const orbs = {
         signal: await page.locator(css.signalOrb).count(),
         qr: await page.locator(css.qrOrb).count(),
@@ -395,7 +413,7 @@ await main(meta, async ({ options, rep, url }) => {
       await page.locator(css.linkedAction("cancel")).click()
       await page.waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
       return [
-        text.includes("ABCD-2345") ? null : "the code was not shown",
+        shown === "ABCD-2345" ? null : `the code was ${shown}`,
         orbs.signal === 1 ? null : `signal orbs: ${orbs.signal}`,
         orbs.qr === 1 ? null : `qr orbs: ${orbs.qr}`,
         ...fit,
