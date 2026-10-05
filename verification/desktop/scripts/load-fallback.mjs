@@ -10,7 +10,9 @@
  * never answers, so the panel never mounts, and which reports the window's
  * size (or never does, or refuses); `main.tsx` writes that size through
  * `windowSize()` and `publishWindowSize()`. A browser scenario holds every
- * script back instead. Each checks that the avatar and "Loading" sit wholly
+ * script back instead. A held-back script shows the calm screen and logs
+ * the page it could not load.
+ * Each other scenario checks that the avatar and "Loading" sit wholly
  * inside the visible window, centred in it once its size is known, and that
  * nothing paints over them.
  */
@@ -90,9 +92,12 @@ function fakeHost(host) {
 
 async function measure(page, phase = null) {
   return page.evaluate(
-    async ([message, mark, title, phase]) => {
+    async ([message, mark, startupMark, title, startupLine, phase]) => {
       const messageElement = document.querySelector(message)
-      const markElement = document.querySelector(mark)
+      const markElement =
+        document.querySelector(startupMark) ?? document.querySelector(mark)
+      const titleElement =
+        document.querySelector(startupLine) ?? document.querySelector(title)
       const markAnimation = document
         .getAnimations()
         .find((animation) => animation.effect?.target === markElement)
@@ -120,11 +125,14 @@ async function measure(page, phase = null) {
         right: messageRect.left + markElement.offsetLeft + markElement.offsetWidth,
         bottom: messageRect.top + markElement.offsetTop + markElement.offsetHeight,
       }
-      const t = rect(title)
+      const t = titleElement.getBoundingClientRect()
+      const titleRect = { left: t.left, top: t.top, right: t.right, bottom: t.bottom }
       const covering = document.elementFromPoint(
         (t.left + t.right) / 2,
         (t.top + t.bottom) / 2,
       )
+      const actions = document.querySelector("[data-nessa-startup-actions]")
+      const actionRect = actions ? actions.getBoundingClientRect() : null
       return {
         message: messageRect,
         markLayout,
@@ -135,17 +143,38 @@ async function measure(page, phase = null) {
         keyframeOffsets: markAnimation?.effect
           ?.getKeyframes()
           .map((frame) => frame.computedOffset),
-        mark: rect(mark),
-        title: t,
+        mark: rect(markElement.matches(startupMark) ? startupMark : mark),
+        title: titleRect,
+        actions: actionRect
+          ? {
+              left: actionRect.left,
+              top: actionRect.top,
+              right: actionRect.right,
+              bottom: actionRect.bottom,
+            }
+          : null,
         text: document.querySelector(message).textContent.trim(),
-        titleOnTop: covering === document.querySelector(title),
+        titleOnTop: covering === titleElement || titleElement.contains(covering),
+        halo: getComputedStyle(markElement).boxShadow,
+        code:
+          document.querySelector("[data-nessa-startup-code]")?.textContent?.trim() ??
+          null,
+        restart: Boolean(document.querySelector('[aria-label="Restart"]')),
+        quit: Boolean(document.querySelector('[aria-label="Quit"]')),
         animations: document.getAnimations().length,
         overflow:
           document.documentElement.scrollWidth > innerWidth ||
           document.documentElement.scrollHeight > innerHeight,
       }
     },
-    [css.loadMessage, css.loadMark, css.loadTitle, phase],
+    [
+      css.loadMessage,
+      css.loadMark,
+      css.startupMark,
+      css.loadTitle,
+      css.startupLine,
+      phase,
+    ],
   )
 }
 
@@ -164,10 +193,10 @@ function check(scenario, m) {
       }
     : { left: 0, top: 0, right: stage.width, bottom: stage.height }
   const content = {
-    left: Math.min(m.mark.left, m.title.left),
-    top: Math.min(m.mark.top, m.title.top),
-    right: Math.max(m.mark.right, m.title.right),
-    bottom: Math.max(m.mark.bottom, m.title.bottom),
+    left: Math.min(m.mark.left, m.title.left, m.actions?.left ?? Infinity),
+    top: Math.min(m.mark.top, m.title.top, m.actions?.top ?? Infinity),
+    right: Math.max(m.mark.right, m.title.right, m.actions?.right ?? -Infinity),
+    bottom: Math.max(m.mark.bottom, m.title.bottom, m.actions?.bottom ?? -Infinity),
   }
   const inside =
     content.left >= clip.left - 0.5 &&
@@ -179,10 +208,10 @@ function check(scenario, m) {
       `avatar and title ${JSON.stringify(content)} are not inside the visible window ${JSON.stringify(clip)}`,
     )
   const layout = {
-    left: Math.min(m.markLayout.left, m.title.left),
-    top: Math.min(m.markLayout.top, m.title.top),
-    right: Math.max(m.markLayout.right, m.title.right),
-    bottom: Math.max(m.markLayout.bottom, m.title.bottom),
+    left: Math.min(m.markLayout.left, m.title.left, m.actions?.left ?? Infinity),
+    top: Math.min(m.markLayout.top, m.title.top, m.actions?.top ?? Infinity),
+    right: Math.max(m.markLayout.right, m.title.right, m.actions?.right ?? -Infinity),
+    bottom: Math.max(m.markLayout.bottom, m.title.bottom, m.actions?.bottom ?? -Infinity),
   }
   if (!m.markLayoutOwned)
     failures.push("the fixed message grid does not own the mark's layout")
@@ -208,7 +237,17 @@ function check(scenario, m) {
         `off centre of the visible window by ${dx.toFixed(1)}, ${dy.toFixed(1)}`,
       )
   }
-  if (m.text !== "Loading") failures.push(`says ${JSON.stringify(m.text)}, not "Loading"`)
+  if (scenario.host === null) {
+    if (!m.text.includes("Nessa couldn’t start"))
+      failures.push(`says ${JSON.stringify(m.text)}, not that Nessa couldn’t start`)
+    if (m.code !== "STARTUP_MODULE")
+      failures.push(`code is ${JSON.stringify(m.code)}, not STARTUP_MODULE`)
+    if (m.text.includes("did not serve") || m.text.includes("/src/"))
+      failures.push(`the log sentence is on the screen: ${JSON.stringify(m.text)}`)
+    if (m.halo !== "none") failures.push(`the mark has a halo (${m.halo})`)
+    if (!m.restart || !m.quit) failures.push("Restart or Quit is missing")
+  } else if (m.text !== "Loading")
+    failures.push(`says ${JSON.stringify(m.text)}, not "Loading"`)
   if (!m.titleOnTop) failures.push("something paints over the title")
   if (m.overflow) failures.push("the page scrolls")
   return { failures, measured: { clip, content, layout, markCentre } }
@@ -256,8 +295,10 @@ await main(
                   page.on("console", (message) => {
                     if (message.type() !== "error") return
                     // Chromium reports each held-back script once more, as a
-                    // failed resource at that script's URL.
+                    // failed resource at that script's URL. The calm screen
+                    // logs the detailed cause; that line is the log.
                     if (heldUrls.has(message.location()?.url ?? "")) return
+                    if (message.text().startsWith("[nessa] ")) return
                     errors.push(`console.error: ${message.text().slice(0, 300)}`)
                   })
                   // Hold the frontend back so the fallback is what stays: every
@@ -281,12 +322,19 @@ await main(
                   })
                   const search = scenario.surface === "setup" ? "?surface=setup" : ""
                   await page.goto(`${origin}/index.html${search}`)
-                  await page.waitForSelector(css.loadMark)
+                  await page.waitForSelector(`${css.loadMark}, ${css.startupMark}`)
                   if (typeof scenario.host === "object" && scenario.host)
                     await page.waitForFunction(() =>
                       document.documentElement.style.getPropertyValue(
                         "--nessa-window-width",
                       ),
+                    )
+                  else if (scenario.host === null)
+                    await page.waitForFunction(
+                      () =>
+                        document
+                          .querySelector("[data-nessa-startup-code]")
+                          ?.textContent?.trim() === "STARTUP_MODULE",
                     )
                   else await page.waitForLoadState("networkidle")
                   await page.evaluate(() => new Promise(requestAnimationFrame))
@@ -294,7 +342,9 @@ await main(
                   // containment must not depend on when the page becomes ready. Only the mark's animation
                   // is paused; other fallback animations retain their behavior.
                   const samples = []
-                  for (const phase of motion === "reduce" ? [null] : [0, 0.5]) {
+                  for (const phase of motion === "reduce" || scenario.host === null
+                    ? [null]
+                    : [0, 0.5]) {
                     const m = await measure(page, phase)
                     samples.push({
                       phase,
@@ -317,7 +367,7 @@ await main(
                   }
                   if (holding && held.size === 0)
                     result.failures.push("no frontend script was held back")
-                  if (!(await page.$(css.loadMark)))
+                  if (!(await page.$(`${css.loadMark}, ${css.startupMark}`)))
                     result.failures.push("the frontend replaced the fallback")
                   result.failures.push(...errors)
                   if (motion === "reduce" && samples[0].animations !== 0)

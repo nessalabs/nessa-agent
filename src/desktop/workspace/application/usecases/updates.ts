@@ -5,7 +5,7 @@
  * that overtook a read, a read answered late, an index read while
  * updates were already flowing (`model/revision.ts`).
  */
-import type { WorkspaceFailureReason } from "../../model/failure"
+import type { StageMismatch, WorkspaceFailureReason } from "../../model/failure"
 import {
   byRecency,
   defaultModel,
@@ -192,6 +192,7 @@ export function indexLoaded(
     ...reconciled,
     status: "ready",
     failure: null,
+    failureStages: null,
     reading: outrunBy(readAnswered(state.reading, read), state.reading, read),
   }
   if (state.panes) {
@@ -267,19 +268,29 @@ export function indexRequested(
 ): WorkspaceState {
   const reading = [...state.reading, { read, heard: [], outrun: false }]
   return state.status === "failed"
-    ? { ...state, status: "loading", failure: null, reading }
+    ? { ...state, status: "loading", failure: null, failureStages: null, reading }
     : { ...state, reading }
 }
 
 /** The index could not be read. A workspace already open stays open. */
 export function indexFailed(
   state: WorkspaceState,
-  { reason, read }: { reason: WorkspaceFailureReason; read: string },
+  {
+    reason,
+    stages,
+    read,
+  }: { reason: WorkspaceFailureReason; stages?: StageMismatch | null; read: string },
 ): WorkspaceState {
   const reading = readAnswered(state.reading, read)
   if (state.status === "ready")
     return reading === state.reading ? state : { ...state, reading }
-  return { ...state, status: "failed", failure: reason, reading }
+  return {
+    ...state,
+    status: "failed",
+    failure: reason,
+    failureStages: reason === "wrong-stage" ? (stages ?? null) : null,
+    reading,
+  }
 }
 
 /**

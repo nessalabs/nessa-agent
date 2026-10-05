@@ -2,9 +2,9 @@
 /**
  * The desktop app's window when it cannot read the local gateway (#419):
  * signed out, the host refusing the credential, the gateway not ready yet, or
- * no gateway listening. Each
- * says why in the chat area, offers Try Again, and never shows the sample in
- * its place.
+ * no gateway listening. Signed out says why in the chat area and offers
+ * Try Again. A startup failure covers the window with the calm screen
+ * (the line, STARTUP_GATEWAY, Restart and Quit) and never shows the sample.
  *
  * The page runs as the desktop app does: a fake Tauri host installed before
  * the page's scripts (as `load-fallback.mjs` does) makes `host.kind` native,
@@ -37,6 +37,9 @@
  */
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { attempt, CannotRun } from "./lib/cli.mjs"
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css, modules } from "./lib/selectors.mjs"
@@ -45,7 +48,37 @@ import { inside, modelValue } from "./lib/workspace.mjs"
 const fakeGateway = "ws://127.0.0.1:7499"
 // Nothing listens here and nothing routes it: the connection is refused.
 const noGateway = "ws://127.0.0.1:7498"
-const unread = "Nessa couldn’t read the local server’s conversations just now."
+const sentences = JSON.parse(
+  readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../src/host/startup-refusals.json",
+    ),
+    "utf8",
+  ),
+)
+function sentence(key) {
+  if (
+    !Object.hasOwn(sentences, key) ||
+    typeof sentences[key] !== "string" ||
+    !sentences[key]
+  )
+    throw new Error(`missing startup sentence ${key}`)
+  return sentences[key]
+}
+function startupLine() {
+  if (typeof sentences.line !== "string" || !sentences.line)
+    throw new Error("missing startup line")
+  return sentences.line
+}
+function startupCode(key) {
+  const table = sentences.code
+  if (!table || typeof table !== "object" || !Object.hasOwn(table, key))
+    throw new Error(`missing startup code ${key}`)
+  const value = table[key]
+  if (typeof value !== "string" || !value) throw new Error(`startup code ${key} is empty`)
+  return value
+}
 const signedOut = "This window isn’t signed in to the local server."
 // How long, in real time, the paused page has to show Try Again's ask (C1).
 // It only ends the wait: with the clock paused nothing else asks the host.
@@ -133,7 +166,7 @@ const scenarios = [
     name: "the host refuses the credential",
     endpoint: fakeGateway,
     credential: null,
-    says: unread,
+    calm: "not-provisioned",
   },
   {
     // The refusal a window meets at every launch, until the host's startup
@@ -142,7 +175,7 @@ const scenarios = [
     name: "the gateway is not ready yet",
     endpoint: null,
     credential: "fixture-only",
-    says: unread,
+    calm: "not-ready",
     credentialNeverAsked: true,
     cadence: true,
   },
@@ -150,7 +183,7 @@ const scenarios = [
     name: "no gateway listening",
     endpoint: noGateway,
     credential: "fixture-only",
-    says: unread,
+    calm: "not-listening",
   },
 ]
 
@@ -196,7 +229,7 @@ function refuseCredential(socket) {
 
 async function measure(page) {
   return page.evaluate(
-    ([empty, text, retry, chat, rows, sample]) => {
+    ([empty, text, retry, chat, rows, sample, screen, line, code, restart, quit]) => {
       const rect = (element) => {
         const r = element.getBoundingClientRect()
         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
@@ -204,8 +237,29 @@ async function measure(page) {
       const status = document.querySelector(empty)
       const button = document.querySelector(retry)
       const area = document.querySelector(chat)
+      const startup = document.querySelector(screen)
+      const restartButton = document.querySelector(restart)
+      const quitButton = document.querySelector(quit)
+      const onTop = (element) => {
+        if (!element) return false
+        const r = element.getBoundingClientRect()
+        return (
+          document
+            .elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2)
+            ?.closest("button") === element
+        )
+      }
+      const mark = document.querySelector("[data-nessa-startup-mark]")
       return {
         text: document.querySelector(text)?.textContent ?? null,
+        line: document.querySelector(line)?.textContent?.trim() ?? null,
+        code: document.querySelector(code)?.textContent?.trim() ?? null,
+        startup: startup ? rect(startup) : null,
+        restart: restartButton ? rect(restartButton) : null,
+        quit: quitButton ? rect(quitButton) : null,
+        restartOnTop: onTop(restartButton),
+        quitOnTop: onTop(quitButton),
+        halo: mark ? getComputedStyle(mark).boxShadow : null,
         status: status ? rect(status) : null,
         button: button ? rect(button) : null,
         buttonOnTop: button
@@ -232,12 +286,19 @@ async function measure(page) {
       css.chatArea,
       css.sessionRow,
       css.sampleAccessory,
+      css.startupScreen,
+      css.startupLine,
+      css.startupCode,
+      css.startupRestart,
+      css.startupQuit,
     ],
   )
 }
 
 function check(scenario, m) {
+  if (scenario.calm) return checkCalm(scenario, m)
   const failures = []
+  if (m.startup) failures.push("the startup screen covers a signed-out window")
   if (m.text !== scenario.says)
     failures.push(`says ${JSON.stringify(m.text)}, not ${JSON.stringify(scenario.says)}`)
   if (!m.status || !m.chat) failures.push("no status in the chat area")
@@ -257,6 +318,49 @@ function check(scenario, m) {
   if (m.rows !== 0) failures.push(`${m.rows} session rows listed`)
   if (m.sample !== 0) failures.push("the sample plugin is drawn")
   // Counted: a count that is missing fails, never passes.
+  if (!(m.asked.load_gateway_endpoint >= 1))
+    failures.push("the host's endpoint was never asked")
+  if (scenario.credentialNeverAsked && m.asked.load_surface_credential !== 0)
+    failures.push(
+      `the credential was asked for while the gateway was not ready (${m.asked.load_surface_credential} times)`,
+    )
+  return failures
+}
+
+function checkCalm(scenario, m) {
+  const failures = []
+  const line = startupLine()
+  const code = startupCode(scenario.calm)
+  if (m.line !== line)
+    failures.push(`says ${JSON.stringify(m.line)}, not ${JSON.stringify(line)}`)
+  if (m.code !== code)
+    failures.push(`code is ${JSON.stringify(m.code)}, not ${JSON.stringify(code)}`)
+  if (m.line && m.line.includes(sentence(scenario.calm)))
+    failures.push("the log sentence is on the screen")
+  if (!m.startup) failures.push("no startup screen")
+  else if (
+    m.startup.left > 1 ||
+    m.startup.top > 1 ||
+    m.startup.right < m.viewport.width - 1 ||
+    m.startup.bottom < m.viewport.height - 1
+  )
+    failures.push(
+      `the startup screen ${JSON.stringify(m.startup)} does not cover the window`,
+    )
+  for (const [name, box, onTop] of [
+    ["Restart", m.restart, m.restartOnTop],
+    ["Quit", m.quit, m.quitOnTop],
+  ]) {
+    if (!box) failures.push(`no ${name}`)
+    else {
+      const height = box.bottom - box.top
+      if (height < 24) failures.push(`${name} is ${height}px tall, under 24`)
+      if (!onTop) failures.push(`something paints over ${name}`)
+    }
+  }
+  if (m.halo && m.halo !== "none") failures.push(`the mark has a halo (${m.halo})`)
+  if (m.rows !== 0) failures.push(`${m.rows} session rows listed`)
+  if (m.sample !== 0) failures.push("the sample plugin is drawn")
   if (!(m.asked.load_gateway_endpoint >= 1))
     failures.push("the host's endpoint was never asked")
   if (scenario.credentialNeverAsked && m.asked.load_surface_credential !== 0)
@@ -288,7 +392,7 @@ It reads the poller's wait from the gateway source in the page, so it needs
               initScripts: [[gatewayHost, scenario]],
               // Either answer: the status this check is for, or a listed
               // session — the sample in disguise, which `check` fails.
-              readySelector: `${css.workspaceEmpty}, ${css.sessionRow}`,
+              readySelector: `${css.workspaceEmpty}, ${css.sessionRow}, ${css.startupScreen}`,
               beforeLoad: async (context) => {
                 // C0: the page's timers are the clock's, running in real time.
                 await context.clock.install()
@@ -302,7 +406,11 @@ It reads the poller's wait from the gateway source in the page, so it needs
             const { quietMs, recoveredMs, unaskedMs, pauseLeadMs } = timing
             const first = await measure(page)
             const failures = check(scenario, first)
-            if (!first.button) return { failures, measured: { timing, first } }
+            if (scenario.calm) {
+              // Restart restarts the app. The poller, under the screen, is
+              // what asks again. Cadence below still runs when the scenario
+              // asks for it; there is no Try Again to click.
+            } else if (!first.button) return { failures, measured: { timing, first } }
             // The poller waits out a failed connect (S10): for `quietMs` after
             // the last ask — a round short of the poller's wait — nothing asks
             // the host. The page's `performance.now()` is the clock's, which
@@ -329,6 +437,19 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 failures.push(
                   `the window asked the host ${asksByRecovered} times between ${quietMs}ms and ${recoveredMs}ms after its last ask, not once`,
                 )
+            }
+            if (scenario.calm) {
+              const refused = `WebSocket connection to '${noGateway}/session' failed`
+              failures.push(
+                ...opened.errors.filter(
+                  (error) =>
+                    !(scenario.endpoint === noGateway && error.includes(refused)),
+                ),
+              )
+              return {
+                failures,
+                measured: { timing, first, asksInQuiet, asksByRecovered },
+              }
             }
             // Try Again reads the index again — the status goes while it reads,
             // which no poll does — and connects at once though the poller

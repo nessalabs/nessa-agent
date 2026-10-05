@@ -3,6 +3,11 @@
  * what it was asked. State holds the reason (`model/failure.ts`); this module
  * is the one place it becomes a sentence, and each table covers every reason.
  */
+import {
+  startupRefusalSentence,
+  wrongStageSentence,
+  type StageMismatch,
+} from "../../../host/startup-refusals"
 import type { WorkspaceFailureReason } from "../model/failure"
 
 const copy: Record<WorkspaceFailureReason, string> = {
@@ -11,9 +16,17 @@ const copy: Record<WorkspaceFailureReason, string> = {
   "not-waiting": "This was already answered.",
   "not-supported": "This isn’t available for this session.",
   "signed-out": "This window isn’t signed in to the local server.",
+  "not-started": startupRefusalSentence("not-provisioned"),
+  "not-ready": startupRefusalSentence("not-ready"),
+  "not-listening": startupRefusalSentence("not-listening"),
+  "wrong-stage": wrongStageSentence(null),
 }
 
-export function failureCopy(reason: WorkspaceFailureReason): string {
+export function failureCopy(
+  reason: WorkspaceFailureReason,
+  stages?: StageMismatch | null,
+): string {
+  if (reason === "wrong-stage") return wrongStageSentence(stages)
   return copy[reason]
 }
 
@@ -44,6 +57,8 @@ const readCopy: Record<ReadSubject, Record<WorkspaceFailureReason, string>> = {
 export function readFailureCopy(
   reason: WorkspaceFailureReason,
   read: ReadSubject,
+  stages?: StageMismatch | null,
 ): string {
+  if (reason === "wrong-stage") return wrongStageSentence(stages)
   return readCopy[read][reason]
 }

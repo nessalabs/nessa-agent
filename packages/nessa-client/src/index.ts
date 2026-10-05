@@ -40,6 +40,7 @@ export {
   NessaRpcError,
   NessaProtocolCompatibilityError,
   NessaConnectionClosedError,
+  RetryableConnectError,
   NessaEndpointDiscoveryError,
   resolveConnectOptions,
   stageAllowsDefaultUrl,

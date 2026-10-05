@@ -10,9 +10,11 @@ mod diagnostics;
 mod gateway;
 mod gateway_endpoint;
 mod host;
+mod host_refusal;
 mod launch;
 mod links;
 mod local_data;
+mod page_load;
 mod panel;
 mod platform;
 mod provider_authentication;
@@ -58,6 +60,9 @@ fn main() {
     // DMA-BUF renderer when there is no DRM device.
     platform::current().prepare();
 
+    let loads = page_load::Loads::new();
+    let observed = loads.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(diagnostics::init())
@@ -70,6 +75,18 @@ fn main() {
         // and nothing else, on a scheme that is never the window's.
         .register_uri_scheme_protocol(app_sandbox::SCHEME, |_context, request| {
             app_sandbox::respond(request.method(), request.uri().path())
+        })
+        .register_uri_scheme_protocol(page_load::SCHEME, |_context, request| {
+            page_load::respond(
+                request.method(),
+                request.uri().path(),
+                request.uri().query(),
+            )
+        })
+        .on_page_load(move |webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                observed.observe(webview.label(), payload.url().as_str());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             platform::set_frosted,
@@ -98,6 +115,7 @@ fn main() {
             startup::quit_nessa,
         ])
         .setup(move |app| {
+            page_load::watch(app.handle().clone(), loads);
             // Nothing below returns an error to Tauri (ADR 221). Tauri panics on
             // one, inside a macOS callback that cannot unwind, and the process
             // aborts with no word to the person. What setup cannot build is a

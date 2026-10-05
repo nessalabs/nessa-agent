@@ -29,7 +29,7 @@
  * again (`followWorkspace`). A source that cannot tell never sends one, and
  * the window then resyncs only when it is opened or asked to (Try Again).
  */
-import type { WorkspaceFailureReason } from "../model/failure"
+import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
 import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { Transcript } from "../model/transcript"
@@ -154,11 +154,13 @@ export interface WorkspaceSource {
 /** The source's refusal: a typed reason (`model/failure.ts`), never a sentence. */
 export class WorkspaceSourceError extends Error {
   readonly reason: WorkspaceFailureReason
+  readonly stages?: StageMismatch
 
-  constructor(reason: WorkspaceFailureReason) {
+  constructor(reason: WorkspaceFailureReason, stages?: StageMismatch) {
     super(`The workspace source refused: ${reason}`)
     this.name = "WorkspaceSourceError"
     this.reason = reason
+    this.stages = stages
   }
 }
 
@@ -171,6 +173,15 @@ export function failureReason(error: unknown): WorkspaceFailureReason {
   if (error instanceof WorkspaceSourceError) return error.reason
   console.error("The workspace source failed unexpectedly", error)
   return "unavailable"
+}
+
+/** Both stages, when a refusal is that the window and the server disagree. */
+export function failureStages(error: unknown): StageMismatch | null {
+  return error instanceof WorkspaceSourceError &&
+    error.reason === "wrong-stage" &&
+    error.stages
+    ? error.stages
+    : null
 }
 
 /**

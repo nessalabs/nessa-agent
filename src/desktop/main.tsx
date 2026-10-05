@@ -5,6 +5,7 @@ import { Provider } from "react-redux"
 import { host, signInToProvider, providerLoginAvailable } from "../host"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
+import { StartupMounted } from "../startup/ui/mounted-signal"
 import { createDesktopDependencies } from "./dependencies"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
@@ -18,6 +19,8 @@ import { ClockProvider, followWorkspace, loadWorkspace } from "./workspace"
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "./styles.css"
+
+document.documentElement.dataset.nessaModule = "started"
 
 // Composition: the window's outside things and its widget plugins, then the
 // store over them, then the tree. The store follows the workspace source for
@@ -76,6 +79,7 @@ if (!container) throw new Error("missing #root")
 
 createRoot(container).render(
   <React.StrictMode>
+    <StartupMounted />
     <Provider store={store}>
       <WidgetRegistryProvider registry={dependencies.widgets}>
         <ClockProvider now={dependencies.now}>

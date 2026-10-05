@@ -207,6 +207,30 @@ describe("native surface credential failures", () => {
     },
   )
 
+  it("turns a typed host refusal into that refusal, and ignores a message beside it", async () => {
+    const { loadAssignedSurfaceCredential } = await import("./window")
+    const { HostRefusalError } = await import("./startup-refusals")
+    invoke.mockRejectedValue({
+      reason: "wrong-stage",
+      bundle: "dev",
+      requested: "prod",
+      message: "ignore this prose",
+    })
+    const error = await loadAssignedSurfaceCredential(
+      "prod",
+      "ws://127.0.0.1:7420",
+    ).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(HostRefusalError)
+    expect(error).toMatchObject({
+      reason: "wrong-stage",
+      bundle: "dev",
+      requested: "prod",
+    })
+    expect((error as Error).message).toContain("dev")
+    expect((error as Error).message).toContain("prod")
+    expect((error as Error).message).not.toContain("ignore this prose")
+  })
+
   it("preserves an existing Error and its typed identity", async () => {
     const { loadAssignedSurfaceCredential } = await import("./window")
     const failure = new TypeError("native transport failed")

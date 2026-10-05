@@ -62,6 +62,7 @@ import type { WidgetRef } from "../../../widgets/model/widget-ref"
 type Root = { workspace: WorkspaceState }
 
 export const selectFailure = (state: Root) => state.workspace.failure
+export const selectFailureStages = (state: Root) => state.workspace.failureStages
 export const selectChrome = (state: Root): Chrome => state.workspace.chrome
 /** Whether the sidebar is drawn: the person's choice, unless the window folded it for room. */
 export const selectSidebarOpen = (state: Root) =>

@@ -1,0 +1,22 @@
+{
+  "line": "Nessa couldn’t start",
+  "code": {
+    "not-provisioned": "STARTUP_GATEWAY",
+    "not-ready": "STARTUP_GATEWAY",
+    "not-listening": "STARTUP_GATEWAY",
+    "wrong-stage": "STARTUP_STAGE",
+    "document-unserved": "STARTUP_PAGE",
+    "script-unserved": "STARTUP_MODULE",
+    "still-compiling": "STARTUP_COMPILE",
+    "runtime": "STARTUP_PAGE",
+    "host": "STARTUP_HOST"
+  },
+  "not-provisioned": "This window was started without the local server. Run `just start`, or `just server`, which creates the chat credential on first run.",
+  "not-ready": "The local server is still starting.",
+  "not-listening": "The local server is not answering. Run `just start`, or `just server`, and try again.",
+  "wrong-stage": "This window is on stage “{bundle}” and the local server was asked for stage “{requested}”.",
+  "wrong-stage-plain": "This window and the local server are on different stages.",
+  "document-unserved": "This window could not load {page}. The dev server is not serving that page.",
+  "script-unserved": "Could not load {page}. The dev server did not serve {script}.",
+  "still-compiling": "Still waiting for {page}. The dev server may still be compiling {script}."
+}

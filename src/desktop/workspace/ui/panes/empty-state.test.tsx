@@ -70,6 +70,24 @@ it("S8: Try Again reads the index again, and a read that answers opens the works
   expect(store.getState().workspace.status).toBe("ready")
 })
 
+it("a startup failure is not this pane", async () => {
+  const store = testStore(fakeSource())
+  await act(async () =>
+    root.render(
+      <Provider store={store}>
+        <EmptyWorkspace
+          failure="wrong-stage"
+          stages={{ bundle: "dev", requested: "prod" }}
+        />
+        <EmptyWorkspace failure="not-listening" />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelector("[role=status]")).toBeNull()
+  expect(host.textContent).not.toContain("different stages")
+  expect(host.textContent).not.toContain("not answering")
+})
+
 it("a workspace that was read shows nothing here", async () => {
   await shown(undefined)
   expect(host.innerHTML).toBe("")

@@ -41,6 +41,8 @@ src/                      composition root (`main.tsx`, `store.ts`)
   diagnostics/            development page-console forwarding
 src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
+  host_refusal.rs         typed startup refusals shared with the page
+  page_load.rs            dev-only page when the document never arrives
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs

@@ -107,24 +107,36 @@ impl GatewayReader {
     /// Waits for the gateway as this reader may: a bundled surface until it
     /// reconciles; the desktop window not at all — it is ready now, or the
     /// read is refused.
-    pub(crate) async fn ready(self, gateway: &Gateway) -> Result<(), String> {
+    pub(crate) async fn ready(self, gateway: &Gateway) -> Result<(), GatewayUnread> {
         match self {
             Self::Surface(surface) => gateway
                 .wait_ready(surface)
                 .await
-                .map_err(|error| error.to_string()),
+                .map_err(|error| GatewayUnread::Other(error.to_string())),
             Self::DesktopWindow => match gateway
                 .startup()
-                .map_err(|error| error.to_string())?
+                .map_err(|error| GatewayUnread::Other(error.to_string()))?
                 .phase()
             {
                 GatewayStartupPhase::Ready => Ok(()),
                 GatewayStartupPhase::Starting(_) | GatewayStartupPhase::Failed(_) => {
-                    Err("The local server isn't ready yet".into())
+                    Err(GatewayUnread::NotReady)
                 }
             },
         }
     }
+}
+
+/// Why a reader was not given a gateway that is up.
+///
+/// `NotReady` is the desktop window's own fact: startup has not reached
+/// `Ready`. Anything a bundled surface's wait reports stays that wait's
+/// words (`Other`), so a registration failure is not rewritten as "still
+/// starting".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GatewayUnread {
+    NotReady,
+    Other(String),
 }
 
 #[tauri::command]

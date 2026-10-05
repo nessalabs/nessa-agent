@@ -24,11 +24,13 @@ import {
   windowSize,
   windowSurface,
 } from "./host"
-import { StartupRefused } from "./startup"
+import { StartupMounted, StartupRefused } from "./startup"
 import { publishWindowSize } from "./panel/adapters/panel-frame"
 
 import { environmentFromVite } from "./env/vite"
 import { installDevConsoleForwarding } from "./diagnostics/dev-console"
+
+document.documentElement.dataset.nessaModule = "started"
 
 if (import.meta.env.DEV) installDevConsoleForwarding()
 
@@ -76,6 +78,7 @@ void hostStartup()
     if (startup.state === "refused") {
       root.render(
         <React.StrictMode>
+          <StartupMounted />
           <StartupRefused
             details={startup.details}
             onTryAgain={() => void restartNessa()}
@@ -91,6 +94,7 @@ void hostStartup()
 function renderApplication() {
   root.render(
     <React.StrictMode>
+      <StartupMounted />
       {windowSurface() === "setup" ? (
         <Provider store={store}>
           <SetupGate

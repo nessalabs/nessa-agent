@@ -23,7 +23,7 @@ import type {
   WorkspaceDependencies,
   WorkspaceUpdate,
 } from "../../application/ports"
-import type { WorkspaceFailureReason } from "../../model/failure"
+import type { StageMismatch, WorkspaceFailureReason } from "../../model/failure"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
   initialWorkspace,
@@ -183,7 +183,13 @@ const workspaceSlice = createSlice({
       updates.indexRequested(state, payload),
     indexFailed: (
       state,
-      { payload }: Payload<{ reason: WorkspaceFailureReason; read: string }>,
+      {
+        payload,
+      }: Payload<{
+        reason: WorkspaceFailureReason
+        stages?: StageMismatch | null
+        read: string
+      }>,
     ) => updates.indexFailed(state, payload),
     updateReceived: (
       state,

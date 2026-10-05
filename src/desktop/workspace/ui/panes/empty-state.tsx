@@ -1,7 +1,8 @@
 import { loadWorkspace } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
-import type { WorkspaceFailureReason } from "../../model/failure"
+import type { StageMismatch, WorkspaceFailureReason } from "../../model/failure"
 import { readFailureCopy } from "../failure-copy"
+import { startupFailureCode } from "../startup-failure"
 
 /**
  * What the workspace shows when there is no conversation to show: its
@@ -9,15 +10,22 @@ import { readFailureCopy } from "../failure-copy"
  * from the local server; in the desktop app this is drawn instead of the
  * sample, which `verification/desktop/scripts/gateway-states.mjs` checks
  * (#419) — and offers
- * the one thing to do next. (No pane shows a session that is not there: a
- * removal starts the last pane over — `usecases/updates.ts`.)
+ * the one thing to do next. A startup failure is the window's calm screen
+ * (`ui/startup-fallback.tsx`), not this pane. (No pane shows a session that
+ * is not there: a removal starts the last pane over — `usecases/updates.ts`.)
  */
-export function EmptyWorkspace({ failure }: { failure: WorkspaceFailureReason | null }) {
+export function EmptyWorkspace({
+  failure,
+  stages,
+}: {
+  failure: WorkspaceFailureReason | null
+  stages?: StageMismatch | null
+}) {
   const dispatch = useWorkspaceDispatch()
-  if (!failure) return null
+  if (!failure || startupFailureCode(failure)) return null
   return (
     <div className="workspace-empty" role="status">
-      <p>{readFailureCopy(failure, "index")}</p>
+      <p>{readFailureCopy(failure, "index", stages)}</p>
       <button
         type="button"
         className="workspace-button"

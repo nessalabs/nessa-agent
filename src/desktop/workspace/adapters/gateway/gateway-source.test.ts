@@ -7,12 +7,14 @@
 import {
   NessaConnectionClosedError,
   NessaCredentialUnavailableError,
+  RetryableConnectError,
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
+import { HostRefusalError } from "../../../../host/startup-refusals"
 import { SessionHealthError } from "../../../../session/adapters/client/dev-session"
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
 import { composerModels } from "../../../model/composer-options"
@@ -326,16 +328,49 @@ describe("a connection that could not be made says why (#419)", () => {
     warn.mockRestore()
   })
 
-  it("S4: anything else — no answer, a host's sentence, a probe with no answer — is unavailable", async () => {
+  it("S4: anything else — a host's sentence, a probe with no answer — is unavailable", async () => {
     const warn = quiet()
     for (const error of [
-      new NessaConnectionClosedError(1006, ""),
       new Error("The local server isn't ready yet"),
       new SessionHealthError("probe", new NessaConnectionClosedError(1006, "")),
+      new SessionHealthError("probe", new RetryableConnectError("offline")),
     ])
       await expect(failing(error).source.index()).rejects.toMatchObject({
         reason: "unavailable",
       })
+    warn.mockRestore()
+  })
+
+  it("a socket that never opens says the server is not answering", async () => {
+    const warn = quiet()
+    for (const error of [
+      new RetryableConnectError("offline"),
+      new NessaConnectionClosedError(1006, ""),
+    ])
+      await expect(failing(error).source.index()).rejects.toMatchObject({
+        reason: "not-listening",
+      })
+    warn.mockRestore()
+  })
+
+  it("a typed host refusal names why the window has no server", async () => {
+    const warn = quiet()
+    await expect(
+      failing(new HostRefusalError("not-provisioned")).source.index(),
+    ).rejects.toMatchObject({ reason: "not-started" })
+    await expect(
+      failing(new HostRefusalError("not-ready")).source.index(),
+    ).rejects.toMatchObject({
+      reason: "not-ready",
+    })
+    await expect(
+      failing(
+        new HostRefusalError("wrong-stage", { bundle: "dev", requested: "prod" }),
+      ).source.index(),
+    ).rejects.toMatchObject({
+      reason: "wrong-stage",
+      stages: { bundle: "dev", requested: "prod" },
+    })
     warn.mockRestore()
   })
 
@@ -441,7 +476,7 @@ describe("a connection that could not be made says why (#419)", () => {
     await store.dispatch(loadWorkspace())
     expect(store.getState().workspace).toMatchObject({
       status: "failed",
-      failure: "unavailable",
+      failure: "not-listening",
     })
     // The gateway comes up before the poller's first connect: no poll failed
     // in between. That connect is `reconnectRounds + 1` rounds away (S16).
