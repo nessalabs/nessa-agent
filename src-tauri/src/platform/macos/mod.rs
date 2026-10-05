@@ -2,6 +2,7 @@
 
 mod live_resize;
 mod overlay;
+mod provider_login;
 mod vibrancy;
 mod viewport;
 
@@ -109,3 +110,5 @@ impl Host for Macos {
         Ok(())
     }
 }
+
+pub use provider_login::MacosProviderLogin;

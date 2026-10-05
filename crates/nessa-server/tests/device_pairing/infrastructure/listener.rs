@@ -124,7 +124,10 @@ fn connections(fixture: &Fixture) -> Arc<NativeEnrollmentConnections> {
 }
 
 /// Paused time: each pause advances the clock by exactly its length, so the
-/// gaps between accepts are the backoff itself.
+/// gaps between accepts are the backoff itself. A worker that finishes while
+/// the last accept is waiting is joined first, and that accept is asked for
+/// again at the same instant. Those re-entries are trailing `0ns` gaps; the
+/// scripted backoff is the prefix.
 #[tokio::test(start_paused = true)]
 async fn native_listener_skips_connection_failures_and_backs_off_on_exhaustion() {
     let fixture = Fixture::new().await;
@@ -205,7 +208,14 @@ async fn native_listener_skips_connection_failures_and_backs_off_on_exhaustion()
         .windows(2)
         .map(|pair| pair[1].duration_since(pair[0]))
         .collect();
-    assert_eq!(actual, gaps);
+    assert!(
+        actual.starts_with(&gaps),
+        "accept gaps {actual:?} do not start with the backoff {gaps:?}"
+    );
+    assert!(
+        actual[gaps.len()..].iter().all(Duration::is_zero),
+        "only an instantaneous re-entry may follow the backoff, got {actual:?}"
+    );
     fixture.gateway.shutdown().await;
 }
 

@@ -356,8 +356,8 @@ async fn gateway_child() {
                 pair_device(&commands, &session, root, native, "device").await;
             // Live mode follows two devices on this one gateway (L8); only
             // it pays for the second pairing.
-            let second_receiver = if mode == "live" {
-                let (receiver, _, _) =
+            let (second_receiver, second_credential) = if mode == "live" {
+                let (receiver, _, credential) =
                     pair_device(&commands, &session, root, native, "device-b").await;
                 private_write(
                     &root.join("profile-b.json"),
@@ -366,9 +366,9 @@ async fn gateway_child() {
                         "gatewayAddress":native.to_string()}))
                     .unwrap(),
                 );
-                Some(receiver)
+                (Some(receiver), Some(credential))
             } else {
-                None
+                (None, None)
             };
             let setup = Setup {
                 gateway: gateway.clone(),
@@ -378,6 +378,7 @@ async fn gateway_child() {
                 receiver,
                 epoch,
                 second_receiver,
+                second_credential,
                 conversation: uuid(),
                 empty: uuid(),
             };
@@ -477,10 +478,12 @@ async fn gateway_child() {
             storage.clone(),
             SessionId::new(setup.conversation.clone()).unwrap(),
             receivers.clone(),
-            [
-                setup.receiver.clone(),
-                setup.second_receiver.clone().unwrap(),
-            ],
+            LiveDevices {
+                auth: auth.clone(),
+                receiver: setup.receiver.clone(),
+                second_receiver: setup.second_receiver.clone().unwrap(),
+                second_credential: setup.second_credential.clone().unwrap(),
+            },
             PrincipalId::new(setup.owner.clone()).unwrap(),
             heads,
         ));
@@ -491,17 +494,32 @@ async fn gateway_child() {
     std::future::pending::<()>().await;
 }
 
+/// The two paired devices a live gateway accepts control lines for.
+struct LiveDevices {
+    auth: Arc<LocalCredentialStore>,
+    receiver: String,
+    second_receiver: String,
+    second_credential: String,
+}
+
 /// Live mode's control lines, each answered with `DONE <line>` once its effect
 /// is durable: `commit` appends one provider-context save to the conversation
 /// through this process's own storage owner, so its committed-change watch
 /// publishes; `revoke` removes the first device's receiver binding, as an
-/// owner would, and `revoke b` the second device's. `hold` makes the next
-/// `watch`'s recheck pass wait at its head read until `release`.
+/// owner would, and `revoke b` the second device's. `revoke-credential b`
+/// revokes that device's issued credential, the same registry write mode
+/// `revoke` uses for the first device. `hold` makes the next `watch`'s
+/// recheck pass wait at its head read until `release`.
 async fn live_control(
     storage: Arc<RecordStorage>,
     conversation: SessionId,
     receivers: Arc<LocalReceiverAuthority>,
-    [receiver, second]: [String; 2],
+    LiveDevices {
+        auth,
+        receiver,
+        second_receiver: second,
+        second_credential,
+    }: LiveDevices,
     owner: PrincipalId,
     heads: Arc<HeadHold>,
 ) {
@@ -540,6 +558,15 @@ async fn live_control(
                     .change(target.clone(), None, false, owner.clone(), uuid())
                     .await
                     .unwrap();
+            }
+            "revoke-credential b" => {
+                auth.revoke_sync(RevokeCredentialRequest {
+                    request_id: uuid(),
+                    issuer_principal_id: owner.as_str().to_owned(),
+                    credential_id: second_credential.clone(),
+                    revoked_at: SystemClock.unix_seconds(),
+                })
+                .unwrap();
             }
             "hold" => heads.hold_recheck(),
             "release" => heads.release.notify_one(),

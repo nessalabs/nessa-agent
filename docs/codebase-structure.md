@@ -1637,6 +1637,22 @@ bytes on the wire as JSON.
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
 
+### Durable creation command owners
+
+SDK `application/agent_execution/commands/creation.rs` owns immutable creation
+bindings, progress and effect order. `commands/mutation.rs` owns the same
+principal stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
+implements that principal lease with the existing SQLite runtime; it does not
+modify the conversation semantic record writer. The host consumers live under
+`conversation/application/service/creation.rs` and `service/mutation.rs`, sharing
+the existing creation helper, metadata/deletion authority and admission guard.
+The socket admits `conversation.create`, `conversation.send`, `conversation.steer`,
+`conversation.stop` and read-only `conversation.receipt` through that store.
+Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs`,
+`nessa-server/tests/conversation/creation_commands.rs` and
+`nessa-server/tests/conversation/mutation_commands.rs`. The state table is in
+[command creation](design/command-creation.md).
+
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
 `ProductRouteState` watch admission before polling the reader and watch drains,
@@ -1650,3 +1666,54 @@ servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process re
 the probe client and with the example's own `watch` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.
+
+
+## Provider authentication recovery
+
+`src-tauri/src/provider_authentication/` owns the trusted-window login launch
+command in `commands.rs`, the closed provider values and injected
+`ProviderLogin` port in `contracts.rs`. Platform-owned adapters live in
+`src-tauri/src/platform/{macos,linux,other}/provider_login.rs`; the existing
+platform selection seam re-exports the adapter injected by composition. macOS
+opens Terminal; Linux and other hosts report unavailable. Named tests live in
+`src-tauri/tests/provider_authentication/commands.rs` and
+`src-tauri/tests/platform/{macos,linux,other}/provider_login.rs`; `mod.rs` maps
+ownership and declares/re-exports these modules. The provider enum chooses each
+CLI's default login command. macOS keeps a bounded 120-second wait for first-use
+Automation consent. The effective bundle's Apple Events entitlement and purpose
+are checked by `scripts/desktop/terminal-automation.mjs`, called from the existing
+macOS release verifier; its regression tests include missing effective declarations.
+Tauri merges the declared `src-tauri/Info.plist` and signs with
+`src-tauri/Entitlements.plist`.
+`AgentError::authentication_required` reads the explicit adapter-owned refusal;
+the ACP worker translates its protocol’s reserved authentication code into that
+variant. Generic provider errors keep their numeric code and diagnostic.
+`crates/nessa-protocol/src/conversation/projection.rs` publishes it through one
+`authentication_refusal` owner: a retained provider report owns dispatched
+outcomes; without a report, the primary typed terminal startup cause survives
+queue audit/storage wrappers. Independent failure notices remain separate. SDK
+new/resume contracts and public Agent queue/storage restoration live in
+`crates/nessa-sdk/tests/infrastructure/acp/contracts/{codex,agents}.rs` and
+`crates/nessa-sdk/tests/application/agent_execution/agents/initialization.rs`.
+Live/restored projection regressions live in
+`crates/nessa-protocol/tests/conversation/projection.rs`. The desktop
+maps the refused execution identity and latest published input across dispatched
+and pending inputs, then draws
+the shared `src/provider-authentication/ui/provider-sign-in.tsx`, with its
+workspace Redux controller in `workspace/ui/transcript/provider-sign-in.tsx`.
+`src/provider-authentication/model/recovery.ts` owns recovery eligibility for both
+surfaces: the refused execution must be the latest published input, and no retained
+local submission may have begun after observing that input. Local sends retain
+that observed identity (null before any input); repeated views preserve it.
+An older delivery failure cannot hide a newly observed refusal. A local send made
+after observing a refusal retires its recovery even if delivery fails; `ui/transcript/transcript.test.tsx` and the
+provider-sign-in browser fixture exercise both states and the accepted queued,
+running and output transitions.
+The floating panel carries the same typed fact through `applyView` and replaces
+that turn's error divider with the shared card; its App receives the login action
+from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
+for states and the Claude internal-error limitation.
+
+The panel's causal recovery integration test is
+`src/conversation/adapters/store/authentication-recovery.test.tsx`: local send,
+retry and replacement use cases followed by the real transcript renderer.

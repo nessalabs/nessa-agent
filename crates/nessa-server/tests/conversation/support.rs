@@ -659,6 +659,13 @@ pub(crate) struct ProviderFactory {
     pub(crate) authority_override:
         Mutex<Option<Result<Option<PermissionAuthority>, PermissionAuthorityError>>>,
     pub(crate) close_calls: AtomicUsize,
+    /// Counts turn cancels. Session close does not increment this.
+    pub(crate) cancel_calls: AtomicUsize,
+    pub(crate) cancel_turns: Mutex<Vec<String>>,
+    pub(crate) cancel_started: Notify,
+    pub(crate) cancel_gate: Mutex<Option<Receiver<()>>>,
+    /// When false, an active turn is refused before any cancel is sent.
+    pub(crate) turn_cancel: AtomicBool,
     pub(crate) close_failure: Mutex<Option<AgentError>>,
     pub(crate) close_reports: Mutex<VecDeque<CleanupReport>>,
     pub(crate) close_finished: Notify,
@@ -1066,6 +1073,28 @@ impl ProviderSessionBackend for Backend {
             .unwrap()
             .clone()
             .unwrap_or_else(|| self.authority.read())
+    }
+    fn supports_turn_cancel(&self) -> bool {
+        self.factory.turn_cancel.load(Ordering::SeqCst)
+    }
+    fn cancel_turn(
+        &self,
+        turn: nessa_sdk::domain::agent_execution::executions::ExecutionId,
+    ) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            self.factory.cancel_calls.fetch_add(1, Ordering::SeqCst);
+            self.factory
+                .cancel_turns
+                .lock()
+                .unwrap()
+                .push(turn.as_str().to_owned());
+            self.factory.cancel_started.notify_one();
+            let gate = self.factory.cancel_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            Ok(())
+        })
     }
     fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move {

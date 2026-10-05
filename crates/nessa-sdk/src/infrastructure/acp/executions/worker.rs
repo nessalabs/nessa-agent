@@ -129,9 +129,16 @@ pub(in crate::infrastructure::acp) fn provider_failure(phase: &str, error: RpcEr
             "provider refused without a message"
         ),
     }
-    AgentError::Provider {
-        code: error.code,
-        diagnostic,
+    // ACP protocol 1 assigns -32000 to Authentication required (the pinned
+    // ACP schema), unlike a generic JSON-RPC provider code. Keep that meaning
+    // at this adapter boundary; custom providers keep their generic errors.
+    if error.code == -32000 {
+        AgentError::AuthenticationRequired { diagnostic }
+    } else {
+        AgentError::Provider {
+            code: error.code,
+            diagnostic,
+        }
     }
 }
 
@@ -343,6 +350,10 @@ struct Worker<P> {
     /// for reporting the state this runtime had not asked for yet.
     configured: bool,
     closing: bool,
+    /// Set only after `session/cancel` for the active turn is written.
+    /// A later `Cancelled` prompt result is that turn ending. Any other
+    /// cancelled result is still session teardown.
+    turn_cancel_requested: Option<ExecutionId>,
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
     settlement_facts: SettlementFacts,
@@ -400,6 +411,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         shutdown_deadline: None,
         configured: false,
         closing: false,
+        turn_cancel_requested: None,
         deferred_outcome: None,
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
@@ -709,7 +721,21 @@ impl<P: AcpProfile> Worker<P> {
             unreachable!("finalized worker settlement always reports cleanup")
         };
         let cleanup = cleanup.clone();
-        let published_failure = if execution_reply.is_some() {
+        // The execution reply already carries an expected authentication refusal.
+        // Finalized facts and cleanup establish whether another failure exists;
+        // ending this stream cleanly avoids inventing a second observation fault.
+        let authentication_refusal_only = execution_reply.is_some()
+            && settlement.provider_result().is_some_and(|result| {
+                result
+                    .as_ref()
+                    .err()
+                    .is_some_and(AgentError::authentication_required)
+            })
+            && settlement.failure().is_none()
+            && cleanup.clone().into_result().is_ok();
+        let published_failure = if authentication_refusal_only {
+            None
+        } else if execution_reply.is_some() {
             settlement.clone().into_result().err()
         } else {
             cleanup.clone().into_result().err().or(failure)
@@ -1207,6 +1233,12 @@ impl<P: AcpProfile> Worker<P> {
                 Command::SetApprovalMode(_, reply) | Command::SetEffortLevel(_, reply) => {
                     let _ = reply.send(Err(AgentError::Closed));
                 }
+                Command::CancelTurn(_, reply) => {
+                    let _ = reply.send(Err(ProviderOperationFailure::new(
+                        AgentError::Closed,
+                        ProviderSessionState::CleanupRequired,
+                    )));
+                }
             }
         }
         failure.map_or(Ok(()), Err)
@@ -1341,7 +1373,57 @@ impl<P: AcpProfile> Worker<P> {
                 self.answer_permission(execution, answer, reply).await
             }
             Command::AnswerQuestion(answer, reply) => self.answer_question(answer, reply).await,
+            Command::CancelTurn(turn, reply) => self.cancel_turn(execution, turn, reply).await,
         }
+    }
+    async fn cancel_turn(
+        &mut self,
+        execution: &mut ExecutionController,
+        turn: ExecutionId,
+        reply: tokio::sync::oneshot::Sender<ProviderOperationResult<()>>,
+    ) -> Result<(), WorkerFailure> {
+        if self.closing {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::Closed,
+                ProviderSessionState::CleanupRequired,
+            )));
+            return Ok(());
+        }
+        let active = self
+            .active
+            .as_ref()
+            .map(|active| active.execution_id.clone());
+        if active.as_ref() != Some(&turn) {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn is not active".into()),
+                ProviderSessionState::Usable,
+            )));
+            return Ok(());
+        }
+        let frame = match json_rpc::encode(
+            json_rpc::notification(
+                "session/cancel",
+                json!({"sessionId": execution.id().as_str()}),
+            ),
+            self.config.max_frame_bytes,
+        ) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                )));
+                return Ok(());
+            }
+        };
+        let result = self.send_encoded(frame, None).await.map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        });
+        if result.is_ok() {
+            self.turn_cancel_requested = Some(turn);
+        }
+        let _ = reply.send(result);
+        Ok(())
     }
     async fn set_approval_mode(
         &mut self,
@@ -1935,7 +2017,15 @@ impl<P: AcpProfile> Worker<P> {
                 .ok_or_else(|| json_rpc::protocol("missing prompt result"))?,
         )?;
         self.provider_result = Some(Ok(result));
-        if result == ExecutionOutcome::Cancelled {
+        let active_turn = self
+            .active
+            .as_ref()
+            .expect("validated active prompt")
+            .execution_id
+            .clone();
+        let turn_cancel_requested =
+            self.turn_cancel_requested.take().as_ref() == Some(&active_turn);
+        if result == ExecutionOutcome::Cancelled && !turn_cancel_requested {
             // Keep pending reviews until correlated session teardown. Never publish
             // tool/process cancellation from protocol evidence alone.
             self.deferred_outcome = Some(result);

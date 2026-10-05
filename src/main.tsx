@@ -16,6 +16,8 @@ import { createDependencies } from "./composition/dependencies"
 import { BrowserApplication } from "./composition/browser"
 import {
   hasNativeHost,
+  signInToProvider,
+  providerLoginAvailable,
   hostStartup,
   quitNessa,
   restartNessa,
@@ -45,6 +47,8 @@ if (!container) throw new Error("missing #root")
 const panel = (
   <Provider store={store}>
     <App
+      onProviderSignIn={signInToProvider}
+      canSignInToProvider={providerLoginAvailable}
       attachmentResources={dependencies.attachments}
       canChoosePaths={dependencies.canChoosePaths}
       digest={dependencies.digest}

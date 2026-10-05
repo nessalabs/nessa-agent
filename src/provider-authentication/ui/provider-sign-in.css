@@ -1,0 +1,44 @@
+/* Provider recovery shares the transcript's quiet cards and controls. */
+.provider-sign-in {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 16px 18px;
+  border: 1px solid
+    var(--desktop-rim, color-mix(in oklab, var(--foreground) 7%, transparent));
+  border-radius: var(--desktop-radius-md, 12px);
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+.provider-sign-in h3 {
+  flex: 1;
+  margin: 0;
+  font-size: var(--desktop-text-body, 13px);
+  font-weight: 500;
+}
+.provider-sign-in p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--desktop-muted, color-mix(in oklab, var(--foreground) 56%, transparent));
+  font-size: var(--desktop-text-footnote, 12px);
+}
+
+.provider-sign-in-button {
+  height: 28px;
+  flex: none;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 8.5%, transparent);
+  color: color-mix(in oklab, var(--foreground) 82%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.provider-sign-in-button:hover {
+  background: color-mix(in oklab, var(--foreground) 13%, transparent);
+}
+.provider-sign-in-button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}

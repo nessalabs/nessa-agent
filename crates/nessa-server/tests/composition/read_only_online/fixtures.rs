@@ -29,6 +29,8 @@ pub(super) struct Setup {
     pub(super) empty: String,
     /// The second paired device's receiver; `live` mode only.
     pub(super) second_receiver: Option<String>,
+    /// The second paired device's issued credential; `live` mode only.
+    pub(super) second_credential: Option<String>,
 }
 /// A profile for this gateway's paired device whose cache is `cache`: the
 /// fixture's own profile with that one field, in a new private file.

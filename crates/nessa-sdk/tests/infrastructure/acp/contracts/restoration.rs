@@ -252,7 +252,7 @@ async fn restore_failures_never_create_a_replacement_conversation() {
             "resume-failure" => assert_eq!(
                 result,
                 Err(AgentError::Provider {
-                    code: -32000,
+                    code: -32001,
                     diagnostic: Some(ProviderDiagnostic::new("restore failed")),
                 })
             ),
@@ -508,7 +508,7 @@ async fn restoration_drains_old_evidence_without_replaying_its_reported_failure(
             .await
             .into_result(),
         Err(AgentError::Provider {
-            code: -32000,
+            code: -32001,
             diagnostic: Some(ProviderDiagnostic::new(
                 "provider plan does not allow this request",
             )),

@@ -51,12 +51,16 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   assert.match(workflow, /node --test scripts\/architecture\/\*\.test\.mjs/)
   assert.match(workflow, /node scripts\/check-architecture\.mjs/)
   // A deadlocked test fails the step in minutes, not at the job's six-hour
-  // limit (#366).
+  // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
-  // The coverage gate runs the same SDK tests again, instrumented.
+  assert.doesNotMatch(
+    workflow,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk\b/,
+  )
+  // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
     workflow,
     /run: bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: \d+\r?\n/,
@@ -75,6 +79,44 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
+
+test("Linux coverage is its own job, and assembly stays with the native smoke", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  // Hosted Windows checks this file out with CRLF. A search that requires a
+  // bare LF after the job key misses every header there, and check-desktop
+  // fails the matrix leg after the Rust tests have already passed.
+  const asWindowsCheckout = workflow.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
+  for (const checkout of [workflow, asWindowsCheckout]) {
+    const jobAt = (name) => checkout.search(new RegExp(`\\n  ${name}:\\r?\\n`))
+    const localAuthStart = jobAt("local-auth")
+    const coverageStart = jobAt("sdk-domain-coverage")
+    const checksStart = jobAt("required-checks")
+    assert.ok(localAuthStart !== -1, "local-auth job")
+    assert.ok(coverageStart > localAuthStart, "sdk-domain-coverage follows local-auth")
+    assert.ok(checksStart > coverageStart, "required-checks follows sdk-domain-coverage")
+    const localAuth = checkout.slice(localAuthStart, coverageStart)
+    const coverage = checkout.slice(coverageStart, checksStart)
+    assertCoverageJobSplit(localAuth, coverage, checkout)
+  }
+})
+
+function assertCoverageJobSplit(localAuth, coverage, workflow) {
+  assert.match(localAuth, /name: Assemble the Linux desktop runtime/)
+  assert.match(localAuth, /pnpm desktop:smoke/)
+  assert.doesNotMatch(localAuth, /run: bash scripts\/check-sdk-domain-coverage\.sh/)
+  assert.match(coverage, /bash scripts\/check-sdk-domain-coverage\.sh/)
+  assert.match(coverage, /NESSA_SDK_COVERAGE_TARGET: target\/sdk-domain-coverage/)
+  assert.match(coverage, /prefix-key: sdk-domain-coverage/)
+  assert.match(coverage, /cache-workspace-crates: "true"/)
+  assert.doesNotMatch(coverage, /prepare\.mjs|desktop:smoke/)
+  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 4)
+  assert.equal(
+    workflow.match(/github\.event\.inputs\.rust-cache != 'cold'/g)?.length,
+    4,
+    "a cold measurement skips the cache and nothing else",
+  )
+  assert.match(workflow, /options:\s+- restore\s+- cold\s+default: restore/)
+}
 
 test("the existing Linux matrix leg uniquely owns direct runtime assembly", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")

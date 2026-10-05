@@ -345,6 +345,15 @@ impl SessionLifecycle {
         let state = self.state.lock().expect("session lifecycle");
         usable_provider_generation(&state)
     }
+    pub(super) fn supports_turn_cancel(&self) -> bool {
+        let state = self.state.lock().expect("session lifecycle");
+        match &state.attachment {
+            AttachmentState::Attached { provider, .. } if state.provider_ready => {
+                provider.session.supports_turn_cancel()
+            }
+            _ => false,
+        }
+    }
     pub(super) fn operation_capabilities(&self) -> OperationCapabilities {
         let state = self.state.lock().expect("session lifecycle");
         match &state.attachment {

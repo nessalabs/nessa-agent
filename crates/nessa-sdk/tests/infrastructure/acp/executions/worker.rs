@@ -238,6 +238,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             shutdown_deadline: None,
             configured: true,
             closing: true,
+            turn_cancel_requested: None,
             deferred_outcome: None,
             provider_result: None,
             settlement_facts: SettlementFacts::new(),
@@ -315,3 +316,34 @@ fn questions_are_advertised_in_the_shape_acp_reads_and_only_where_answerable() {
 
 #[path = "worker/timing.rs"]
 mod timing;
+
+#[test]
+fn acp_authentication_code_maps_to_its_own_failure_variant() {
+    for phase in ["startup", "prompt", "steering"] {
+        assert_eq!(
+            provider_failure(
+                phase,
+                RpcError {
+                    code: -32000,
+                    message: None
+                }
+            ),
+            AgentError::AuthenticationRequired { diagnostic: None }
+        );
+        for code in [-32001, -32603] {
+            assert_eq!(
+                provider_failure(
+                    phase,
+                    RpcError {
+                        code,
+                        message: Some("OAuth session expired".into())
+                    }
+                ),
+                AgentError::Provider {
+                    code,
+                    diagnostic: Some(ProviderDiagnostic::new("OAuth session expired"))
+                }
+            );
+        }
+    }
+}

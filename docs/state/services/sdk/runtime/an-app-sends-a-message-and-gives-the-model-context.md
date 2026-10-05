@@ -12,10 +12,13 @@ sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-server/src/conversation/infrastructure/context_drops.rs"
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/app_message.rs"
+  - "packages/nessa-client/src/presentation/mcp-apps-api.ts"
+  - "packages/nessa-client/src/protocol/mcp-app-validate.ts"
   - "docs/design/mcp-app-calls.md"
   - "crates/nessa-server/tests/conversation/app_messages.rs"
   - "crates/nessa-server/tests/conversation/context_drops.rs"
   - "crates/nessa-server/tests/mcp_servers/gateway.rs"
+  - "packages/nessa-client/src/presentation/mcp-apps-api.test.ts"
 diagramLinks: {}
 ---
 
@@ -25,7 +28,7 @@ An app can send a message into its conversation with `mcp.sendMessage`. The mess
 
 An app can also give the model context with `mcp.updateModelContext`. The gateway holds one context per mount, and at most four mounts. Each context's text and structured content are each at most 8 KiB, past which the update is `invalid_request`, and together at most `AppModelContext::MAX_BYTES` (8 KiB), past which it is `mcp_request_too_large`. One update per conversation runs at a time, and each is recorded before it is held. The next message admitted while nothing runs or waits takes every held context and carries them as one leading text block. A queued or steered message takes none.
 
-The gateway side is implemented: it answers both methods as described here. No client or desktop calls them yet; that wiring comes later in #390.
+The gateway side is implemented: it answers both methods as described here. The product client sends them as `client.mcpApps.sendMessage` and `client.mcpApps.updateModelContext`, refusing a request outside the schema's bounds before anything is sent. No desktop host calls them yet; that wiring comes later in #390.
 
 ## Held context
 

@@ -260,27 +260,143 @@ describe("gateway conversation projection", () => {
     })
   })
 
-  it("Stop calls gateway close and waits for acknowledgement; closing a tab only detaches", async () => {
+  it("refreshes an uncertain replay boundary after observing a newer published input", async () => {
+    const effects = scenarioEffects("echo")
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          send: async () => {
+            throw new Error("connection lost")
+          },
+          read: async (id) => ({
+            ...view(id, "B"),
+            messages: [
+              {
+                executionId: "B",
+                userText: "Later",
+                attachments: [],
+                files: [],
+                parts: [],
+                status: "failed",
+                authenticationRequired: true,
+              },
+            ],
+          }),
+        },
+      }),
+    )
+    await store.dispatch(sendDraft({ content: textContent("local") }))
+    const turn = store.getState().conversation.conversations[0]?.turns[0]
+    if (!turn || turn.from !== "user" || !turn.executionId)
+      throw new Error("missing uncertain submission")
+    expect(turn.observedInput).toBeNull()
+    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: { kind: "retry", executionId: turn.executionId },
+      }),
+    )
+    expect(
+      store
+        .getState()
+        .conversation.conversations[0]?.turns.find(
+          (held) => held.from === "user" && held.executionId === turn.executionId,
+        ),
+    ).toMatchObject({ observedInput: "B", receipt: "unknown" })
+  })
+
+  it("Stop names the captured turn and leaves the attachment open", async () => {
     const effects = scenarioEffects("echo")
     const gate = deferred<void>()
-    const close = vi.fn(async (id: string) => {
+    const sendGate = deferred<void>()
+    const stop = vi.fn(async (id: string, executionId: string) => {
       await gate.promise
-      return effects.close(id)
+      return effects.stop(id, executionId)
     })
-    const store = makeStore(createDependencies({ conversation: { ...effects, close } }))
-    await store.dispatch(sendDraft({ content: textContent("hello") }))
+    const close = vi.fn(async (id: string) => effects.close(id))
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          stop,
+          close,
+          send: async (input) => {
+            await sendGate.promise
+            return effects.send(input)
+          },
+        },
+      }),
+    )
+    const sending = store.dispatch(sendDraft({ content: textContent("hello") }))
+    await Promise.resolve()
+    const turn = store.getState().conversation.conversations[0]!.turns[0]!
+    if (turn.from !== "user" || !turn.executionId) throw new Error("missing turn")
     const stopping = store.dispatch(stopGenerating(undefined))
     await Promise.resolve()
-    expect(close).toHaveBeenCalledWith(
+    expect(stop).toHaveBeenCalledWith(
       store.getState().conversation.conversations[0]!.serverConversationId,
+      turn.executionId,
     )
+    expect(close).not.toHaveBeenCalled()
     expect(store.getState().conversation.conversations[0]!.controlPending).toBe(true)
     gate.resolve()
     await stopping
     expect(store.getState().conversation.conversations[0]!.controlPending).toBe(false)
     store.dispatch(closeConversation("c0"))
-    expect(close).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
     expect(store.getState().conversation.conversations).toHaveLength(1)
+    sendGate.resolve()
+    await sending
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(stop).toHaveBeenNthCalledWith(2, stop.mock.calls[0]![0], turn.executionId)
+  })
+
+  it("Stop names the running turn when a later turn is only queued", async () => {
+    const effects = scenarioEffects("echo")
+    const stop = vi.fn(async () => {})
+    const close = vi.fn(async () => {})
+    const seen = view("rev")
+    seen.conversationId = serverId(1)
+    seen.messages = [
+      {
+        executionId: "active",
+        parts: [
+          {
+            offset: 0,
+            kind: "text",
+            text: "working",
+            toolId: "",
+            noticeId: "",
+          },
+        ],
+        userText: "go",
+        attachments: [],
+        files: [],
+        status: "running",
+      },
+    ]
+    seen.pending = [
+      {
+        executionId: "queued",
+        text: "later",
+        attachments: [],
+        files: [],
+        mode: "queued",
+      },
+    ]
+    const store = makeStore(
+      createDependencies({
+        conversation: { ...effects, stop, close, read: async () => seen },
+      }),
+    )
+    const id = store.getState().conversation.activeId
+    store.dispatch(bindConversation({ id, serverId: serverId(1) }))
+    await store.dispatch(refreshConversation(id))
+    await store.dispatch(stopGenerating({ conversationId: id }))
+    expect(stop).toHaveBeenCalledWith(serverId(1), "active")
+    expect(close).not.toHaveBeenCalled()
   })
 
   it("discards older reads and detached-tab responses", async () => {

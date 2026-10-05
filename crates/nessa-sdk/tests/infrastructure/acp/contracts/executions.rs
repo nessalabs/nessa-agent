@@ -142,7 +142,7 @@ async fn protocol_failures_and_output_overflow_close_owned_scope() {
             assert_eq!(
                 result,
                 Err(AgentError::Provider {
-                    code: -32000,
+                    code: -32001,
                     diagnostic: Some(ProviderDiagnostic::new(
                         "provider plan does not allow this request",
                     )),
@@ -482,4 +482,45 @@ async fn an_agent_frame_over_the_inbound_ceiling_fails_although_the_host_writes_
         .into_result()
         .unwrap();
     assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn authentication_refusal_ends_observation_without_hiding_independent_audit_failure() {
+    let _slot = process_test_slot().await;
+    for reject in [false, true] {
+        let audit = Arc::new(RecordingAudit {
+            reject,
+            ..Default::default()
+        });
+        let (root, binding) = test_acp_binding_with_audit("provider-auth-error", 16, audit);
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let reply = opened.session.execute(prompt("auth")).await;
+        let report = match reply {
+            ProviderExecutionReply::Finished(report) => report,
+            _ => panic!("expected provider settlement"),
+        };
+        assert!(report
+            .provider_result()
+            .unwrap()
+            .as_ref()
+            .unwrap_err()
+            .authentication_required());
+        let observation = opened.events.next().await;
+        if reject {
+            assert!(report.failure().is_some());
+            assert!(observation.is_err());
+        } else {
+            assert!(report.failure().is_none());
+            assert!(report
+                .clone()
+                .into_result()
+                .unwrap_err()
+                .authentication_required());
+            assert!(matches!(observation, Ok(None)));
+        }
+        wait_until_gone(&root, "pid").await;
+    }
 }

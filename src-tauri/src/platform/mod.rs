@@ -12,6 +12,7 @@
 //! | Viewport pin | `WKWebView` in the content view | `WebKitWebView` in a `GtkFixed` | webview fills the window |
 //! | Live resize | AppKit notifications | size-allocate + button mask | none |
 //! | Lifecycle | accessory app, stays open when focus moves away | taskbar window, shown on launch | default window |
+//! | Provider login | Terminal CLI login | unavailable | unavailable |
 //! | Clicked link | `/usr/bin/open` | `xdg-open` | refused, with a reason |
 
 use tauri::{AppHandle, Manager, WebviewWindow, Window, WindowEvent};
@@ -25,6 +26,13 @@ mod linux;
 mod macos;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod other;
+
+#[cfg(target_os = "linux")]
+pub use linux::LinuxProviderLogin as PlatformProviderLogin;
+#[cfg(target_os = "macos")]
+pub use macos::MacosProviderLogin as PlatformProviderLogin;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub use other::OtherProviderLogin as PlatformProviderLogin;
 
 /// The OS-shaped half of the host. Shared code calls these methods; each
 /// platform crate folder fills them in.

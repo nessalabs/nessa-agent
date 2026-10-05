@@ -127,6 +127,24 @@ export function conversationReceipt(
   oneOf(text(item, "disposition"), ["queued", "injected", "settled"])
   return item as unknown as ConversationReceipt
 }
+export function conversationCommandReceipt(
+  value: unknown,
+  requestId: string,
+): { requestId: string; stage: string; outcome?: string } {
+  const item = record(value)
+  exact(item, ["requestId", "stage", "outcome"])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  oneOf(text(item, "stage"), ["accepted", "attempted", "ready", "settled"])
+  if (item.outcome !== undefined)
+    oneOf(text(item, "outcome"), [
+      "dispatched",
+      "withdrawn",
+      "cancelled",
+      "already_final",
+    ])
+  return item as { requestId: string; stage: string; outcome?: string }
+}
 export function conversationMutation(
   value: unknown,
   requestId: string,
@@ -220,12 +238,20 @@ export function conversationView(value: unknown, expected: string): Conversation
       "status",
       "error",
       "steeringTarget",
+      "authenticationRequired",
       "parts",
       "steeringOffset",
     ])
     const executionId = identity(message, "executionId")
     if (messageIds.has(executionId))
       throw new Error("Conversation response repeats a message execution")
+    if (
+      message.authenticationRequired !== undefined &&
+      typeof message.authenticationRequired !== "boolean"
+    )
+      throw new Error("Conversation response has invalid authenticationRequired")
+    if (message.authenticationRequired === true && message.status !== "failed")
+      throw new Error("Conversation authentication refusal requires a failed turn")
     if (message.steeringTarget !== undefined) {
       const target = identity(message, "steeringTarget")
       if (target === executionId)

@@ -322,6 +322,24 @@ it("routes every control with stable action and target identities", async () => 
     optionId: "allow",
   })
 })
+it("stops the named turn without closing the attachment", async () => {
+  const request = vi.fn(async () => ({
+    requestId: "action",
+    stage: "settled",
+    outcome: "cancelled",
+  }))
+  const api = createConversationApi({ request }, () => "action")
+  await expect(api.stop(conversationId, "turn")).resolves.toEqual({
+    requestId: "action",
+    stage: "settled",
+    outcome: "cancelled",
+  })
+  expect(request).toHaveBeenCalledWith("conversation.stop", {
+    conversationId,
+    requestId: "action",
+    executionId: "turn",
+  })
+})
 it("accepts bounded full replacement views and rejects mismatched identities or invalid choices", async () => {
   const request = vi.fn().mockResolvedValue(view)
   const api = createConversationApi({ request }, () => "id")

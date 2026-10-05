@@ -446,6 +446,8 @@ export interface ConversationMessage {
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
   error?: string
+  /** The provider adapter explicitly requires authentication for this failed turn. Generic provider codes and diagnostic text do not establish this fact. */
+  authenticationRequired?: boolean
   /** Execution that consumed this injected steering input; its shared reply answers this input. */
   steeringTarget?: string
   /** Provider observations in execution order; offsets address the retained SDK event sequence. */
@@ -670,6 +672,85 @@ export interface ConversationRemoveParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+}
+/** Stop one captured turn. A queued turn is withdrawn. The active turn is cancelled without closing the attachment. A finished turn records that nothing was sent. */
+export interface ConversationStopParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The captured turn. Stop never substitutes a newer one. */
+  executionId: string
+}
+/** Which command family a read-only receipt lookup names. The lookup does not admit that command. */
+export const ConversationCommandOperation = {
+  Create: "create",
+  Submit: "submit",
+  Steer: "steer",
+  Stop: "stop",
+} as const
+export type ConversationCommandOperation =
+  (typeof ConversationCommandOperation)[keyof typeof ConversationCommandOperation]
+/** Durable progress. Attempted means the original effect was authorized and its success was not saved. Ready is creation's terminal. Settled is a submit or stop terminal. */
+export const ConversationCommandStage = {
+  Accepted: "accepted",
+  Attempted: "attempted",
+  Ready: "ready",
+  Settled: "settled",
+} as const
+export type ConversationCommandStage =
+  (typeof ConversationCommandStage)[keyof typeof ConversationCommandStage]
+/** What a settled submit or stop did. Absent until the stage is settled. Already final means nothing was sent. */
+export const ConversationCommandOutcome = {
+  Dispatched: "dispatched",
+  Withdrawn: "withdrawn",
+  Cancelled: "cancelled",
+  AlreadyFinal: "already_final",
+} as const
+export type ConversationCommandOutcome =
+  (typeof ConversationCommandOutcome)[keyof typeof ConversationCommandOutcome]
+/** Non-content progress of one creation, submit, or stop. The request identity, not this object, is the idempotency key. */
+export interface ConversationCommandReceipt {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Acknowledged progress of that command. */
+  stage: ConversationCommandStage
+  /** Present only when stage is settled. */
+  outcome?: ConversationCommandOutcome
+}
+/** Read one command receipt. This writes nothing and does not enqueue, open, withdraw, or cancel. Submit and steer must repeat the original bytes so the fingerprint matches. Create repeats the original selection hints. */
+export interface ConversationReceiptParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Command family to read. A different family under this request is a conflict. */
+  operation: ConversationCommandOperation
+  /** Required for submit, steer, and stop. The captured turn. */
+  executionId?: string
+  /** Original submit or steer text. Required for those operations, omitted for create and stop. */
+  text?: string
+  /** Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
+  attachments?: ImageAttachment[]
+  /** Original submit or steer file paths, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
+  files?: LinkedFile[]
+  /** Creation hint. Omitted when the original creation named no agent. */
+  agent?: string
+  /** Creation hint. Omitted when the original creation named no model. */
+  model?: string
+  /** Creation hint. Omitted when the original creation named no preset. */
+  approvalMode?: ApprovalMode
+}
+/** Whether a receipt for that request is saved. Found is false when the principal has no such request. A deleted conversation is refused instead of answering found. */
+export interface ConversationReceiptResult {
+  /** True when this request has saved progress. */
+  found: boolean
+  /** The request that was looked up. */
+  requestId: string
+  /** Present when found is true. */
+  stage?: ConversationCommandStage
+  /** Present when the saved stage is settled. */
+  outcome?: ConversationCommandOutcome
 }
 /** Whether a failed permission answer left the domain review pending, consumed it, or could not prove either state. */
 export const ConversationPermissionSelectionState = {
@@ -1762,7 +1843,7 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
-/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first. */
+/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. callDeadlineMs is reviewDeadlineMs + callTimeoutMs + clientAllowanceMs. A client waits at least callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it; giving up sooner would drop an answer the gateway may still send. These bound a request to an open conversation. A closed one is opened first, the agent's launch and startup, and only then does the request's own budget, a review's among them, begin. No published deadline covers that opening, so a client that gives up after callDeadlineMs may still drop an answer the gateway sends later. */
 export const mcpAppCallTiming = {
   reviewDeadlineMs: 300000,
   callTimeoutMs: 60000,
@@ -1791,7 +1872,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 47,
+  maxReadyMethods: 49,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1861,6 +1942,8 @@ export const ProductMethod = {
   ConversationSend: "conversation.send",
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
+  ConversationStop: "conversation.stop",
+  ConversationReceipt: "conversation.receipt",
   ConversationAnswer: "conversation.answer",
   ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
@@ -1916,6 +1999,8 @@ export const productReadyMethods = [
   "conversation.send",
   "conversation.steer",
   "conversation.remove",
+  "conversation.stop",
+  "conversation.receipt",
   "conversation.answer",
   "conversation.answerQuestion",
   "conversation.cancel",

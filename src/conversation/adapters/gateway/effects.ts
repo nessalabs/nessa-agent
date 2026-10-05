@@ -624,6 +624,13 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
+    async stop(conversationId, executionId) {
+      try {
+        await api().stop(conversationId, executionId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
+    },
     async archive(conversationId, archived) {
       if (!reachable()) throw new ControlFailedError("not-connected", "refused")
       try {

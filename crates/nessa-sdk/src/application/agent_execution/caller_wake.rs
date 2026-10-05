@@ -59,6 +59,8 @@ pub(crate) enum CallerWaiter {
     PermissionAnswer(SessionId),
     /// `Agent::cancel_permission` on this session's Agent.
     PermissionCancellation(SessionId),
+    /// `Agent::cancel_turn` of this input.
+    TurnCancel(ExecutionId),
     /// `Agent::answer_question` on this session's Agent.
     QuestionAnswer(SessionId),
     /// `AgentInitializationError::retry_cleanup`.
@@ -138,6 +140,7 @@ impl fmt::Display for CallerWaiter {
                     session.as_str()
                 )
             }
+            Self::TurnCancel(id) => write!(formatter, "turn cancel of {}", id.as_str()),
             Self::InitializationCleanup => formatter.write_str("initialization cleanup retry"),
             Self::QuestionAnswer(session) => {
                 write!(formatter, "question answer in session {}", session.as_str())

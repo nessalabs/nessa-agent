@@ -70,6 +70,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
 export function createDesktopDependencies(
   options: {
     workspace?: WorkspaceSource
+    signInToProvider?: WorkspaceDependencies["signInToProvider"]
+    providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -112,6 +114,8 @@ export function createDesktopDependencies(
   const workspace = options.workspace ?? source ?? inMemorySource({ now, after })
   return {
     workspace,
+    signInToProvider: options.signInToProvider,
+    providerLoginAvailable: options.providerLoginAvailable,
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,
@@ -160,6 +164,11 @@ function gatewayWorkspace(
         callTool: (...args) =>
           source.appCall(args[0], () => mcpApps().then((api) => api.callTool(...args))),
         readResource: (...args) => mcpApps().then((api) => api.readResource(...args)),
+        // Nothing in the window sends either yet; #390's desktop part does,
+        // and chooses how a message is routed.
+        sendMessage: (...args) => mcpApps().then((api) => api.sendMessage(...args)),
+        updateModelContext: (...args) =>
+          mcpApps().then((api) => api.updateModelContext(...args)),
         fetchResource: (...args) => mcpApps().then((api) => api.fetchResource(...args)),
         releaseApp: (...args) => mcpApps().then((api) => api.releaseApp(...args)),
       },

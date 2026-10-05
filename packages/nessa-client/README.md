@@ -165,7 +165,7 @@ requests, and releases subscriptions. It is safe to call repeatedly.
 - `client.conversation.create({ conversationId? })` creates or reopens an agent conversation.
 - `client.conversation.send(id, text, attachments)` queues a message of text, images, or both; `steer(id, text, attachments)` uses supported steering. Pass `[]` for text alone.
 - `client.attachments.begin(id, file)` and `client.attachments.upload(ticket, file)` stage bytes so a message can refer to them by digest.
-- `client.mcpApps.callTool`, `readResource`, `fetchResource`, and `releaseApp` make an MCP App's calls to its own server, fetch its HTML, and release a mount of it.
+- `client.mcpApps.callTool`, `readResource`, `fetchResource`, and `releaseApp` make an MCP App's calls to its own server, fetch its HTML, and release a mount of it; `sendMessage` and `updateModelContext` let it speak in its conversation (MCP Apps `ui/message`, `ui/update-model-context`).
 - `client.mcpServers.list`, `save`, `remove`, and `inspect` manage the gateway's stored MCP servers for a credential that may (`mayManageMcpServers(client.productSession)`); every failure is a `NessaMcpServersError`, whose `refusal` is the typed code with its details for that code, and whose `forbidden` says the session refused the caller. Variable values go out on `save` and are never listed.
 - `client.conversation.read(id)` returns a bounded replacement view of live output, waiting input, tools, and permissions.
 - `client.conversation.list({ archived? })` lists the caller's conversations, closed ones included, newest first: title, last line said, when, whether it is running, and whether it is archived. Archived conversations are listed only when asked for. It opens no provider.
@@ -346,10 +346,10 @@ origin, as `upload` does, with the ticket in the `x-nessa-resource-ticket`
 header and never in the URL, and hands back the bytes only once their size and
 SHA-256 are the ones `readResource` described. A destructive tool waits for the
 person's answer to a review with `origin: {kind: "app", server, tool}`, and
-`callTool` waits for the review, the call and an allowance:
-`mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds the longest each call can
-take the gateway, as the protocol publishes it (`x-mcpAppCallTiming`), for a host
-that bounds an app's requests. `argumentsJson` is at most
+`callTool` waits `mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds how long
+this client waits on each call, as the protocol publishes it, for a host that
+bounds an app's requests; what those deadlines cover, and what they do not, is
+the description of `mcpAppCallTiming`, exported beside it. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
 bound throw `TypeError` before anything is sent. What an app sends — a tool's
 name, a resource's URI, the arguments' text — is held to its bounds, and to
@@ -361,12 +361,56 @@ itself. What the arguments decode to is the gateway's to judge
 `NessaRequestTooLargeError` — inside `NessaMcpAppError`, with `uncertain`
 false: the gateway would close the socket on it rather than answer.
 
-`callTool` and `readResource` fail with `NessaMcpAppError`. Its `uncertain` is
-`false` when nothing reached the app's server — `mcp_app_unknown`,
+An app speaks in its conversation through two more requests:
+
+```ts
+await client.mcpApps.updateModelContext(conversationId, app, "charts", {
+  text: "Showing April",
+  structuredContentJson: JSON.stringify({ month: 4 }),
+})
+const { executionId } = await client.mcpApps.sendMessage(
+  conversationId,
+  app,
+  "charts",
+  "Plot May next to April",
+)
+```
+
+`sendMessage` puts the text into the conversation as the person's turn,
+shown as the app's (`ConversationMessage.app`), and answers the turn it
+became. Every new message waits on its own review, and this client waits
+`mcpAppDeadlines.callToolMs` for it; while a turn runs or input waits it is
+refused `turn_running`, never queued. The same `requestId` from the same
+mount is the same turn, and is not reviewed again (the design's M6). `updateModelContext` holds what a mount gives the
+model in place of what it gave; `{}`, or only an empty text, clears it. The
+rule for a held context: the next message admitted while nothing runs and no
+input waits — the person's or an app's — takes it as it is read, and it is
+held no longer; if that message is refused, or its turn fails, it is lost,
+and the app may give it again; a message queued behind a turn, or steered
+into one, takes none; a release of the mount, or the end of the
+conversation's opening, drops it unsent. So `applied: true` means the update
+was taken and recorded, not that it is still held: a release or end that lands
+before it is held drops it unsent (the design's C17). The design states each ordering
+([docs/design/mcp-app-calls.md](../../docs/design/mcp-app-calls.md#an-app-in-its-conversation-the-gateway-390)).
+A message is 1 character to `MAX_MCP_MESSAGE_BYTES` UTF-8 bytes, and each
+part of a context at most `MAX_MCP_CONTEXT_BYTES`, as
+`mcpAppRequestProblem.message` and `.context` say; a context is a plain
+object of its own `text` and `structuredContentJson` and nothing else, since
+an array or a stray key would otherwise travel as a clear. Whether the two
+parts fit together, and whether the structure is one JSON object, is the
+gateway's to say.
+
+`callTool`, `readResource`, `sendMessage` and `updateModelContext` fail with
+`NessaMcpAppError`. Its `uncertain` is `false` when the request certainly took
+no effect — for a call, nothing reached the app's server; for a message, it
+became no turn; for a context, nothing was held: `mcp_app_unknown`,
 `mcp_server_mismatch`, `mcp_tool_not_for_app`, `mcp_request_too_large`,
-`mcp_approval_denied`, `mcp_approval_expired`, `mcp_cancelled` — and `true`
-when it may have: `mcp_session_unavailable`, `mcp_timed_out`,
-`mcp_remote_error`, `mcp_result_too_large`, or no trustworthy answer. With
+`mcp_approval_denied`, `mcp_approval_expired`, `mcp_cancelled` (for a
+message, nothing was sent), `turn_running` — and `true` when it may have:
+`mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error`,
+`mcp_result_too_large`, `submission_unresolved`, or no trustworthy answer.
+`temporarily_unavailable` and `audit_unavailable` are `true` for every
+method, a context's among them, though the gateway held nothing for either. With
 `mcp_remote_error`, `remoteError` is the server's own JSON-RPC error
 `{code, message}` when it sent one. `releaseApp` is a control and fails with
 `NessaConversationControlError`. `fetchResource` fails with

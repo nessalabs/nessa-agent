@@ -249,6 +249,9 @@ pub(super) enum SavedError {
         delivery_error: Box<SavedError>,
         cleanup_error: Option<Box<SavedError>>,
     },
+    AuthenticationRequired {
+        diagnostic: Option<SavedProviderDiagnostic>,
+    },
     Provider {
         code: i64,
         diagnostic: Option<SavedProviderDiagnostic>,
@@ -485,6 +488,9 @@ impl TryFrom<SavedError> for AgentError {
                     .map(|error| AgentError::try_from(*error).map(Box::new))
                     .transpose()?,
             },
+            SavedError::AuthenticationRequired { diagnostic } => Self::AuthenticationRequired {
+                diagnostic: diagnostic.map(|value| value.0),
+            },
             SavedError::Provider { code, diagnostic } => Self::Provider {
                 code,
                 diagnostic: diagnostic.map(|value| value.0),
@@ -600,6 +606,9 @@ impl From<AgentError> for SavedError {
             } => Self::PermissionAnswerDeliveryAndAuditFailure {
                 delivery_error: Box::new((*delivery_error).into()),
                 cleanup_error: cleanup_error.map(|error| Box::new((*error).into())),
+            },
+            AgentError::AuthenticationRequired { diagnostic } => Self::AuthenticationRequired {
+                diagnostic: diagnostic.map(SavedProviderDiagnostic),
             },
             AgentError::Provider { code, diagnostic } => Self::Provider {
                 code,

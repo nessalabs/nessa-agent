@@ -88,15 +88,17 @@ pub trait ProviderSessionDeleter: Send + Sync {
     /// failure ([`AgentError::Transport`]), a budget running out
     /// ([`AgentError::Deadline`]), an `initialize` or a delete answer the
     /// binding does not accept ([`AgentError::Protocol`]), the agent's error
-    /// response ([`AgentError::Provider`]) to `initialize` or to
+    /// response ([`AgentError::Provider`], or
+    /// [`AgentError::AuthenticationRequired`] for the ACP authentication-required
+    /// refusal) to `initialize` or to
     /// `session/delete`, or the exchange ending with no answer to give
     /// ([`AgentError::Closed`]) — its connection closed, or its task ended
     /// without one.
     ///
-    /// [`AgentError::Provider`] is only ever the agent's error answer to one
-    /// of those two, never to the list. The list read after a refusal of the
-    /// delete never supplies an error of its own: a list that names the
-    /// session, or that could not be read in full — refused, past its budget,
+    /// [`AgentError::Provider`] and [`AgentError::AuthenticationRequired`] are
+    /// only ever the agent's error answer to one of those two, never to the list.
+    /// The list read after a refusal of the delete never supplies an error of
+    /// its own: a list that names the session, or that could not be read in full — refused, past its budget,
     /// too large, a page without `sessions`, an entry without a string
     /// `sessionId`, a `nextCursor` that is neither a string nor null or
     /// repeats one already followed, too many pages — leaves the refusal standing, unchanged

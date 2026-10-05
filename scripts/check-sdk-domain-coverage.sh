@@ -5,8 +5,34 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-coverage_target=$(mktemp -d "${TMPDIR:-/tmp}/nessa-sdk-domain-coverage.XXXXXX")
-trap 'rm -rf -- "$coverage_target"' EXIT
+root=$(pwd -P)
+workspace_target="$root/target"
+
+# Never instrument the workspace `target/` directory. CI names a different
+# directory with NESSA_SDK_COVERAGE_TARGET and leaves it in place so the
+# coverage job can cache it. A local run gets a temporary directory that is
+# removed with this process. The suite stays every SDK test except
+# `link_attack_tests`: a domain-test-only filter has not been measured against
+# these thresholds, so it is not substituted here.
+if [ -n "${NESSA_SDK_COVERAGE_TARGET:-}" ]; then
+  created=0
+  if [ ! -d "$NESSA_SDK_COVERAGE_TARGET" ]; then
+    created=1
+  fi
+  mkdir -p -- "$NESSA_SDK_COVERAGE_TARGET"
+  coverage_target=$(cd -- "$NESSA_SDK_COVERAGE_TARGET" && pwd -P)
+  if [ "$coverage_target" = "$workspace_target" ]; then
+    if [ "$created" -eq 1 ]; then
+      rmdir -- "$coverage_target" 2>/dev/null || true
+    fi
+    echo "SDK domain coverage refuses the workspace target directory." >&2
+    exit 1
+  fi
+else
+  coverage_target=$(mktemp -d "${TMPDIR:-/tmp}/nessa-sdk-domain-coverage.XXXXXX")
+  trap 'rm -rf -- "$coverage_target"' EXIT
+fi
+echo "SDK domain coverage target: $coverage_target" >&2
 
 # Coverage instrumentation slows ACP cleanup handshakes enough that parallel
 # contract tests can consume each other's short scheduling margin. Run the test

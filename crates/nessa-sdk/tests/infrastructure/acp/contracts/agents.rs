@@ -306,6 +306,62 @@ fn pause_cancelled_provider() -> (
     (root, provider, waiting, release)
 }
 
+#[tokio::test]
+async fn explicit_turn_cancel_finishes_that_turn_and_keeps_the_provider_process() {
+    let _slot = process_test_slot().await;
+    let (root, provider) = test_acp_binding("turn-cancel", 32);
+    let agent = attached_agent(
+        Arc::new(provider),
+        SessionManager::open(
+            None,
+            Arc::new(InMemoryStorage::new()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(agent.supports_turn_cancel());
+    let mut events = agent.subscribe();
+    let first = agent
+        .enqueue(prompt("first"), close_action())
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let event = events.next().await.unwrap().unwrap();
+            if event.update() == &ExecutionUpdate::Message(MessageChunk::text("running")) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    agent
+        .cancel_turn(ExecutionId::new("first").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.wait().await, Ok(ExecutionOutcome::Cancelled));
+    assert_eq!(
+        agent
+            .enqueue(prompt("second"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    let launches: Vec<u32> =
+        serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();
+    assert_eq!(launches.len(), 1);
+    assert!(root.path().join("cancel-observed").exists());
+    agent.close(close_action()).await.unwrap();
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_generation_is_sealed_while_terminal_audit_is_pending() {
     let _slot = process_test_slot().await;
@@ -871,7 +927,7 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
         assert_eq!(
             attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()),).await,
             Err(AgentError::Provider {
-                code: -32000,
+                code: -32001,
                 diagnostic: Some(ProviderDiagnostic::new("restore failed")),
             }),
             "restoration {index} must reach the provider rather than exhaust the reader queue"
@@ -899,4 +955,137 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     for pid in launches {
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     }
+}
+
+#[tokio::test]
+async fn authentication_and_generic_provider_failures_keep_their_meaning_after_storage_reopen() {
+    let _slot = process_test_slot().await;
+    for (mode, expected) in [
+        (
+            "provider-auth-error",
+            AgentError::AuthenticationRequired {
+                diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+            },
+        ),
+        (
+            "provider-error",
+            AgentError::Provider {
+                code: -32001,
+                diagnostic: Some(ProviderDiagnostic::new(
+                    "provider plan does not allow this request",
+                )),
+            },
+        ),
+    ] {
+        let (root, provider) = test_acp_binding(mode, 16);
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+        let id = SessionId::new(mode).unwrap();
+        let clock =
+            Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new());
+        let manager = SessionManager::open(Some(id.clone()), storage.clone(), clock.clone())
+            .await
+            .unwrap();
+        let provider: Arc<dyn AgentProvider> = Arc::new(provider);
+        let agent = attached_agent(provider.clone(), manager).await.unwrap();
+        let final_result = agent.invoke(prompt("first"), close_action()).await;
+        let expected_final = if expected.authentication_required() {
+            Err(expected.clone())
+        } else {
+            Err(AgentError::ExecutionObservation {
+                error: Box::new(expected.clone()),
+                execution_result: Some(Box::new(Err(expected.clone()))),
+            })
+        };
+        assert_eq!(final_result, expected_final);
+        agent.close(close_action()).await.unwrap();
+        drop(agent);
+        let restored = SessionManager::open(Some(id), storage, clock)
+            .await
+            .unwrap();
+        let restored = Agent::prepare(provider, restored, Arc::new(RecordingAudit::default()))
+            .await
+            .unwrap();
+        let snapshot = restored.session_manager().snapshot().await.unwrap();
+        assert_eq!(snapshot.invocations[0].result, Some(final_result));
+        if expected.authentication_required() {
+            assert_eq!(
+                snapshot.invocations[0]
+                    .provider_report
+                    .as_ref()
+                    .expect("authentication refusal retains authoritative settlement")
+                    .provider_result(),
+                Some(&Err(expected))
+            );
+        }
+        wait_until_gone(&root, "pid").await;
+    }
+}
+
+#[tokio::test]
+async fn unsigned_codex_startup_settles_queued_input_without_provider_report_and_restores_it() {
+    let _slot = process_test_slot().await;
+    let (root, provider) = test_codex_binding("not-signed-in", 16);
+    let provider = Arc::new(provider);
+    let storage_root = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
+    let id = SessionId::new("unsigned-codex").unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        provider.clone(),
+        manager,
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let queued = agent
+        .enqueue(prompt("unsigned-input"), close_action())
+        .await
+        .unwrap();
+    let result = attach_agent(&agent, AttachmentRequest::CallerRequested(close_action())).await;
+    let auth = AgentError::AuthenticationRequired {
+        diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+    };
+    assert_eq!(result, Err(auth.clone()));
+    assert_eq!(queued.wait().await, Err(auth.clone()));
+    let saved = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(saved.invocations[0].provider_report, None);
+    assert_eq!(saved.invocations[0].result, Some(Err(auth.clone())));
+    wait_until_gone(&root, "pid").await;
+    drop(agent);
+    let manager = SessionManager::open(
+        Some(id),
+        storage,
+        Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let restored = Agent::prepare(provider, manager, Arc::new(RecordingAudit::default()))
+        .await
+        .unwrap();
+    assert_eq!(
+        restored
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .invocations[0]
+            .result,
+        Some(Err(auth.clone()))
+    );
+    assert_eq!(
+        restored
+            .enqueue(prompt("unsigned-input"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Err(auth)
+    );
 }

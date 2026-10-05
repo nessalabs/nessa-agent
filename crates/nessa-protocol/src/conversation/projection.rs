@@ -155,12 +155,42 @@ fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> Stri
         .trim_end()
         .to_owned()
 }
+// A provider report owns dispatched settlement. Before dispatch, the retained
+// terminal result owns automatic-attachment failure, including its primary cause
+// through queue audit/storage wrappers (startup_authentication tests).
+fn authentication_refusal(record: &InvocationRecord) -> Option<&AgentError> {
+    let mut error = match record.provider_report.as_ref() {
+        Some(report) => report.provider_result()?.as_ref().err()?,
+        None => record.result.as_ref()?.as_ref().err()?,
+    };
+    loop {
+        match error {
+            AgentError::AuthenticationRequired { .. } => return Some(error),
+            AgentError::MultipleOperationFailures { first_error, .. } => error = first_error,
+            AgentError::OperationAndCleanupFailure {
+                operation_error, ..
+            } => error = operation_error,
+            AgentError::StorageAfterExecution {
+                execution_result, ..
+            } => {
+                error = execution_result.as_ref().as_ref().err()?;
+            }
+            _ => return None,
+        }
+    }
+}
 fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let final_error = record.result.as_ref()?.as_ref().err()?;
     let report = record.provider_report.as_ref();
     let provider_error = report
         .and_then(|report| report.provider_result())
         .and_then(|result| result.as_ref().err());
+    if let Some(refusal) = authentication_refusal(record) {
+        let report_error = report.and_then(|report| report.clone().into_result().err());
+        return (report_error.as_ref().is_some_and(|error| error != refusal)
+            || refusal != final_error)
+            .then(|| REQUIRED_WORK_FAILURE.into());
+    }
     let Some(AgentError::Provider {
         diagnostic: Some(diagnostic),
         ..
@@ -512,6 +542,7 @@ impl Projection {
             self.view.truncated = true;
         }
         self.view.messages.push(ConversationMessage {
+            authentication_required: None,
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
@@ -1011,6 +1042,11 @@ impl Projection {
             }
         }
         self.view.messages[index].error = failure_notice(record);
+        self.view.messages[index].authentication_required = (self.view.messages[index].status
+            == ConversationMessageStatus::Failed)
+            .then_some(record)
+            .and_then(authentication_refusal)
+            .map(|_| true);
         // An ask is offered only while its execution is the one running here.
         // A settled or restarted message drops it, and so does a turn that is
         // running but not active: the gap around liveness is not an open ask.

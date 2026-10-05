@@ -26,7 +26,8 @@ use nessa_sdk::application::agent_execution::providers::{
 };
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, InvocationRecord,
-    InvocationSchedulingEvent, QueueHistoryRecord, SessionSnapshot, SubmissionAcknowledgement,
+    InvocationSchedulingEvent, QueueHistoryRecord, SessionSnapshot, StorageError,
+    SubmissionAcknowledgement,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::domain::agent_execution::executions::{
@@ -1679,6 +1680,94 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
     }
 }
 
+#[test]
+fn typed_authentication_refusal_survives_projection_and_not_diagnostic_text() {
+    for (error, expected) in [
+        (
+            AgentError::AuthenticationRequired {
+                diagnostic: Some(ProviderDiagnostic::new("OAuth session expired")),
+            },
+            Some(true),
+        ),
+        (
+            AgentError::Provider {
+                code: -32000,
+                diagnostic: Some(ProviderDiagnostic::new(
+                    "provider plan does not allow this request",
+                )),
+            },
+            None,
+        ),
+        (
+            AgentError::Provider {
+                code: -32603,
+                diagnostic: Some(ProviderDiagnostic::new("OAuth session expired")),
+            },
+            None,
+        ),
+    ] {
+        let report = ExecutionReport::new(Some(Err(error)), None, ProviderSessionState::Usable);
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(report.clone().into_result());
+        snapshot.invocations[0].provider_report = Some(report);
+        let restored = Projection::new(
+            "conversation".into(),
+            ConversationCapabilities {
+                queue: true,
+                steer: true,
+                resume: false,
+                permissions: true,
+                image_input: false,
+                agent_features: OperationCapabilities::default().into(),
+            },
+            Some(&snapshot),
+        );
+        let message = &restored.read().messages[0];
+        assert_eq!(message.authentication_required, expected);
+        if expected.is_none() {
+            assert!(message.error.as_ref().is_some_and(|value| value
+                .contains("provider plan does not allow this request")
+                || value.contains("OAuth session expired")));
+        } else {
+            assert_eq!(message.error, None);
+        }
+    }
+}
+
+#[test]
+fn authentication_recovery_keeps_independent_required_work_failure() {
+    for independent in [None, Some(AgentError::AuditFailure)] {
+        let report = ExecutionReport::new(
+            Some(Err(AgentError::AuthenticationRequired {
+                diagnostic: Some(ProviderDiagnostic::new("login expired")),
+            })),
+            independent.clone(),
+            ProviderSessionState::Usable,
+        );
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(report.clone().into_result());
+        snapshot.invocations[0].provider_report = Some(report);
+        let projected = Projection::new(
+            "conversation".into(),
+            ConversationCapabilities {
+                queue: true,
+                steer: true,
+                resume: false,
+                permissions: true,
+                image_input: false,
+                agent_features: OperationCapabilities::default().into(),
+            },
+            Some(&snapshot),
+        );
+        let view = projected.read();
+        assert_eq!(view.messages[0].authentication_required, Some(true));
+        assert_eq!(
+            view.messages[0].error.as_deref(),
+            independent.map(|_| "The turn could not complete all required work.")
+        );
+    }
+}
+
 fn shown(events: Vec<ExecutionEvent>) -> ConversationView {
     let snapshot = review_snapshot(events);
     let mut projection = projection();
@@ -1891,4 +1980,90 @@ fn shown_snapshot(snapshot: &SessionSnapshot) -> ConversationView {
         Some(&ExecutionId::new("execution").unwrap()),
     );
     projection.read()
+}
+
+#[test]
+fn startup_authentication_uses_primary_retained_cause_without_a_provider_report() {
+    let auth = AgentError::AuthenticationRequired {
+        diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+    };
+    let generic = AgentError::Provider {
+        code: -32000,
+        diagnostic: Some(ProviderDiagnostic::new("OAuth session expired")),
+    };
+    for (error, expected, notice) in [
+        (auth.clone(), Some(true), None),
+        (
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(auth.clone()),
+                subsequent_error: Box::new(AgentError::AuditFailure),
+            },
+            Some(true),
+            Some("The turn could not complete all required work."),
+        ),
+        (
+            AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(auth.clone()),
+                cleanup_error: Box::new(AgentError::CleanupUncertain),
+            },
+            Some(true),
+            Some("The turn could not complete all required work."),
+        ),
+        (
+            AgentError::StorageAfterExecution {
+                error: StorageError::Io("write failed".into()),
+                execution_result: Box::new(Err(auth.clone())),
+            },
+            Some(true),
+            Some("The turn could not complete all required work."),
+        ),
+        (
+            generic.clone(),
+            None,
+            Some("The turn could not complete all required work."),
+        ),
+        (
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(generic),
+                subsequent_error: Box::new(auth.clone()),
+            },
+            None,
+            Some("The turn could not complete all required work."),
+        ),
+    ] {
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].provider_report = None;
+        snapshot.invocations[0].result = Some(Err(error));
+        let restored = Projection::new(
+            "conversation".into(),
+            projection().read().capabilities,
+            Some(&snapshot),
+        )
+        .read();
+        let live = shown_snapshot(&snapshot);
+        assert_eq!(live.messages[0].authentication_required, expected);
+        assert_eq!(live.messages[0].error.as_deref(), notice);
+        assert_eq!(restored.messages[0].authentication_required, expected);
+        assert_eq!(restored.messages[0].error.as_deref(), notice);
+    }
+    // A real report remains authoritative even if a later local operation is auth-related.
+    for provider_result in [
+        Ok(ExecutionOutcome::Completed),
+        Err(AgentError::Provider {
+            code: -32000,
+            diagnostic: None,
+        }),
+    ] {
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(Err(auth.clone()));
+        snapshot.invocations[0].provider_report = Some(ExecutionReport::new(
+            Some(provider_result),
+            None,
+            ProviderSessionState::Usable,
+        ));
+        assert_eq!(
+            shown_snapshot(&snapshot).messages[0].authentication_required,
+            None
+        );
+    }
 }
