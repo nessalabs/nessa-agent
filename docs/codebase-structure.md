@@ -1565,7 +1565,16 @@ receipt that fences it. Cache/command evidence lives under
 names ordering and resource evidence. Real paired-credential client/gateway
 process, restart, output loss and authority-order evidence lives under
 `crates/nessa-server/tests/composition/read_only_online.rs`, with canonical gateway provisioning and
-client/encoder support in its `read_only_online/fixtures/` children. Pure parser
+client/encoder support in its `read_only_online/fixtures/` children. The
+`read_only_online/semantic.rs` acceptance corpus uses `fixtures/semantic.rs` to
+produce real SDK Agent decisions through the gateway service and its canonical
+record/metadata stores. Its `semantic/storage.rs` child delegates the real writer
+and captures only successfully confirmed producer candidates. Public fold replay
+and checkpoint continuation compare with those independent snapshots; cached
+committed reads separately check incremental/full parity. The public core watch
+command resumes the rich prefix through actual hint passes. Independent native
+core processes compare retained views,
+progress, live suffixes and deletion after restart. Pure parser
 and JSON presentation evidence lives under `crates/nessa-client-core/tests/read_only_sync/entrypoint/`,
 the status decision's and the watch loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
 the session's watch evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/watch.rs`, and the

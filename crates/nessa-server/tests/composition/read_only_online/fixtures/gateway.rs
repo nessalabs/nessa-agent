@@ -75,12 +75,20 @@ struct GatedRead {
 /// Live mode's held head read: the head reads counted so far, the one
 /// `hold` named (zero for none), and the `release` that lets it answer.
 #[derive(Default)]
-struct HeadHold {
+pub(super) struct HeadHold {
     count: AtomicUsize,
     held: AtomicUsize,
     release: tokio::sync::Notify,
 }
 impl HeadHold {
+    /// Hold the next head read while the semantic producer settles.
+    pub(super) fn hold_next(&self) {
+        self.held
+            .store(self.count.load(Ordering::SeqCst) + 1, Ordering::SeqCst);
+    }
+    pub(super) fn release(&self) {
+        self.release.notify_one();
+    }
     /// Hold the second head read from now: a `watch`'s discovery reads the
     /// first, its recheck pass the second.
     fn hold_recheck(&self) {
@@ -105,7 +113,9 @@ impl RecordReadSource for GatedRead {
                 // The recheck pass `hold` named answers only after `release`,
                 // so a commit acknowledged in between lands while it reads
                 // the head (committed change watches L9).
-                ("live", Some(count)) if count == self.heads.held.load(Ordering::SeqCst) => {
+                ("live" | "semantic", Some(count))
+                    if count == self.heads.held.load(Ordering::SeqCst) =>
+                {
                     self.heads.release.notified().await
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
@@ -399,6 +409,10 @@ async fn gateway_child() {
             revoked_at: SystemClock.unix_seconds(),
         })
         .unwrap();
+    }
+    if mode == "semantic" {
+        super::semantic::serve(root, &setup, storage, metadata, heads).await;
+        return;
     }
     for (target, large) in [(&setup.conversation, true), (&setup.empty, false)] {
         let id = ConversationId::new(target).unwrap();
