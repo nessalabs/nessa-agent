@@ -855,6 +855,18 @@ gateway-wide slots are held by those tasks, not by the socket, so a caller
 that reconnects cannot start calls past them. They are not shared out by
 person: a gateway serves its one owner, whose apps they all are.
 
+The refusal lane holds one frame, and the writer sends a control frame before
+a refusal. A call past the app lane waits for a place on that lane. While it
+waits, the socket still reads: a control frame is admitted, and a further app
+call is held until that place is free. A stalled refusal does not leave a
+release unread.
+
+| # | In flight | What arrives | Effect |
+| --- | --- | --- | --- |
+| L1 | 4 app reads, their `mcp.releaseApp` being written | 4 further reads | each further read is `temporarily_unavailable`; each release is answered; the socket stays up |
+| L2 | the same, with further reads still unread ahead of releases | those releases, and more reads than the lane | the reads are refused; the releases are answered; the socket stays up |
+| L3 | one app refusal waiting because the writer is inside a control frame, and a further read is held behind it | `mcp.releaseApp` | the release is admitted before the refusal is sent; the further read is not |
+
 ## Tests
 
 Each row above has a test, named after it:
@@ -868,6 +880,9 @@ Each row above has a test, named after it:
   `http.rs`, and `gateway.rs` (a redeemed ticket in no log line or trace).
 - Lanes over the socket: `mcp_app_lane` in
   `crates/nessa-server/tests/mcp_servers/gateway.rs`.
+  L1 `a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket`.
+  L2 `releases_behind_a_burst_of_refused_reads_are_still_answered`.
+  L3 `a_release_is_admitted_while_an_app_refusal_waits`.
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `error_code.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`;
