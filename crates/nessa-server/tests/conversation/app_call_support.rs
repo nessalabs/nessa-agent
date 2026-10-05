@@ -452,6 +452,8 @@ impl Fixture {
 
     /// As [`Self::new`], its apps reporting each context they drop to
     /// `dropped` — a sink composition wired — rather than to `drops`.
+    /// Its one user, composition's MCP test, is Unix-only.
+    #[cfg(unix)]
     pub(crate) async fn dropping_to(dropped: Arc<dyn DroppedContexts>) -> Self {
         Self::built(caller("fixture"), DELETION_BUDGETS, Some(dropped)).await
     }
