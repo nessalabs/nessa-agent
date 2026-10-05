@@ -1831,3 +1831,66 @@ async fn an_inspection_is_not_started_unaudited_and_keeps_both_causes() {
         })
     );
 }
+
+/// A remove from a hand-edited list past a bound (here, more servers than
+/// allowed) is written, not refused: removing adds no problem, and it is the
+/// way back. The live set is kept while the list is still past the bound, the
+/// outcome says so, and the remove that brings it within takes it live
+/// (found by #482's browser check).
+#[tokio::test]
+async fn a_remove_from_a_list_past_its_bounds_is_written_and_recovers() {
+    let names: Vec<String> = (0..18).map(|i| format!("s{i:02}")).collect();
+    let files = MemoryFiles::holding(config(names.iter().map(|n| entry(n)).collect()));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, servers) = settings_for(files.clone(), audit.clone());
+    let kept = live(&servers);
+    // A save is still refused for the bound.
+    let revision = settings.list().await.unwrap().revision;
+    assert!(matches!(
+        settings
+            .edit(initiator(), revision.clone(), save("s00"))
+            .await,
+        Err(McpServerSettingsError::Invalid(EditProblem::Server(
+            ServerProblem::TooMany
+        )))
+    ));
+    audit.records.lock().unwrap().clear();
+    let revision = settings
+        .edit(initiator(), revision, remove("s17"))
+        .await
+        .unwrap();
+    assert_eq!(stored(&files).len(), 17);
+    assert_eq!(
+        live(&servers),
+        kept,
+        "the live set followed a list past its bound"
+    );
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Applied {
+            live_set_replaced: false,
+            ..
+        }
+    ));
+    // The managed server counts toward the bound, so the list is within it
+    // at 15 configured servers.
+    let revision = settings
+        .edit(initiator(), revision, remove("s16"))
+        .await
+        .unwrap();
+    assert_eq!(live(&servers), kept);
+    audit.records.lock().unwrap().clear();
+    let _ = settings
+        .edit(initiator(), revision, remove("s15"))
+        .await
+        .unwrap();
+    assert_eq!(stored(&files).len(), 15);
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Applied {
+            live_set_replaced: true,
+            ..
+        }
+    ));
+    assert!(live(&servers).contains(&"s14".to_owned()));
+}
