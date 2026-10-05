@@ -877,12 +877,15 @@ bounds — stays the gateway's and the client's to say.
   adapter asks it first: an uncertain error that the table would read as
   refused, busy or server-gone is `{kind: "uncertain", serverGone}`, never a
   refusal, so an app does not send again a message that may already be the
-  conversation's turn (the gateway can answer `temporarily_unavailable` or
-  `conversation_closed` after the agent has it, M15). Only then is a code
-  read through `outcomes` in `mcp-app-server.ts`, by `answerFor`, the same
-  table `tools/call` reads, for its words and for whether the server is
-  gone; `turn_running` is `{refused: "turn-running"}`, "The conversation is
-  busy". What the app is told:
+  conversation's turn. Only `temporarily_unavailable` (M15) and M14's codes
+  (`audit_unavailable`, `conversation_storage_unavailable`,
+  `agent_operation_failed`) can be answered after the agent may have the
+  message; `conversation_closed` and `mcp_session_unavailable` are uncertain
+  because the client cannot prove they were refused before dispatch. Only
+  then is a code read through `outcomes` in `mcp-app-server.ts`, by
+  `answerFor`, the same table `tools/call` reads, for its words and for
+  whether the server is gone; `turn_running` is `{refused: "turn-running"}`,
+  "The conversation is busy". What the app is told:
 
   | answer | `ui/message` | `ui/update-model-context` |
   | --- | --- | --- |
@@ -905,10 +908,15 @@ bounds — stays the gateway's and the client's to say.
   held back; messages are not queued. Each update carries the signal the
   bridge gives its request (`settle` in `bridge.ts`), aborted once the
   bridge has answered the request — a timeout among those — or the mount is
-  released. An update whose signal is aborted when its turn comes is dropped
-  unsent, and the next goes in its place, so the queue holds no more than the
-  bridge's live requests (`pendingLimit`), nothing is sent after the app was
-  told it timed out, and nothing after its mount was let go.
+  released — the view failing among those, not only its end. An update
+  whose signal is aborted when its turn comes is dropped unsent, and the next
+  goes in its place. So the sends are bounded, not the queue: an update given
+  up on may still wait its turn in the chain, but what reaches the gateway is
+  never more than the bridge had requests waiting (`pendingLimit`), nothing
+  is sent after the app was told it timed out, and nothing after its mount
+  was let go. Each request's abort listener on the mount's signal is removed
+  once the request is settled, and a mount's queue entry once it drains, so
+  neither grows with the requests a mount makes.
 - **D-E. Routing** (`dependencies.ts`). `sendMessage` goes through the
   source's `appCall`, as `callTool` does, so the conversation is read each
   round while the message waits on its review (#436). `updateModelContext`
@@ -929,8 +937,12 @@ bounds — stays the gateway's and the client's to say.
   `data-message-app` `<server>/<tool>`), plain text in reading order. It
   wraps rather than being cut, so both names are always whole and no `title`
   repeats them; each name is in its own `<bdi>` (`said.tsx`), so a name
-  written right to left cannot reorder the line. A waiting app message has
-  the label and no delivery state.
+  written right to left cannot reorder the line. A name cannot end its own
+  isolation nor turn its letters round: `said.tsx`, the one owner of showing
+  a name, shows every bidi control in it (U+202A–U+202E, U+2066–U+2069,
+  U+200E, U+200F, U+061C) as U+FFFD before isolating it, in the label, the
+  card's head and the overview row alike. `data-message-app` keeps the names
+  as they came. A waiting app message has the label and no delivery state.
 - **D-I. The review says what it asks.** `ConversationPermission.ask` is
   `"tool" | "message"`, owned by the gateway's `ReviewAsk` (`review_of`);
   the agent's reviews are `"tool"`. The client refuses a view whose review
@@ -941,7 +953,9 @@ bounds — stays the gateway's and the client's to say.
   (`approvalHead`, `approvalRequest`): the agent's command, an app's tool,
   or an app's message — "The `<server>` app wants to send a message as you",
   its command the app's tool and `{"text": …}`. The names in the head are in
-  `<bdi>`, and in the row's accessible name between FSI and PDI. The answers'
+  `<bdi>`, and in the row's accessible name between FSI and PDI; an app's
+  tool command, in the row's accessible name and its visible command, is
+  isolated the same way, its bidi controls shown as U+FFFD (D-H). The answers'
   tooltips are worded by `ask` too (`answerTips`): "Don’t send it" and "Send
   it once" for a message.
 - **D-J. Sample and fixtures.** The fixture app has `message` and `context`
@@ -1035,18 +1049,20 @@ Each row has at least one test, named after it.
   server gone), D7, D8, D10 with D-G, D11 with D12, D14, D16; D15 and D-D
   with the gateway's adapter behind the bridge (the signal aborted on an
   answer, a timeout and a release; a release mid-queue sends nothing more; a
-  timed-out update is not sent; a flood of timed-out updates sends no more
-  than were live).
+  view that fails mid-queue sends nothing more; a timed-out update is not
+  sent; a flood of timed-out updates sends no more than were live; settled
+  requests leave no abort listener on the mount's signal).
 - `src/desktop/widgets/app/adapters/gateway/app-messages.test.ts`: D1, D3,
   D4 (each code), D5 (`temporarily_unavailable` uncertain), D6 (each code,
   certain and uncertain), D7, D-B (certainty first: every certain code is
   the outcome a `tools/call` gets, every uncertain one never a refusal), D11,
   D12, D13, D14 (each code, certain and uncertain), D15 (the order, going on
   after a refusal or a failure, an aborted update dropped and the next
-  sent), D-F.
+  sent; a drained mount leaves no queue entry), D-F.
 - `src/desktop/widgets/app/fixture/fixture-plugin.test.ts`: D1 and D3 for
-  the sample's conversation, which asks `appMessageText`, the adapter's own
-  check, so it draws no message a gateway would refuse.
+  the sample's conversation, which asks `appMessageText`
+  (`application/app-message.ts`), the check the adapter asks too, so it
+  draws no message a gateway would refuse.
 - `src/desktop/widgets/app/adapters/gateway/mcp-app-server.test.ts`: the
   shared table is total, `turn_running` among the refusals.
 - `src/desktop/widgets/app/model/messages.test.ts`: D-A (`contentText`).
@@ -1058,9 +1074,12 @@ Each row has at least one test, named after it.
 - `src/desktop/workspace/ui/transcript/transcript.test.tsx`: D17 (the label:
   no `title`, `data-message-app` `server/tool`, each name in a `<bdi>`), D19
   (the head over every combination the client lets through, its names in
-  `<bdi>`).
+  `<bdi>`), D-H's bidi controls (the reviewer's names, a stray PDI then an
+  embedding and an override, shown as U+FFFD in the label and the head).
 - `src/desktop/workspace/ui/overview/overview.test.tsx`: D19 (the row, its
-  server isolated; the row's and the peek's tooltips by `ask`).
+  server isolated; the row's and the peek's tooltips by `ask`), D-H's bidi
+  controls (the row's accessible name and visible command, the app's command
+  isolated).
 - `packages/nessa-client/src/protocol/conversation-validate.test.ts`: D19
   (`ask` a closed set; missing or unknown refuses the view; the agent's
   review asking `message` refuses it).
@@ -1071,9 +1090,11 @@ Each row has at least one test, named after it.
   reviews ask a tool (`a_review_says_what_each_offered_option_decides`).
 - In a browser (Chromium and WebKit, both layouts): `mcp-apps.mjs --only
   message` (D1, D4, D17, D-J) and `app-review.mjs --only
-  message,message-card,message-overview,message-label` (D9, D17, D18, D19,
-  the long message's card at 280–900 px, and the label with the longest
-  names whole in a 280–900 px column and an 800×480 window); their contracts
+  message,message-card,message-overview,message-label,message-bidi` (D9,
+  D17, D18, D19, the long message's card at 280–900 px, the label with the
+  longest names whole in a 280–900 px column and an 800×480 window, and the
+  reviewer's bidi names drawn in order in the label, the head and the row);
+  their contracts
   are in
   [`verification/desktop/CHECKLIST.md`](../../verification/desktop/CHECKLIST.md).
 

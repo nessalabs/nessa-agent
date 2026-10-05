@@ -27,8 +27,8 @@ import type {
   Timers,
 } from "../application/ports"
 import type { PageContext } from "../model/host-context"
+import { appMessageText } from "../application/app-message"
 import { deadlines } from "../application/bridge"
-import { appMessageText } from "../adapters/gateway/app-messages"
 import { appMimeType } from "../model/resource"
 import { appPlugin } from "../ui/app-plugin"
 import { fixtureAppHtml } from "./fixture-app"
@@ -79,9 +79,9 @@ export const noModelForContext = "The sample has no model to give context to"
 /**
  * The fixture app's conversation: its message given to `write` as the
  * fixture server's app, its blocks' text as the gateway's adapter makes it
- * and held to the same bounds (`appMessageText`): past them it is `invalid`,
- * in the client's words, and nothing is written — so the sample draws no
- * message a gateway would refuse (gate 7). A message `write` refuses is the
+ * and held to the same bounds (`appMessageText`, `application/app-message.ts`):
+ * past them it is `invalid`, in the client's words, and nothing is written —
+ * so the sample draws no message a gateway would refuse (gate 7). A message `write` refuses is the
  * app's message refused (`isError`), and nothing was written. The sample's
  * replies are scripted, so a context is refused, never answered as if a
  * model had it.

@@ -8,7 +8,9 @@
  *
  * What the app sent is already read into blocks of text
  * (`model/messages.ts`), and `contentText` makes them the one text sent on:
- * a message's, or a context's beside its structured content, encoded. A
+ * a message's (`appMessageText`, `application/app-message.ts`, which the
+ * sample's conversation asks too), or a context's beside its structured
+ * content, encoded. A
  * context with neither part — `{}`, no blocks, or only empty ones — is sent
  * with neither, which clears what the mount gave (D12, the gateway's C7).
  * Both are held to the client's bounds (`mcpAppRequestProblem`), its owner,
@@ -30,8 +32,10 @@
  * recorded last stands (D15, the gateway's C8). Another mount's are not held
  * back. An update whose signal is aborted before its turn — the bridge has
  * answered it, a timeout among those, or its mount was released — is never
- * sent, and the next goes in its place: the queue holds no more than the
- * bridge has requests waiting (`pendingLimit`). A message is not queued:
+ * sent, and the next goes in its place. So the sends are bounded, not the
+ * queue: an update given up on still waits its turn in the chain, but is
+ * dropped there unsent, and what reaches the gateway is never more than the
+ * bridge had requests waiting (`pendingLimit`). A message is not queued:
  * every one waits on its own review.
  */
 import {
@@ -40,8 +44,8 @@ import {
   NessaMcpAppError,
   type McpAppsApi,
 } from "@nessa/client"
+import { appMessageText } from "../../application/app-message"
 import type { ConversationAnswer, McpAppConversation } from "../../application/ports"
-import type { JsonObject } from "../../model/json-rpc"
 import { contentText } from "../../model/messages"
 import { answerFor } from "./mcp-app-server"
 
@@ -68,23 +72,6 @@ function answered(error: unknown): ConversationAnswer {
   const uncertain = error instanceof NessaMcpAppError && error.uncertain
   if (!uncertain || answer.kind === "failed") return answer
   return { kind: "uncertain", serverGone: answer.kind === "server-gone" }
-}
-
-/**
- * The one text an app's message blocks are sent as, or why they cannot be:
- * the client's words when it is outside its bounds (D3). Every conversation
- * an app's message reaches asks this before taking it — the gateway's here,
- * and the sample's (`fixture/fixture-plugin.ts`) — so neither takes a message
- * the other would refuse.
- */
-export function appMessageText(
-  content: readonly JsonObject[],
-):
-  | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "invalid"; readonly reason: string } {
-  const text = contentText(content)
-  const problem = mcpAppRequestProblem.message(text)
-  return problem ? { kind: "invalid", reason: problem } : { kind: "text", text }
 }
 
 /** The app's conversation, through the gateway's `client.mcpApps`. */

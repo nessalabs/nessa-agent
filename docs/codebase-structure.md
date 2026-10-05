@@ -274,7 +274,9 @@ writing the full defaults on first launch is buying.
   copies, the CSP built from `_meta.ui.csp`, display modes onto places, the
   host context and one view's lifecycle (`app/model/`); the `ui/*` bridge
   and its ports — the server, the tool calls, the conversation, links,
-  downloads, the timers (`app/application/`); the frame transport, the page's
+  downloads, the timers — and the one text an app's message is sent as,
+  held to the client's bounds, which the gateway's conversation and the
+  sample's both ask (`app-message.ts`) (`app/application/`); the frame transport, the page's
   style variables, where the sandbox proxy is and its frame's sandbox flags
   (`app/adapters/dom/`); the server port over the gateway's
   `client.mcpApps` — the typed outcomes, the resource ticket redeemed once,
