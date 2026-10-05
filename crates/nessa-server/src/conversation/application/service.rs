@@ -84,7 +84,7 @@ use std::{
 
 use tokio::{
     sync::{
-        watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
+        oneshot, watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
         RwLockReadGuard, Semaphore,
     },
     task::JoinHandle,
@@ -116,10 +116,12 @@ pub struct ConversationDeletionBudgets {
     /// stop: a delete's stop still unconfirmed after it is carried on
     /// in-process until it is (`waiting_for`).
     pub stop: Duration,
-    /// How long a delete asks again for the lease on a conversation's saved
-    /// history before it reports the history still held. A stopped agent's
-    /// last handles let go of their lease as the tasks holding them finish,
-    /// which is soon after the stop but not at it.
+    /// How long a delete, or an opening, asks again for the lease on a
+    /// conversation's saved history before it reports the history still held.
+    /// A stopped agent's last handles let go of their lease as the tasks
+    /// holding them finish, which is soon after the stop but not at it
+    /// (`a_read_right_after_a_persons_close_is_not_busy`,
+    /// `an_opening_stops_waiting_for_a_history_lease_at_its_bound`).
     pub history_lease: Duration,
 }
 
@@ -1302,13 +1304,32 @@ impl ConversationService {
                                 }
                             };
                             let session_id = conversation_session(&id);
-                            let manager = SessionManager::open(
-                                Some(session_id),
-                                service.inner.storage.clone(),
-                                service.inner.message_commit_clock.clone(),
-                            )
-                            .await
-                            .map_err(|error| {
+                            let storage = service.inner.storage.clone();
+                            let clock = service.inner.message_commit_clock.clone();
+                            // The stopped agent's last handles may still hold
+                            // this history. Wait them out, within the lease
+                            // bound, instead of answering Busy once. A stop
+                            // ends that wait: the opening must not sit out the
+                            // lease and then launch a provider
+                            // (`an_opening_waiting_on_a_history_lease_stops_with_the_service`).
+                            let opened = tokio::select! {
+                                opened = service.while_history_busy(|| {
+                                    let storage = storage.clone();
+                                    let clock = clock.clone();
+                                    let session_id = session_id.clone();
+                                    async move {
+                                        SessionManager::open(Some(session_id), storage, clock)
+                                            .await
+                                    }
+                                }) => opened,
+                                _ = stops.changed() => {
+                                    return Err(OpeningFailure {
+                                        cause: ConversationError::Unavailable,
+                                        holds: false,
+                                    });
+                                }
+                            };
+                            let manager = opened.map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),
@@ -1470,7 +1491,10 @@ impl ConversationService {
         .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         if let Some(slot) = slot {
-            self.stop_slot(id, slot, &actor, &McpAppInitiator::System)
+            // Past the budget the stop carries on and lets the slot go once
+            // the close is confirmed. Leaving it would keep the reopened
+            // agent, and the next submission would be admitted there.
+            self.stop_and_release(id, slot, &actor, &McpAppInitiator::System)
                 .await
                 .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         }
@@ -2775,21 +2799,34 @@ impl ConversationService {
             // Its apps' end drops what they still hold, each drop reported
             // to the drop recorder there and then: the close answers its own
             // result, not their records (row C15b).
-            let (closed, may_release) = if pending_mode.is_some() {
+            let (closed, released) = if pending_mode.is_some() {
                 let slot = service.inner.conversations.lock().await.get(&id).cloned();
                 match slot {
-                    Some(slot) => {
-                        let stopped = service
-                            .stop_slot(&id, slot, &actor, &initiator_of(&actor))
-                            .await
-                            .map_err(|_| ConversationError::ApprovalModeUncertain);
-                        let may_release = stopped.is_ok();
-                        (stopped, may_release)
-                    }
-                    None => (Ok(()), true),
+                    Some(slot) => match service
+                        .finish_pending_close(&id, slot, &actor, &initiator_of(&actor), &caller)
+                        .await
+                    {
+                        // Uploads were let go before the slot, inside the close.
+                        PendingClose::Closed { uploads } => (Ok(()), uploads),
+                        // The carry-on lets the uploads go, then the slot. This
+                        // answer does not mean they stay held.
+                        PendingClose::Stopped(StopFailure::OverBudget) => {
+                            (Err(ConversationError::ApprovalModeUncertain), Ok(()))
+                        }
+                        PendingClose::Stopped(_) => {
+                            if service.inner.attachments.is_some() {
+                                tracing::warn!(
+                                    conversation_id = %id,
+                                    "a conversation that did not close keeps its uploads"
+                                );
+                            }
+                            (Err(ConversationError::ApprovalModeUncertain), Ok(()))
+                        }
+                    },
+                    None => (Ok(()), service.release_closed_uploads(&id, &caller).await),
                 }
             } else {
-                match service.resolve(&id, &caller).await {
+                let (closed, may_release) = match service.resolve(&id, &caller).await {
                     Ok(live) => {
                         service.end_apps(&id, &live, &initiator_of(&actor));
                         let result = live.agent.close(actor).await;
@@ -2814,29 +2851,19 @@ impl ConversationService {
                     // has queued either, so its files stay where they are and the
                     // next close, which can open it, lets them go.
                     Err(error) => (Err(error), false),
-                }
-            };
-            let released = match (&service.inner.attachments, may_release) {
-                (Some(attachments), true) => {
-                    attachments
-                        .release(AttachmentRelease {
-                            organization_id: caller.organization_id.clone(),
-                            conversation_id: id.clone(),
-                            cause: AttachmentReleaseCause::ConversationClosed,
-                            initiator_principal_id: caller.principal_id.clone(),
-                            initiator_surface_id: caller.surface_id.clone(),
-                            correlation_id: caller.action_id.clone(),
-                        })
-                        .await
-                }
-                (Some(_), false) => {
+                };
+                let released = if may_release {
+                    service.release_closed_uploads(&id, &caller).await
+                } else if service.inner.attachments.is_some() {
                     tracing::warn!(
                         conversation_id = %id,
                         "a conversation that did not close keeps its uploads"
                     );
                     Ok(())
-                }
-                (None, _) => Ok(()),
+                } else {
+                    Ok(())
+                };
+                (closed, released)
             };
             match (closed, released) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -3427,14 +3454,36 @@ impl ConversationService {
         &self,
         id: &ConversationId,
     ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
+        let storage = self.inner.storage.clone();
         let session = conversation_session(id);
+        self.while_history_busy(|| {
+            let storage = storage.clone();
+            let session = session.clone();
+            async move { storage.open_existing(session).await }
+        })
+        .await
+    }
+
+    /// Call `attempt` again while it answers [`StorageError::Busy`], for at
+    /// most [`ConversationDeletionBudgets::history_lease`]. One wait, for a
+    /// delete taking the lease and for an opening taking it: a stopped
+    /// agent's last handles let the history go soon after the stop, not at
+    /// it. Still busy at the bound is [`StorageError::Busy`]
+    /// (`a_read_right_after_a_persons_close_is_not_busy`,
+    /// `an_opening_stops_waiting_for_a_history_lease_at_its_bound`,
+    /// `a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).
+    async fn while_history_busy<T, F, Fut>(&self, mut attempt: F) -> Result<T, StorageError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, StorageError>>,
+    {
         let deadline = Instant::now() + self.inner.deletion_budgets.history_lease;
         loop {
-            match self.inner.storage.open_existing(session.clone()).await {
+            match attempt().await {
                 Err(StorageError::Busy) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                opened => return opened,
+                result => return result,
             }
         }
     }
@@ -3858,7 +3907,7 @@ impl ConversationService {
     ) -> Result<(), StopFailure> {
         match tokio::time::timeout(
             self.inner.deletion_budgets.stop,
-            self.stopping(id, slot, None, actor, ended_by),
+            self.stopping(id, slot, None, actor, ended_by, ConfirmedClose::ReleaseSlot),
         )
         .await
         {
@@ -3905,13 +3954,161 @@ impl ConversationService {
                     Some(submissions),
                     &actor,
                     &McpAppInitiator::System,
+                    ConfirmedClose::ReleaseSlot,
                 )
                 .await
         });
+        self.join_stop(stop).await
+    }
+
+    /// Stop one owner, as [`Self::stop_slot`] does, except a stop past the
+    /// budget is not abandoned. This answers [`StopFailure::OverBudget`], and
+    /// the stop carries on until the close is confirmed and the slot is
+    /// released, as the desktop stop does ([`Self::stop_after_submissions`]).
+    /// The slot is gone before the next submission, which opens the
+    /// conversation again
+    /// (`a_pending_mode_close_past_its_budget_lets_the_agent_go`,
+    /// `a_mode_retirement_past_its_budget_lets_the_agent_go`).
+    async fn stop_and_release(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+        ended_by: &McpAppInitiator,
+    ) -> Result<(), StopFailure> {
+        let service = self.clone();
+        let id = id.clone();
+        let actor = actor.clone();
+        let ended_by = ended_by.clone();
+        let stop = tokio::spawn(async move {
+            service
+                .stopping(
+                    &id,
+                    slot,
+                    None,
+                    &actor,
+                    &ended_by,
+                    ConfirmedClose::ReleaseSlot,
+                )
+                .await
+        });
+        self.join_stop(stop).await
+    }
+
+    /// Stop one owner for a close that retires a pending mode change, as
+    /// [`Self::stop_and_release`] does. The slot stays until this close's
+    /// uploads are let go, so a conversation that opens again cannot have
+    /// those new uploads retired by this close
+    /// (`a_pending_mode_close_past_its_budget_lets_the_uploads_go_before_the_slot`).
+    ///
+    /// Within the budget the caller lets the uploads go, then the task
+    /// releases the slot. Past the budget the caller has already answered, so
+    /// the task lets the uploads go in that caller's name and only then
+    /// releases the slot. Either way the uploads are let go once
+    /// (`a_pending_mode_close_within_its_budget_releases_uploads_once`,
+    /// `a_pending_mode_close_past_its_budget_lets_the_uploads_go`).
+    /// A release that fails after the caller has gone is logged with its
+    /// error: the attempt was made, and the failure is not discarded
+    /// (`a_pending_mode_close_past_its_budget_still_asks_to_let_the_uploads_go_when_that_fails`).
+    async fn finish_pending_close(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+        ended_by: &McpAppInitiator,
+        caller: &ConversationCaller,
+    ) -> PendingClose {
+        let (confirmed_tx, confirmed_rx) = oneshot::channel();
+        // `true` once the caller has let the uploads go. `false` means this
+        // task does, which is the path past the budget.
+        let (handoff_tx, handoff_rx) = oneshot::channel();
+        let stopping_service = self.clone();
+        let releasing = self.clone();
+        let stop_id = id.clone();
+        let release_id = id.clone();
+        let release_caller = caller.clone();
+        let stop_actor = actor.clone();
+        let ended_by = ended_by.clone();
+        let slot_for_release = Arc::clone(&slot);
+        tokio::spawn(async move {
+            let stopped = stopping_service
+                .stopping(
+                    &stop_id,
+                    slot,
+                    None,
+                    &stop_actor,
+                    &ended_by,
+                    ConfirmedClose::HoldSlot,
+                )
+                .await;
+            let confirmed = stopped.is_ok();
+            let _ = confirmed_tx.send(stopped);
+            if !confirmed {
+                return;
+            }
+            let caller_released = handoff_rx.await.unwrap_or(false);
+            if !caller_released {
+                if let Err(error) = releasing
+                    .release_closed_uploads(&release_id, &release_caller)
+                    .await
+                {
+                    tracing::error!(
+                        conversation_id = %release_id,
+                        %error,
+                        "a close confirmed after its budget could not let its uploads go"
+                    );
+                }
+            }
+            releasing.release_slot(&release_id, &slot_for_release).await;
+        });
+        match tokio::time::timeout(self.inner.deletion_budgets.stop, confirmed_rx).await {
+            Ok(Ok(Ok(()))) => {
+                let uploads = self.release_closed_uploads(id, caller).await;
+                let _ = handoff_tx.send(true);
+                PendingClose::Closed { uploads }
+            }
+            Ok(Ok(Err(error))) => PendingClose::Stopped(StopFailure::Failed(error)),
+            Ok(Err(_ended)) => {
+                PendingClose::Stopped(StopFailure::Failed(AgentError::CleanupUncertain))
+            }
+            Err(_budget) => {
+                let _ = handoff_tx.send(false);
+                PendingClose::Stopped(StopFailure::OverBudget)
+            }
+        }
+    }
+
+    /// Let go of the uploads `caller` closed `id` to hold. One release, used
+    /// by the caller when the close finishes within its budget and by the
+    /// carry-on when it confirms later.
+    async fn release_closed_uploads(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(), ConversationError> {
+        let Some(attachments) = &self.inner.attachments else {
+            return Ok(());
+        };
+        attachments
+            .release(AttachmentRelease {
+                organization_id: caller.organization_id.clone(),
+                conversation_id: id.clone(),
+                cause: AttachmentReleaseCause::ConversationClosed,
+                initiator_principal_id: caller.principal_id.clone(),
+                initiator_surface_id: caller.surface_id.clone(),
+                correlation_id: caller.action_id.clone(),
+            })
+            .await
+    }
+
+    /// Join `stop` for at most the owner's stop budget. Past that, this
+    /// answers [`StopFailure::OverBudget`] and detaches the task, which
+    /// carries on until the close is confirmed
+    /// (`a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go`).
+    /// A panic, or the runtime ending the task, is cleanup unconfirmed.
+    async fn join_stop(&self, stop: JoinHandle<Result<(), AgentError>>) -> Result<(), StopFailure> {
         match tokio::time::timeout(self.inner.deletion_budgets.stop, stop).await {
             Ok(Ok(stopped)) => stopped.map_err(StopFailure::Failed),
-            // A panic, or the runtime ending it: what it had done is unknown,
-            // so its cleanup is too.
             Ok(Err(_ended)) => Err(StopFailure::Failed(AgentError::CleanupUncertain)),
             Err(_) => Err(StopFailure::OverBudget),
         }
@@ -3919,8 +4116,10 @@ impl ConversationService {
 
     /// Stop the agent of `slot`, however long that takes: mark it as
     /// stopping, so it takes no more work, wait for it to finish opening if
-    /// it has not, end its apps by `ended_by`, close it, and release its slot
-    /// once the close is confirmed.
+    /// it has not, end its apps by `ended_by`, and close it. Once the close
+    /// is confirmed, [`ConfirmedClose::ReleaseSlot`] releases the slot.
+    /// [`ConfirmedClose::HoldSlot`] leaves it, so the caller can let the
+    /// uploads go before the slot is released.
     ///
     /// `submissions` is the conversation's submission lock when the caller
     /// took it to order this stop with them. It is held while the owner is
@@ -3935,6 +4134,7 @@ impl ConversationService {
         submissions: Option<OwnedMutexGuard<()>>,
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
+        on_confirm: ConfirmedClose,
     ) -> Result<(), AgentError> {
         slot.stopping.store(true, Ordering::SeqCst);
         let mut submissions = submissions;
@@ -3954,7 +4154,9 @@ impl ConversationService {
                         match live.agent.close(actor.clone()).await {
                             Ok(_) => {
                                 let _ = live.join_attachment_owner().await;
-                                self.release_slot(id, &slot).await;
+                                if on_confirm == ConfirmedClose::ReleaseSlot {
+                                    self.release_slot(id, &slot).await;
+                                }
                                 Ok(())
                             }
                             Err(error) => Err(error),
@@ -4002,6 +4204,27 @@ impl ConversationService {
             }
         }
     }
+}
+
+/// What a pending-mode close did with the agent and its uploads.
+enum PendingClose {
+    /// The close confirmed within the budget. `uploads` is this caller's
+    /// release, done before the slot is let go.
+    Closed {
+        uploads: Result<(), ConversationError>,
+    },
+    /// The close did not confirm within the budget, or it failed. Over budget,
+    /// the carry-on lets the uploads go and then releases the slot.
+    Stopped(StopFailure),
+}
+
+/// Whether a confirmed close releases its slot here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConfirmedClose {
+    /// The slot goes once the close is confirmed.
+    ReleaseSlot,
+    /// The slot stays. The caller lets the uploads go, then releases it.
+    HoldSlot,
 }
 
 /// Whether a pass of stops can meet a submission still being admitted.
@@ -4462,6 +4685,10 @@ mod retirement_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/desktop_stop.rs"]
 mod desktop_stop_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/stop_release.rs"]
+mod stop_release_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/opening_diagnostics.rs"]
