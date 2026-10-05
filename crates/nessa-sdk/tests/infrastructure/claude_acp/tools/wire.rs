@@ -697,6 +697,85 @@ fn a_sparse_websearch_permission_without_an_observed_query_stays_unreadable() {
     .is_err());
 }
 
+/// An object that does not fit the retention budget is not the previous query.
+///
+/// Other calls can fill the budget after a query was cached. The next object
+/// for that call then cannot be retained. Keeping the old query would let a
+/// sparse permission approve input the provider has already replaced. The cache
+/// is cleared instead, whether or not this update repeats the tool name.
+#[test]
+fn an_unretained_query_replacement_clears_the_cached_input() {
+    let max = super::MAX_RETAINED_INPUT_BYTES;
+    let old = object_with_json_len(32);
+    let filler = object_with_json_len(max - 32);
+    let replacement = object_with_json_len(33);
+    for named in [true, false] {
+        let mut names = HashMap::new();
+        tool_call(
+            &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+            &mut names,
+        )
+        .unwrap();
+        tool_call(
+            &json!({"toolCallId":"filler","name":"WebFetch","rawInput":filler}),
+            &mut names,
+        )
+        .unwrap();
+        // Omitting the object leaves the cached query, even with a full budget.
+        tool_call(
+            &json!({"toolCallId":"search-1","status":"pending"}),
+            &mut names,
+        )
+        .unwrap();
+        let kept = permission(&names, json!({"toolCallId":"search-1"})).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&kept.arguments_json).unwrap(),
+            old,
+            "named={named}"
+        );
+        let update = if named {
+            json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+                "rawInput":replacement})
+        } else {
+            json!({"toolCallId":"search-1","rawInput":replacement})
+        };
+        tool_call(&update, &mut names).unwrap();
+        assert!(
+            matches!(
+                names.get("search-1"),
+                Some(ObservedTool::Reviewable {
+                    arguments_json: None,
+                    ..
+                })
+            ),
+            "named={named}"
+        );
+        assert!(
+            permission(&names, json!({"toolCallId":"search-1"})).is_err(),
+            "named={named}: the previous query stayed approvable"
+        );
+        let review = permission(
+            &names,
+            json!({"toolCallId":"search-1","rawInput":replacement}),
+        )
+        .unwrap();
+        assert_eq!(review.name, "WebSearch", "named={named}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+            replacement,
+            "named={named}"
+        );
+    }
+}
+
+fn object_with_json_len(bytes: usize) -> Value {
+    let overhead = serde_json::to_string(&json!({"q":""})).unwrap().len();
+    assert!(bytes >= overhead);
+    let value = json!({"q": "x".repeat(bytes - overhead)});
+    assert_eq!(serde_json::to_string(&value).unwrap().len(), bytes);
+    value
+}
+
 #[test]
 fn a_permission_name_that_disagrees_with_the_observed_call_is_rejected() {
     let mut names = HashMap::new();

@@ -135,8 +135,10 @@ pub(in crate::infrastructure::claude_acp) enum ObservedTool {
     /// A name this binding will put to a host, retained for the review.
     Reviewable {
         name: String,
-        /// Latest object input that fit the retention budget. `None` leaves a
-        /// previously retained input in place when this frame carried none.
+        /// Latest object input that fit the retention budget. `None` means
+        /// nothing is cached: this call never carried an object that fit, or
+        /// a later object could not be retained and the previous one was
+        /// cleared.
         arguments_json: Option<Box<str>>,
     },
     /// A name it will not. The name is deliberately not retained: an unbounded
@@ -180,7 +182,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
     // Validate the complete representation before retaining provider name state.
     let mut update = acp_tool_call(value)?;
     let id = identifier(value, "toolCallId")?.to_owned();
-    let arguments = retain_arguments(names, &id, object_arguments(value));
+    let cached = cache_input(names, &id, object_arguments(value));
     if let Some(name) = frame_tool_name(value)? {
         // Names are bounded before retention; together with 256-byte IDs and
         // 4,096 entries, this bounds the map's string payload independently of
@@ -190,12 +192,14 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
             if let Some(tool) = mcp_tool(name, mcp_prefixes) {
                 update = update.with_mcp_tool(tool);
             }
-            let arguments_json = arguments.or_else(|| {
-                names
+            let arguments_json = match cached {
+                CachedInput::Replace(encoded) => Some(encoded),
+                CachedInput::Cleared => None,
+                CachedInput::Unchanged => names
                     .get(&id)
                     .and_then(ObservedTool::arguments_json)
-                    .map(Box::from)
-            });
+                    .map(Box::from),
+            };
             ObservedTool::Reviewable {
                 name: name.to_owned(),
                 arguments_json,
@@ -222,16 +226,18 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
             return Err(protocol("tool count limit exceeded"));
         }
         names.insert(id, observed);
-    } else if let (Some(arguments), Some(slot)) = (
-        arguments,
-        names.get_mut(&id).and_then(|tool| match tool {
-            ObservedTool::Reviewable { arguments_json, .. } => Some(arguments_json),
-            ObservedTool::Declined => None,
-        }),
-    ) {
+    } else if let Some(slot) = names.get_mut(&id).and_then(|tool| match tool {
+        ObservedTool::Reviewable { arguments_json, .. } => Some(arguments_json),
+        ObservedTool::Declined => None,
+    }) {
         // A query update may restate only the input. The name already observed
-        // for this call stays, and the review can still read the query.
-        *slot = Some(arguments);
+        // for this call stays. An omitted object leaves the cached query; an
+        // object that cannot be retained clears it.
+        match cached {
+            CachedInput::Replace(encoded) => *slot = Some(encoded),
+            CachedInput::Cleared => *slot = None,
+            CachedInput::Unchanged => {}
+        }
     }
     Ok(update)
 }
@@ -264,19 +270,32 @@ fn object_arguments(value: &Value) -> Option<&Value> {
     value.get("rawInput").filter(|input| input.is_object())
 }
 
-/// Encode `incoming` when it fits the execution's retained-input budget.
+/// What this frame does to the object input cached for its tool call.
+enum CachedInput {
+    /// The frame omitted an object. The previous cache stays.
+    Unchanged,
+    /// The frame carried an object that fit the retention budget.
+    Replace(Box<str>),
+    /// The frame carried an object that could not be retained. The previous
+    /// cache is not this input and must not be offered in its place.
+    Cleared,
+}
+
+/// Decide how `incoming` changes the input cached for `id`.
 ///
-/// `None` means this frame had no object input, or the object does not fit
-/// beside what is already retained for other calls. The caller keeps the
-/// previous input in that second case rather than failing the tool row: a
-/// query that is too large to cache can still be reviewed from the permission
-/// frame that carries it.
-fn retain_arguments(
+/// An omitted object leaves the cache alone. An object that fits replaces it.
+/// An object that does not fit clears it: a later sparse permission must not
+/// approve the previous query while the provider's latest update carried a
+/// different one. The tool row itself still succeeds, so a permission frame
+/// that carries the new object can be reviewed from that frame.
+fn cache_input(
     names: &HashMap<String, ObservedTool>,
     id: &str,
     incoming: Option<&Value>,
-) -> Option<Box<str>> {
-    let incoming = incoming?;
+) -> CachedInput {
+    let Some(incoming) = incoming else {
+        return CachedInput::Unchanged;
+    };
     let previous = names
         .get(id)
         .and_then(ObservedTool::arguments_json)
@@ -291,11 +310,12 @@ fn retain_arguments(
         incoming,
         MAX_RETAINED_INPUT_BYTES.saturating_sub(used_without),
     ) {
-        return None;
+        return CachedInput::Cleared;
     }
-    serde_json::to_string(incoming)
-        .ok()
-        .map(String::into_boxed_str)
+    match serde_json::to_string(incoming) {
+        Ok(encoded) => CachedInput::Replace(encoded.into_boxed_str()),
+        Err(_) => CachedInput::Cleared,
+    }
 }
 
 /// What a permission request is asking to be allowed.
