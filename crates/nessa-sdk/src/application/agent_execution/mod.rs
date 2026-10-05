@@ -14,6 +14,7 @@
 
 pub mod agents;
 pub(crate) mod caller_wake;
+pub mod commands;
 pub mod executions;
 pub mod hooks;
 pub mod permissions;

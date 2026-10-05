@@ -17,6 +17,7 @@ use nessa_protocol::conversation::projection::MAX_VIEW_BYTES;
 use nessa_protocol::conversation::view::{
     ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
@@ -1853,6 +1854,12 @@ async fn a_conversation_deleted_with_no_apps_in_this_run_has_them_deleted() {
     fixture
         .service
         .close_apps_for_good(&never, &McpAppInitiator::System);
+    fixture.drops.settled().await;
+    assert!(!fixture
+        .audit
+        .phases()
+        .iter()
+        .any(|phase| matches!(phase, McpAppAuditPhase::ContextDropped { .. })));
     let apps = fixture.service.apps_of(&never);
     let opening = apps.begin();
     assert_eq!(

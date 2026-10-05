@@ -338,8 +338,10 @@ bash scripts/check-sdk-domain-coverage.sh
 The script runs every SDK test, then requires **100% lines, functions, and
 regions for all SDK domain source**, including common values, model metadata,
 and effective capabilities. Application, infrastructure, test, and example files
-are excluded from this domain threshold. It uses a fresh temporary target and
-removes only that directory; the normal/shared build target is untouched.
+are excluded from this domain threshold. By default it uses a fresh temporary
+target and removes only that directory. `NESSA_SDK_COVERAGE_TARGET` names a
+different directory and leaves it in place; that path must not be the workspace
+`target/` directory. Either way the normal build target is not instrumented.
 This stable-toolchain measurement does not report branch coverage.
 
 Measured after the metadata/capability slice: **36 SDK tests passed**, and domain coverage is
@@ -405,3 +407,47 @@ Read `queued_ids` and use `reorder_queued` to change their complete order within
 each priority class while keeping their IDs, receipts and audit history.
 See [queueing and steering](docs/agent_execution/scheduling.md) for lifecycle,
 audit, and provider capability guarantees. Gateway wiring remains separate.
+
+## Startup metrics
+
+The `nessa_sdk::timing` tracing target reports process start, protocol startup,
+individual startup phases, prompt dispatch, and the first accepted text response.
+Startup exchanges additionally report:
+
+| Event | Fields | Meaning |
+| --- | --- | --- |
+| `agent startup request write finished` | `phase`, `request_id`, `elapsed_ms`, `outcome` | Time in the initial request's bounded pipe write, after encoding. An error remains the exchange's original typed failure. |
+| `agent startup first frame received` | `phase`, `request_id`, `elapsed_ms` | Time from successful request write to the first decoded frame. A notification or nested request counts; this event does not establish response acceptance or readiness. |
+| `agent startup phase finished` | `phase`, `elapsed_ms`, `outcome` | Existing duration of the complete exchange, including preparation, writes, waiting, nested-frame handling and response validation. |
+
+The existing `agent_launch` span correlates these events with a launch. Each
+exchange emits one write result if it reaches the write, and at most one first
+frame event. Preparation failure emits neither new event; failed write emits no
+first frame event. A deadline or close while awaiting a frame retains the
+successful write result and finishes the phase with an error. These orderings and
+payload exclusion are checked by
+`startup_timing_logs_success_error_and_deadline_without_request_payloads` in
+`tests/infrastructure/acp/executions/worker/timing.rs`. The same module checks
+nonzero write duration with a full pipe in
+`startup_write_duration_reports_blocked_pipe_until_deadline`, and separate
+first-frame and complete-exchange durations in
+`startup_first_frame_duration_excludes_later_frames_and_uses_injected_clock`.
+
+| Ordering | Write result | First frame | Phase result | Regression case |
+| --- | --- | --- | --- | --- |
+| Preparation refused before write | Absent | Absent | Error | `StartupScenario::PreparationError` |
+| Write-result logging advances the clock before decoding | Success, excludes logging time | Includes time since write completion | Success | `startup_first_frame_duration_includes_write_result_logging_delay` |
+| Initial write refused | Error | Absent | Error | `StartupScenario::WriteError` |
+| Initial write blocked until deadline | Error | Absent | Error | `startup_write_duration_reports_blocked_pipe_until_deadline` |
+| Write succeeds, close observed | Success | Absent | Error | `StartupScenario::Close` |
+| Write succeeds, response deadline expires | Success | Absent | Error | `StartupScenario::Deadline` |
+| Provider response refuses exchange | Success | Once | Error | `StartupScenario::ProviderError` |
+| Notifications precede accepted response | Success | Once, for notification | Success | `StartupScenario::Notifications` |
+| Accepted response is first frame | Success | Once | Success | `StartupScenario::Success` |
+
+These metrics use the injected monotonic clock. They log durations and protocol
+correlation, without request parameters, response bodies, provider error text or
+credentials. They separate host pipe delay from exchange waiting; they do not
+identify work inside the external adapter or distinguish its CPU time from
+scheduling, filesystem or network waits. Enabling this target is instrumentation,
+not a startup performance change.

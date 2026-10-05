@@ -306,6 +306,14 @@ async fn gateway_child() {
         None,
     )
     .unwrap();
+    // conversation.send on this socket admits through the shared command
+    // store. The gateway root outlives the child, so the receipt database
+    // stays beside the seeded metadata.
+    let commands = Arc::new(
+        nessa_sdk::infrastructure::session_storage::RecordStorage::new(root.join("records"))
+            .expect("command store"),
+    );
+    service.bind_commands(commands);
     let (mut state, _) = fixture(MembershipRole::Member);
     state.verifier = owners.clone();
     state.access = owners.clone();

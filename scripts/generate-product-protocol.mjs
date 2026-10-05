@@ -70,11 +70,10 @@ passiveReadTiming.minRequestTimeoutMs =
 if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
   throw new Error("Passive request deadline exceeds the runtime timer range")
 
-// How long an MCP App's calls can take the gateway, with one owner: a review
-// waiting for the person, the server's budgets for a call and a read, and the
-// client's allowance. The client waits their sum for `mcp.callTool` and, since
-// the gateway may open the conversation first, for `mcp.readResource` too;
-// every layer reads these generated values and spells none of them.
+// How long an MCP App's calls can take the gateway, with one owner: every
+// layer reads these generated values and spells none of them. What they cover,
+// and what they do not, is stated once, in `mcpAppCallTiming`'s description
+// below.
 const appTiming = schema["x-mcpAppCallTiming"]
 const mcpAppCallTiming = {}
 for (const name of [
@@ -100,8 +99,8 @@ mcpAppCallTiming.callDeadlineMs =
   mcpAppCallTiming.clientAllowanceMs
 if (mcpAppCallTiming.callDeadlineMs > 2_147_483_647)
   throw new Error("MCP App call deadline exceeds the runtime timer range")
-// A client waits a call's deadline for a read too; a read longer than a call
-// would be abandoned while the gateway is still bound to answer it.
+// A read is waited on for a call's deadline (the description below); a read
+// longer than a call would be abandoned while the gateway still answers it.
 if (mcpAppCallTiming.readTimeoutMs > mcpAppCallTiming.callTimeoutMs)
   throw new Error("MCP App read timeout outlasts a call")
 
@@ -247,7 +246,8 @@ let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
   "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
-// ConversationErrorCode is named by MCP app audit and by the product wire.
+// ConversationErrorCode is named by MCP app audit — a refused call, an app's
+// message answered and not sent — and by the product wire.
 // It has no payload field, so it is published here with the other outcome
 // codes an application module may import.
 const sharedOutcomes = new Set([
@@ -391,6 +391,9 @@ const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties
 const mcpResource = schema.$defs.McpReadResourceResult.properties
+const mcpMessage = schema.$defs.McpSendMessageParams.properties
+const mcpContext = schema.$defs.McpUpdateModelContextParams.properties
+const messageApp = schema.$defs.ConversationMessageApp.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const catalogueDecimalFields = [
@@ -487,6 +490,10 @@ const bounds = {
     mcpCall.server["x-utf8MaxBytes"],
     mcpCall.tool["x-utf8MaxBytes"],
     mcpRead.server["x-utf8MaxBytes"],
+    mcpMessage.server["x-utf8MaxBytes"],
+    mcpContext.server["x-utf8MaxBytes"],
+    messageApp.server["x-utf8MaxBytes"],
+    messageApp.tool["x-utf8MaxBytes"],
   ]),
   maxUiResourceUriBytes:
     schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
@@ -498,6 +505,24 @@ const bounds = {
   ]),
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
+  // An app's message is held to what the person's own may take.
+  maxMcpMessageBytes: agreeing("app message and sent message bytes", [
+    mcpMessage.text["x-utf8MaxBytes"],
+    schema.$defs.ConversationSendParams.properties.text["x-utf8MaxBytes"],
+  ]),
+  // An empty message is refused at the wire, before anything is recorded.
+  minMcpMessageCharacters: mcpMessage.text.minLength,
+  // The turn an app's message became is a turn like any other.
+  maxExecutionIdBytes: agreeing("execution identity bytes", [
+    schema.$defs.McpSendMessageResult.properties.executionId["x-utf8MaxBytes"],
+    schema.$defs.ConversationMessage.properties.executionId["x-utf8MaxBytes"],
+    messageApp.executionId["x-utf8MaxBytes"],
+  ]),
+  // An app's context: its text and its structured content, each.
+  maxMcpContextBytes: agreeing("app context bytes", [
+    mcpContext.text["x-utf8MaxBytes"],
+    mcpContext.structuredContentJson["x-utf8MaxBytes"],
+  ]),
   maxMcpResourceUriBytes: agreeing("app resource URI bytes", [
     mcpRead.uri["x-utf8MaxBytes"],
     mcpResource.uri["x-utf8MaxBytes"],
@@ -531,9 +556,19 @@ for (const name of [
   "maxRecordPageRecords",
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
+  // Each part of an app's context past it is refused at the wire, before
+  // anything is recorded; both together are the gateway's to bound.
+  "maxMcpContextBytes",
+  // An app's message shorter than it is refused at the wire, before anything
+  // is recorded; a blank one is the conversation's to refuse, on record.
+  "minMcpMessageCharacters",
 ]) {
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
+// An app's message past it is refused at the wire, before anything is
+// recorded; and the conversation's own input bound is never larger, which the
+// gateway's configuration holds to it — so it sits with the contract.
+contractRs += `/// Published bound from the product schema.\npub const MAX_MCP_MESSAGE_BYTES: usize = ${bounds.maxMcpMessageBytes};\n`
 for (const [name, value] of Object.entries(passiveReadTiming)) {
   rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
 }
@@ -554,7 +589,7 @@ ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
 ts += `${doc(
-  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first.",
+  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. callDeadlineMs is reviewDeadlineMs + callTimeoutMs + clientAllowanceMs. A client waits at least callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it; giving up sooner would drop an answer the gateway may still send. These bound a request to an open conversation. A closed one is opened first, the agent's launch and startup, and only then does the request's own budget, a review's among them, begin. No published deadline covers that opening, so a client that gives up after callDeadlineMs may still drop an answer the gateway sends later.",
 )}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
 ts += `${doc(
   "How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response.",

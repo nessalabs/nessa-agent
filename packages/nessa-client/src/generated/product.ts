@@ -440,6 +440,8 @@ export interface ConversationMessage {
   attachments: ImageAttachment[]
   /** Files the user pointed this turn at, in attachment order. No bytes were ever carried for them. */
   files: LinkedFile[]
+  /** The app that wrote this turn on the person's behalf; absent when the person wrote it. */
+  app?: ConversationMessageApp
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -463,8 +465,21 @@ export interface ConversationPending {
   attachments: ImageAttachment[]
   /** Files the waiting input points at, in attachment order. */
   files: LinkedFile[]
+  /** The app that wrote this waiting input on the person's behalf; absent when the person wrote it. */
+  app?: ConversationMessageApp
   /** Queue or steering admission. */
   mode: ConversationPendingMode
+}
+/** The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to. */
+export interface ConversationMessageApp {
+  /** The execution the app's tool call belongs to. */
+  executionId: string
+  /** The app's tool call. */
+  toolId: string
+  /** The app's MCP server. */
+  server: string
+  /** The tool whose UI the app is. */
+  tool: string
 }
 /** An exact option offered by the provider. */
 export interface ConversationPermissionOption {
@@ -658,6 +673,85 @@ export interface ConversationRemoveParams {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
 }
+/** Stop one captured turn. A queued turn is withdrawn. The active turn is cancelled without closing the attachment. A finished turn records that nothing was sent. */
+export interface ConversationStopParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The captured turn. Stop never substitutes a newer one. */
+  executionId: string
+}
+/** Which command family a read-only receipt lookup names. The lookup does not admit that command. */
+export const ConversationCommandOperation = {
+  Create: "create",
+  Submit: "submit",
+  Steer: "steer",
+  Stop: "stop",
+} as const
+export type ConversationCommandOperation =
+  (typeof ConversationCommandOperation)[keyof typeof ConversationCommandOperation]
+/** Durable progress. Attempted means the original effect was authorized and its success was not saved. Ready is creation's terminal. Settled is a submit or stop terminal. */
+export const ConversationCommandStage = {
+  Accepted: "accepted",
+  Attempted: "attempted",
+  Ready: "ready",
+  Settled: "settled",
+} as const
+export type ConversationCommandStage =
+  (typeof ConversationCommandStage)[keyof typeof ConversationCommandStage]
+/** What a settled submit or stop did. Absent until the stage is settled. Already final means nothing was sent. */
+export const ConversationCommandOutcome = {
+  Dispatched: "dispatched",
+  Withdrawn: "withdrawn",
+  Cancelled: "cancelled",
+  AlreadyFinal: "already_final",
+} as const
+export type ConversationCommandOutcome =
+  (typeof ConversationCommandOutcome)[keyof typeof ConversationCommandOutcome]
+/** Non-content progress of one creation, submit, or stop. The request identity, not this object, is the idempotency key. */
+export interface ConversationCommandReceipt {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Acknowledged progress of that command. */
+  stage: ConversationCommandStage
+  /** Present only when stage is settled. */
+  outcome?: ConversationCommandOutcome
+}
+/** Read one command receipt. This writes nothing and does not enqueue, open, withdraw, or cancel. Submit and steer must repeat the original bytes so the fingerprint matches. Create repeats the original selection hints. */
+export interface ConversationReceiptParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Command family to read. A different family under this request is a conflict. */
+  operation: ConversationCommandOperation
+  /** Required for submit, steer, and stop. The captured turn. */
+  executionId?: string
+  /** Original submit or steer text. Required for those operations, omitted for create and stop. */
+  text?: string
+  /** Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
+  attachments?: ImageAttachment[]
+  /** Original submit or steer file paths, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
+  files?: LinkedFile[]
+  /** Creation hint. Omitted when the original creation named no agent. */
+  agent?: string
+  /** Creation hint. Omitted when the original creation named no model. */
+  model?: string
+  /** Creation hint. Omitted when the original creation named no preset. */
+  approvalMode?: ApprovalMode
+}
+/** Whether a receipt for that request is saved. Found is false when the principal has no such request. A deleted conversation is refused instead of answering found. */
+export interface ConversationReceiptResult {
+  /** True when this request has saved progress. */
+  found: boolean
+  /** The request that was looked up. */
+  requestId: string
+  /** Present when found is true. */
+  stage?: ConversationCommandStage
+  /** Present when the saved stage is settled. */
+  outcome?: ConversationCommandOutcome
+}
 /** Whether a failed permission answer left the domain review pending, consumed it, or could not prove either state. */
 export const ConversationPermissionSelectionState = {
   Pending: "pending",
@@ -822,6 +916,39 @@ export interface McpReleaseAppParams {
   requestId: string
   /** The mount torn down. */
   app: McpAppReference
+}
+/** An MCP App sends a message into its conversation (mcp.sendMessage, MCP Apps ui/message): the person's turn, written by the app on their behalf and shown in the transcript as the app's (ConversationMessage.app). Every message waits for the person's approval in the conversation's permissions, origin {kind: app}, answered with conversation.answer or conversation.cancel whatever the approval mode. Refused turn_running while a turn runs or input waits, so it is never queued behind the person's own; any other refusal of the message is its own conversation code. The same requestId again, from the same mount, is the same turn: one the agent has already is not asked again, and the agent settles it, the same text answering the first delivery and other text submission_conflict; one sent again while the first is still in review or being sent is refused temporarily_unavailable. It travels on the app lane. */
+export interface McpSendMessageParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app sending it. */
+  app: McpAppReference
+  /** The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch. */
+  server: string
+  /** The message, as text: at most 8192 UTF-8 bytes, what conversation.send takes (invalid_request past it, refused before anything is recorded), and not empty (invalid_request, refused before anything is recorded). Blank text, whitespace only, is invalid_request too, refused on record by the conversation. Past the conversation's own input bound, which is never larger, it is refused mcp_request_too_large. It is shown whole in its review, which must fit the 16 000 bytes an app's review may take of the view, encoded; text heavy in quotes or control characters can be past that while within 8192 bytes (mcp_request_too_large, and no review is opened). */
+  text: string
+}
+/** The conversation's agent took the message. */
+export interface McpSendMessageResult {
+  /** The turn the message became, as the transcript names it. */
+  executionId: string
+}
+/** An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson, or with only an empty text, clears it. It is held for the mount until the next message admitted into the conversation while nothing runs and no input waits, the person's or an app's, carries it ahead of what the message says; it is not shown in the transcript. That message takes it as it is read, and it is held no longer. If the message is then refused, it is lost, recorded as dropped not_sent; if its turn fails, it is lost; either way the app may give it again. A message queued behind a running turn, or steered into one, carries none and leaves it held. A release of the mount (mcp.releaseApp) or the end of the conversation's opening drops it unsent while it is still held. A conversation's updates are taken one at a time, each recorded before it is held. Each part takes at most 8192 UTF-8 bytes (invalid_request past it, refused before anything is recorded), and text and structured content together at most 8192 (mcp_request_too_large past it); at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane. */
+export interface McpUpdateModelContextParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app giving it. */
+  app: McpAppReference
+  /** The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch. */
+  server: string
+  /** The context as text: at most 8192 UTF-8 bytes (invalid_request past it). Empty is none. */
+  text?: string
+  /** The context's structured content: one JSON object, encoded (invalid_request if it is not one, or past 8192 UTF-8 bytes), held exactly as given. Absent is none. */
+  structuredContentJson?: string
 }
 /** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
 export interface McpCallToolParams {
@@ -1090,7 +1217,7 @@ export const McpServersErrorCode = {
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 32 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1716,7 +1843,7 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
-/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first. */
+/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. callDeadlineMs is reviewDeadlineMs + callTimeoutMs + clientAllowanceMs. A client waits at least callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it; giving up sooner would drop an answer the gateway may still send. These bound a request to an open conversation. A closed one is opened first, the agent's launch and startup, and only then does the request's own budget, a review's among them, begin. No published deadline covers that opening, so a client that gives up after callDeadlineMs may still drop an answer the gateway sends later. */
 export const mcpAppCallTiming = {
   reviewDeadlineMs: 300000,
   callTimeoutMs: 60000,
@@ -1745,7 +1872,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 45,
+  maxReadyMethods: 49,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1785,6 +1912,10 @@ export const bounds = {
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxMcpArgumentsBytes: 32768,
   maxMcpResultBytes: 57344,
+  maxMcpMessageBytes: 8192,
+  minMcpMessageCharacters: 1,
+  maxExecutionIdBytes: 256,
+  maxMcpContextBytes: 8192,
   maxMcpResourceUriBytes: 2048,
   mcpAppMimeType: "text/html;profile=mcp-app",
   maxMcpResourceBytes: 4194304,
@@ -1811,6 +1942,8 @@ export const ProductMethod = {
   ConversationSend: "conversation.send",
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
+  ConversationStop: "conversation.stop",
+  ConversationReceipt: "conversation.receipt",
   ConversationAnswer: "conversation.answer",
   ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
@@ -1830,6 +1963,8 @@ export const ProductMethod = {
   McpCallTool: "mcp.callTool",
   McpReadResource: "mcp.readResource",
   McpReleaseApp: "mcp.releaseApp",
+  McpSendMessage: "mcp.sendMessage",
+  McpUpdateModelContext: "mcp.updateModelContext",
   McpServersList: "mcpServers.list",
   McpServersSave: "mcpServers.save",
   McpServersRemove: "mcpServers.remove",
@@ -1864,6 +1999,8 @@ export const productReadyMethods = [
   "conversation.send",
   "conversation.steer",
   "conversation.remove",
+  "conversation.stop",
+  "conversation.receipt",
   "conversation.answer",
   "conversation.answerQuestion",
   "conversation.cancel",
@@ -1883,6 +2020,8 @@ export const productReadyMethods = [
   "mcp.callTool",
   "mcp.readResource",
   "mcp.releaseApp",
+  "mcp.sendMessage",
+  "mcp.updateModelContext",
   "mcpServers.list",
   "mcpServers.save",
   "mcpServers.remove",

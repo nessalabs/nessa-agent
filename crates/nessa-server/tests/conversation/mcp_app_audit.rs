@@ -1,7 +1,7 @@
 //! What the durable MCP App record holds, what it keeps out, and what it
 //! refuses to overwrite.
 use super::*;
-use crate::conversation::application::{McpAppRef, TicketEnd};
+use crate::conversation::application::{ContextDrop, McpAppRef, TicketEnd};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
@@ -220,6 +220,47 @@ async fn every_phase_of_one_request_is_its_own_record() {
             McpAppInitiator::System,
             json!({"kind": "ticket_ended", "ticketDigest": "ticket-digest", "cause": "expired"}),
         ),
+        (
+            McpAppAuditPhase::MessageSent {
+                execution_id: "turn-9".into(),
+                code: None,
+            },
+            app_initiator(),
+            json!({"kind": "message_sent", "executionId": "turn-9"}),
+        ),
+        (
+            McpAppAuditPhase::MessageNotSent {
+                execution_id: "turn-9".into(),
+                code: ConversationErrorCode::SubmissionConflict,
+            },
+            app_initiator(),
+            json!({"kind": "message_not_sent", "executionId": "turn-9", "code": "submission_conflict"}),
+        ),
+        (
+            McpAppAuditPhase::MessageUnresolved {
+                execution_id: "turn-9".into(),
+                code: ConversationErrorCode::SubmissionUnresolved,
+            },
+            app_initiator(),
+            json!({"kind": "message_unresolved", "executionId": "turn-9", "code": "submission_unresolved"}),
+        ),
+        (
+            McpAppAuditPhase::ContextHeld { bytes: 12 },
+            app_initiator(),
+            json!({"kind": "context_held", "bytes": 12}),
+        ),
+        (
+            McpAppAuditPhase::ContextCleared,
+            app_initiator(),
+            json!({"kind": "context_cleared"}),
+        ),
+        (
+            McpAppAuditPhase::ContextDropped {
+                cause: ContextDrop::Released,
+            },
+            person_initiator(),
+            json!({"kind": "context_dropped", "cause": "released"}),
+        ),
     ];
     let count = cases.len();
     for (phase, initiator, _) in cases.clone() {
@@ -284,6 +325,47 @@ async fn each_withdrawal_and_failure_keeps_its_cause() {
     assert_eq!(
         sole_record(&directory)["phase"]["outcome"],
         json!({"kind": "failed", "code": "mcp_timed_out"})
+    );
+}
+
+#[tokio::test]
+async fn each_context_drop_keeps_its_cause_and_each_message_outcome_its_code() {
+    for (cause, name) in [
+        (ContextDrop::Released, "released"),
+        (ContextDrop::ConversationEnded, "conversation_ended"),
+        (ContextDrop::NotHeld, "not_held"),
+        (ContextDrop::NotSent, "not_sent"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("mcp-apps");
+        audit_at(&directory, 1)
+            .record(call(
+                McpAppAuditPhase::ContextDropped { cause },
+                McpAppInitiator::System,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            sole_record(&directory)["phase"],
+            json!({"kind": "context_dropped", "cause": name})
+        );
+    }
+    // A message taken without its evidence says what failed (row M14).
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("mcp-apps");
+    audit_at(&directory, 1)
+        .record(call(
+            McpAppAuditPhase::MessageSent {
+                execution_id: "turn-9".into(),
+                code: Some(ConversationErrorCode::AuditUnavailable),
+            },
+            app_initiator(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        sole_record(&directory)["phase"],
+        json!({"kind": "message_sent", "executionId": "turn-9", "code": "audit_unavailable"})
     );
 }
 
@@ -538,5 +620,39 @@ async fn no_argument_result_or_resource_content_is_stored() {
         ] {
             assert!(!text.contains(forbidden), "{forbidden} in {text}");
         }
+    }
+}
+
+#[tokio::test]
+async fn an_apps_message_and_its_context_record_what_they_asked_and_turn_running() {
+    for (ask, stored_ask) in [
+        (
+            McpAppAsk::SendMessage {
+                server: "charts".into(),
+            },
+            json!({"kind": "send_message", "server": "charts"}),
+        ),
+        (
+            McpAppAsk::UpdateModelContext {
+                server: "charts".into(),
+            },
+            json!({"kind": "update_model_context", "server": "charts"}),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("mcp-apps");
+        let audit = audit_at(&directory, 500);
+        let mut record = call(
+            McpAppAuditPhase::Refused(ConversationErrorCode::TurnRunning),
+            app_initiator(),
+        );
+        record.ask = ask;
+        audit.record(record).await.unwrap();
+        let stored = sole_record(&directory);
+        assert_eq!(stored["target"]["ask"], stored_ask);
+        assert_eq!(
+            stored["phase"],
+            json!({"kind": "refused", "code": "turn_running"})
+        );
     }
 }

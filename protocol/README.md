@@ -33,6 +33,8 @@ or schema version bump is needed merely to change this repository's current cont
 | `conversation.list` | The caller's conversations, newest first, with title and last line said, at most 500, and `complete` saying whether that is all of them; archived ones only on request; opens no provider |
 | `conversation.archive`, `conversation.unarchive`, `conversation.delete` | Hide or restore a conversation in the list; delete permanently (history, uploads and summary erased, audit kept, identity never reused) |
 | `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
+| `conversation.stop` | Stop one captured turn: withdraw it if queued, cancel it if active, and do not close the attachment |
+| `conversation.receipt` | Read one creation, submit, steer, or stop receipt without admitting that command |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
 | `pairing.create`, `pairing.pending`, `pairing.status`, `pairing.approve`, `pairing.deny`, `pairing.cancel` | Owner side of native device pairing (`credential.manage`, then Auth's exact consent check): a one-time code, the unfinished enrollments, one enrollment, and approval of the exact claimed key, denial or cancellation. `pairing_not_configured` unless `config.json` names a native listen address. Refusals are a `PairingErrorCode` or the session's own codes. See [device pairing](../docs/design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a) |
 | `mcpServers.list`, `mcpServers.save`, `mcpServers.remove`, `mcpServers.inspect` | The gateway's configured MCP servers (`credential.manage`, refused `forbidden` before params are read): list them with variable names only, save one (`kind: "stdio"`, `env` values, `null` keeping a stored one, `value` required) or remove one, naming the listed `revision`; or inspect a saved one — started once outside any conversation, its tools listed with their hints and each MCP App's CSP and permissions, then stopped — within `x-mcpServerInspect` (`MCP_SERVER_INSPECT_*` in Rust, `mcpServerInspect` in TypeScript). Each change rewrites the whole of `config.json` under its lock, is audited, and reaches the next conversation; each inspection is audited. `mcp_servers_not_configured` where the gateway holds no live MCP server set. Refusals are an `McpServersErrorCode`. See [MCP connections](../docs/design/mcp-connections.md#managing-the-stored-servers) |
@@ -101,21 +103,19 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   does not fit beside those open is refused `temporarily_unavailable`.
   Allowed, the call is made only if the tool is still listed as it was.
 - **A waiting call stays pending** until the person answers, or the review
-  expires (`reviewDeadlineMs`, below; `mcp_approval_expired`), or it is
+  expires (`reviewDeadlineMs` in `x-mcpAppCallTiming`; `mcp_approval_expired`), or it is
   withdrawn (`mcp_cancelled`). It is withdrawn when the request is cancelled —
   its socket closes — the app is torn down (`mcp.releaseApp`), or the
   conversation ends. A client that stops waiting withdraws nothing: the
   review stays open, and the call is still made if the person allows it.
-- **How long a call can take is published once**, as `x-mcpAppCallTiming`:
-  `reviewDeadlineMs` for a review to be answered, then `callTimeoutMs` for
-  the server to answer a call (`mcp_timed_out`); `readTimeoutMs` for it to
-  answer a resource read; and `clientAllowanceMs` for opening the
-  conversation and recording each step. The schema holds their values;
-  nothing here repeats them. A client waits at least
-  `reviewDeadlineMs + callTimeoutMs + clientAllowanceMs` (`callDeadlineMs`)
-  before giving up on `mcp.callTool`, and as long on `mcp.readResource`,
-  which may open the conversation first and never outlasts a call. The
-  gateway, the SDK's caller and the client read the generated values
+- **How long a call can take is published once**, as `x-mcpAppCallTiming`.
+  The schema holds its values, and the generator's description of it
+  (`mcpAppCallTiming` in `scripts/generate-product-protocol.mjs`, emitted
+  into the generated TypeScript) is the one statement of what each covers,
+  what a client waits, and what no published deadline covers; nothing here
+  repeats either. A server that does not answer a call within
+  `callTimeoutMs` is `mcp_timed_out`. The gateway, the SDK's caller and the
+  client read the generated values
   (`MCP_APP_REVIEW_DEADLINE_MS`, `MCP_APP_CALL_TIMEOUT_MS` and
   `MCP_APP_READ_TIMEOUT_MS` in Rust, `mcpAppCallTiming` in TypeScript); no
   layer writes its own.
@@ -130,11 +130,48 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   until its socket goes. Past either they are refused
   `temporarily_unavailable`, so held calls never stop `conversation.read` or
   `conversation.answer`.
+- **`mcp.sendMessage`** (MCP Apps `ui/message`, #390) puts the app's text
+  into its conversation as the person's turn, written by the app: the
+  transcript says so (`ConversationMessage.app`, `ConversationPending.app`),
+  and the agent is given it as the person's. Every message waits on its own
+  review in `permissions`, as a destructive tool's call does. Text is at most
+  what `conversation.send` takes, and not empty; outside the schema's bounds
+  it is `invalid_request`, refused before anything is recorded. Blank text,
+  whitespace only, is within them, and is `invalid_request` on record, the
+  conversation's refusal. It is shown whole
+  in its review, which must fit the 16 000 bytes an app's review may take of
+  the view: text heavy in quotes or control characters can be past that
+  while within the schema's bound, and is refused `mcp_request_too_large`
+  with no review opened. While a turn runs or input waits it is refused
+  `turn_running`: an app's message is never queued behind the person's. Any
+  other refusal of the message is its own conversation code. Its turn is
+  derived from the conversation, the mount and `requestId`: the same request
+  again is the same turn, which the agent settles without anyone being asked
+  again; sent again while the first is still in review or being sent, it is
+  refused `temporarily_unavailable`.
+- **`mcp.updateModelContext`** (MCP Apps `ui/update-model-context`) holds
+  what a mount gives the model, in place of what it gave; an update with
+  neither part, or only an empty text, clears it. The next message admitted
+  into the conversation while nothing runs and no input waits — the
+  person's or an app's — takes every context held and carries them ahead of
+  its text: taken as it is read, they are no longer held. If that message is
+  then refused, they are lost, each on record as dropped `not_sent`; if its
+  turn fails, they are lost. Either way the app may give them again. A
+  message queued behind a running turn, or steered into one, carries none
+  and leaves them held. A conversation's updates are taken one at a time, each on record
+  before it is held; the structured content is held exactly as given. They
+  are not part of the transcript. A release of the mount, or the end of the
+  opening, drops a context still held unsent; one a message took goes with
+  that message. The schema states its bounds
+  (`McpUpdateModelContextParams`): a part past its own is `invalid_request`,
+  refused before anything is recorded, as every schema bound of both
+  methods is; both parts together past what one context holds are
+  `mcp_request_too_large`.
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's
-  open reviews (their calls answer `mcp_cancelled`) and releases its
-  resource tickets, and is idempotent. Nothing is admitted, opened or issued
+  open reviews (their calls answer `mcp_cancelled`), releases its resource
+  tickets, drops its context unsent, and is idempotent. Nothing is admitted, opened or issued
   for that mount again — across a close and a reopening, and when the
   release came before the conversation was open: its later calls answer
   `mcp_cancelled`. An `mcp.callTool` already handed to the session is not

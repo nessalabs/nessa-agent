@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rust-cache:
+        description: Restore the shared Rust build cache, or compile cold for a measurement.
+        type: choice
+        options:
+          - restore
+          - cold
+        default: restore
 
 # Nothing here writes anything. Said out loud because the default for a token is
 # whatever the repository's default happens to be, and `changes` below reaches
@@ -130,6 +138,7 @@ jobs:
       # from its own fingerprints; this only supplies artifacts it would
       # otherwise regenerate, and `Cargo.lock` is part of the key.
       - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -241,6 +250,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -281,6 +291,7 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -316,7 +327,15 @@ jobs:
       # stuck test is still named: libtest prints "has been running for over 60
       # seconds" for each test still running, and that line is in the log before
       # the step is cancelled.
-      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk
+      #
+      # The package list is still one cargo invocation (`--no-run`), so feature
+      # unification does not change. scripts/cargo-test-parallel.mjs then runs
+      # the built test binaries two at a time and runs doctests with the same
+      # packages. It does not raise libtest's thread count: the ACP
+      # process-contract semaphore is process-local, and a process-per-test
+      # runner would make that semaphore admit every contract test at once.
+      - shell: bash
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk
         timeout-minutes: 45
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
@@ -359,27 +378,6 @@ jobs:
       - name: Assemble the Linux desktop runtime
         if: runner.os == 'Linux'
         run: node scripts/desktop/prepare.mjs
-      # `cargo install` spent most of a minute building this tool from source
-      # on every run, to arrive at a binary its author already publishes. Taken
-      # from the release archive instead, pinned the same way actionlint is at
-      # the top of this file: the version doing the measuring is the version
-      # named here, and it arrives in seconds rather than being compiled.
-      - name: Install SDK domain coverage tools
-        if: runner.os == 'Linux'
-        env:
-          VERSION: 0.6.16
-        run: |
-          set -euo pipefail
-          rustup component add llvm-tools-preview
-          curl -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C /usr/local/bin cargo-llvm-cov
-      # This runs every SDK test again, serially and instrumented, so a test
-      # that deadlocks can hang here as well as in `cargo test` above (#366).
-      # Over 36 green runs it took at most 11 minutes.
-      - name: Require complete SDK domain coverage
-        if: runner.os == 'Linux'
-        run: bash scripts/check-sdk-domain-coverage.sh
-        timeout-minutes: 40
       - run: cargo build -p nessa-server
       # This is the one platform where Tauri has a native WebDriver for the
       # WebKit host. It drives the real embedded executable through a message
@@ -448,3 +446,70 @@ jobs:
       # against the registry rather than trusted.
       - run: node --import tsx scripts/smoke-install-agent.mjs
         working-directory: .ci-auth
+
+  # Linux used to run this after runtime assembly on the matrix leg: about nine
+  # minutes of instrumented tests, serial, on a fresh target directory. The
+  # instrumentation does not share artifacts with that assembly or with the
+  # ordinary test build, so it runs beside them. The 100% domain thresholds and
+  # the single test thread stay in scripts/check-sdk-domain-coverage.sh.
+  # Dependencies and workspace crates are cached under a prefix of their own;
+  # rust-cache would otherwise keep only dependencies, and only from `target/`.
+  sdk-domain-coverage:
+    name: SDK domain coverage
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/sdk-domain-coverage
+      NESSA_SDK_COVERAGE_TARGET: target/sdk-domain-coverage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          prefix-key: sdk-domain-coverage
+          workspaces: ". -> target/sdk-domain-coverage"
+          cache-workspace-crates: "true"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Install cargo-llvm-cov
+        env:
+          VERSION: 0.6.16
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin cargo-llvm-cov
+      # The same deadlock margin as the ordinary SDK tests (#366). Over 36
+      # green runs the serial instrumented suite took at most 11 minutes.
+      - name: Require complete SDK domain coverage
+        run: bash scripts/check-sdk-domain-coverage.sh
+        timeout-minutes: 40
+
+  # A skipped required check counts as a pass. scripts/ci-result.mjs is what
+  # refuses that: every job above has to have run and passed, except that a
+  # documentation-only change may skip the compile jobs and nothing else.
+  required-checks:
+    name: Required checks passed
+    needs:
+      - workflows
+      - changes
+      - gateway-contract
+      - desktop-release-profile
+      - frontend
+      - local-auth
+      - sdk-domain-coverage
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci-result.mjs
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+      - name: Fail unless every owned check ran and passed
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: node scripts/ci-result.mjs

@@ -469,6 +469,27 @@ async fn conversations(
     ))
 }
 
+/// What an app's calls take, as this gateway wires them: the conversation's
+/// own sessions of its MCP servers, `audit` for every step, the ticket
+/// store, and the drop recorder's sink — started here with the ticket
+/// recorder, both writing to `audit` — for every held context's drop
+/// (`a_composed_gateways_dropped_context_is_written_by_its_recorder`).
+#[cfg(unix)]
+pub(super) fn mcp_app_ports(
+    mcp: &mut super::mcp_servers::McpComposition,
+    audit: Arc<dyn McpAppAudit>,
+) -> McpAppPorts {
+    let dropped = mcp.start_recorders(audit.clone());
+    McpAppPorts {
+        apps: Arc::new(crate::mcp_servers::infrastructure::SessionApps(
+            mcp.servers.clone(),
+        )),
+        audit,
+        tickets: mcp.resource_tickets.clone(),
+        dropped,
+    }
+}
+
 /// Open the namespace's receiver journal.
 ///
 /// The file is `receiver-access/receiver-access.sqlite3`, not a file under
@@ -1004,7 +1025,7 @@ async fn conversations(
     let dependencies = ConversationDependencies {
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
-        storage,
+        storage: storage.clone(),
         metadata: metadata.clone(),
         creation_audit,
         mode_audit,
@@ -1023,33 +1044,18 @@ async fn conversations(
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
     // sessions of them, every step on record in `mcp_app_audit`: the issue
-    // by the service, the redemption by the route, and every other end of a
-    // ticket by `audit_ticket_ends`, which takes the store's events.
+    // by the service, the redemption by the route, every other end of a
+    // ticket by `audit_ticket_ends`, which takes the store's events, and
+    // every held context's drop by `audit_context_drops`, which takes what
+    // the conversations' apps report.
     let (service, resource_route) = match mcp.as_mut() {
         Some(mcp) => {
-            if let Some(events) = mcp.ticket_events.take() {
-                let (stop, stopping) = tokio::sync::oneshot::channel();
-                mcp.ticket_recorder = Some(super::mcp_servers::TicketRecorder {
-                    stop,
-                    task: tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
-                        events,
-                        mcp_app_audit.clone(),
-                        stopping,
-                    )),
-                });
-            }
             let service = ConversationService::with_mcp_apps(
                 dependencies,
                 ConversationLimits::default(),
                 workspace,
                 tool_uis,
-                McpAppPorts {
-                    apps: Arc::new(crate::mcp_servers::infrastructure::SessionApps(
-                        mcp.servers.clone(),
-                    )),
-                    audit: mcp_app_audit.clone(),
-                    tickets: mcp.resource_tickets.clone(),
-                },
+                mcp_app_ports(mcp, mcp_app_audit.clone()),
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }
@@ -1064,6 +1070,7 @@ async fn conversations(
         ),
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
+    service.bind_commands(storage.clone());
     if warm_current_opencode {
         warm_ups.push(StartupWarmUp::Current(resolver.clone()));
     }

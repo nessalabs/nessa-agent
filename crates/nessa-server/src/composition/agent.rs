@@ -909,6 +909,7 @@ pub(super) mod build {
         application::ProviderSessionEraser,
         infrastructure::{BindingSessionEraser, DurableExecutionAudit},
     };
+    use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
     use nessa_sdk::{
         application::agent_execution::{
             agents::AgentError,
@@ -919,8 +920,10 @@ pub(super) mod build {
             agent_execution::{
                 permissions::PermissionOfferPolicy,
                 prompts::{
-                    PromptSource, PromptSourceKind, SystemPrompt, SystemPromptBuilder, UserMessage,
+                    AppModelContext, LinkedFile, McpAppSource, PromptSource, PromptSourceKind,
+                    SystemPrompt, SystemPromptBuilder, UserMessage,
                 },
+                tools::MAX_MCP_NAME_BYTES,
             },
             common::value_objects::TokenLimits,
         },
@@ -944,14 +947,60 @@ pub(super) mod build {
     /// The largest ACP frame, derived from the largest message rather than
     /// chosen beside it. One `session/prompt` carries every image of a message
     /// as base64, which grows bytes by a third: `UserMessage::MAX_IMAGE_BYTES`
-    /// (10 MiB) becomes 13⅓ MiB. With 8 KiB of text and the JSON around each
-    /// block, that fits 16 MiB and nothing smaller that is a round number. 16
-    /// MiB is also the most `AcpConfig` accepts, so the image budget cannot
-    /// grow without the SDK's ceiling growing first.
+    /// (10 MiB) becomes 13⅓ MiB. 16 MiB is the round number that also holds
+    /// the rest of the largest message ([`LARGEST_MESSAGE_FRAME_BYTES`]), and
+    /// the most `AcpConfig` accepts, so the image budget cannot grow without
+    /// the SDK's ceiling growing first.
     const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+    /// The most bytes one input byte takes once written as a JSON string: a
+    /// control byte becomes `\u00XX`. Every other byte takes two at most.
+    const ESCAPED_ONCE: usize = 6;
+    /// The most bytes one input byte takes once written as a JSON string
+    /// inside a JSON string. An app's context is: each of its strings is
+    /// escaped into the JSON array of contexts, and that array is the string
+    /// of one text block. `\u00XX`'s backslash is then escaped again, `\\u00XX`;
+    /// a quote or a backslash takes four.
+    const ESCAPED_TWICE: usize = ESCAPED_ONCE + 1;
+    /// The most the SDK can measure the largest message at
+    /// (`fits_one_frame`), so it never refuses as `MessageTooLarge` a message
+    /// this gateway admitted, whatever an app's context adds to it.
+    ///
+    /// - Images: `MAX_IMAGE_BYTES` (10 MiB) across at most `MAX_IMAGES` (10),
+    ///   each rounded up to whole base64 quanta: (10 485 760 + 2 × 10) / 3 × 4
+    ///   = 13 981 040.
+    /// - Text: `MAX_MCP_MESSAGE_BYTES` (8 KiB), which the conversation's own
+    ///   input bound never exceeds (a larger one is refused when the
+    ///   conversation service is built), escaped once: 6 × 8 192 = 49 152.
+    /// - App contexts, which a message admitted while the conversation is
+    ///   idle takes: `UserMessage::MAX_APP_MODEL_CONTEXTS` (4), each at most
+    ///   `AppModelContext::MAX_BYTES` (8 KiB) of text and structured content,
+    ///   naming its server and tool (`MAX_MCP_NAME_BYTES`, 128 each) and its
+    ///   tool call (`McpAppSource::MAX_TOOL_ID_BYTES`, 256), all escaped
+    ///   twice: 4 × 7 × (8 192 + 128 + 128 + 256) = 243 712.
+    /// - Files: `UserMessage::MAX_FILES` (10) links, each a percent-encoded
+    ///   URI (3 bytes for each path byte, never escaped again) and a label
+    ///   (the path's last component, punctuation backslash-escaped and then
+    ///   escaped once, 6 bytes at most for each byte), both from at most
+    ///   `LinkedFile::MAX_PATH_BYTES` (4 096): 10 × 9 × 4 096 = 368 640.
+    /// - Everything else, which none of the message's senders writes: the
+    ///   request around it and every block's keys, quotes and braces, as the
+    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 3 781.
+    ///
+    /// 14 646 325 in all, 2 130 891 under [`MAX_FRAME_BYTES`].
+    const LARGEST_MESSAGE_FRAME_BYTES: usize =
+        (UserMessage::MAX_IMAGE_BYTES as usize + 2 * UserMessage::MAX_IMAGES) / 3 * 4
+            + ESCAPED_ONCE * MAX_MCP_MESSAGE_BYTES
+            + UserMessage::MAX_APP_MODEL_CONTEXTS
+                * ESCAPED_TWICE
+                * (AppModelContext::MAX_BYTES
+                    + 2 * MAX_MCP_NAME_BYTES
+                    + McpAppSource::MAX_TOOL_ID_BYTES)
+            + UserMessage::MAX_FILES * (3 + ESCAPED_ONCE) * LinkedFile::MAX_PATH_BYTES
+            + AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES;
     const _: () = assert!(
-        UserMessage::MAX_IMAGE_BYTES as usize / 3 * 4 + 1024 * 1024 <= MAX_FRAME_BYTES,
-        "one message's images, encoded, must fit one ACP frame"
+        LARGEST_MESSAGE_FRAME_BYTES <= MAX_FRAME_BYTES,
+        "the largest message, with its images encoded and the most app context it may carry, must fit one ACP frame"
     );
     /// What an agent may send us, which is the buffer this host can be made to
     /// allocate for one frame and has nothing to do with the prompts it writes.

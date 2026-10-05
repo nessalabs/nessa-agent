@@ -7,6 +7,7 @@ use crate::application::agent_execution::{
     providers::{ExecutableUseSnapshot, UserImageSource},
 };
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
+use crate::infrastructure::acp::executions::prompt_content;
 use crate::infrastructure::clock::Clock;
 use serde::Deserialize;
 use std::{
@@ -427,6 +428,24 @@ pub struct AcpConfig {
     pub clock: Arc<dyn Clock>,
 }
 impl AcpConfig {
+    /// The most bytes, beyond what its sender wrote, that one message takes
+    /// of a frame when it is as large as `UserMessage` allows: the request
+    /// around it (about 2 KiB) and every block's keys, quotes and braces —
+    /// the text's, the app-context block's preamble and each of the at most
+    /// `UserMessage::MAX_APP_MODEL_CONTEXTS` app entries in it, the at most
+    /// `UserMessage::MAX_IMAGES` images', and the at most
+    /// `UserMessage::MAX_FILES` file links' with their `file://`. In bytes.
+    ///
+    /// What the sender wrote — the text, each image's base64, each app's
+    /// names and context, each file's path and name, each with whatever JSON
+    /// escaping it takes — is not in it: a host that bounds those adds its
+    /// bounds to this to size `max_frame_bytes`, so that no message it admits
+    /// is refused with `AgentError::MessageTooLarge`. Derived from the figure
+    /// a message is measured by when it is submitted, so it grows when that
+    /// figure's allowances do.
+    pub const LARGEST_MESSAGE_SYNTAX_BYTES: usize =
+        prompt_content::LARGEST_MESSAGE_SYNTAX_BYTES as usize;
+
     /// The ACP `mcpServers` entries for `session/new` and `session/resume`:
     /// each trusted server as configured, with this open's environment. The
     /// one statement of the entry every profile sends.

@@ -176,7 +176,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 45,
+          "maxItems": 49,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -979,6 +979,10 @@
           "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files the user pointed this turn at, in attachment order. No bytes were ever carried for them."
         },
+        "app": {
+          "$ref": "#/$defs/ConversationMessageApp",
+          "description": "The app that wrote this turn on the person's behalf; absent when the person wrote it."
+        },
         "status": {
           "$ref": "#/$defs/ConversationMessageStatus",
           "description": "Current invocation state."
@@ -1048,12 +1052,52 @@
           "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files the waiting input points at, in attachment order."
         },
+        "app": {
+          "$ref": "#/$defs/ConversationMessageApp",
+          "description": "The app that wrote this waiting input on the person's behalf; absent when the person wrote it."
+        },
         "mode": {
           "$ref": "#/$defs/ConversationPendingMode",
           "description": "Queue or steering admission."
         }
       },
       "required": ["executionId", "text", "attachments", "files", "mode"]
+    },
+    "ConversationMessageApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The execution the app's tool call belongs to."
+        },
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The app's tool call."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The app's MCP server."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The tool whose UI the app is."
+        }
+      },
+      "required": ["executionId", "toolId", "server", "tool"]
     },
     "ConversationPermissionOption": {
       "type": "object",
@@ -1628,6 +1672,171 @@
       },
       "required": ["conversationId", "requestId", "executionId"]
     },
+    "ConversationStopParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stop one captured turn. A queued turn is withdrawn. The active turn is cancelled without closing the attachment. A finished turn records that nothing was sent.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The captured turn. Stop never substitutes a newer one."
+        }
+      },
+      "required": ["conversationId", "requestId", "executionId"]
+    },
+    "ConversationCommandOperation": {
+      "type": "string",
+      "enum": ["create", "submit", "steer", "stop"],
+      "description": "Which command family a read-only receipt lookup names. The lookup does not admit that command."
+    },
+    "ConversationCommandStage": {
+      "type": "string",
+      "enum": ["accepted", "attempted", "ready", "settled"],
+      "description": "Durable progress. Attempted means the original effect was authorized and its success was not saved. Ready is creation's terminal. Settled is a submit or stop terminal."
+    },
+    "ConversationCommandOutcome": {
+      "type": "string",
+      "enum": ["dispatched", "withdrawn", "cancelled", "already_final"],
+      "description": "What a settled submit or stop did. Absent until the stage is settled. Already final means nothing was sent."
+    },
+    "ConversationCommandReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Non-content progress of one creation, submit, or stop. The request identity, not this object, is the idempotency key.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "stage": {
+          "$ref": "#/$defs/ConversationCommandStage",
+          "description": "Acknowledged progress of that command."
+        },
+        "outcome": {
+          "$ref": "#/$defs/ConversationCommandOutcome",
+          "description": "Present only when stage is settled."
+        }
+      },
+      "required": ["requestId", "stage"]
+    },
+    "ConversationReceiptParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read one command receipt. This writes nothing and does not enqueue, open, withdraw, or cancel. Submit and steer must repeat the original bytes so the fingerprint matches. Create repeats the original selection hints.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "operation": {
+          "$ref": "#/$defs/ConversationCommandOperation",
+          "description": "Command family to read. A different family under this request is a conflict."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Required for submit, steer, and stop. The captured turn."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "Original submit or steer text. Required for those operations, omitted for create and stop."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": { "$ref": "#/$defs/ImageAttachment" },
+          "description": "Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none."
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/LinkedFile" },
+          "description": "Original submit or steer file paths, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none."
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "Creation hint. Omitted when the original creation named no agent."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Creation hint. Omitted when the original creation named no model."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Creation hint. Omitted when the original creation named no preset."
+        }
+      },
+      "required": ["conversationId", "requestId", "operation"]
+    },
+    "ConversationReceiptResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether a receipt for that request is saved. Found is false when the principal has no such request. A deleted conversation is refused instead of answering found.",
+      "properties": {
+        "found": {
+          "type": "boolean",
+          "description": "True when this request has saved progress."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The request that was looked up."
+        },
+        "stage": {
+          "$ref": "#/$defs/ConversationCommandStage",
+          "description": "Present when found is true."
+        },
+        "outcome": {
+          "$ref": "#/$defs/ConversationCommandOutcome",
+          "description": "Present when the saved stage is settled."
+        }
+      },
+      "required": ["found", "requestId"]
+    },
     "ConversationPermissionSelectionState": {
       "type": "string",
       "enum": ["pending", "consumed", "unknown"],
@@ -2085,6 +2294,103 @@
         }
       },
       "required": ["conversationId", "requestId", "app"]
+    },
+    "McpSendMessageParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App sends a message into its conversation (mcp.sendMessage, MCP Apps ui/message): the person's turn, written by the app on their behalf and shown in the transcript as the app's (ConversationMessage.app). Every message waits for the person's approval in the conversation's permissions, origin {kind: app}, answered with conversation.answer or conversation.cancel whatever the approval mode. Refused turn_running while a turn runs or input waits, so it is never queued behind the person's own; any other refusal of the message is its own conversation code. The same requestId again, from the same mount, is the same turn: one the agent has already is not asked again, and the agent settles it, the same text answering the first delivery and other text submission_conflict; one sent again while the first is still in review or being sent is refused temporarily_unavailable. It travels on the app lane.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": {
+          "$ref": "#/$defs/McpAppReference",
+          "description": "The app sending it."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The message, as text: at most 8192 UTF-8 bytes, what conversation.send takes (invalid_request past it, refused before anything is recorded), and not empty (invalid_request, refused before anything is recorded). Blank text, whitespace only, is invalid_request too, refused on record by the conversation. Past the conversation's own input bound, which is never larger, it is refused mcp_request_too_large. It is shown whole in its review, which must fit the 16 000 bytes an app's review may take of the view, encoded; text heavy in quotes or control characters can be past that while within 8192 bytes (mcp_request_too_large, and no review is opened)."
+        }
+      },
+      "required": ["conversationId", "requestId", "app", "server", "text"]
+    },
+    "McpSendMessageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The conversation's agent took the message.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The turn the message became, as the transcript names it."
+        }
+      },
+      "required": ["executionId"]
+    },
+    "McpUpdateModelContextParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App gives the model context (mcp.updateModelContext, MCP Apps ui/update-model-context), in place of what this mount gave before; an update with neither text nor structuredContentJson, or with only an empty text, clears it. It is held for the mount until the next message admitted into the conversation while nothing runs and no input waits, the person's or an app's, carries it ahead of what the message says; it is not shown in the transcript. That message takes it as it is read, and it is held no longer. If the message is then refused, it is lost, recorded as dropped not_sent; if its turn fails, it is lost; either way the app may give it again. A message queued behind a running turn, or steered into one, carries none and leaves it held. A release of the mount (mcp.releaseApp) or the end of the conversation's opening drops it unsent while it is still held. A conversation's updates are taken one at a time, each recorded before it is held. Each part takes at most 8192 UTF-8 bytes (invalid_request past it, refused before anything is recorded), and text and structured content together at most 8192 (mcp_request_too_large past it); at most 4 mounts of a conversation hold a context at once (temporarily_unavailable for another). Answered with ConversationMutationResult. It travels on the app lane.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": { "$ref": "#/$defs/McpAppReference", "description": "The app giving it." },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The MCP server's configured name: the app's own server. Any other is refused mcp_server_mismatch."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The context as text: at most 8192 UTF-8 bytes (invalid_request past it). Empty is none."
+        },
+        "structuredContentJson": {
+          "type": "string",
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The context's structured content: one JSON object, encoded (invalid_request if it is not one, or past 8192 UTF-8 bytes), held exactly as given. Absent is none."
+        }
+      },
+      "required": ["conversationId", "requestId", "app", "server"]
     },
     "McpCallToolParams": {
       "type": "object",
@@ -2739,7 +3045,7 @@
         "mcp_timed_out",
         "mcp_remote_error"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 32 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details)."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details)."
     },
     "ConversationAnswerOption": {
       "type": "object",

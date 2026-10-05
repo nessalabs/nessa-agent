@@ -20,10 +20,7 @@ async fn retirement_joins_admitted_commands_and_never_reopens_admission() {
     assert!(!task.is_finished());
     drop(admitted);
     task.await.unwrap().unwrap();
-    assert!(matches!(
-        service.admit().await,
-        Err(ConversationError::Unavailable)
-    ));
+    assert!(matches!(service.admit().await, Err(Halt::Retired)));
     service
         .retire("gateway_upgrade", "upgrade-one")
         .await
@@ -506,6 +503,7 @@ async fn an_unsettled_opening_counts_as_holding_resources() {
             value: OnceCell::new(),
             ready: Notify::new(),
             started: AtomicBool::new(true),
+            stopping: AtomicBool::new(false),
         }),
     );
     assert!(service.owns_unreleased_resources().await);

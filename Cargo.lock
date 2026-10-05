@@ -3104,6 +3104,8 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "tungstenite",
  "uuid",
  "zeroize",

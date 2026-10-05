@@ -74,8 +74,22 @@ pub trait McpApps: Send + Sync {
 /// What an app asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppAsk {
-    CallTool { server: String, tool: String },
-    ReadResource { server: String, uri: String },
+    CallTool {
+        server: String,
+        tool: String,
+    },
+    ReadResource {
+        server: String,
+        uri: String,
+    },
+    /// `ui/message`: a message in its conversation, as the person.
+    SendMessage {
+        server: String,
+    },
+    /// `ui/update-model-context`: what it gives the model now.
+    UpdateModelContext {
+        server: String,
+    },
 }
 
 /// Who a step was taken by: the app, on behalf of the person whose
@@ -130,6 +144,23 @@ pub enum TicketEnd {
     ConversationEnded,
 }
 
+/// Why a mount's context was dropped unsent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextDrop {
+    /// Its mount was released.
+    Released,
+    /// The conversation's opening ended — closed, deleted, stopped, the
+    /// gateway stopping — or another began.
+    ConversationEnded,
+    /// Its mount was released, or its opening ended, after the update was
+    /// recorded and before it was held: it never was.
+    NotHeld,
+    /// A message admitted while the conversation was idle took it, and was
+    /// then refused, or failed before the agent was asked: it went nowhere.
+    /// The app may give it again.
+    NotSent,
+}
+
 /// One step of an app call's life. Each is recorded before the step's
 /// effect is reported; a refusal and a withdrawal, as much as a success.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +197,41 @@ pub enum McpAppAuditPhase {
         ticket_digest: String,
         cause: TicketEnd,
     },
+    /// The agent took the app's message as the turn `execution_id`, whose
+    /// own record holds what it said. `code` is the answer's when the
+    /// agent's evidence of taking it failed.
+    MessageSent {
+        execution_id: String,
+        code: Option<ConversationErrorCode>,
+    },
+    /// The conversation refused the app's message, or its submission failed
+    /// before it reached the agent: nothing did. `code` is the answer's.
+    MessageNotSent {
+        execution_id: String,
+        code: ConversationErrorCode,
+    },
+    /// Whether the agent has the app's message is not known: the agent
+    /// could not settle it, or the submission's own task failed once the
+    /// agent was asked to take it. `code` is the answer's.
+    MessageUnresolved {
+        execution_id: String,
+        code: ConversationErrorCode,
+    },
+    /// The mount's context, `bytes` of it, is held for the next message
+    /// admitted while the conversation is idle, in place of what it held.
+    /// The conversation's updates are recorded in the order they are held
+    /// in, one at a time. A turn that carries it names this call's id
+    /// (`AppModelContext::update_id`). Why one was never sent is read from
+    /// the record of the update that replaced or cleared it, from its own
+    /// [`Self::ContextDropped`], or from the record of the turn that
+    /// carried it.
+    ContextHeld { bytes: usize },
+    /// What the mount held, if anything, is let go of unsent.
+    ContextCleared,
+    /// The context this update held, or was to hold, was dropped unsent,
+    /// and why; taken by whoever released the mount, ended the opening or
+    /// deleted the conversation, or by the system.
+    ContextDropped { cause: ContextDrop },
 }
 
 /// Immutable evidence of one step: its target (the conversation, the app,
@@ -268,7 +334,7 @@ pub const MAX_HELD_TICKETS: usize = 64;
 
 /// Why an app's call was refused, or failed once sent. [`Self::code`] is the
 /// protocol's [`ConversationErrorCode`], which audit records and the wire
-/// answers with (`tests/conversation/wire_errors.rs`).
+/// answers with (`each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppError {
     AppUnknown,
@@ -321,12 +387,33 @@ impl From<McpAppFailure> for McpAppError {
     }
 }
 
+/// Told of each held context dropped unsent, so it can be audited: the
+/// [`McpAppAuditPhase::ContextDropped`] record, built by the conversation's
+/// apps at the moment they removed it — released, its opening ended, a new
+/// opening begun, the conversation deleted, or taken by a submission that
+/// then went nowhere — against the update that held it, by whoever dropped
+/// it. The twin of the resource tickets' `TicketEvents`.
+///
+/// Called once per drop, synchronously, after the apps have let go of the
+/// context and outside their lock. It must not block: an implementation
+/// that has to await an audit store hands the record on (composition's
+/// channel and its recorder, `audit_context_drops`). The apps keep no
+/// record of what they reported; the receiver is the evidence's only holder
+/// from then on. No command that dropped a context waits for its record or
+/// answers by it: a drop whose record fails is logged by the receiver
+/// (`docs/design/mcp-app-calls.md`, row C15b).
+pub trait DroppedContexts: Send + Sync {
+    fn context_dropped(&self, record: McpAppAuditRecord);
+}
+
 /// What an app's calls go through: the conversation's own MCP sessions, the
-/// audit of every step, and the resources held behind tickets. A gateway
-/// with no MCP servers has none, and no app to admit.
+/// audit of every step, the resources held behind tickets, and where the
+/// drops of held contexts are reported. A gateway with no MCP servers has
+/// none, and no app to admit.
 #[derive(Clone)]
 pub struct McpAppPorts {
     pub apps: Arc<dyn McpApps>,
     pub audit: Arc<dyn McpAppAudit>,
     pub tickets: Arc<dyn ResourceTickets>,
+    pub dropped: Arc<dyn DroppedContexts>,
 }

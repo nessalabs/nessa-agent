@@ -786,6 +786,16 @@ tool, and permission invariants; adapters own provider translation and effects.
 Mandatory permission audit remains separate from session snapshots.
 The host supplies verified attribution and authorizes commands before SDK access.
 
+The first durable creation consumer is `ConversationService::create_command`,
+which uses the SDK `commands::CreationCoordinator` with a principal control lease
+on the shared `RecordStorage` runtime. Its non-content binding and original
+attempt precede initialization; attempted recovery stays interrupted without
+provider reopening. Current target access/deletion remains in the conversation
+service. The existing host admission guard spans the full command and terminal
+commit. The product socket creates, sends, steers, stops, and reads those
+receipts through the same command store; see
+[command creation](design/command-creation.md).
+
 Behavior belongs in the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md),
 especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 [scheduling/retries](../crates/nessa-sdk/docs/agent_execution/scheduling.md), and
@@ -802,8 +812,9 @@ The floating panel polls current replacement views, displays streaming output an
 permission choices, distinguishes provider startup from model thinking, and queues
 follow-ups while attachment is pending. Create, read, and queue admission use the
 ordinary client command deadline; provider startup settles later through the same
-replacement view and durable SDK receipt. Closing a tab detaches a view;
-Stop explicitly closes active and queued work.
+replacement view and durable SDK receipt. Closing a tab detaches a view.
+Stop names the captured turn: it withdraws a queued turn or cancels the
+active one, and it leaves the attachment open.
 
 See [gateway chat](guides/gateway-chat.md) for configuration, ownership, commands,
 limits, and durability. The server stores SDK semantic records in one SQLite runtime at consequential
@@ -914,10 +925,11 @@ and so does the device client; it depends on neither
 ([ADR 483](adr/done/483-protocol-and-client-core-crates.md)).
 
 `nessa-protocol/src/product_contract/generated.rs` contains pure schema-derived
-product outcome values and close policy. Product DTOs/socket and read-only sync
-application ports consume that publication. The product schema owns its
-vocabulary; this contract contains no routing or IO and is separate from generic
-protocol frames.
+product outcome values and close policy. Product DTOs/socket, read-only sync
+application ports and the gateway's conversation service (its one mapping of
+errors to `ConversationErrorCode`, which the wire answers by and MCP app audit
+records) consume that publication. The product schema owns its vocabulary; this
+contract contains no routing or IO and is separate from generic protocol frames.
 
 **Device client core** (`crates/nessa-client-core`) — reusable Rust library and
 standalone retained-sync example. Owns device enrollment, private profile/cache,

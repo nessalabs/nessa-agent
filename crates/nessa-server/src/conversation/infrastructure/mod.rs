@@ -44,6 +44,9 @@
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
 //! by the conversation, the app's mount, the gateway's call id and the phase.
+//! `audit_context_drops` is the one recorder of every held MCP App context
+//! dropped unsent: the conversations' apps report each drop to it, through a
+//! channel, as they make it, and it writes the record on a task of its own.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 mod catalogue_changes;
@@ -78,6 +81,9 @@ pub use mode_audit::DurableConversationModeAudit;
 
 mod mcp_app_audit;
 pub use mcp_app_audit::DurableMcpAppAudit;
+
+mod context_drops;
+pub use context_drops::audit_context_drops;
 
 mod file_link_audit;
 pub use file_link_audit::DurableConversationFileLinkAudit;

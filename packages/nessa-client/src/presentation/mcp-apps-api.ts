@@ -14,6 +14,7 @@ import {
   type McpAppReference,
   type McpCallToolResult,
   type McpReadResourceResult,
+  type McpSendMessageResult,
 } from "../generated/product.js"
 import {
   conversationIdPattern,
@@ -21,10 +22,13 @@ import {
 } from "../protocol/conversation-validate.js"
 import {
   boundedName,
+  mcpAppModelContext,
   mcpAppReferenceProblem,
   mcpAppRequestProblem,
   mcpCallToolResult,
   mcpReadResourceResult,
+  mcpSendMessageResult,
+  type McpAppModelContext,
   validResourceDigest,
   validResourceSize,
   validResourceTicket,
@@ -32,25 +36,21 @@ import {
 import type { ConversationActionOptions } from "./conversation-api.js"
 
 /**
- * The longest each of {@link McpAppsApi}'s calls can take the gateway, in
- * milliseconds, as the protocol publishes it (`x-mcpAppCallTiming`, and the
- * ticket's lifetime); nothing else spells them. A host that bounds an app's
- * request by these never drops an answer the gateway is still bound to send.
+ * How long this client waits on each of {@link McpAppsApi}'s calls, in
+ * milliseconds, as the protocol publishes it; nothing else spells them. What
+ * the call deadlines cover, and what they do not, is the description of
+ * {@link mcpAppCallTiming}, its one statement.
  */
 export const mcpAppDeadlines = Object.freeze({
   /**
-   * `callTool`: a destructive tool's review waits for the person, then the
-   * call has its budget, and the client's allowance covers audit writes, the
-   * response and scheduling. The client waits at least this long — longer
-   * when it is configured for longer — since giving up sooner would drop an
-   * answer the gateway still sends, and would not withdraw the review: only
-   * `releaseApp`, or the socket closing, does.
+   * `callTool`, `sendMessage` and `updateModelContext`: the published
+   * `callDeadlineMs`. The client waits at least this long, longer when it is
+   * configured for longer.
    */
   callToolMs: mcpAppCallTiming.callDeadlineMs,
   /**
-   * `readResource`: as long as a call. The gateway may open the conversation
-   * first, and records each step; a read never outlasts a call. The client
-   * waits at least this long, as for `callTool`.
+   * `readResource`: the published `callDeadlineMs`, as for `callTool`. The
+   * client waits at least this long.
    */
   readResourceMs: mcpAppCallTiming.callDeadlineMs,
   /**
@@ -69,8 +69,9 @@ export type McpResourceDescription = Pick<McpReadResourceResult, "size" | "sha25
  * An app is the UI of one MCP tool call in a conversation, named by an
  * {@link McpAppReference}: the call's `executionId` and `toolId`, and the host's
  * own `instanceId` for this mount of it. It reaches its own server — and no
- * other — through `callTool` and `readResource`; the host lets it go with
- * `releaseApp` when the mount is torn down.
+ * other — through `callTool` and `readResource`, speaks in its conversation
+ * through `sendMessage` and `updateModelContext`, and the host lets it go
+ * with `releaseApp` when the mount is torn down.
  *
  * A resource's bytes never ride the socket. `readResource` answers what they
  * are and a single-use ticket; `fetchResource` redeems it over HTTP and hands
@@ -89,9 +90,9 @@ export type McpAppsApi = {
    * first for the person's approval, as a review in the conversation's
    * `permissions` with `origin: {kind: "app", server, tool}`. The call is
    * answered when they answer, when the review expires
-   * (`x-mcpAppCallTiming.reviewDeadlineMs`), or when it is withdrawn; this client waits
-   * for it (`mcpAppDeadlines.callToolMs`). At most 4 app
-   * calls run at once per socket; past that they are refused
+   * (`x-mcpAppCallTiming.reviewDeadlineMs`), or when it is withdrawn; this
+   * client waits `mcpAppDeadlines.callToolMs` for it. At most 4 app calls
+   * run at once per socket; past that they are refused
    * `temporarily_unavailable`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
@@ -124,10 +125,8 @@ export type McpAppsApi = {
   ) => Promise<McpCallToolResult>
   /**
    * Read a resource of the app's own server: once, held by the gateway as
-   * exactly those bytes, and described with a ticket to fetch them. The server
-   * has `x-mcpAppCallTiming.readTimeoutMs` to answer the read, but the gateway
-   * may open the conversation first, so this client waits as long as for a
-   * call (`mcpAppDeadlines.readResourceMs`).
+   * exactly those bytes, and described with a ticket to fetch them. This
+   * client waits `mcpAppDeadlines.readResourceMs`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
@@ -153,6 +152,84 @@ export type McpAppsApi = {
     uri: string,
     options?: ConversationActionOptions,
   ) => Promise<McpReadResourceResult>
+  /**
+   * Send a message into the app's conversation (MCP Apps `ui/message`): the
+   * person's turn, written by the app, and shown in the transcript as the
+   * app's (`ConversationMessage.app`). Every new message waits on its own
+   * review in the conversation's `permissions`, `origin: {kind: "app",
+   * server, tool}`; this client waits `mcpAppDeadlines.callToolMs`. The same
+   * `requestId` again, from the same mount, is the same turn: the agent
+   * settles it without anyone being asked again
+   * (`docs/design/mcp-app-calls.md` M6).
+   * @param conversationId - Canonical lowercase UUID of the app's conversation.
+   * @param app - The app sending it: its tool call and this mount of it.
+   * @param server - The app's own server, by its configured name: 1 to
+   * `bounds.maxMcpNameBytes` UTF-8 bytes.
+   * @param text - The message: what {@link mcpAppRequestProblem}`.message`
+   * accepts, 1 character to `MAX_MCP_MESSAGE_BYTES` UTF-8 bytes of Unicode.
+   * Blank text, whitespace only, is the conversation's to refuse
+   * (`invalid_request`).
+   * @param options - Optional caller-managed action identity.
+   * @returns The turn the message became.
+   * @throws TypeError for arguments outside the schema's bounds, before
+   * anything is sent; otherwise {@link NessaMcpAppError}. Its `uncertain` is
+   * false — the message became no turn — for `turn_running` (a turn runs or
+   * input waits: an app's message is never queued), `mcp_cancelled` (the
+   * review was withdrawn, or the mount was released or its opening ended
+   * first: nothing was sent and nothing opened), `mcp_approval_denied`,
+   * `mcp_approval_expired`, `mcp_app_unknown`, `mcp_server_mismatch`,
+   * `mcp_request_too_large` and `invalid_request`; and true wherever the
+   * agent may have the turn, `submission_unresolved` and an answer this
+   * client does not believe among them.
+   */
+  sendMessage: (
+    conversationId: string,
+    app: McpAppReference,
+    server: string,
+    text: string,
+    options?: ConversationActionOptions,
+  ) => Promise<McpSendMessageResult>
+  /**
+   * Give the model context from the app (MCP Apps `ui/update-model-context`),
+   * in place of what this mount gave before; an update with neither part, or
+   * only an empty text, clears it. The next message admitted while nothing
+   * runs and no input waits takes it, as it is read, to the agent; it is
+   * never part of the transcript. When it is lost or dropped instead is
+   * `McpUpdateModelContextParams`' to say, and the design's
+   * (`docs/design/mcp-app-calls.md`). This client waits
+   * `mcpAppDeadlines.callToolMs`.
+   * @param conversationId - Canonical lowercase UUID of the app's conversation.
+   * @param app - The app giving it: its tool call and this mount of it.
+   * @param server - The app's own server, by its configured name: 1 to
+   * `bounds.maxMcpNameBytes` UTF-8 bytes.
+   * @param context - What {@link mcpAppRequestProblem}`.context` accepts: a
+   * plain object of its own `text` and `structuredContentJson` (one JSON
+   * object, encoded), each at most `MAX_MCP_CONTEXT_BYTES` UTF-8 bytes, and no
+   * other key. `{}` clears. Whether the two fit together, and whether the
+   * structure is one object, are the gateway's to say.
+   * @param options - Optional caller-managed action identity.
+   * @returns The gateway's acknowledgement of this action, `applied: true`:
+   * the update was taken and recorded. A release of the mount, or the end of
+   * the conversation's opening, that lands before it is held drops it unsent
+   * (`docs/design/mcp-app-calls.md` C17), so it is not necessarily still held.
+   * @throws TypeError for arguments outside the schema's bounds, before
+   * anything is sent; otherwise {@link NessaMcpAppError}, with `code`
+   * undefined and `uncertain` true for an answer this client does not
+   * believe, `applied: false` among them. Its `uncertain` is
+   * false — nothing was held — for `invalid_request` (structured content that
+   * is no object), `mcp_request_too_large` (both parts together),
+   * `mcp_app_unknown`, `mcp_server_mismatch` and `mcp_cancelled`; and true for
+   * `temporarily_unavailable` (no room for another mount's context, or the
+   * lane is full) and `audit_unavailable` (the update could not be recorded),
+   * as for every method, though the gateway held nothing for either.
+   */
+  updateModelContext: (
+    conversationId: string,
+    app: McpAppReference,
+    server: string,
+    context: McpAppModelContext,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
   /**
    * Redeem a resource ticket: `GET /mcp-resources` on the gateway's own HTTP
    * origin, the ticket in its header and never in the URL.
@@ -202,6 +279,22 @@ function hex(digest: ArrayBuffer): string {
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("")
+}
+
+/**
+ * The answer to `mcp.updateModelContext`: this action's acknowledgement, with
+ * `applied: true`. The gateway answers a context it took no other way
+ * (`crates/nessa-server/src/product/mcp_apps.rs`), so `applied: false` is no
+ * answer it could have given, and is refused as one this client does not
+ * believe; other methods' `applied` stays {@link conversationMutation}'s.
+ */
+function modelContextResult(
+  value: unknown,
+  requestId: string,
+): ConversationMutationResult {
+  const result = conversationMutation(value, requestId)
+  if (!result.applied) throw new Error("Context update answered as not applied")
+  return result
 }
 
 export function createMcpAppsApi(
@@ -295,6 +388,30 @@ export function createMcpAppsApi(
         { ...command, server, uri },
         (value) => mcpReadResourceResult(value, uri),
         readDeadline,
+      )
+    },
+    async sendMessage(conversationId, app, server, text, options = {}) {
+      const command = addressed(conversationId, app, options)
+      serverName(server)
+      const problem = mcpAppRequestProblem.message(text)
+      if (problem) throw new TypeError(problem)
+      return call(
+        ProductMethod.McpSendMessage,
+        { ...command, server, text },
+        mcpSendMessageResult,
+        callDeadline,
+      )
+    },
+    async updateModelContext(conversationId, app, server, context, options = {}) {
+      const command = addressed(conversationId, app, options)
+      serverName(server)
+      const parts = mcpAppModelContext(context)
+      if (typeof parts === "string") throw new TypeError(parts)
+      return call(
+        ProductMethod.McpUpdateModelContext,
+        { ...command, server, ...parts },
+        (value) => modelContextResult(value, command.requestId),
+        callDeadline,
       )
     },
     async fetchResource(ticket, expected, options = {}) {

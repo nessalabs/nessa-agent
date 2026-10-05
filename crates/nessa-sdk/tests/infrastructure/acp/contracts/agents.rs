@@ -306,6 +306,62 @@ fn pause_cancelled_provider() -> (
     (root, provider, waiting, release)
 }
 
+#[tokio::test]
+async fn explicit_turn_cancel_finishes_that_turn_and_keeps_the_provider_process() {
+    let _slot = process_test_slot().await;
+    let (root, provider) = test_acp_binding("turn-cancel", 32);
+    let agent = attached_agent(
+        Arc::new(provider),
+        SessionManager::open(
+            None,
+            Arc::new(InMemoryStorage::new()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(agent.supports_turn_cancel());
+    let mut events = agent.subscribe();
+    let first = agent
+        .enqueue(prompt("first"), close_action())
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let event = events.next().await.unwrap().unwrap();
+            if event.update() == &ExecutionUpdate::Message(MessageChunk::text("running")) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    agent
+        .cancel_turn(ExecutionId::new("first").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.wait().await, Ok(ExecutionOutcome::Cancelled));
+    assert_eq!(
+        agent
+            .enqueue(prompt("second"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    let launches: Vec<u32> =
+        serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();
+    assert_eq!(launches.len(), 1);
+    assert!(root.path().join("cancel-observed").exists());
+    agent.close(close_action()).await.unwrap();
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_generation_is_sealed_while_terminal_audit_is_pending() {
     let _slot = process_test_slot().await;
