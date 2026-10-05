@@ -868,29 +868,47 @@ bounds — stays the gateway's and the client's to say.
   is `invalidParams` as the request is read. `contentText` is the one place
   blocks become a text: each block's text, a blank line between, empty
   blocks dropped. Blank but not empty text is the gateway's to refuse (M3).
-- **D-B. One answer type, one table.** Both methods take the bridge's
+- **D-B. Certainty first, then one table.** Both methods take the bridge's
   `AppAddress` and answer `ConversationAnswer`: the server port's
-  `ServerAnswer`, or `invalid` with the client's words when
-  `mcpAppRequestProblem.message` / `.context` refuse it before anything is
-  sent. A code the gateway answers is read through `outcomes` in
-  `mcp-app-server.ts`, by `answerFor`, the same table `tools/call` reads;
-  `turn_running` is `{refused: "turn-running"}`, "The conversation is busy".
-  What the app is told:
+  `ServerAnswer` when the client is certain of it; `invalid` with the
+  client's words when `mcpAppRequestProblem.message` / `.context` refuse it
+  before anything is sent; or `uncertain`. Whether the gateway may have taken
+  the request is the client's to say (`NessaMcpAppError.uncertain`), and the
+  adapter asks it first: an uncertain error that the table would read as
+  refused, busy or server-gone is `{kind: "uncertain", serverGone}`, never a
+  refusal, so an app does not send again a message that may already be the
+  conversation's turn (the gateway can answer `temporarily_unavailable` or
+  `conversation_closed` after the agent has it, M15). Only then is a code
+  read through `outcomes` in `mcp-app-server.ts`, by `answerFor`, the same
+  table `tools/call` reads, for its words and for whether the server is
+  gone; `turn_running` is `{refused: "turn-running"}`, "The conversation is
+  busy". What the app is told:
 
   | answer | `ui/message` | `ui/update-model-context` |
   | --- | --- | --- |
   | ok | `{}` | `{}` |
   | invalid (client bounds) | `invalidParams`, the client's words | the same |
-  | refused / busy / server-gone | `{isError: true}`; nothing was sent for any of them; server-gone also shows the "server has stopped" notice | the refusal's words, as for `tools/call`; server-gone shows the notice |
+  | refused / busy / server-gone, certain | `{isError: true}`; nothing was sent for any of them; server-gone also shows the "server has stopped" notice | the refusal's words, as for `tools/call`; server-gone shows the notice |
+  | uncertain | `internal` "The request failed"; the notice too when the table places the code as server-gone | the same |
   | failed (no code, an answer not believed, a fault) | `internal` "The request failed", logged | the same |
+
+  So `temporarily_unavailable`, `conversation_closed` and
+  `mcp_session_unavailable` are uncertain, and `conversation_not_found` and
+  `conversation_deleted` are a certain server-gone.
 - **D-C. A context.** `text` from `contentText`, `structuredContentJson` as
   `JSON.stringify(structuredContent)`, absent parts left out: `{}`,
   `content: []` or only empty blocks send `{}`, a clear (C7). `{}` back means
   taken and recorded (C17).
-- **D-D. One mount's updates in order.** The adapter keeps a queue per
-  `instanceId`: the next update is sent once the one before has answered,
-  whatever it answered. Another mount's are not held back; messages are not
-  queued.
+- **D-D. One mount's updates in order, and only while they are asked.**
+  The adapter keeps a queue per `instanceId`: the next update is sent once
+  the one before has answered, whatever it answered. Another mount's are not
+  held back; messages are not queued. Each update carries the signal the
+  bridge gives its request (`settle` in `bridge.ts`), aborted once the
+  bridge has answered the request — a timeout among those — or the mount is
+  released. An update whose signal is aborted when its turn comes is dropped
+  unsent, and the next goes in its place, so the queue holds no more than the
+  bridge's live requests (`pendingLimit`), nothing is sent after the app was
+  told it timed out, and nothing after its mount was let go.
 - **D-E. Routing** (`dependencies.ts`). `sendMessage` goes through the
   source's `appCall`, as `callTool` does, so the conversation is read each
   round while the message waits on its review (#436). `updateModelContext`
@@ -908,16 +926,24 @@ bounds — stays the gateway's and the client's to say.
 - **D-H. The label.** `Message.app` (`{server, tool}`) is set from a view's
   `messages[].app` and `pending[].app`. Above the person's bubble, a line
   "Sent by `<tool>`, from `<server>`" (`.workspace-message-author`,
-  `data-message-app`, its `title` the whole of it), plain text in reading
-  order. A waiting app message has the label and no delivery state.
+  `data-message-app` `<server>/<tool>`), plain text in reading order. It
+  wraps rather than being cut, so both names are always whole and no `title`
+  repeats them; each name is in its own `<bdi>` (`said.tsx`), so a name
+  written right to left cannot reorder the line. A waiting app message has
+  the label and no delivery state.
 - **D-I. The review says what it asks.** `ConversationPermission.ask` is
   `"tool" | "message"`, owned by the gateway's `ReviewAsk` (`review_of`);
   the agent's reviews are `"tool"`. The client refuses a view whose review
   has no `ask` or one it does not know. The desktop carries it as
-  `Approval.ask`; the card's head and the overview's row are total over who
-  asks and what (`approvalHead`, `approvalRequest`): an app's message reads
-  "The `<server>` app wants to send a message as you", its command the
-  app's tool and `{"text": …}`.
+  `Approval.ask`. A harness review with `ask: "message"` is a contradiction
+  the client refuses, as it refuses an agent's review naming an app tool, so
+  the card's head and the overview's row word only what can arrive
+  (`approvalHead`, `approvalRequest`): the agent's command, an app's tool,
+  or an app's message — "The `<server>` app wants to send a message as you",
+  its command the app's tool and `{"text": …}`. The names in the head are in
+  `<bdi>`, and in the row's accessible name between FSI and PDI. The answers'
+  tooltips are worded by `ask` too (`answerTips`): "Don’t send it" and "Send
+  it once" for a message.
 - **D-J. Sample and fixtures.** The fixture app has `message` and `context`
   controls. Beside the sample workspace its conversation is
   `fixtureConversation`, which writes the message through
@@ -933,8 +959,8 @@ bounds — stays the gateway's and the client's to say.
 | D2 | live | a non-text block, no `role: user`, or an empty list | — | `invalidParams` when read; nothing sent |
 | D3 | live | text empty after the join, past `MAX_MCP_MESSAGE_BYTES`, or a lone surrogate | — | `invalidParams`, with the client's words; nothing sent |
 | D4 | live | `turn_running`, `mcp_approval_denied` / `_expired`, `mcp_cancelled`, `invalid_request`, `mcp_request_too_large`, `mcp_app_unknown`, `mcp_server_mismatch` | — | `{isError: true}`; nothing in the transcript |
-| D5 | live | `temporarily_unavailable` | — | `{isError: true}`; the app may try again |
-| D6 | live | conversation gone, or `mcp_session_unavailable` | — | `{isError: true}`, and the "server has stopped" notice |
+| D5 | live | `temporarily_unavailable`, which the client marks uncertain | — | `internal` "The request failed": the agent may have the message, so it is not told as a refusal |
+| D6 | live | `conversation_not_found` / `_deleted` (certain); `conversation_closed` or `mcp_session_unavailable` (uncertain) | — | certain: `{isError: true}`; uncertain: `internal` "The request failed"; either way the "server has stopped" notice |
 | D7 | live | no code, an unbelieved answer, a fault | — | `internal` "The request failed", logged |
 | D8 | waiting | `within` passes | — | `internal` "timed out". A review still open may still be allowed, and its message lands labelled without the app being told (recorded limit, as for `tools/call`) |
 | D9 | message in review | each poll round while it waits | — | the card is drawn (origin app, ask message, `<tool> {"text":…}`). Allow → `{}`; Deny → `{isError: true}` |
@@ -942,12 +968,12 @@ bounds — stays the gateway's and the client's to say.
 | D11 | live | `ui/update-model-context` with text and/or `structuredContent` | — | `{text?, structuredContentJson?}` sent; `{}` |
 | D12 | live | `{}`, `content: []`, or only empty text blocks | — | `{}` sent (a clear); `{}` |
 | D13 | live | a part past `MAX_MCP_CONTEXT_BYTES`, or a lone surrogate | — | `invalidParams`; nothing sent |
-| D14 | live | `mcp_request_too_large`, `invalid_request`, `temporarily_unavailable`, `mcp_cancelled` | — | an error with the words, as for `tools/call` |
-| D15 | one update in flight for this mount | a second update, or a clear, from the same mount | queued | sent once the first answers; another mount's goes at once |
+| D14 | live | `mcp_request_too_large`, `invalid_request`, `mcp_cancelled`, `mcp_app_unknown` (certain); `temporarily_unavailable`, `conversation_closed`, `mcp_session_unavailable` (uncertain) | — | certain: an error with the words, as for `tools/call`; uncertain: `internal` "The request failed", with the notice for a server gone |
+| D15 | one update in flight for this mount | a second update, or a clear, from the same mount | queued | sent once the first answers, whatever it answered; dropped unsent if, when its turn comes, the bridge has answered it (a timeout too) or the mount is released; another mount's goes at once |
 | D16 | no conversation port | either request | — | `methodNotFound`; capabilities omit both |
 | D17 | — | a view message or pending entry with `app` | — | the label "Sent by `<tool>`, from `<server>`"; the person's own messages carry none |
 | D18 | idle, not polled | `sendMessage` | polled | read each round until it settles; `updateModelContext` starts no read |
-| D19 | — | a review whose `ask` is `message` | — | head and row: "The `<server>` app wants to send a message as you"; `ask` missing or unknown → the view is refused (client) |
+| D19 | — | a review whose `ask` is `message` | — | head and row: "The `<server>` app wants to send a message as you", the server's name isolated; the tooltips "Don’t send it", "Send it once"; `ask` missing or unknown, or `message` on the agent's review → the view is refused (client) |
 
 ```mermaid
 sequenceDiagram
@@ -974,9 +1000,12 @@ sequenceDiagram
             Bridge-->>App: result {}
             GW-->>Src: view with the message, app set
             Src-->>Person: bubble labelled Sent by tool, from server
-        else turn running, denied or cancelled
+        else turn running, denied or cancelled, certain
             GW-->>Conv: code
             Bridge-->>App: result isError true
+        else the client is not certain it was not taken
+            GW-->>Conv: code, uncertain
+            Bridge-->>App: error internal, the request failed
         end
     end
 ```
@@ -1001,25 +1030,40 @@ sequenceDiagram
 Each row has at least one test, named after it.
 
 - `src/desktop/widgets/app/application/bridge.test.ts`, "an app in its
-  conversation (#390)": D1, D2, D3 and D13, D4 with D5 and D9, D6, D7, D8,
-  D10 with D-G, D11 with D12, D14, D16.
+  conversation (#390)": D1, D2, D3 and D13, D4 with D9, D6, D5 with D6 and
+  D14 (uncertain: the request failed, never `isError`, the notice for a
+  server gone), D7, D8, D10 with D-G, D11 with D12, D14, D16; D15 and D-D
+  with the gateway's adapter behind the bridge (the signal aborted on an
+  answer, a timeout and a release; a release mid-queue sends nothing more; a
+  timed-out update is not sent; a flood of timed-out updates sends no more
+  than were live).
 - `src/desktop/widgets/app/adapters/gateway/app-messages.test.ts`: D1, D3,
-  D4 (each code), D5, D6 (each code), D7, D-B (every code is the outcome a
-  `tools/call` gets), D11, D12, D13, D14 (each code), D15 (the order, and
-  going on after a refusal or a failure), D-F.
+  D4 (each code), D5 (`temporarily_unavailable` uncertain), D6 (each code,
+  certain and uncertain), D7, D-B (certainty first: every certain code is
+  the outcome a `tools/call` gets, every uncertain one never a refusal), D11,
+  D12, D13, D14 (each code, certain and uncertain), D15 (the order, going on
+  after a refusal or a failure, an aborted update dropped and the next
+  sent), D-F.
+- `src/desktop/widgets/app/fixture/fixture-plugin.test.ts`: D1 and D3 for
+  the sample's conversation, which asks `appMessageText`, the adapter's own
+  check, so it draws no message a gateway would refuse.
 - `src/desktop/widgets/app/adapters/gateway/mcp-app-server.test.ts`: the
   shared table is total, `turn_running` among the refusals.
 - `src/desktop/widgets/app/model/messages.test.ts`: D-A (`contentText`).
 - `src/desktop/dependencies.test.ts`: D18 (a message read each round until
-  answered; a context starts no read), D-J (the fixture app's conversation
-  beside the sample workspace).
+  answered; a context, its answer held open while time passes, starts no
+  read), D-J (the fixture app's conversation beside the sample workspace).
 - `src/desktop/workspace/adapters/gateway/gateway-views.test.ts`: D17 (a
   turn's and a pending entry's `app`), D19 (`ask` carried).
-- `src/desktop/workspace/ui/transcript/transcript.test.tsx`: D17 (the label),
-  D19 (the head, total over who asks and what).
-- `src/desktop/workspace/ui/overview/overview.test.tsx`: D19 (the row).
+- `src/desktop/workspace/ui/transcript/transcript.test.tsx`: D17 (the label:
+  no `title`, `data-message-app` `server/tool`, each name in a `<bdi>`), D19
+  (the head over every combination the client lets through, its names in
+  `<bdi>`).
+- `src/desktop/workspace/ui/overview/overview.test.tsx`: D19 (the row, its
+  server isolated; the row's and the peek's tooltips by `ask`).
 - `packages/nessa-client/src/protocol/conversation-validate.test.ts`: D19
-  (`ask` a closed set; missing or unknown refuses the view).
+  (`ask` a closed set; missing or unknown refuses the view; the agent's
+  review asking `message` refuses it).
 - `crates/nessa-server/tests/conversation/app_reviews.rs`: D19, from
   `ReviewAsk` (`a_review_is_shown_with_its_app_origin_and_ends_as_answered`,
   `a_message_review_says_what_it_asks`);
@@ -1027,8 +1071,10 @@ Each row has at least one test, named after it.
   reviews ask a tool (`a_review_says_what_each_offered_option_decides`).
 - In a browser (Chromium and WebKit, both layouts): `mcp-apps.mjs --only
   message` (D1, D4, D17, D-J) and `app-review.mjs --only
-  message,message-card,message-overview` (D9, D17, D18, D19, and the long
-  message's card at 280–900 px); their contracts are in
+  message,message-card,message-overview,message-label` (D9, D17, D18, D19,
+  the long message's card at 280–900 px, and the label with the longest
+  names whole in a 280–900 px column and an 800×480 window); their contracts
+  are in
   [`verification/desktop/CHECKLIST.md`](../../verification/desktop/CHECKLIST.md).
 
 ## Lanes
