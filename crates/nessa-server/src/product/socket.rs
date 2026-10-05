@@ -458,7 +458,7 @@ async fn write_authenticated<S>(
         let next = tokio::select! {
             biased;
             () = wait_for_record_deadline(deadline), if deadline.is_some() => {
-                note_limit("socket.record_delivery_deadline");
+                note_elapsed_delivery(&pending_record, &watches);
                 break;
             },
             Some(response) = records.recv(), if pending_record.is_none() => {
@@ -530,7 +530,7 @@ async fn write_authenticated<S>(
                 // Abandon this sink; a second frame must not follow a cancelled
                 // physical write. Also observe a record arriving during it.
                 () = wait_for_record_deadline(deadline), if deadline.is_some() => {
-                    note_limit("socket.record_delivery_deadline");
+                    note_elapsed_delivery(&pending_record, &watches);
                     return;
                 },
                 Some(response) = records.recv(), if pending_record.is_none() =>
@@ -594,6 +594,30 @@ fn missed_record_deadline<T>(value: Option<T>) -> Option<T> {
         note_limit("socket.record_delivery_deadline");
     }
     value
+}
+
+fn note_elapsed_delivery(record: &Option<QueuedRecordResponse>, watches: &WatchDeliveries) {
+    let now = Instant::now();
+    if queued_record_deadline(record).is_some_and(|deadline| now >= deadline) {
+        note_limit("socket.record_delivery_deadline");
+    }
+    if watches.deadline().is_some_and(|deadline| now >= deadline) {
+        note_limit("socket.watch_delivery_deadline");
+    }
+}
+
+fn rejected_lane<T>(
+    limit: &'static str,
+    result: Result<(), tokio::sync::mpsc::error::TrySendError<T>>,
+) -> bool {
+    match result {
+        Ok(()) => false,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            note_limit(limit);
+            true
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => true,
+    }
 }
 
 enum AuthenticatedInput {
@@ -669,29 +693,28 @@ where
                 break;
             }
             _ = state.change_watches.closed() => {
-                if control_send
-                    .try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable))
-                    .is_err()
-                {
-                    note_limit("socket.control_lane");
-                }
+                let _ = rejected_lane(
+                    "socket.control_lane",
+                    control_send
+                        .try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable)),
+                );
                 break;
             }
             outcome = watches.next(&state, &session), if watches.has_pending() => {
                 match outcome {
                     WatchOutcome::Reply(reply) => {
-                        if ordinary_send.try_send(queued_watch(*reply)).is_err() {
-                            note_limit("socket.ordinary_lane");
+                        if rejected_lane(
+                            "socket.ordinary_lane",
+                            ordinary_send.try_send(queued_watch(*reply)),
+                        ) {
                             break;
                         }
                     }
                     WatchOutcome::Close(reason) => {
-                        if control_send
-                            .try_send(ControlOutput::Close(reason))
-                            .is_err()
-                        {
-                            note_limit("socket.control_lane");
-                        }
+                        let _ = rejected_lane(
+                            "socket.control_lane",
+                            control_send.try_send(ControlOutput::Close(reason)),
+                        );
                         break;
                     }
                     WatchOutcome::Progress => {},
@@ -701,28 +724,30 @@ where
             Some(result) = requests.next(), if !requests.is_empty() => {
                 let Ok((message, class, slot, record_work)) = result else { break };
                 let queued = QueuedResponse { message, _slot: slot, _record_work: record_work };
-                let sent = match class {
-                    ResponseClass::Control => control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok(),
-                    ResponseClass::Ordinary | ResponseClass::App => ordinary_send.try_send(queued).is_ok(),
-                    ResponseClass::Record => record_send.try_send(QueuedRecordResponse::new(queued)).is_ok(),
+                let rejected = match class {
+                    ResponseClass::Control => rejected_lane(
+                        "socket.control_lane",
+                        control_send.try_send(ControlOutput::Response(Box::new(queued))),
+                    ),
+                    ResponseClass::Ordinary | ResponseClass::App => rejected_lane(
+                        "socket.ordinary_lane",
+                        ordinary_send.try_send(queued),
+                    ),
+                    ResponseClass::Record => rejected_lane(
+                        "socket.record_lane",
+                        record_send.try_send(QueuedRecordResponse::new(queued)),
+                    ),
                 };
-                if !sent {
-                    note_limit(match class {
-                        ResponseClass::Control => "socket.control_lane",
-                        ResponseClass::Record => "socket.record_lane",
-                        ResponseClass::Ordinary | ResponseClass::App => "socket.ordinary_lane",
-                    });
+                if rejected {
                     break;
                 }
                 None
             }
             _ = &mut expiry => {
-                if control_send
-                    .try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired))
-                    .is_err()
-                {
-                    note_limit("socket.control_lane");
-                }
+                let _ = rejected_lane(
+                    "socket.control_lane",
+                    control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired)),
+                );
                 break;
             }
             current = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
@@ -733,12 +758,10 @@ where
                     // passive-read admission (row A3).
                     Ok(current) => watches.recheck(&state, &current),
                     Err(error) => {
-                        if control_send
-                            .try_send(ControlOutput::Close(close_reason(error)))
-                            .is_err()
-                        {
-                            note_limit("socket.control_lane");
-                        }
+                        let _ = rejected_lane(
+                            "socket.control_lane",
+                            control_send.try_send(ControlOutput::Close(close_reason(error))),
+                        );
                         break;
                     }
                 }
@@ -751,19 +774,16 @@ where
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
                 input_check = None;
                 if let Some(error) = error {
-                    if control_send
-                        .try_send(ControlOutput::Close(close_reason(error)))
-                        .is_err()
-                    {
-                        note_limit("socket.control_lane");
-                    }
+                    let _ = rejected_lane(
+                        "socket.control_lane",
+                        control_send.try_send(ControlOutput::Close(close_reason(error))),
+                    );
                     break;
                 }
                 match pending_input.take().expect("input check owns one input") {
                     AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
                     AuthenticatedInput::Refusal(response) => {
-                        if refusal_send.try_send(response).is_err() {
-                            note_limit("socket.refusal_lane");
+                        if rejected_lane("socket.refusal_lane", refusal_send.try_send(response)) {
                             break;
                         }
                         None
@@ -828,18 +848,14 @@ where
             });
             let response = failure(&frame.id, "temporarily_unavailable");
             let refused = if record {
-                record_send
-                    .try_send(QueuedRecordResponse::refusal(response))
-                    .is_err()
+                rejected_lane(
+                    "socket.record_lane",
+                    record_send.try_send(QueuedRecordResponse::refusal(response)),
+                )
             } else {
-                refusal_send.try_send(response).is_err()
+                rejected_lane("socket.refusal_lane", refusal_send.try_send(response))
             };
             if refused {
-                note_limit(if record {
-                    "socket.record_lane"
-                } else {
-                    "socket.refusal_lane"
-                });
                 break;
             }
             continue;
@@ -853,8 +869,10 @@ where
                 slot,
                 received_at + RECORD_SEND_TIMEOUT,
             ) {
-                if ordinary_send.try_send(queued_watch(reply)).is_err() {
-                    note_limit("socket.ordinary_lane");
+                if rejected_lane(
+                    "socket.ordinary_lane",
+                    ordinary_send.try_send(queued_watch(reply)),
+                ) {
                     break;
                 }
             }
@@ -885,25 +903,20 @@ where
                 _slot: slot,
                 _record_work: None,
             };
-            let sent = if control {
-                control_send
-                    .try_send(ControlOutput::Response(Box::new(queued)))
-                    .is_ok()
+            let rejected = if control {
+                rejected_lane(
+                    "socket.control_lane",
+                    control_send.try_send(ControlOutput::Response(Box::new(queued))),
+                )
             } else if record {
-                record_send
-                    .try_send(QueuedRecordResponse::new(queued))
-                    .is_ok()
+                rejected_lane(
+                    "socket.record_lane",
+                    record_send.try_send(QueuedRecordResponse::new(queued)),
+                )
             } else {
-                ordinary_send.try_send(queued).is_ok()
+                rejected_lane("socket.ordinary_lane", ordinary_send.try_send(queued))
             };
-            if !sent {
-                note_limit(if control {
-                    "socket.control_lane"
-                } else if record {
-                    "socket.record_lane"
-                } else {
-                    "socket.ordinary_lane"
-                });
+            if rejected {
                 break;
             }
             continue;
@@ -1601,9 +1614,12 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 .await;
                 return Err(());
             }
-            within_deadline(deadline, send(write_timeout, socket, *message))
-                .await
-                .ok_or(())??;
+            let Some(sent) = within_deadline(deadline, send(write_timeout, socket, *message)).await
+            else {
+                note_limit("socket.watch_delivery_deadline");
+                return Err(());
+            };
+            sent?;
             let _ = completed.send(());
             Ok(())
         }
@@ -1641,11 +1657,19 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         WireResponse::Ordinary(message) => {
             let text = ordinary_text(*message)?;
             drop((slot, record_work));
-            return missed_record_deadline(
-                within_deadline(deadline, timeout(write_timeout, send_text(socket, text))).await,
-            )
-            .ok_or(())?
-            .map_err(|_| ())?;
+            return match within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
+                .await
+            {
+                None => {
+                    note_limit("socket.record_delivery_deadline");
+                    Err(())
+                }
+                Some(Err(_)) => {
+                    note_limit("socket.write_timeout");
+                    Err(())
+                }
+                Some(Ok(result)) => result.map_err(|_| ()),
+            };
         }
         WireResponse::Record { text } => text,
         // The record lane carries the five passive methods' answers only:
@@ -4333,6 +4357,86 @@ mod tests {
             .unwrap();
         named(&captured, "product.max_payload_bytes");
         assert!(peer.output.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_ordinary_record_reply_names_the_write_timeout() {
+        let (captured, _guard) = limit_log();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let response = QueuedRecordResponse {
+            message: WireResponse::ordinary(success("read", &json!({}))),
+            _slot: Some(
+                Arc::new(Semaphore::new(1))
+                    .try_acquire_owned()
+                    .unwrap()
+                    .into(),
+            ),
+            _record_work: None,
+            deadline: Instant::now() + Duration::from_secs(30),
+        };
+        let task = tokio::spawn(async move {
+            send_record_queued(Duration::from_secs(5), &mut socket, response).await
+        });
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(task
+            .await
+            .expect("the stalled record reply finishes")
+            .is_err());
+        let logged = limit_text(&captured);
+        assert!(logged.contains("socket.write_timeout"), "{logged}");
+        assert!(
+            !logged.contains("socket.record_delivery_deadline"),
+            "{logged}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_watch_reply_that_expires_while_sending_names_that_deadline() {
+        let (captured, _guard) = limit_log();
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let owners = state.change_watches.clone();
+        let permit = Arc::new(
+            owners
+                .try_acquire(&super::super::change_watch::WatchPrincipal::of(&session))
+                .expect("one watch permit"),
+        );
+        let (completed, _done) = tokio::sync::oneshot::channel();
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut socket, _peer) = test_socket(Some(gate));
+        let task = tokio::spawn(async move {
+            send_queued(
+                Duration::from_secs(30),
+                &mut socket,
+                WireResponse::Watch(Box::new(QueuedWatch {
+                    message: Box::new(success("watch", &json!({}))),
+                    acknowledgement: WatchAcknowledgement {
+                        deadline: Instant::now() + Duration::from_secs(2),
+                        completed,
+                        owner: permit,
+                    },
+                })),
+            )
+            .await
+        });
+        tokio::time::advance(Duration::from_secs(2)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(task
+            .await
+            .expect("the expiring watch reply finishes")
+            .is_err());
+        let logged = limit_text(&captured);
+        assert!(
+            logged.contains("socket.watch_delivery_deadline"),
+            "{logged}"
+        );
+        assert!(!logged.contains("socket.write_timeout"), "{logged}");
     }
 
     #[tokio::test(start_paused = true)]
