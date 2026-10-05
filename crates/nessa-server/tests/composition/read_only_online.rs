@@ -1046,3 +1046,203 @@ fn online_two_devices_follow_live_hints_and_converge() {
             "max":round(samples[samples.len() - 1]),"passesPerCommitMax":1})
     );
 }
+
+/// Rows L11 and PC3/PC6: two paired devices keep catalogues and transcripts.
+/// After the gateway process restarts, a commit made before either device
+/// reconnects has no hint to deliver; both `watch` rechecks recover it from
+/// the durable checkpoint and agree with each other. Revoking B's credential
+/// leaves B's cache intact until B's next command, which reads Terminal and
+/// purges only B. A's saved view and next read stay admitted.
+#[test]
+fn online_two_devices_catch_up_after_restart_and_revocation_purges_only_the_victim() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let gateway = Gateway::start_live(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let receiver_b = setup.second_receiver.clone().unwrap();
+    assert_ne!(receiver_b, setup.receiver);
+    let cache_a = setup_cache(&directory.path().join("a"));
+    let cache_b = setup_cache(&directory.path().join("b"));
+    let profile_a = profile_for(&root, &cache_a);
+    let profile_b = profile_for_device(&root, "profile-b.json", &cache_b);
+    let facts = |report: &Value| {
+        report["durable"]["progress"]["facts"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+    };
+    let sync_records = |profile: &str| {
+        let (ok, report) = command(
+            vec![
+                "sync-records".into(),
+                profile.into(),
+                setup.conversation.clone(),
+                "100".into(),
+            ],
+            false,
+        );
+        assert!(ok, "{report:?}");
+        let report = report.unwrap();
+        assert_eq!(report["work"]["complete"], true, "{report}");
+        assert_eq!(report["durable"]["status"], "complete", "{report}");
+        report
+    };
+    let sync_catalogue = |profile: &str| {
+        let (ok, report) = command(
+            vec!["sync-catalogue".into(), profile.into(), "10".into()],
+            false,
+        );
+        assert!(ok, "{report:?}");
+        let report = report.unwrap();
+        assert_eq!(report["work"]["complete"], true, "{report}");
+        report
+    };
+    let list = |cache: &Path, receiver: &str, report: &Value| {
+        let scope = &report["durable"]["progress"]["scope"];
+        let (ok, listed) = command(
+            vec![
+                "list".into(),
+                cache.to_string_lossy().into_owned(),
+                receiver.into(),
+                scope["origin"].as_str().unwrap().into(),
+                scope["stream"].as_str().unwrap().into(),
+            ],
+            false,
+        );
+        assert!(ok, "{listed:?}");
+        let listed = listed.unwrap();
+        let mut rows: Vec<(String, bool, String)> = listed["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["id"].as_str().unwrap().to_owned(),
+                    entry["deleted"].as_bool().unwrap(),
+                    entry["metadata"]["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+    let show = |cache: &Path, receiver: &str| {
+        let (ok, view) = command(
+            vec![
+                "show".into(),
+                cache.to_string_lossy().into_owned(),
+                receiver.into(),
+                setup.gateway.clone(),
+                setup.conversation.clone(),
+            ],
+            false,
+        );
+        assert!(ok, "{view:?}");
+        let mut view = view.unwrap();
+        assert!(view["view"]["revision"].take().is_string(), "{view}");
+        view
+    };
+    let rows = |cache: &Path, receiver: &str, table: &str| -> i64 {
+        Connection::open(cache)
+            .unwrap()
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE receiver = ?1"),
+                [receiver],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+
+    let seeded_a = sync_records(&profile_a);
+    let seeded_b = sync_records(&profile_b);
+    let seeded_facts = facts(&seeded_a);
+    assert_eq!(facts(&seeded_b), seeded_facts);
+    let catalogue_a = sync_catalogue(&profile_a);
+    let catalogue_b = sync_catalogue(&profile_b);
+    let listed_a = list(&cache_a, &setup.receiver, &catalogue_a);
+    let listed_b = list(&cache_b, &receiver_b, &catalogue_b);
+    assert_eq!(listed_a, listed_b);
+    assert!(
+        listed_a.iter().any(|(_, _, id)| id == &setup.conversation)
+            && listed_a.iter().any(|(_, _, id)| id == &setup.empty),
+        "{listed_a:?}"
+    );
+    let view = show(&cache_a, &setup.receiver);
+    assert_eq!(view, show(&cache_b, &receiver_b));
+
+    // The gateway process is gone. Its hints die with it. The restarted
+    // process commits before either device connects, so that commit is never
+    // hinted; the next recheck is what recovers it.
+    drop(gateway);
+    let mut gateway = Gateway::start_live(&root);
+    gateway.act("commit");
+    let catch_up = |profile: &str| {
+        let mut child = WatchChild::spawn(vec![
+            "watch".into(),
+            profile.into(),
+            setup.conversation.clone(),
+            "100".into(),
+            "1".into(),
+        ]);
+        watch_registered(&mut child);
+        watch_pass(&mut child, "recheck", seeded_facts + 1);
+        assert!(watch_end(child, "passesExhausted"));
+    };
+    catch_up(&profile_a);
+    catch_up(&profile_b);
+    let caught_up = show(&cache_a, &setup.receiver);
+    assert_eq!(caught_up["facts"], (seeded_facts + 1).to_string());
+    assert_eq!(caught_up, show(&cache_b, &receiver_b));
+    assert_ne!(caught_up, view);
+
+    // Revocation is not a wipe by itself. B's cache still holds the caught-up
+    // view until B's own next command reads the Terminal status.
+    gateway.act("revoke-credential b");
+    assert_eq!(show(&cache_b, &receiver_b), caught_up);
+    assert!(rows(&cache_b, &receiver_b, "transcript_records") > 0);
+    let (ok, denied) = command(
+        vec![
+            "sync-records".into(),
+            profile_b.clone(),
+            setup.conversation.clone(),
+            "100".into(),
+        ],
+        false,
+    );
+    assert!(!ok);
+    let denied = denied.unwrap();
+    assert_eq!(denied["enrollment"]["phase"], "terminal", "{denied}");
+    assert_eq!(
+        denied["enrollment"]["cause"], "credentialRevoked",
+        "{denied}"
+    );
+    assert_eq!(denied["purge"]["receiver"], receiver_b, "{denied}");
+    assert_eq!(denied["purge"]["initiator"], "gatewayStatus", "{denied}");
+    for table in [
+        "transcript_records",
+        "transcript_progress",
+        "transcript_checkpoints",
+        "catalogue_entries",
+        "catalogue_progress",
+    ] {
+        assert_eq!(rows(&cache_b, &receiver_b, table), 0, "{table}");
+        assert!(rows(&cache_a, &setup.receiver, table) > 0, "{table}");
+    }
+    let (ok, again) = command(vec!["sync-catalogue".into(), profile_b, "10".into()], false);
+    assert!(!ok);
+    assert_eq!(again.unwrap()["configurationFailure"], "notPaired");
+    let (ok, still) = command(
+        vec![
+            "sync-records".into(),
+            profile_a,
+            setup.conversation.clone(),
+            "100".into(),
+        ],
+        false,
+    );
+    assert!(ok, "{still:?}");
+    assert_eq!(facts(&still.unwrap()), seeded_facts + 1);
+    assert_eq!(show(&cache_a, &setup.receiver), caught_up);
+}
