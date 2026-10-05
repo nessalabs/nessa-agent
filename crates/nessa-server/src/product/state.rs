@@ -32,8 +32,48 @@ use tokio::sync::Semaphore;
 
 /// Name the operational limit a refusal or a silent close hit.
 /// The wire response and close code stay what they were.
+///
+/// This is not `tracing::warn!`. That macro puts every limit on one callsite,
+/// and the first thread to record it — a test with no subscriber — disables
+/// the callsite for the process. A later test then sees an empty log
+/// (`one_mount_cannot_fill_the_app_lane` beside a lane that is already full).
+/// Dispatch asks the subscriber that is current on this thread.
 pub(crate) fn note_limit(limit: &'static str) {
-    tracing::warn!(limit, "product session hit an operational limit");
+    static CALLSITE: tracing::callsite::DefaultCallsite =
+        tracing::callsite::DefaultCallsite::new(&META);
+    static META: tracing::Metadata<'static> = tracing::Metadata::new(
+        "product session hit an operational limit",
+        "nessa_server::product::state",
+        tracing::Level::WARN,
+        Some(file!()),
+        Some(line!()),
+        Some(module_path!()),
+        tracing::field::FieldSet::new(
+            &["message", "limit"],
+            tracing::callsite::Identifier(&CALLSITE),
+        ),
+        tracing::metadata::Kind::EVENT,
+    );
+
+    tracing::dispatcher::get_default(|dispatch| {
+        if !dispatch.enabled(&META) {
+            return;
+        }
+        let fields = META.fields();
+        let message_field = fields
+            .field("message")
+            .expect("message is one of the limit event's fields");
+        let limit_field = fields
+            .field("limit")
+            .expect("limit is one of the limit event's fields");
+        let message = "product session hit an operational limit";
+        let values = [
+            (&message_field, Some(&message as &dyn tracing::field::Value)),
+            (&limit_field, Some(&limit as &dyn tracing::field::Value)),
+        ];
+        let values = fields.value_set(&values);
+        dispatch.event(&tracing::Event::new(&META, &values));
+    });
 }
 
 /// Dependencies and trusted gateway selectors for the product route.
