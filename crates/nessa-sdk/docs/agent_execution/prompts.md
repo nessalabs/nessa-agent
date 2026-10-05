@@ -129,12 +129,13 @@ gave `AcpConfig::images` a `UserImageSource`. And the connected agent must have
 advertised `promptCapabilities.image` at `initialize`, reported as
 `OperationCapabilities::image_input`.
 
-Every one of those, with the app and text-input rules in the last two rows, is
+The model's recorded limits, the binding's image offer, the message size, an
+app the message names, and a context sent to a model with no text input are
 checked when a message is submitted, before it is accepted, by `Agent::invoke`,
-`enqueue`, `enqueue_steering`, and `steer`. A refusal there saved nothing,
-queued nothing, and sent nothing. The connected agent's image answer is the
-exception at every entry, `steer` included: it is checked when the provider is
-called, and a refusal is saved:
+`enqueue`, `enqueue_steering`, and `steer`. A refusal saved nothing, queued
+nothing, and sent nothing. The connected agent's image answer is checked later,
+when the provider is called, at every one of those entries including `steer`,
+and that refusal is saved.
 
 | Refused because | Error |
 | --- | --- |
