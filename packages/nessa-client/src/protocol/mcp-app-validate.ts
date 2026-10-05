@@ -73,11 +73,13 @@ export const mcpAppRequestProblem = {
    * A message an app sends: `minMcpMessageCharacters` (the schema's
    * `minLength`, in code points) to `MAX_MCP_MESSAGE_BYTES` UTF-8 bytes of
    * Unicode. Whether it is blank, whitespace only, is the conversation's to
-   * judge (`invalid_request`, on record).
+   * judge (`invalid_request`, on record). The byte bound is checked first, so
+   * a text far past it is refused without being encoded or read character by
+   * character (`K1: refuses a text far past its bound without reading it`).
    */
   message: (text: string): string | undefined =>
-    [...text].length < bounds.minMcpMessageCharacters ||
-    utf8.encode(text).byteLength > MAX_MCP_MESSAGE_BYTES
+    !withinUtf8Bytes(text, MAX_MCP_MESSAGE_BYTES) ||
+    !atLeastCodePoints(text, bounds.minMcpMessageCharacters)
       ? `Message must contain ${bounds.minMcpMessageCharacters} character to ${MAX_MCP_MESSAGE_BYTES} UTF-8 bytes`
       : !wellFormedText(text)
         ? "Message must be Unicode text"
@@ -96,6 +98,23 @@ export const mcpAppRequestProblem = {
     return typeof read === "string" ? read : undefined
   },
 } as const
+
+/**
+ * Whether `text` is at most `max` UTF-8 bytes. Every UTF-16 code unit is at
+ * least one UTF-8 byte (a lone surrogate encodes as three), so a text of more
+ * units than `max` is past it without being encoded.
+ */
+function withinUtf8Bytes(text: string, max: number): boolean {
+  return text.length <= max && utf8.encode(text).byteLength <= max
+}
+
+/** Whether `text` holds at least `min` code points, counting no further than `min`. */
+function atLeastCodePoints(text: string, min: number): boolean {
+  let count = 0
+  if (count >= min) return true
+  for (const _ of text) if (++count >= min) return true
+  return false
+}
 
 /** What an app gives the model: either part, both, or neither, which clears what its mount gave. */
 export interface McpAppModelContext {
@@ -147,11 +166,14 @@ export function mcpAppModelContext(context: unknown): McpAppModelContext | strin
 
 /**
  * The answer to `mcp.sendMessage`: the turn the message became, an execution
- * id of 1 to `maxExecutionIdBytes` UTF-8 bytes, and nothing else.
+ * id of 1 to `maxExecutionIdBytes` UTF-8 bytes of Unicode, and nothing else.
  */
 export function mcpSendMessageResult(value: unknown): McpSendMessageResult {
   const item = object(value, ["executionId"], "message result")
-  if (!boundedName(item.executionId, bounds.maxExecutionIdBytes))
+  if (
+    !boundedName(item.executionId, bounds.maxExecutionIdBytes) ||
+    !wellFormedText(item.executionId)
+  )
     throw new Error("Invalid message executionId")
   return { executionId: item.executionId }
 }

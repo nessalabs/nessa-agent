@@ -951,6 +951,66 @@ describe("an app speaking in its conversation (#390)", () => {
     expect(mcpAppRequestProblem.message("\udc00")).toMatch(/Unicode/)
   })
 
+  /**
+   * Runs `check` counting how many characters any string yields, one by one,
+   * while it runs: what spreading or iterating a string reads.
+   */
+  function charactersRead<T>(check: () => T): { result: T; read: number } {
+    const iterate = Object.getOwnPropertyDescriptor(String.prototype, Symbol.iterator)!
+    const original = iterate.value as (this: string) => Iterator<string>
+    let read = 0
+    Object.defineProperty(String.prototype, Symbol.iterator, {
+      ...iterate,
+      value(this: string) {
+        const characters = original.call(this)
+        return {
+          next: () => {
+            read++
+            return characters.next()
+          },
+          [Symbol.iterator]() {
+            return this
+          },
+        }
+      },
+    })
+    try {
+      const result = check()
+      return { result, read }
+    } finally {
+      Object.defineProperty(String.prototype, Symbol.iterator, iterate)
+    }
+  }
+
+  it("K1: refuses a text far past its bound without reading it", async () => {
+    const text = "x".repeat(MAX_MCP_MESSAGE_BYTES * 1024)
+    const encode = vi.spyOn(TextEncoder.prototype, "encode")
+    try {
+      const { result, read } = charactersRead(() => mcpAppRequestProblem.message(text))
+      expect(result).toMatch(String(MAX_MCP_MESSAGE_BYTES))
+      expect(read).toBe(0)
+      expect(encode).not.toHaveBeenCalled()
+    } finally {
+      encode.mockRestore()
+    }
+    const request = taking()
+    await expect(
+      api(request).sendMessage(conversationId, app, "charts", text),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("K1: counts a message's characters no further than its minimum", () => {
+    for (const text of [
+      "x".repeat(MAX_MCP_MESSAGE_BYTES),
+      "😀".repeat(MAX_MCP_MESSAGE_BYTES / 4),
+    ]) {
+      const { result, read } = charactersRead(() => mcpAppRequestProblem.message(text))
+      expect(result).toBeUndefined()
+      expect(read).toBe(bounds.minMcpMessageCharacters)
+    }
+  })
+
   it.each([
     ["null", null],
     ["a number", 5],
@@ -968,6 +1028,31 @@ describe("an app speaking in its conversation (#390)", () => {
       expect(request).not.toHaveBeenCalled()
     },
   )
+
+  it("K2: takes a context with no prototype, as {} is, and sends its parts", async () => {
+    const request = taking()
+    const context = Object.assign(Object.create(null) as object, {
+      text: "Showing April",
+      structuredContentJson: '{"month":4}',
+    })
+    expect(
+      await api(request).updateModelContext(conversationId, app, "charts", context, {
+        requestId: "context",
+      }),
+    ).toEqual({ requestId: "context", applied: true })
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "mcp.updateModelContext",
+      {
+        conversationId,
+        requestId: "context",
+        app,
+        server: "charts",
+        text: "Showing April",
+        structuredContentJson: '{"month":4}',
+      },
+      { atLeastMs: mcpAppDeadlines.callToolMs },
+    )
+  })
 
   it.each([
     ["a field it has no such part for", { content: "Showing April" }],
@@ -1144,6 +1229,7 @@ describe("an app speaking in its conversation (#390)", () => {
       { executionId: over(bounds.maxExecutionIdBytes + 1) },
     ],
     ["a turn that is no string", { executionId: 7 }],
+    ["a turn holding a lone surrogate", { executionId: "app-\ud800" }],
     ["an unknown field", { executionId: "app-turn", sent: true }],
     ["no object", "app-turn"],
     ["null", null],
@@ -1172,6 +1258,7 @@ describe("an app speaking in its conversation (#390)", () => {
     ["no action", { applied: true }],
     ["no applied flag", { requestId: "context" }],
     ["an unknown field", { requestId: "context", applied: true, held: true }],
+    ["itself, not applied", { requestId: "context", applied: false }],
   ])(
     "K8: refuses a context answer acknowledging %s as uncertain",
     async (_name, reply) => {
