@@ -256,8 +256,9 @@ app widgets alike.
   a call admitted before it can still open one after (#397); the app lane's
   4 slots per socket are shared by every app in the window (#398); an app is
   told `{}` for arguments the view does not carry (#394); a frame the gateway
-  cannot decode is answered `invalid_request` when `type` is `req` and `id`
-  is one Unicode string of 1 to 256 bytes (#403), so the client refuses a lone
+  cannot decode is answered `invalid_request` when that frame is one JSON
+  object, its envelope keys are unique, `type` is `req`, and `id` is one
+  Unicode string of 1 to 256 bytes (#403), so the client refuses a lone
   surrogate in what it sends; and it closes the socket on a frame past its
   message limit, so the client refuses one before sending
   (`NessaRequestTooLargeError`).

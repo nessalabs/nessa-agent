@@ -1238,12 +1238,11 @@ fn action_for_method(method: &str) -> Option<&'static str> {
     }
 }
 
-// Which request to blame for a frame that did not decode. A nested duplicate
-// still leaves one unambiguous `id`, and so does a nested string that is not
-// Unicode: that frame is answered `invalid_request`. A frame that named `id`
-// twice, or whose `id` is not itself a string, has no single request to answer,
-// and the server does not pick one. That frame gets no reply, as any other
-// uncorrelatable text does, and the client's own request timeout settles it.
+// Which request to blame for a frame that did not decode. Answer
+// `invalid_request` when the text is one JSON object, its envelope keys are
+// unique, `type` is `req`, and `id` is one Unicode string of 1 to 256 bytes.
+// A nested duplicate, or a nested string that is not Unicode, still leaves
+// that id. Anything else gets no reply, and the caller's own timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
     let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
@@ -2848,6 +2847,10 @@ mod tests {
             r#"{{"type":"req","id":"{wide}","method":"m","params":{{"a":"\ud800"}}}}"#
         ))
         .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"event","id":"request-9","payload":{"a":"\ud800"}}"#
+        )
+        .is_none());
     }
 
     #[tokio::test]
@@ -3485,11 +3488,14 @@ mod tests {
                 .into(),
             )))
             .unwrap();
-        let mut message = peer.message().await;
-        if matches!(message, Message::Text(_)) {
-            message = peer.message().await;
-        }
-        let Message::Close(Some(close)) = message else {
+        let Message::Text(text) = peer.message().await else {
+            panic!("unauthorized expected")
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "unauthorized");
+        let Message::Close(Some(close)) = peer.message().await else {
             panic!("close expected")
         };
         assert_eq!(close.code, 4001);
