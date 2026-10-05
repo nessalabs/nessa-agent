@@ -41,9 +41,12 @@ export const MODELS = {
 /**
  * What a check asks the agent to do: call each of `tools` (`{ name, args }`,
  * `args` an object or undefined) once, in order, then reply DONE. Codex
- * defers MCP tools behind its tool search (#500), so the prompt must not
- * forbid the agent's own tools; the check's permission guard, not the
- * prompt, holds it to the server's tools. The single-tool wording is the
+ * defers MCP tools behind its tool search (#500), so the prompt does not
+ * forbid the agent's own tools, only other tools of the server. The prompt
+ * holds no one to anything: each check answers permission requests for the
+ * named tools alone, and reads which tools were called from the view, since
+ * a harness may run a tool without asking (Codex ran `review_rows`, which
+ * declares `readOnlyHint`, unasked). The single-tool wording is the
  * prompt of the recorded turn in the SDK's Codex fixture
  * (`toolSearchTurn`), held to it by `local-gateway.test.mjs`.
  */

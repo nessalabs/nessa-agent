@@ -217,36 +217,23 @@ test("the one-tool prompt is the one the recorded Codex turn was asked with", ()
   )
 })
 
-test("the several-tool prompt names the server and each tool with its arguments, in order", () => {
-  const prompt = toolPrompt(fiveTools)
-  assert.ok(prompt.startsWith(`Use the tools of the "${SERVER}" MCP server.`), prompt)
-  const calls = [
-    "report_rows (no arguments)",
-    "link_resources (no arguments)",
-    'rows.get with {"id": 2}',
-    "always_fails (no arguments)",
-    "show_chart (no arguments)",
-  ]
-  assert.ok(
-    prompt.includes(
-      `in this order, waiting for each result before the next: ${calls.join(", ")}.`,
-    ),
-    prompt,
+test("the several-tool prompt is exactly this wording, which forbids only other tools of the server", () => {
+  // Held word for word, as the one-tool wording is held to its recording: a
+  // sentence forbidding the agent's own tools, however phrased, fails here.
+  assert.equal(
+    toolPrompt(fiveTools),
+    `Use the tools of the "${SERVER}" MCP server. If they are not among the tools you ` +
+      "were given, find them with your tool search. Call each of these exactly once, in " +
+      "this order, waiting for each result before the next: report_rows (no arguments), " +
+      'link_resources (no arguments), rows.get with {"id": 2}, always_fails (no ' +
+      "arguments), show_chart (no arguments). Call no other tool of that server. When " +
+      "all 5 have returned, reply with DONE.",
   )
-  assert.ok(prompt.endsWith("When all 5 have returned, reply with DONE."), prompt)
   // Empty arguments read as none, as absent ones do.
   assert.equal(
     toolPrompt([{ name: "show_chart", args: {} }]),
     toolPrompt([{ name: "show_chart" }]),
   )
-})
-
-test("neither prompt forbids the agent's own tools, which Codex finds the server's tools with", () => {
-  for (const prompt of [toolPrompt([{ name: "review_rows" }]), toolPrompt(fiveTools)]) {
-    assert.ok(!prompt.includes("any other tool"), prompt)
-    assert.ok(prompt.includes("no other tool of that server"), prompt)
-    assert.ok(prompt.includes("tool search"), prompt)
-  }
 })
 
 test("a prompt for no tools is refused", () => {

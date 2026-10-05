@@ -737,11 +737,13 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
     assert_eq!(content("show_chart")[0], text("Chart of two rows."));
 }
 
-/// A call codex-acp 1.12.0 made through Codex's tool search, which defers MCP
-/// tools (#500): two frames, with no `in_progress` update between them, as
-/// recorded live in the fixture's `toolSearchTurn`.
+/// A call Codex ran without asking (#500): `review_rows` declares
+/// `readOnlyHint`, so no permission was requested, and codex-acp 1.12.0 sends
+/// its bare `in_progress` update only after an accepted one
+/// (`publishAcceptedMcpToolApproval`). Two frames, as recorded live in the
+/// fixture's `toolSearchTurn`.
 #[test]
-fn a_call_codex_made_through_its_tool_search_is_parsed_as_that_servers_tool() {
+fn a_call_codex_ran_without_asking_is_two_frames_naming_that_servers_tool() {
     let recorded: Value =
         serde_json::from_str(include_str!("fixtures/mcp_live_frames.json")).unwrap();
     let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();

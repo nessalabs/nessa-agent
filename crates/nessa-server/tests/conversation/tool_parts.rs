@@ -1,8 +1,9 @@
 //! One tool call is one part of its turn, however many updates it has (#418).
 //!
 //! A harness reports one call as an announcement and then updates under the
-//! same `toolCallId`: Codex as an announcement, a bare status, and a
-//! completion; Claude as three to five frames. The desktop draws a card, and
+//! same `toolCallId`: Codex as an announcement, a bare status after an
+//! accepted permission, and a completion (no bare status for a call it ran
+//! without asking); Claude as three to five frames. The desktop draws a card, and
 //! for an app a mount, per part, so a part per update was a card per update.
 //!
 //! The recorded frames are the SDK's parser fixtures. Turning a frame into an
@@ -116,11 +117,11 @@ fn each_recorded_claude_call_is_one_tool_part() {
     one_part_per_recorded_call(CLAUDE);
 }
 
-/// The call Codex made through its tool search (#500), recorded in two frames
-/// with no `in_progress` update between them: one part, at its announcement,
-/// its entry completed.
+/// A call Codex ran without asking (#500), recorded in two frames with no bare
+/// `in_progress` update between them: one part, at its announcement, its
+/// entry completed.
 #[test]
-fn a_recorded_codex_call_made_through_its_tool_search_is_one_tool_part() {
+fn a_recorded_codex_call_run_without_asking_is_one_tool_part() {
     let recorded: Value = serde_json::from_str(CODEX).unwrap();
     let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();
     assert_eq!(frames.len(), 2);

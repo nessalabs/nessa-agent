@@ -12,9 +12,9 @@
  * keychain the gateway reads, Codex's from its own home, Opencode's from
  * Nessa's credential store — and creates no account and writes no credential.
  * A gateway without one refuses the conversation, and the run fails there.
- * It asks for each of the test server's tools once (`toolPrompt`), and allows
- * only calls to them, each once; anything else the agent asks for is left
- * unanswered. It exits non-zero unless the turn
+ * It asks for five of the test server's tools, each once (`toolPrompt`), and
+ * answers permission requests only for those, each once; anything else the
+ * agent asks for is left unanswered. It exits non-zero unless the turn
  * completed and `show_chart` yielded a widget part in the transcript.
  *
  * The harness is given a stand-in (`nessa mcp-relay`) in the test server's
@@ -62,7 +62,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-/** What the model is asked to do: call every tool once, in order. */
+/** What the model is asked to do: call these five tools once each, in order. */
 const PROMPT = toolPrompt([
   { name: "report_rows" },
   { name: "link_resources" },

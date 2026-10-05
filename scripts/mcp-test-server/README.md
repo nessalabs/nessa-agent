@@ -52,11 +52,13 @@ configured as `mcptest` (also wrapped, so its own traffic is recorded). The
 harness is given a stand-in, `nessa mcp-relay`, in its place, and for each
 harness session that starts it the gateway starts the server and holds the
 connection to it (ADR 344). It
-sends one message asking for every tool once, allows each tool's permission
-request once, and writes what happened. The message is `toolPrompt` in
-`local-gateway.mjs`, which the desktop's `mcp-apps-gateway.mjs` asks with
-too: it lets the agent use its own tool search, since Codex reaches MCP tools
-only through it (#500), and leaves the scope to the permission guard below.
+sends one message asking for five of the server's tools, each once, allows
+each one's permission request once, and writes what happened. The message is
+`toolPrompt` in `local-gateway.mjs`, which the desktop's `mcp-apps-gateway.mjs`
+asks with too: it lets the agent use its own tool search, since Codex reaches
+MCP tools only through it (#500), and forbids only other tools of the server.
+Which tools were called is read from what the gateway reports, not from the
+permissions answered: a harness may run a tool without asking.
 
 ```sh
 cargo build -p nessa-server
@@ -90,6 +92,11 @@ parser tests replay (`crates/nessa-sdk/tests/infrastructure/{claude_acp,codex_ac
 were extracted from such a run. The Codex fixture's `toolSearchTurn` is one
 turn asked with `toolPrompt`'s single-tool wording, which
 `local-gateway.test.mjs` holds to it: change the wording, and record it again.
+No checked-in command sends that wording under the recorder: it was recorded
+with this check's setup (`startLocalGateway`, the harness wrapped by
+`acp-recorder.mjs`) sending `toolPrompt([{ name: "review_rows" }])`, and
+extracted as the `session/prompt` text and every `tool_call` and
+`tool_call_update` frame, verbatim. Codex asked no permission for it.
 
 `MCP_LIVE_HARNESSES` names the directory holding `claude-acp/` and `codex-acp/`
 with their `node_modules` (default: `crates/nessa-sdk/harnesses` in this
