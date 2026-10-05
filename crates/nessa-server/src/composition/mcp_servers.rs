@@ -58,26 +58,35 @@ pub(super) struct McpComposition {
     pub(super) ticket_events: Option<UnboundedReceiver<TicketEvent>>,
     /// The task recording those ends, once started: the server lifecycle
     /// stops it last, after the conversations whose ends it records.
-    pub(super) ticket_recorder: Option<TicketRecorder>,
+    pub(super) ticket_recorder: Option<AuditRecorder>,
+    /// The task recording each MCP App context the conversations' apps drop
+    /// unsent (`audit_context_drops`), once started: stopped beside the
+    /// ticket recorder, after the conversations whose drops it records.
+    pub(super) context_drop_recorder: Option<AuditRecorder>,
 }
 
-/// The task recording each ticket's unredeemed end.
-pub(super) struct TicketRecorder {
+/// A task recording what the conversations report after the command that
+/// caused it — a ticket's unredeemed end, or a held context's drop — named
+/// by `what` in its logs.
+pub(super) struct AuditRecorder {
+    pub(super) what: &'static str,
     pub(super) stop: tokio::sync::oneshot::Sender<()>,
     pub(super) task: tokio::task::JoinHandle<()>,
 }
-impl TicketRecorder {
-    /// Record every end already reported, then stop: called once the
+impl AuditRecorder {
+    /// Record everything already reported, then stop: called once the
     /// conversations, and their apps, have ended.
     pub(super) async fn finish(self) {
+        let what = self.what;
         let _ = self.stop.send(());
         // Bounded, as the app calls' own records are: a record that hangs
         // must not hold the gateway's exit.
         match tokio::time::timeout(std::time::Duration::from_secs(10), self.task).await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(%error, "the MCP App ticket recorder failed"),
+            Ok(Err(error)) => tracing::error!(%error, what, "an MCP App recorder failed"),
             Err(_) => tracing::warn!(
-                "MCP App ticket ends were still being recorded when the gateway stopped"
+                what,
+                "an MCP App recorder was still recording when the gateway stopped"
             ),
         }
     }
@@ -210,6 +219,7 @@ pub(super) async fn compose(
         )),
         ticket_events: Some(ticket_events),
         ticket_recorder: None,
+        context_drop_recorder: None,
     }))
 }
 

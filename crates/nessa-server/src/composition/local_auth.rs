@@ -749,13 +749,16 @@ async fn conversations(
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
     // sessions of them, every step on record in `mcp_app_audit`: the issue
-    // by the service, the redemption by the route, and every other end of a
-    // ticket by `audit_ticket_ends`, which takes the store's events.
+    // by the service, the redemption by the route, every other end of a
+    // ticket by `audit_ticket_ends`, which takes the store's events, and
+    // every held context's drop by `audit_context_drops`, which takes what
+    // the conversations' apps report.
     let (service, resource_route) = match mcp.as_mut() {
         Some(mcp) => {
             if let Some(events) = mcp.ticket_events.take() {
                 let (stop, stopping) = tokio::sync::oneshot::channel();
-                mcp.ticket_recorder = Some(super::mcp_servers::TicketRecorder {
+                mcp.ticket_recorder = Some(super::mcp_servers::AuditRecorder {
+                    what: "ticket ends",
                     stop,
                     task: tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
                         events,
@@ -764,6 +767,17 @@ async fn conversations(
                     )),
                 });
             }
+            let (dropped, drops) = tokio::sync::mpsc::unbounded_channel();
+            let (stop, stopping) = tokio::sync::oneshot::channel();
+            mcp.context_drop_recorder = Some(super::mcp_servers::AuditRecorder {
+                what: "context drops",
+                stop,
+                task: tokio::spawn(crate::conversation::infrastructure::audit_context_drops(
+                    drops,
+                    mcp_app_audit.clone(),
+                    stopping,
+                )),
+            });
             let service = ConversationService::with_mcp_apps(
                 dependencies,
                 ConversationLimits::default(),
@@ -775,6 +789,7 @@ async fn conversations(
                     )),
                     audit: mcp_app_audit.clone(),
                     tickets: mcp.resource_tickets.clone(),
+                    dropped: Arc::new(dropped),
                 },
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))

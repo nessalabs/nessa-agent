@@ -6,7 +6,8 @@
 //! opening ended.
 use super::*;
 use crate::conversation::application::mcp_apps::{
-    McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef, McpAppWithdrawal,
+    ContextDrop, DroppedContexts, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator,
+    McpAppRef, McpAppWithdrawal,
 };
 use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::OrganizationId;
@@ -16,7 +17,7 @@ use nessa_sdk::domain::agent_execution::{
     prompts::{AppModelContext, McpAppSource},
     tools::{McpTool, ToolCallId},
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn app(instance: &str) -> McpAppRef {
@@ -46,11 +47,48 @@ fn releaser() -> McpAppInitiator {
 /// The epoch of a conversation's first opening.
 const EPOCH: u64 = 1;
 
+/// Each drop a conversation's apps reported, as they reported it.
+#[derive(Default)]
+struct Reported(Mutex<Vec<McpAppAuditRecord>>);
+impl DroppedContexts for Reported {
+    fn context_dropped(&self, record: McpAppAuditRecord) {
+        self.0.lock().unwrap().push(record);
+    }
+}
+impl Reported {
+    /// The drops reported since last asked: each by the call of the update
+    /// that held what it dropped, why, and by whom.
+    fn take(&self) -> Vec<(String, ContextDrop, McpAppInitiator)> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+            .into_iter()
+            .map(|record| match record.phase {
+                McpAppAuditPhase::ContextDropped { cause } => {
+                    (record.call_id, cause, record.initiator)
+                }
+                other => panic!("reported as a drop: {other:?}"),
+            })
+            .collect()
+    }
+}
+
+/// A conversation's apps, no opening begun, and what they report dropped.
+fn unopened() -> (Arc<AppReviews>, Arc<Reported>) {
+    let reported = Arc::new(Reported::default());
+    (Arc::new(AppReviews::new(reported.clone())), reported)
+}
+
+/// A conversation's apps, in its first opening, and what they report
+/// dropped.
+fn reporting() -> (Arc<AppReviews>, Arc<Reported>) {
+    let (reviews, reported) = unopened();
+    assert_eq!(reviews.begin(), EPOCH);
+    assert!(reported.take().is_empty());
+    (reviews, reported)
+}
+
 /// A conversation's apps, in its first opening.
 fn reviews() -> Arc<AppReviews> {
-    let reviews = Arc::new(AppReviews::default());
-    assert_eq!(reviews.begin(), (EPOCH, Vec::new()));
-    reviews
+    reporting().0
 }
 
 fn open(reviews: &Arc<AppReviews>, instance: &str) -> Result<Waiting, ReviewRefusal> {
@@ -228,9 +266,7 @@ async fn releasing_a_mount_withdraws_only_its_own_reviews_as_the_releasers() {
     let mine = open(&reviews, "i1").unwrap();
     let other_mount = open(&reviews, "i2").unwrap();
     let mut released = 0;
-    assert!(reviews
-        .release_app(&app("i1"), &releaser(), || released += 1)
-        .is_empty());
+    reviews.release_app(&app("i1"), &releaser(), || released += 1);
     assert_eq!(released, 1);
     assert_eq!(
         mine.ended(APP_REVIEW_DEADLINE).await,
@@ -243,9 +279,7 @@ async fn releasing_a_mount_withdraws_only_its_own_reviews_as_the_releasers() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].permission_id, other_mount.permission_id);
     // Releasing it again withdraws nothing more.
-    assert!(reviews
-        .release_app(&app("i1"), &releaser(), || {})
-        .is_empty());
+    reviews.release_app(&app("i1"), &releaser(), || {});
     assert_eq!(reviews.reviews().len(), 1);
     drop(other_mount);
 }
@@ -253,9 +287,7 @@ async fn releasing_a_mount_withdraws_only_its_own_reviews_as_the_releasers() {
 #[tokio::test]
 async fn a_released_mount_opens_and_is_issued_nothing_again() {
     let reviews = reviews();
-    assert!(reviews
-        .release_app(&app("i1"), &releaser(), || {})
-        .is_empty());
+    reviews.release_app(&app("i1"), &releaser(), || {});
     assert_eq!(open(&reviews, "i1").err(), Some(ReviewRefusal::Released));
     assert_eq!(
         reviews.issue(EPOCH, &app("i1"), || "ticket").err(),
@@ -282,7 +314,7 @@ async fn a_conversation_ending_withdraws_every_review_as_whoever_ended_it() {
         )
         .unwrap();
     let mut released = 0;
-    assert!(reviews.end(EPOCH, &releaser(), || released += 1).is_empty());
+    reviews.end(EPOCH, &releaser(), || released += 1);
     assert_eq!(released, 1);
     for waiting in [first, second] {
         assert_eq!(
@@ -295,18 +327,14 @@ async fn a_conversation_ending_withdraws_every_review_as_whoever_ended_it() {
     }
     assert!(reviews.reviews().is_empty());
     // Ended once: a second end releases nothing again.
-    assert!(reviews
-        .end(EPOCH, &McpAppInitiator::System, || released += 1)
-        .is_empty());
+    reviews.end(EPOCH, &McpAppInitiator::System, || released += 1);
     assert_eq!(released, 1);
 }
 
 #[tokio::test]
 async fn once_the_conversation_ended_nothing_opens_or_is_issued() {
     let reviews = reviews();
-    assert!(reviews
-        .end(EPOCH, &McpAppInitiator::System, || {})
-        .is_empty());
+    reviews.end(EPOCH, &McpAppInitiator::System, || {});
     assert_eq!(open(&reviews, "i1").err(), Some(ReviewRefusal::Ended));
     assert_eq!(
         reviews.issue(EPOCH, &app("i1"), || "ticket").err(),
@@ -416,9 +444,7 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
 fn a_conversation_remembers_its_last_released_mounts() {
     let reviews = reviews();
     for mount in 0..=MAX_RELEASED_MOUNTS {
-        assert!(reviews
-            .release_app(&app(&mount.to_string()), &releaser(), || {})
-            .is_empty());
+        reviews.release_app(&app(&mount.to_string()), &releaser(), || {});
     }
     // The newest are remembered; the oldest, one past the bound, is not.
     assert_eq!(
@@ -438,9 +464,7 @@ fn a_conversation_remembers_its_last_released_mounts() {
 async fn an_ended_opening_admits_nothing_and_the_next_opening_is_its_own() {
     let reviews = reviews();
     let waiting = open(&reviews, "i1").unwrap();
-    assert!(reviews
-        .end(EPOCH, &McpAppInitiator::System, || {})
-        .is_empty());
+    reviews.end(EPOCH, &McpAppInitiator::System, || {});
     assert!(matches!(
         waiting.ended(APP_REVIEW_DEADLINE).await,
         ReviewEnd::Withdrawn { .. }
@@ -448,7 +472,7 @@ async fn an_ended_opening_admits_nothing_and_the_next_opening_is_its_own() {
     assert_eq!(reviews.admit(EPOCH, &app("i1")), Err(ReviewRefusal::Ended));
     // Opened again: a call that resolved the old opening still admits,
     // opens and is issued nothing — the new one is another epoch.
-    let (next, _) = reviews.begin();
+    let next = reviews.begin();
     assert_ne!(next, EPOCH);
     assert_eq!(reviews.admit(EPOCH, &app("i1")), Err(ReviewRefusal::Ended));
     assert_eq!(open(&reviews, "i1").err(), Some(ReviewRefusal::Ended));
@@ -459,9 +483,7 @@ async fn an_ended_opening_admits_nothing_and_the_next_opening_is_its_own() {
     assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
     // Ending the old opening again ends nothing of the new one.
     let mut released = 0;
-    assert!(reviews
-        .end(EPOCH, &McpAppInitiator::System, || released += 1)
-        .is_empty());
+    reviews.end(EPOCH, &McpAppInitiator::System, || released += 1);
     assert_eq!(released, 0);
     assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
 }
@@ -469,19 +491,15 @@ async fn an_ended_opening_admits_nothing_and_the_next_opening_is_its_own() {
 #[test]
 fn a_release_outlasts_the_opening_it_came_in_and_any_before_one() {
     // Released before any opening, and kept through two.
-    let reviews = AppReviews::default();
-    assert!(reviews
-        .release_app(&app("i1"), &releaser(), || {})
-        .is_empty());
-    let (first, _) = reviews.begin();
+    let (reviews, _) = unopened();
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    let first = reviews.begin();
     assert_eq!(
         reviews.admit(first, &app("i1")),
         Err(ReviewRefusal::Released)
     );
-    assert!(reviews
-        .end(first, &McpAppInitiator::System, || {})
-        .is_empty());
-    let (second, _) = reviews.begin();
+    reviews.end(first, &McpAppInitiator::System, || {});
+    let second = reviews.begin();
     assert_eq!(
         reviews.issue(second, &app("i1"), || ()).err(),
         Some(ReviewRefusal::Released)
@@ -494,7 +512,7 @@ async fn a_deleted_conversations_apps_take_nothing_and_keep_nothing() {
     let reviews = reviews();
     let waiting = open(&reviews, "i1").unwrap();
     let mut released = 0;
-    assert!(reviews.delete(|| released += 1).is_empty());
+    reviews.delete(&releaser(), || released += 1);
     assert_eq!(released, 1);
     assert!(matches!(
         waiting.ended(APP_REVIEW_DEADLINE).await,
@@ -504,18 +522,16 @@ async fn a_deleted_conversations_apps_take_nothing_and_keep_nothing() {
         }
     ));
     // No opening begins again, and a release racing it keeps nothing.
-    let (after, _) = reviews.begin();
+    let after = reviews.begin();
     assert_eq!(reviews.admit(after, &app("i2")), Err(ReviewRefusal::Ended));
-    assert!(reviews
-        .release_app(&app("i3"), &releaser(), || {})
-        .is_empty());
+    reviews.release_app(&app("i3"), &releaser(), || {});
     assert_eq!(reviews.admit(after, &app("i3")), Err(ReviewRefusal::Ended));
     // Its opening ended already: what it held was let go then, not again.
-    let ended = AppReviews::default();
-    let (epoch, _) = ended.begin();
-    assert!(ended.end(epoch, &McpAppInitiator::System, || {}).is_empty());
+    let (ended, _) = unopened();
+    let epoch = ended.begin();
+    ended.end(epoch, &McpAppInitiator::System, || {});
     let mut again = 0;
-    assert!(ended.delete(|| again += 1).is_empty());
+    ended.delete(&releaser(), || again += 1);
     assert_eq!(again, 0);
 }
 
@@ -524,7 +540,7 @@ async fn an_opening_never_carries_another_s_reviews() {
     let reviews = reviews();
     let waiting = open(&reviews, "i1").unwrap();
     // Should an opening ever begin over one not ended, its reviews end.
-    let (next, _) = reviews.begin();
+    let next = reviews.begin();
     assert!(matches!(
         waiting.ended(APP_REVIEW_DEADLINE).await,
         ReviewEnd::Withdrawn {
@@ -581,9 +597,21 @@ fn update(mount: &str, call: &str) -> McpAppAuditRecord {
     }
 }
 
-/// The calls of the updates `dropped` names.
-fn calls(dropped: Vec<McpAppAuditRecord>) -> Vec<String> {
-    dropped.into_iter().map(|update| update.call_id).collect()
+/// The calls of the updates `taken` names.
+fn calls(taken: Vec<McpAppAuditRecord>) -> Vec<String> {
+    taken.into_iter().map(|update| update.call_id).collect()
+}
+
+/// Each of `calls`' updates dropped for `cause` by `by`, in that order.
+fn each(
+    calls: &[&str],
+    cause: ContextDrop,
+    by: &McpAppInitiator,
+) -> Vec<(String, ContextDrop, McpAppInitiator)> {
+    calls
+        .iter()
+        .map(|call| ((*call).to_owned(), cause, by.clone()))
+        .collect()
 }
 
 /// `mount`'s update in `epoch`, its call the context's own update: held as
@@ -648,11 +676,9 @@ fn c6_a_fifth_mount_finds_no_room_and_a_mount_holds_a_place_only_while_it_holds_
 
 #[test]
 fn c17_an_update_whose_mount_was_released_or_whose_opening_ended_after_its_room_is_not_held() {
-    let reviews = reviews();
+    let (reviews, reported) = reporting();
     reviews.room(EPOCH, &app("i1"), true).unwrap();
-    assert!(reviews
-        .release_app(&app("i1"), &releaser(), || {})
-        .is_empty());
+    reviews.release_app(&app("i1"), &releaser(), || {});
     // Not held, and said so, for the service to record.
     assert_eq!(
         hold(&reviews, EPOCH, "i1", Some(context("u1", "late"))),
@@ -666,7 +692,7 @@ fn c17_an_update_whose_mount_was_released_or_whose_opening_ended_after_its_room_
         Err(ContextRefusal::Gone(ReviewRefusal::Released))
     );
     reviews.room(EPOCH, &app("i2"), true).unwrap();
-    assert!(reviews.end(EPOCH, &releaser(), || {}).is_empty());
+    reviews.end(EPOCH, &releaser(), || {});
     assert_eq!(
         hold(&reviews, EPOCH, "i2", Some(context("u2", "late"))),
         Err(NotHeld)
@@ -676,13 +702,15 @@ fn c17_an_update_whose_mount_was_released_or_whose_opening_ended_after_its_room_
         reviews.room(EPOCH, &app("i2"), false),
         Err(ContextRefusal::Gone(ReviewRefusal::Ended))
     );
+    // Never held, so never dropped here: its `not_held` is its own call's.
+    assert!(reported.take().is_empty());
 }
 
 #[tokio::test]
 async fn c8_one_context_update_of_a_conversation_runs_at_a_time_across_mounts_and_openings() {
     let reviews = reviews();
     let first = reviews.one_update().await;
-    assert!(reviews.end(EPOCH, &releaser(), || {}).is_empty());
+    reviews.end(EPOCH, &releaser(), || {});
     let _ = reviews.begin();
     let waiting = tokio::spawn({
         let reviews = reviews.clone();
@@ -700,7 +728,7 @@ async fn c8_one_context_update_of_a_conversation_runs_at_a_time_across_mounts_an
 
 #[test]
 fn c9_a_take_empties_the_mounts_frees_their_room_and_leaves_a_release_or_an_end_nothing() {
-    let reviews = reviews();
+    let (reviews, reported) = reporting();
     for n in 0..MAX_HELD_CONTEXTS {
         give(
             &reviews,
@@ -727,50 +755,88 @@ fn c9_a_take_empties_the_mounts_frees_their_room_and_leaves_a_release_or_an_end_
     // end has nothing of them to drop.
     assert!(held(&reviews).is_empty());
     assert_eq!(reviews.room(EPOCH, &app("other"), true), Ok(()));
-    assert!(reviews
-        .release_app(&app("i0"), &releaser(), || {})
-        .is_empty());
+    reviews.release_app(&app("i0"), &releaser(), || {});
     // A mount's newer update is held anew; a second take takes only it.
     give(&reviews, "i1", Some(context("u5", "newer")));
     assert_eq!(held(&reviews), ["newer"]);
     assert_eq!(calls(reviews.take_held().updates), ["u5"]);
     assert!(reviews.take_held().contexts.is_empty());
     give(&reviews, "i2", Some(context("u6", "held")));
-    let _taken = reviews.take_held();
-    assert!(reviews.end(EPOCH, &releaser(), || {}).is_empty());
+    let taken = reviews.take_held();
+    reviews.end(EPOCH, &releaser(), || {});
+    // Nothing taken was dropped by the release or the end.
+    assert!(reported.take().is_empty());
+    // A message that took some and went nowhere hands them back: each
+    // dropped as not sent, by the system, against its own update.
+    reviews.not_sent(taken);
+    assert_eq!(
+        reported.take(),
+        each(&["u6"], ContextDrop::NotSent, &McpAppInitiator::System)
+    );
 }
 
 #[test]
 fn c14_c15_contexts_are_dropped_with_their_mount_the_openings_end_a_new_opening_and_a_delete() {
-    let reviews = reviews();
+    let (reviews, reported) = reporting();
     give(&reviews, "i1", Some(context("u1", "i1")));
     give(&reviews, "i2", Some(context("u2", "i2")));
     give(&reviews, "i3", Some(context("u5", "i3")));
-    // Each drop answers the update that held what it dropped, once.
+    // Each drop is reported as it is made, against the update that held
+    // what it dropped, by whoever dropped it, once.
+    reviews.release_app(&app("i1"), &releaser(), || {});
     assert_eq!(
-        calls(reviews.release_app(&app("i1"), &releaser(), || {})),
-        ["u1"]
+        reported.take(),
+        each(&["u1"], ContextDrop::Released, &releaser())
     );
-    assert!(reviews
-        .release_app(&app("i1"), &releaser(), || {})
-        .is_empty());
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    assert!(reported.take().is_empty());
     assert_eq!(held(&reviews), ["i2", "i3"]);
-    assert_eq!(calls(reviews.end(EPOCH, &releaser(), || {})), ["u2", "u5"]);
+    let closer = McpAppInitiator::Person {
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "pane".into(),
+        request_id: "close-1".into(),
+    };
+    reviews.end(EPOCH, &closer, || {});
+    assert_eq!(
+        reported.take(),
+        each(&["u2", "u5"], ContextDrop::ConversationEnded, &closer)
+    );
     assert!(held(&reviews).is_empty());
-    assert!(reviews.end(EPOCH, &releaser(), || {}).is_empty());
-    // An opening that was never ended still gives the next nothing.
-    let (next, dropped) = reviews.begin();
-    assert!(dropped.is_empty());
+    reviews.end(EPOCH, &releaser(), || {});
+    assert!(reported.take().is_empty());
+    // An opening that was never ended still gives the next nothing, and
+    // its contexts are dropped by the system.
+    let next = reviews.begin();
+    assert!(reported.take().is_empty());
     reviews.room(next, &app("i2"), true).unwrap();
     hold(&reviews, next, "i2", Some(context("u3", "again"))).unwrap();
     assert_eq!(held(&reviews), ["again"]);
-    let (after, dropped) = reviews.begin();
-    assert_eq!(calls(dropped), ["u3"]);
+    let after = reviews.begin();
+    assert_eq!(
+        reported.take(),
+        each(
+            &["u3"],
+            ContextDrop::ConversationEnded,
+            &McpAppInitiator::System
+        )
+    );
     assert!(held(&reviews).is_empty());
     reviews.room(after, &app("i2"), true).unwrap();
     hold(&reviews, after, "i2", Some(context("u4", "once more"))).unwrap();
-    assert_eq!(calls(reviews.delete(|| {})), ["u4"]);
+    // A delete's, by the deleter it is given.
+    let deleter = McpAppInitiator::Person {
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "pane".into(),
+        request_id: "delete-1".into(),
+    };
+    reviews.delete(&deleter, || {});
+    assert_eq!(
+        reported.take(),
+        each(&["u4"], ContextDrop::ConversationEnded, &deleter)
+    );
     assert!(held(&reviews).is_empty());
+    reviews.delete(&deleter, || {});
+    assert!(reported.take().is_empty());
 }
 
 #[test]

@@ -5,9 +5,9 @@ use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     conversation_session, ConversationCaller, ConversationDependencies, ConversationError,
     ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationPermission,
-    ConversationPermissionOrigin, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppCall, McpAppContextUpdate, McpAppFailure, McpAppFuture,
-    McpAppInitiator, McpAppMessage, McpAppPorts, McpAppRef, McpApps, McpToolUis,
+    ConversationPermissionOrigin, ConversationService, DroppedContexts, HeldResource, McpAppAudit,
+    McpAppAuditPhase, McpAppAuditRecord, McpAppCall, McpAppContextUpdate, McpAppFailure,
+    McpAppFuture, McpAppInitiator, McpAppMessage, McpAppPorts, McpAppRef, McpApps, McpToolUis,
     ProviderSessionErasers, RequestedConversation, ResourceTickets, SubmissionMode,
     SubmittedMessage, TicketEnd, TicketRefusal,
 };
@@ -36,7 +36,7 @@ use nessa_sdk::domain::mcp_apps::{
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{oneshot, Notify};
@@ -303,6 +303,59 @@ impl McpAppAudit for Audit {
     }
 }
 
+/// Where the conversation's apps report each context they drop: onto a
+/// channel, recorded into `audit` by a task of its own, as composition's
+/// recorder (`audit_context_drops`) does — so a drop is written after the
+/// command that made it, never by it. [`Self::settled`] waits for every
+/// drop reported so far to have been tried.
+pub(crate) struct Drops {
+    sender: tokio::sync::mpsc::UnboundedSender<McpAppAuditRecord>,
+    reported: AtomicUsize,
+    tried: Arc<AtomicUsize>,
+}
+impl Drops {
+    /// Recording into `audit`, from now on.
+    pub(crate) fn recording_into(audit: Arc<Audit>) -> Arc<Self> {
+        let (sender, mut drops) = tokio::sync::mpsc::unbounded_channel::<McpAppAuditRecord>();
+        let tried = Arc::new(AtomicUsize::new(0));
+        let trying = tried.clone();
+        tokio::spawn(async move {
+            while let Some(record) = drops.recv().await {
+                // A failure is the recorder's to log; the drop stands.
+                let _ = audit.record(record).await;
+                trying.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        Arc::new(Self {
+            sender,
+            reported: AtomicUsize::new(0),
+            tried,
+        })
+    }
+
+    /// How many drops the apps reported.
+    pub(crate) fn reported(&self) -> usize {
+        self.reported.load(Ordering::SeqCst)
+    }
+
+    /// Wait until every drop reported so far has been tried.
+    pub(crate) async fn settled(&self) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.tried.load(Ordering::SeqCst) < self.reported.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("every drop reported is tried");
+    }
+}
+impl DroppedContexts for Drops {
+    fn context_dropped(&self, record: McpAppAuditRecord) {
+        self.reported.fetch_add(1, Ordering::SeqCst);
+        self.sender.send(record).expect("the drop recorder runs");
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Tickets {
     pub(crate) issued: Mutex<Vec<HeldResource>>,
@@ -351,6 +404,8 @@ pub(crate) struct Fixture {
     pub(crate) apps: Arc<Apps>,
     pub(crate) audit: Arc<Audit>,
     pub(crate) tickets: Arc<Tickets>,
+    /// Where its apps report each context they drop, recorded into `audit`.
+    pub(crate) drops: Arc<Drops>,
     /// The conversation's agent: what each turn it ran was given.
     pub(crate) provider: Arc<ProviderFactory>,
     /// The conversation's own record.
@@ -410,6 +465,7 @@ impl Fixture {
         let apps = Arc::new(Apps::default());
         let audit = Arc::new(Audit::default());
         let tickets = Arc::new(Tickets::default());
+        let drops = Drops::recording_into(audit.clone());
         let repository = Arc::new(MemoryRepository::default());
         let execution_audit = Arc::new(ExecutionRecords::default());
         let service = ConversationService::with_mcp_apps(
@@ -453,6 +509,7 @@ impl Fixture {
                 apps: apps.clone(),
                 audit: audit.clone(),
                 tickets: tickets.clone(),
+                dropped: drops.clone(),
             },
         )
         .unwrap();
@@ -512,6 +569,7 @@ impl Fixture {
             apps,
             audit,
             tickets,
+            drops,
             provider,
             repository,
             execution_audit,

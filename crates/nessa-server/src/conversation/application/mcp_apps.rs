@@ -288,7 +288,8 @@ pub enum McpAppAuditPhase {
     /// What the mount held, if anything, is let go of unsent.
     ContextCleared,
     /// The context this update held, or was to hold, was dropped unsent,
-    /// and why; taken by whoever released the mount or ended the opening.
+    /// and why; taken by whoever released the mount, ended the opening or
+    /// deleted the conversation, or by the system.
     ContextDropped { cause: ContextDrop },
 }
 
@@ -444,12 +445,33 @@ impl From<McpAppFailure> for McpAppError {
     }
 }
 
+/// Told of each held context dropped unsent, so it can be audited: the
+/// [`McpAppAuditPhase::ContextDropped`] record, built by the conversation's
+/// apps at the moment they removed it — released, its opening ended, a new
+/// opening begun, the conversation deleted, or taken by a submission that
+/// then went nowhere — against the update that held it, by whoever dropped
+/// it. The twin of the resource tickets' `TicketEvents`.
+///
+/// Called once per drop, synchronously, after the apps have let go of the
+/// context and outside their lock. It must not block: an implementation
+/// that has to await an audit store hands the record on (composition's
+/// channel and its recorder, `audit_context_drops`). The apps keep no
+/// record of what they reported; the receiver is the evidence's only holder
+/// from then on. No command that dropped a context waits for its record or
+/// answers by it: a drop whose record fails is logged by the receiver
+/// (`docs/design/mcp-app-calls.md`, row C15b).
+pub trait DroppedContexts: Send + Sync {
+    fn context_dropped(&self, record: McpAppAuditRecord);
+}
+
 /// What an app's calls go through: the conversation's own MCP sessions, the
-/// audit of every step, and the resources held behind tickets. A gateway
-/// with no MCP servers has none, and no app to admit.
+/// audit of every step, the resources held behind tickets, and where the
+/// drops of held contexts are reported. A gateway with no MCP servers has
+/// none, and no app to admit.
 #[derive(Clone)]
 pub struct McpAppPorts {
     pub apps: Arc<dyn McpApps>,
     pub audit: Arc<dyn McpAppAudit>,
     pub tickets: Arc<dyn ResourceTickets>,
+    pub dropped: Arc<dyn DroppedContexts>,
 }

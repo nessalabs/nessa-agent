@@ -17,11 +17,12 @@ use crate::conversation::application::app_reviews::{
 use crate::conversation::application::view::{
     ConversationMessageApp, ConversationMessageStatus, ConversationPermissionOrigin,
 };
-use crate::conversation::application::{ContextDrop, McpAppAsk};
+use crate::conversation::application::{ContextDrop, ConversationRepository, McpAppAsk};
 use crate::conversation::application::{
     ConversationLimits, SubmissionMode, SubmissionReceipt, SubmittedImage, SubmittedMessage,
     MAX_APP_CALLS,
 };
+use crate::conversation::domain::ConversationDeletion;
 use crate::product_contract::generated::ConversationErrorCode;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
@@ -172,10 +173,11 @@ async fn approved_on_record(fixture: &Fixture, from: usize) {
     .unwrap();
 }
 
-/// The drops on record, each with who dropped it and why — each recorded
-/// against the update that held what it dropped, whose `ContextHeld` is on
-/// record before it.
-fn drops(fixture: &Fixture) -> Vec<(ContextDrop, McpAppInitiator)> {
+/// The drops on record once every drop reported so far was tried, each with
+/// who dropped it and why — each recorded against the update that held what
+/// it dropped, whose `ContextHeld` is on record before it.
+async fn drops(fixture: &Fixture) -> Vec<(ContextDrop, McpAppInitiator)> {
+    fixture.drops.settled().await;
     let records = fixture.audit.records.lock().unwrap().clone();
     records
         .iter()
@@ -965,7 +967,7 @@ async fn m10_a_release_while_the_message_waits_for_the_lock_stops_it() {
     // Refused before it read what is held: another mount's context is still
     // held, and nothing is on record as dropped.
     assert_eq!(fixture.held_now(), ["theirs"]);
-    assert!(drops(&fixture).is_empty());
+    assert!(drops(&fixture).await.is_empty());
 }
 
 #[tokio::test]
@@ -1313,11 +1315,11 @@ async fn m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carrie
         panic!("{phases:?}");
     };
     let app_turn = execution_id.clone();
-    // The agent saved it, so what it carried was let go of; without its
-    // evidence the agent never ran it, so the model never saw it: lost,
-    // and the app may give it again (recorded limit C13).
+    // It took what was held at its admission, and what it carried went
+    // with it; without its evidence the agent never ran it, so the model
+    // never saw it: lost, and the app may give it again (recorded limit C13).
     assert!(fixture.held_now().is_empty());
-    assert!(drops(&fixture).is_empty());
+    assert!(drops(&fixture).await.is_empty());
     fixture
         .execution_audit
         .failing
@@ -1378,11 +1380,11 @@ async fn m13_a_message_whose_submission_task_failed_before_the_agent_was_asked_i
     );
     // It failed before it read what is held: nothing taken.
     assert_eq!(fixture.held_now(), ["kept"]);
-    assert!(drops(&fixture).is_empty());
+    assert!(drops(&fixture).await.is_empty());
 }
 
 #[tokio::test]
-async fn m13_an_opening_that_failed_is_the_conversations_refusal_not_m10() {
+async fn m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system() {
     let fixture = Fixture::new().await;
     let executions = fixture.provider.executions.lock().unwrap().len();
     let (message, review) = fixture
@@ -1393,7 +1395,8 @@ async fn m13_an_opening_that_failed_is_the_conversations_refusal_not_m10() {
     fixture.answer(&review, ALLOW).await;
     approved_on_record(&fixture, from).await;
     // Its opening ends without the lock, and the next one fails, holding
-    // what it may have launched: its failure stands for the conversation.
+    // what it may have launched: the message is refused by that failure,
+    // before the agent was asked.
     fixture.service.stop_active_agents().await.unwrap();
     fixture.storage_open_panics.store(true, Ordering::SeqCst);
     assert!(matches!(
@@ -1404,26 +1407,17 @@ async fn m13_an_opening_that_failed_is_the_conversations_refusal_not_m10() {
     ));
     fixture.storage_open_panics.store(false, Ordering::SeqCst);
     drop(held);
-    // Not a stop, a retirement or a release: the conversation refused it,
-    // as it would any message (row M13), not `mcp_cancelled` (row M10).
-    let result = message.await.unwrap();
-    assert!(
-        matches!(result, Err(ConversationError::Unavailable)),
-        "{result:?}"
-    );
+    // But its own apps say the stop ended its opening first: it is that
+    // stop's, `mcp_cancelled` by the system (row M10), whatever refused it
+    // — not the failed opening's `temporarily_unavailable` (row M13).
+    assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
     let records = fixture.audit.records.lock().unwrap().clone();
     let last = records.last().unwrap();
-    assert!(
-        matches!(
-            last.phase,
-            McpAppAuditPhase::MessageNotSent {
-                code: ConversationErrorCode::TemporarilyUnavailable,
-                ..
-            }
-        ),
-        "{last:?}"
-    );
-    assert_eq!(last.initiator, the_app());
+    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(last.initiator, McpAppInitiator::System);
+    assert!(!records
+        .iter()
+        .any(|record| matches!(record.phase, McpAppAuditPhase::MessageNotSent { .. })));
     assert_eq!(
         fixture.provider.executions.lock().unwrap().len(),
         executions
@@ -1477,15 +1471,17 @@ async fn m15_c11b_a_message_whose_enqueue_failed_once_the_agent_was_asked_is_unr
     // whether it has the message, whose record covers them. Not held, and
     // no drop on record (row C11b).
     assert!(fixture.held_now().is_empty());
-    assert!(drops(&fixture).is_empty());
+    assert!(drops(&fixture).await.is_empty());
 }
 
 #[tokio::test]
-async fn m15_a_message_whose_submission_task_failed_after_the_agent_took_it_is_unresolved() {
+async fn m15_a_message_whose_submission_task_failed_once_the_agent_was_asked_is_unresolved() {
     let fixture = Fixture::new().await;
     let (task, review) = fixture.held_message(INSTANCE, "hello").await;
-    // The submission's own task falls over after the agent took it, as the
-    // conversation's list entry is written.
+    // The submission's own task falls over once the agent was asked — here
+    // after it took it, as the conversation's list entry is written. The
+    // gateway's own answer is only that it was asked: whether the agent has
+    // it is the SDK's record to settle, so the record says unknown.
     fixture
         .summaries
         .record_panics
@@ -1891,7 +1887,7 @@ async fn c9_a_message_takes_the_contexts_and_a_release_meanwhile_drops_none() {
         fixture.contexts_given("next").await,
         [Some("mine".to_owned())]
     );
-    assert!(drops(&fixture).is_empty());
+    assert!(drops(&fixture).await.is_empty());
     assert!(fixture.held_now().is_empty());
 }
 
@@ -2149,7 +2145,7 @@ async fn c11_a_refused_submission_drops_what_it_took_on_record() {
     // held it, by the system. Nothing is put back.
     assert!(fixture.held_now().is_empty());
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::NotSent, McpAppInitiator::System)]
     );
     // The app may give it again; this gateway takes no images, so the next
@@ -2181,7 +2177,7 @@ async fn c11_a_refused_submission_drops_what_it_took_on_record() {
         "{refused:?}"
     );
     assert_eq!(fixture.held_now(), ["ctx"]);
-    assert_eq!(drops(&fixture).len(), 1);
+    assert_eq!(drops(&fixture).await.len(), 1);
     // Held, it goes with the next.
     fixture.person_sends("next", "again").await;
     assert_eq!(
@@ -2236,8 +2232,8 @@ async fn c13_a_context_carried_by_a_turn_that_then_fails_is_lost() {
         .lock()
         .unwrap()
         .contains(&"p1".to_owned()));
-    // Let go of at admission all the same: lost, and the app may give it
-    // again (recorded limit).
+    // Taken at its admission all the same, and went with the turn: lost,
+    // and the app may give it again (recorded limit).
     assert!(fixture.held_now().is_empty());
     fixture.person_sends("p2", "second").await;
     assert!(fixture.contexts_given("p2").await.is_empty());
@@ -2262,7 +2258,7 @@ async fn c14_a_mounts_release_drops_its_context_unsent() {
     assert_eq!(fixture.held_now(), ["other"]);
     // On record, against the update that held it, by the releaser.
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::Released, person_by("release"))]
     );
     // Released again: nothing more to drop, nothing more on record.
@@ -2271,7 +2267,7 @@ async fn c14_a_mounts_release_drops_its_context_unsent() {
         .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
         .await
         .unwrap();
-    assert_eq!(drops(&fixture).len(), 1);
+    assert_eq!(drops(&fixture).await.len(), 1);
     fixture.person_turn("next").await;
     assert_eq!(
         fixture.contexts_given("next").await,
@@ -2280,7 +2276,7 @@ async fn c14_a_mounts_release_drops_its_context_unsent() {
 }
 
 #[tokio::test]
-async fn c14_a_drop_that_cannot_be_recorded_is_dropped_and_the_release_says_so() {
+async fn c14_a_release_whose_drop_cannot_be_recorded_completes() {
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("mine"), None)
@@ -2292,10 +2288,12 @@ async fn c14_a_drop_that_cannot_be_recorded_is_dropped_and_the_release_says_so()
         .service
         .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
         .await;
-    assert!(
-        matches!(released, Err(ConversationError::Audit)),
-        "{released:?}"
-    );
+    // The release answers its own result: the drop was reported, and its
+    // record is the drop recorder's to write — or, failing, to log
+    // (row C15b; `context_drops.rs`).
+    assert!(matches!(released, Ok(())), "{released:?}");
+    assert_eq!(fixture.drops.reported(), 1);
+    assert!(drops(&fixture).await.is_empty());
     // Released all the same: the context dropped, the review withdrawn, and
     // the mount refused from now on.
     assert!(fixture.held_now().is_empty());
@@ -2323,7 +2321,7 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
         .unwrap();
     assert!(fixture.held_now().is_empty());
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::ConversationEnded, person_by("close"))]
     );
     fixture.person_turn("reopened").await;
@@ -2342,7 +2340,7 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
     fixture.service.stop_active_agents().await.unwrap();
     assert!(fixture.held_now().is_empty());
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::ConversationEnded, McpAppInitiator::System)]
     );
     let fixture = Fixture::new().await;
@@ -2353,7 +2351,7 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
     fixture.service.shutdown().await.unwrap();
     assert!(fixture.held_now().is_empty());
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::ConversationEnded, McpAppInitiator::System)]
     );
 
@@ -2378,7 +2376,7 @@ async fn c15_the_openings_end_drops_every_context_unsent() {
     );
     assert!(fixture.held_now().is_empty());
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::ConversationEnded, person_by("delete"))]
     );
 }
@@ -2406,14 +2404,15 @@ async fn c15_a_stop_during_an_admission_drops_nothing_the_message_took() {
     let sent = sending.await.unwrap();
     let _ = stopping.await.unwrap();
     // The opening's end found nothing held: the context was the message's.
-    assert!(drops(&fixture).is_empty(), "{sent:?}");
+    assert!(drops(&fixture).await.is_empty(), "{sent:?}");
     assert!(fixture.held_now().is_empty());
 }
 
 #[tokio::test]
-async fn c15_a_close_or_delete_whose_drops_cannot_be_recorded_completes_and_says_so() {
-    // A close: closed, its context dropped, and the answer is the lost
-    // record.
+async fn c15b_a_close_or_delete_whose_drops_cannot_be_recorded_answers_its_own_result() {
+    // A close: closed, its context dropped, and the close answers its own
+    // result. The drop was reported; its lost record is the recorder's to
+    // log (`context_drops.rs`), not the close's to answer.
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("x"), None)
@@ -2425,17 +2424,16 @@ async fn c15_a_close_or_delete_whose_drops_cannot_be_recorded_completes_and_says
         .service
         .close(fixture.id.clone(), caller("close"))
         .await;
-    assert!(
-        matches!(closed, Err(ConversationError::Audit)),
-        "{closed:?}"
-    );
+    assert!(matches!(closed, Ok(())), "{closed:?}");
     assert!(fixture.held_now().is_empty());
-    assert!(drops(&fixture).is_empty());
+    assert_eq!(fixture.drops.reported(), 1);
+    assert!(drops(&fixture).await.is_empty());
     assert!(fixture.provider.close_calls.load(Ordering::SeqCst) > closes);
     fixture.audit.failing.store(false, Ordering::SeqCst);
 
-    // A delete: deleted all the same, its context dropped, and answered
-    // through its failures' audit: `audit_unavailable`.
+    // A delete: deleted, its context dropped, and `audit_unavailable` keeps
+    // its one meaning on a delete — the deletion's own record — so a lost
+    // drop record is no reason for it.
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("x"), None)
@@ -2447,19 +2445,19 @@ async fn c15_a_close_or_delete_whose_drops_cannot_be_recorded_completes_and_says
         .delete(fixture.id.clone(), caller("delete"))
         .await;
     fixture.audit.failing.store(false, Ordering::SeqCst);
-    let Err(error @ ConversationError::DeletionIncomplete(_)) = deleted else {
-        panic!("{deleted:?}");
-    };
-    let ConversationError::DeletionIncomplete(failures) = &error else {
-        unreachable!();
-    };
-    assert!(
-        matches!(failures.audit, Some(ConversationError::Audit)),
-        "{failures:?}"
-    );
-    assert_eq!(error_code(&error), ConversationErrorCode::AuditUnavailable);
+    match &deleted {
+        Ok(applied) => assert!(applied),
+        // The fixture names no eraser for the agent's own session, so its
+        // erasure may be unfinished: never for the drop's record.
+        Err(error @ ConversationError::DeletionIncomplete(failures)) => {
+            assert!(failures.audit.is_none(), "{failures:?}");
+            assert_ne!(error_code(error), ConversationErrorCode::AuditUnavailable);
+        }
+        Err(other) => panic!("{other:?}"),
+    }
     assert!(fixture.held_now().is_empty());
-    assert!(drops(&fixture).is_empty());
+    assert_eq!(fixture.drops.reported(), 1);
+    assert!(drops(&fixture).await.is_empty());
     assert!(matches!(
         fixture
             .service
@@ -2501,9 +2499,188 @@ async fn c15_a_delete_drops_what_is_still_held_as_the_deleters() {
     // By the deleter, as the stop's drops are
     // (`c15_the_openings_end_drops_every_context_unsent`).
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::ConversationEnded, person_by("delete"))]
     );
+}
+
+/// A context held, its update on record, with the person's turn settled.
+async fn holding(fixture: &Fixture) {
+    fixture
+        .update_context(INSTANCE, Some("x"), None)
+        .await
+        .unwrap();
+}
+
+/// Waits until the agent's close has been asked for more than `before` times.
+async fn closing(fixture: &Fixture, before: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.provider.close_calls.load(Ordering::SeqCst) <= before {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the agent is being closed");
+}
+
+#[tokio::test]
+async fn c15_a_delete_cut_short_by_retirement_records_each_drop_once() {
+    let fixture = Fixture::new().await;
+    holding(&fixture).await;
+    // The delete's stop ends the apps, then waits on the agent's close …
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(gate);
+    let closes = fixture.provider.close_calls.load(Ordering::SeqCst);
+    let deleting = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        tokio::spawn(async move { service.delete(id, caller("delete")).await })
+    };
+    closing(&fixture, closes).await;
+    // … and the gateway stops meanwhile: retirement wins the delete's wait,
+    // and the future that stopped the agent is dropped mid-close.
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.shutdown().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.service.inner.retirement.get().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let _ = release.send(());
+    let deleted = deleting.await.unwrap();
+    assert!(
+        matches!(
+            deleted,
+            Ok(_) | Err(ConversationError::DeletionIncomplete(_))
+        ),
+        "{deleted:?}"
+    );
+    let _ = stopping.await.unwrap();
+    // Reported as the stop removed it, before it awaited the close: on
+    // record exactly once, by the deleter — neither lost with the dropped
+    // future nor dropped again by the gateway's own stop.
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::ConversationEnded, person_by("delete"))]
+    );
+    assert_eq!(fixture.drops.reported(), 1);
+    assert!(fixture.held_now().is_empty());
+}
+
+#[tokio::test]
+async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as_the_deleters() {
+    let fixture = Fixture::new().await;
+    holding(&fixture).await;
+    // Its agent's slot is an opening not yet live — the live one gone
+    // without its apps' end, as `c15_a_delete_drops_what_is_still_held_as_the_deleters`
+    // has it — so the delete's stop waits for it, and has ended no app.
+    let opening = Arc::new(super::super::Slot {
+        value: tokio::sync::OnceCell::new(),
+        ready: Notify::new(),
+        started: std::sync::atomic::AtomicBool::new(true),
+    });
+    let live = fixture
+        .service
+        .inner
+        .conversations
+        .lock()
+        .await
+        .insert(fixture.id.clone(), opening);
+    assert!(live.is_some());
+    let deleting = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        tokio::spawn(async move { service.delete(id, caller("delete")).await })
+    };
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    // The gateway stops: the delete's wait gives way to it, before its stop
+    // reached the apps. The gateway's own stop cannot reach them either —
+    // the opening never comes — so it is not awaited.
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.shutdown().await })
+    };
+    let deleted = deleting.await.unwrap();
+    let Err(ConversationError::DeletionIncomplete(failures)) = &deleted else {
+        panic!("{deleted:?}");
+    };
+    assert!(failures.stop.is_some(), "{failures:?}");
+    // The delete itself ends its apps for good: what they held is dropped
+    // once, as the deleter's, whose tombstone it is.
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::ConversationEnded, person_by("delete"))]
+    );
+    assert!(fixture.held_now().is_empty());
+    let tombstone = fixture.repository.load(&fixture.id).await.unwrap().unwrap();
+    assert_eq!(tombstone.deletion().unwrap().request(), "delete");
+    stopping.abort();
+}
+
+/// The conversation fenced as deleted by its owner's request `request`, as
+/// a delete that stopped right after its tombstone leaves it: nothing of it
+/// stopped, ended or erased yet.
+async fn fenced_by(fixture: &Fixture, request: &str) {
+    let record = fixture.repository.load(&fixture.id).await.unwrap().unwrap();
+    let deletion = ConversationDeletion::new(
+        fixture.owner.organization_id.clone(),
+        fixture.owner.principal_id.clone(),
+        fixture.owner.surface_id.clone(),
+        request.to_owned(),
+        record.creation_requested_at_ms(),
+    )
+    .unwrap();
+    fixture
+        .repository
+        .record_deletion(&fixture.id, deletion)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn c15_a_delete_finished_by_a_repeat_drops_as_the_first_deleter() {
+    let fixture = Fixture::new().await;
+    holding(&fixture).await;
+    fenced_by(&fixture, "delete-1").await;
+    // Repeated under another request: it carries on the first's deletion,
+    // and its stop ends the apps as the first deleter's, read from the
+    // tombstone — not as this caller's.
+    let deleted = fixture
+        .service
+        .delete(fixture.id.clone(), caller("delete-2"))
+        .await;
+    assert!(
+        matches!(
+            deleted,
+            Ok(false) | Err(ConversationError::DeletionIncomplete(_))
+        ),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::ConversationEnded, person_by("delete-1"))]
+    );
+    assert!(fixture.held_now().is_empty());
+}
+
+#[tokio::test]
+async fn c15_a_delete_finished_at_a_gateway_start_drops_as_its_deleter() {
+    let fixture = Fixture::new().await;
+    holding(&fixture).await;
+    fenced_by(&fixture, "delete-1").await;
+    // Finished by the gateway, from the tombstone alone.
+    let _left = fixture.service.finish_deletions().await.unwrap();
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::ConversationEnded, person_by("delete-1"))]
+    );
+    assert!(fixture.held_now().is_empty());
 }
 
 #[tokio::test]
@@ -2556,7 +2733,7 @@ async fn c17_a_release_between_the_record_and_the_hold_holds_nothing() {
     // was never held is on record too, as the system's.
     update.await.unwrap().unwrap();
     assert_eq!(
-        drops(&fixture),
+        drops(&fixture).await,
         [(ContextDrop::NotHeld, McpAppInitiator::System)]
     );
     assert!(fixture.held_now().is_empty());

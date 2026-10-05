@@ -19,8 +19,8 @@ use super::super::app_reviews::{
     APP_REVIEW_DEADLINE,
 };
 use super::super::mcp_apps::{
-    ContextDrop, HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppCode,
-    McpAppError, McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord,
+    McpAppCode, McpAppError, McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
     McpAppWithdrawal, TicketRefusal,
 };
 use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
@@ -213,10 +213,11 @@ impl ConversationService {
     /// The caller tore the mount `app` down: withdraw its open reviews
     /// (their calls answer `mcp_cancelled`), let go of what was held for it,
     /// and open or issue nothing for it again — each recorded as the
-    /// caller's. Idempotent; it never opens the conversation. A context it
-    /// dropped whose drop cannot be recorded is dropped all the same, and the
-    /// release answers [`ConversationError::Audit`]
-    /// (`c14_a_drop_that_cannot_be_recorded_is_dropped_and_the_release_says_so`).
+    /// caller's. Idempotent; it never opens the conversation. Its context
+    /// still held is dropped, and the drop reported as the caller's
+    /// ([`AppReviews::release_app`]); the release answers its own result, not
+    /// the drop's record, which the drop recorder writes or logs
+    /// (`c14_a_release_whose_drop_cannot_be_recorded_completes`).
     pub async fn release_app(
         &self,
         id: ConversationId,
@@ -230,49 +231,12 @@ impl ConversationService {
         // The conversation's apps, open or not: a release before the
         // conversation is open, or while it opens, is kept all the same.
         let tickets = self.inner.mcp_apps.as_ref().map(|ports| &ports.tickets);
-        let dropped = self.apps_of(&id).release_app(&app, &by, || {
+        self.apps_of(&id).release_app(&app, &by, || {
             if let Some(tickets) = tickets {
                 tickets.release_app(&id, &app, &by);
             }
         });
-        self.record_dropped(Dropped {
-            updates: dropped,
-            cause: ContextDrop::Released,
-            by,
-        })
-        .await
-    }
-
-    /// Record each context `dropped` held as dropped unsent, against the
-    /// record of the update that gave it. Each is dropped already, so a
-    /// record that cannot be written does not stop the rest, or anything
-    /// else: it is logged, the next is tried, and the answer says one failed.
-    pub(super) async fn record_dropped(&self, dropped: Dropped) -> Result<(), ConversationError> {
-        let Dropped { updates, cause, by } = dropped;
-        let Some(ports) = &self.inner.mcp_apps else {
-            return Ok(());
-        };
-        let mut recorded = Ok(());
-        for update in updates {
-            let record = McpAppAuditRecord {
-                phase: McpAppAuditPhase::ContextDropped { cause },
-                initiator: by.clone(),
-                ..update
-            };
-            let (conversation_id, call_id) =
-                (record.conversation_id.clone(), record.call_id.clone());
-            if let Err(error) = ports.audit.record(record).await {
-                tracing::error!(
-                    %conversation_id,
-                    %call_id,
-                    ?cause,
-                    ?error,
-                    "an MCP App context's drop could not be audited; it is dropped all the same"
-                );
-                recorded = Err(error);
-            }
-        }
-        recorded
+        Ok(())
     }
 
     /// Whether the conversation `id`, live now, has the turn `execution`
@@ -297,57 +261,56 @@ impl ConversationService {
             })
     }
 
-    /// The conversation `id`'s apps, kept for it until it is deleted.
+    /// The conversation `id`'s apps, kept for it until it is deleted. They
+    /// report each context they drop to the drop recorder; with no MCP
+    /// servers there is no app to hold one, and a drop is only logged.
     pub(super) fn apps_of(&self, id: &ConversationId) -> Arc<AppReviews> {
         self.inner
             .apps
             .lock()
             .expect("conversations' apps")
             .entry(id.clone())
-            .or_default()
+            .or_insert_with(|| {
+                let dropped = self.inner.mcp_apps.as_ref().map_or_else(
+                    || Arc::new(NoAppsToDrop) as _,
+                    |ports| ports.dropped.clone(),
+                );
+                Arc::new(AppReviews::new(dropped))
+            })
             .clone()
     }
 
-    /// The conversation `id` was deleted, and its agent's stop tried: its
-    /// apps take no more work, ever, and keep nothing. Kept as that — made
-    /// so if it had none in this run — not removed, so that a release or an
-    /// opening racing the delete finds them deleted, and cannot build them
-    /// afresh. The contexts it drops, `by` the person who deleted it.
-    pub(super) fn close_apps_for_good(&self, id: &ConversationId, by: &McpAppInitiator) -> Dropped {
-        let updates = self.apps_of(id).delete(|| {
+    /// `by` deleted the conversation `id`, and its agent's stop was tried:
+    /// its apps take no more work, ever, and keep nothing; a context still
+    /// held is dropped, `by` the deleter. Kept as that — made so if it had
+    /// none in this run — not removed, so that a release or an opening
+    /// racing the delete finds them deleted, and cannot build them afresh.
+    pub(super) fn close_apps_for_good(&self, id: &ConversationId, by: &McpAppInitiator) {
+        self.apps_of(id).delete(by, || {
             if let Some(ports) = &self.inner.mcp_apps {
                 ports
                     .tickets
                     .release_conversation(id, &McpAppInitiator::System);
             }
         });
-        Dropped {
-            updates,
-            cause: ContextDrop::ConversationEnded,
-            by: by.clone(),
-        }
     }
 
     /// `by` ended `live`'s conversation: withdraw its apps' reviews, let go
-    /// of what was held for them, and open or issue nothing for them again.
-    /// Idempotent. The contexts it drops are the caller's to record
-    /// ([`Self::record_dropped`]), once whatever it is bounded by is done.
+    /// of what was held for them, drop the contexts they still hold, and
+    /// open or issue nothing for them again. Idempotent. Every drop is
+    /// reported before this returns ([`AppReviews::end`]): a caller that
+    /// then awaits a stop cannot lose one, however that await ends.
     pub(super) fn end_apps(
         &self,
         id: &ConversationId,
         live: &LiveConversation,
         by: &McpAppInitiator,
-    ) -> Dropped {
-        let updates = live.app_reviews.end(live.app_epoch, by, || {
+    ) {
+        live.app_reviews.end(live.app_epoch, by, || {
             if let Some(ports) = &self.inner.mcp_apps {
                 ports.tickets.release_conversation(id, by);
             }
         });
-        Dropped {
-            updates,
-            cause: ContextDrop::ConversationEnded,
-            by: by.clone(),
-        }
     }
 
     /// One of the [`MAX_APP_CALLS`], for a call's task to hold until it ends.
@@ -1052,13 +1015,17 @@ struct Asked<'a> {
     shown: &'a str,
 }
 
-/// Contexts dropped unsent — the records of the updates that gave them —
-/// why, and by whom: for [`ConversationService::record_dropped`].
-#[must_use]
-pub(super) struct Dropped {
-    pub(super) updates: Vec<McpAppAuditRecord>,
-    pub(super) cause: ContextDrop,
-    pub(super) by: McpAppInitiator,
+/// Where a gateway with no MCP servers reports a context's drop: it has no
+/// app to hold one, so a drop is a fault, logged.
+struct NoAppsToDrop;
+impl DroppedContexts for NoAppsToDrop {
+    fn context_dropped(&self, record: McpAppAuditRecord) {
+        tracing::error!(
+            conversation_id = %record.conversation_id,
+            call_id = %record.call_id,
+            "an MCP App context was dropped on a gateway with no MCP servers; nothing records it"
+        );
+    }
 }
 
 /// What an app call keeps of the conversation it is in: its apps, and the

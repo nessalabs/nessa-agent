@@ -79,7 +79,8 @@
 //! model with the one lock their updates take, and the lock nothing is
 //! opened, held or issued past once a mount is released or the conversation
 //! ended — are `app_reviews.rs`, and the ports the calls go through
-//! `mcp_apps.rs`. An app's message is a submission like the person's
+//! `mcp_apps.rs`, among them `DroppedContexts`, where the apps report each
+//! context they drop as they drop it. An app's message is a submission like the person's
 //! (`service.rs`, `submit_as`), which decides under the submission lock
 //! whether it may go and which held contexts it carries.
 mod app_reviews;
@@ -121,10 +122,10 @@ pub use catalogue_read::{
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::{error_code, wire_code};
 pub use mcp_apps::{
-    ContextDrop, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord,
-    McpAppCode, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome,
-    McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
-    MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+    ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
+    McpAppAuditRecord, McpAppCode, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator,
+    McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd,
+    TicketRefusal, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
 pub use passive_read::{
     AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,

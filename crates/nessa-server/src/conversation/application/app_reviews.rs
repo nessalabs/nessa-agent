@@ -14,12 +14,20 @@
 //! held until a message admitted while the conversation is idle takes it.
 //! Taken, it leaves the mount at once, and belongs to that message. A
 //! release, an opening's end, a new opening and a delete drop only what is
-//! still held, unsent, and answer the record of each update dropped, for the
-//! caller to record the drop against; the conversation's one update lock
-//! orders the updates themselves. And the app messages in flight, by the turn each becomes, so
-//! one request is asked about once at a time (`docs/design/mcp-app-calls.md`,
-//! "An app in its conversation: the gateway").
-use super::mcp_apps::{McpAppAuditRecord, McpAppInitiator, McpAppRef, McpAppWithdrawal};
+//! still held, unsent; a message that took some and went nowhere hands them
+//! back to be dropped ([`AppReviews::not_sent`]). Whatever drops a context,
+//! this is the one owner of its drop's record: built here, from the update
+//! that held it and who dropped it, and reported to [`DroppedContexts`] at
+//! the moment of removal, after the lock — never handed to the caller to
+//! record, so no caller's cancellation, budget or panic can lose it. The
+//! conversation's one update lock orders the updates themselves. And the app
+//! messages in flight, by the turn each becomes, so one request is asked
+//! about once at a time (`docs/design/mcp-app-calls.md`, "An app in its
+//! conversation: the gateway").
+use super::mcp_apps::{
+    ContextDrop, DroppedContexts, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
+    McpAppWithdrawal,
+};
 use super::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
@@ -136,13 +144,14 @@ struct Pending {
 }
 
 /// One conversation's apps, across its openings.
-#[derive(Default)]
 pub struct AppReviews {
     state: Mutex<Reviews>,
     /// The conversation's one context update at a time, held across its
     /// room check, its record and its hold ([`Self::one_update`]): so the
     /// order updates are recorded in is the order they are held in.
     updates: tokio::sync::Mutex<()>,
+    /// Where each context dropped unsent is reported, as it is dropped.
+    dropped: Arc<dyn DroppedContexts>,
 }
 #[derive(Default)]
 struct Reviews {
@@ -180,6 +189,20 @@ struct HeldContext {
 fn updates(contexts: Vec<HeldContext>) -> Vec<McpAppAuditRecord> {
     contexts.into_iter().map(|held| held.update).collect()
 }
+/// The record of the drop of what `update` held, `by` whom and why: the
+/// update's own record — its conversation, app, call and request — with the
+/// dropper as its initiator.
+fn drop_record(
+    update: McpAppAuditRecord,
+    cause: ContextDrop,
+    by: &McpAppInitiator,
+) -> McpAppAuditRecord {
+    McpAppAuditRecord {
+        phase: McpAppAuditPhase::ContextDropped { cause },
+        initiator: by.clone(),
+        ..update
+    }
+}
 impl Reviews {
     fn key(&self, permission: &str) -> Option<u64> {
         self.pending
@@ -214,32 +237,61 @@ pub struct Waiting {
 }
 
 impl AppReviews {
-    /// A new opening of the conversation's agent: its epoch, which every app
-    /// call that resolves it is admitted against, and the records of the
-    /// updates whose contexts an opening not ended held, dropped. What was
-    /// released is still released.
-    #[must_use]
-    pub fn begin(&self) -> (u64, Vec<McpAppAuditRecord>) {
-        let mut state = self.state.lock().expect("app reviews");
-        state.epoch += 1;
-        state.ended = state.deleted;
-        state.bytes = 0;
-        // Every opening is ended before the next begins. Should one ever not
-        // be, its reviews are not carried into this one: let go of, each
-        // wait reads its review as withdrawn by the system. Its tickets are
-        // not let go of here; they run out their lifetime. Nor are the
-        // contexts it held: an opening's apps give the new one nothing.
-        state.pending.clear();
-        let dropped = updates(std::mem::take(&mut state.contexts));
-        (state.epoch, dropped)
+    /// A conversation's apps, none of them released, no opening begun; each
+    /// context they drop is reported to `dropped`.
+    pub fn new(dropped: Arc<dyn DroppedContexts>) -> Self {
+        Self {
+            state: Mutex::default(),
+            updates: tokio::sync::Mutex::default(),
+            dropped,
+        }
     }
 
-    /// The conversation was deleted: end the current opening, and begin no
+    /// Report each context whose update is in `updates` as dropped unsent,
+    /// for `cause`, `by` whom: called once they are out of the state and
+    /// the lock is let go of, before anything is awaited.
+    fn report_dropped(
+        &self,
+        updates: Vec<McpAppAuditRecord>,
+        cause: ContextDrop,
+        by: &McpAppInitiator,
+    ) {
+        for update in updates {
+            self.dropped.context_dropped(drop_record(update, cause, by));
+        }
+    }
+
+    /// A new opening of the conversation's agent: its epoch, which every app
+    /// call that resolves it is admitted against. What was released is still
+    /// released.
+    pub fn begin(&self) -> u64 {
+        let (epoch, dropped) = {
+            let mut state = self.state.lock().expect("app reviews");
+            state.epoch += 1;
+            state.ended = state.deleted;
+            state.bytes = 0;
+            // Every opening is ended before the next begins. Should one ever
+            // not be, its reviews are not carried into this one: let go of,
+            // each wait reads its review as withdrawn by the system. Its
+            // tickets are not let go of here; they run out their lifetime.
+            // Nor are the contexts it held: an opening's apps give the new
+            // one nothing, and they are dropped, by the system.
+            state.pending.clear();
+            (state.epoch, updates(std::mem::take(&mut state.contexts)))
+        };
+        self.report_dropped(
+            dropped,
+            ContextDrop::ConversationEnded,
+            &McpAppInitiator::System,
+        );
+        epoch
+    }
+
+    /// `by` deleted the conversation: end the current opening, and begin no
     /// other; what was held of it — its released mounts — is let go, as
-    /// nothing will name it again. `release` runs under the lock. Answers
-    /// the records of the updates whose contexts it dropped.
-    #[must_use]
-    pub fn delete(&self, release: impl FnOnce()) -> Vec<McpAppAuditRecord> {
+    /// nothing will name it again, and the contexts still held are dropped,
+    /// `by` the deleter. `release` runs under the lock.
+    pub fn delete(&self, by: &McpAppInitiator, release: impl FnOnce()) {
         let (ended, dropped) = {
             let mut state = self.state.lock().expect("app reviews");
             state.deleted = true;
@@ -255,8 +307,8 @@ impl AppReviews {
                 updates(std::mem::take(&mut state.contexts)),
             )
         };
+        self.report_dropped(dropped, ContextDrop::ConversationEnded, by);
         withdraw_ended(ended, &McpAppInitiator::System);
-        dropped
     }
 
     /// One context update of the conversation at a time: held across its
@@ -344,6 +396,8 @@ impl AppReviews {
     /// admitted while the conversation is idle: they leave their mounts now,
     /// and free their room. Nothing is ever put back. A release or an end
     /// from now on finds them gone, and a mount's newer update is held anew.
+    /// Should the message then go nowhere, they are handed back to
+    /// [`Self::not_sent`].
     #[must_use]
     pub fn take_held(&self) -> Taken {
         let taken = std::mem::take(&mut self.state.lock().expect("app reviews").contexts);
@@ -352,6 +406,17 @@ impl AppReviews {
             .map(|held| (held.context, held.update))
             .unzip();
         Taken { contexts, updates }
+    }
+
+    /// What a message took ([`Self::take_held`]) went nowhere: it was
+    /// refused, or failed before the agent was asked. Each is dropped
+    /// unsent, by the system; the app may give it again.
+    pub fn not_sent(&self, taken: Taken) {
+        self.report_dropped(
+            taken.updates,
+            ContextDrop::NotSent,
+            &McpAppInitiator::System,
+        );
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -485,15 +550,9 @@ impl AppReviews {
 
     /// `by` released the mount `app`: withdraw its reviews, open nothing for
     /// it again, and run `release` — letting go of what was issued to it —
-    /// under the same lock, so nothing is issued after it. Idempotent.
-    /// Answers the record of the update whose context it dropped, if any.
-    #[must_use]
-    pub fn release_app(
-        &self,
-        app: &McpAppRef,
-        by: &McpAppInitiator,
-        release: impl FnOnce(),
-    ) -> Vec<McpAppAuditRecord> {
+    /// under the same lock, so nothing is issued after it; drop its context
+    /// still held, if any, `by` the releaser. Idempotent.
+    pub fn release_app(&self, app: &McpAppRef, by: &McpAppInitiator, release: impl FnOnce()) {
         let (ended, dropped): (Vec<Pending>, _) = {
             let mut state = self.state.lock().expect("app reviews");
             if !state.released.contains(app) {
@@ -520,31 +579,27 @@ impl AppReviews {
                 updates(dropped),
             )
         };
+        self.report_dropped(dropped, ContextDrop::Released, by);
         for open in ended {
             let _ = open.end.send(ReviewEnd::Withdrawn {
                 cause: McpAppWithdrawal::AppTornDown,
                 by: Some(by.clone()),
             });
         }
-        dropped
     }
 
     /// `by` ended the opening `epoch`: withdraw every review open, admit,
-    /// open and issue nothing for it again, and run `release` under the same
-    /// lock. Idempotent: a second end, or the end of an opening already
-    /// gone, withdraws nothing and does not run `release`. Answers the
-    /// records of the updates whose contexts it dropped.
-    #[must_use]
-    pub fn end(
-        &self,
-        epoch: u64,
-        by: &McpAppInitiator,
-        release: impl FnOnce(),
-    ) -> Vec<McpAppAuditRecord> {
+    /// open and issue nothing for it again, run `release` under the same
+    /// lock, and drop every context still held, `by` whoever ended it — all
+    /// before this returns, so a caller that goes on to await anything has
+    /// already reported every drop. Idempotent: a second end, or the end of
+    /// an opening already gone, withdraws and drops nothing and does not run
+    /// `release`.
+    pub fn end(&self, epoch: u64, by: &McpAppInitiator, release: impl FnOnce()) {
         let (ended, dropped) = {
             let mut state = self.state.lock().expect("app reviews");
             if state.ended || epoch != state.epoch {
-                return Vec::new();
+                return;
             }
             state.ended = true;
             release();
@@ -554,14 +609,14 @@ impl AppReviews {
                 updates(std::mem::take(&mut state.contexts)),
             )
         };
+        self.report_dropped(dropped, ContextDrop::ConversationEnded, by);
         withdraw_ended(ended, by);
-        dropped
     }
 }
 
 /// The contexts a message took ([`AppReviews::take_held`]), and the records
 /// of the updates that gave them: what a drop of them, should the message go
-/// nowhere, is recorded against.
+/// nowhere ([`AppReviews::not_sent`]), is recorded against.
 #[derive(Debug, Default)]
 pub struct Taken {
     pub contexts: Vec<AppModelContext>,

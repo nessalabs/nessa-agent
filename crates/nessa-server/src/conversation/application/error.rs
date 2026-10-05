@@ -159,9 +159,7 @@ pub struct DeletionFailures {
     /// Only the gateway's own slot bound sets this — no agent's answer can —
     /// and it is what a deletion is carried on for until a slot frees.
     pub no_agent_slot: bool,
-    /// The deletion record was not acknowledged; or, for a person's delete,
-    /// the record of a context its apps dropped was not, which the
-    /// tombstone knows nothing of: the deletion finished all the same.
+    /// The deletion record was not acknowledged.
     pub audit: Option<ConversationError>,
     /// Letting go of uploads did not complete.
     pub attachments: Option<ConversationError>,
