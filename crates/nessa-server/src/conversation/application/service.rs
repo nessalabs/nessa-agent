@@ -431,11 +431,12 @@ struct Slot {
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
     ready: Notify,
     started: AtomicBool,
-    /// Set when a stop of this owner begins, before anything of the stop is
-    /// awaited, and never cleared: a slot is not reused. From then on a
-    /// submission hands its agent no message
-    /// (`an_owner_marked_as_stopping_is_handed_no_message`). A person's
-    /// close needs none: it holds the submission lock until its slot is let go.
+    /// Set when a stop of this owner begins — on the desktop path once it
+    /// has the submission lock, before it awaits anything else — and never
+    /// cleared: a slot is not reused. From then on a submission hands its
+    /// agent no new message (`an_owner_marked_as_stopping_is_handed_no_message`).
+    /// A person's close needs none: it holds the submission lock until its
+    /// slot is let go.
     stopping: AtomicBool,
 }
 struct Inner {
@@ -1771,12 +1772,6 @@ impl ConversationService {
             let message = UserMessage::new(prompt, images, files)
                 .map_err(|_| ConversationError::InvalidInput)?;
             let (owner, live) = service.resolve_owner(&id, &caller).await?;
-            // Asked under the submission lock, which a desktop stop takes to
-            // mark the owner: an owner being stopped is handed no message
-            // (`an_owner_marked_as_stopping_is_handed_no_message`, #528).
-            if owner.stopping.load(Ordering::SeqCst) {
-                return Err(ConversationError::Agent(AgentError::Closed));
-            }
             let non_default_mode = live
                 .projection
                 .lock()
@@ -1827,6 +1822,15 @@ impl ConversationService {
                         .iter()
                         .any(|record| record.request.execution_id == execution)
                 });
+            // Asked under the submission lock, which a desktop stop takes to
+            // mark the owner: an owner being stopped is handed no new message
+            // (`an_owner_marked_as_stopping_is_handed_no_message`, #528),
+            // before anything about it is recorded. A message it already has
+            // is still answered with its own delivery
+            // (`a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`).
+            if owner.stopping.load(Ordering::SeqCst) && !known {
+                return Err(ConversationError::Agent(AgentError::Closed));
+            }
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.

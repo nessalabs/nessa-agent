@@ -361,7 +361,7 @@ async fn an_owner_marked_as_stopping_is_handed_no_message() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 2: the submission is past every check when the stop comes. The stop
+/// Row 3: the submission is past every check when the stop comes. The stop
 /// waits for the enqueue, then stops the agent with the message in it: the
 /// message settles, and the conversation is not left busy.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -394,7 +394,7 @@ async fn a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 2 again, with the lever #488's round 5 found: a mode change made on
+/// Row 3 again, with the lever #488's round 5 found: a mode change made on
 /// the agent directly holds its scheduler lock, so the submission waits in
 /// the enqueue itself — past the gateway's last check — when the stop lands.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -446,7 +446,7 @@ async fn a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 3: the agent has the message when the stop comes — behaviour the
+/// Row 4: the agent has the message when the stop comes — behaviour the
 /// ordering keeps, not one it adds. The agent finishes what it was given, the
 /// message settles on the stopped agent, and the conversation opens again
 /// afterwards.
@@ -484,7 +484,7 @@ async fn a_desktop_stop_after_the_enqueue_settles_the_message() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 4: a submission holds the lock past the stop budget. The stop
+/// Row 5: a submission holds the lock past the stop budget. The stop
 /// answers over budget with nothing stopped yet, and carries on: once the
 /// submission has enqueued, it marks and stops the owner, the message settles
 /// there, and the next send opens the conversation again.
@@ -538,7 +538,7 @@ async fn a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on()
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 1, when the owner changed while the stop waited: a person's close
+/// Row 2: the owner changed while the stop waited: a person's close
 /// held the lock and let the agent go, and a message waiting ahead of the
 /// stop opened the conversation again. The stop stops the agent live when its
 /// turn comes — the new one — not the one it first saw.
@@ -601,7 +601,7 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 4, the budget is one: time spent waiting for the lock is time the
+/// Row 5, the budget is one: time spent waiting for the lock is time the
 /// stop no longer has for the agent. Paused time, so the bound is exact.
 #[tokio::test(start_paused = true)]
 async fn the_wait_for_the_lock_and_the_stop_share_one_budget() {
@@ -637,7 +637,7 @@ async fn the_wait_for_the_lock_and_the_stop_share_one_budget() {
     sending.await.unwrap().unwrap();
 }
 
-/// Row 5: the agent's close runs past the budget. The stop answers over
+/// Row 6: the agent's close runs past the budget. The stop answers over
 /// budget and carries on until the close is confirmed and the slot let go.
 /// Meanwhile a read answers and a send is refused as closed — never admitted
 /// to the closed agent — and afterwards the conversation opens again. Paused
@@ -731,5 +731,49 @@ async fn a_desktop_stop_whose_close_fails_leaves_its_owner_refusing_work() {
     ));
     assert_eq!(fixture.audit.recorded.load(Ordering::SeqCst), 0);
     *fixture.provider.close_failure.lock().unwrap() = None;
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Row 1, for a message the stopping owner already has: a retry of it is
+/// answered with its own delivery, as any retry is, not refused as closed —
+/// a refusal would say it was never admitted, and invite a second send.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery() {
+    let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
+    fixture.live().await;
+    let (release_turn, execution_gate) = oneshot::channel::<()>();
+    *fixture.provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    fixture.send("same", "Same", false).await.unwrap().unwrap();
+    fixture.provider.execution_started.notified().await;
+    let (release_close, close_gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
+    let stopping = fixture.stop();
+    let slot = fixture
+        .service
+        .inner
+        .conversations
+        .lock()
+        .await
+        .get(&fixture.id)
+        .cloned()
+        .unwrap();
+    tokio::time::timeout(BOUND, async {
+        while !slot.stopping.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the stop marks the owner");
+    drop(slot);
+    let retried = fixture.send("same", "Same", false).await.unwrap();
+    assert!(retried.is_ok(), "{retried:?}");
+    let _ = release_turn.send(());
+    let _ = release_close.send(());
+    let _ = stopping.await.unwrap();
+    let settled = fixture.settled().await;
+    assert!(
+        matches!(settled.as_slice(), [(id, _)] if id == "same"),
+        "{settled:?}"
+    );
     fixture.service.shutdown().await.unwrap();
 }

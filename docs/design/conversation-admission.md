@@ -357,6 +357,11 @@ A stopped agent lets go of its history soon after the stop, not at the same
 moment, as after any close. So the first read after a stop can still answer
 `Busy` once; it does not last (#542).
 
+A send refused as closed is not final. The refusal lasts while the stop runs,
+until its slot is let go, and the next send after that opens the conversation
+again. A client treats `conversation_closed` on a send as "not sent now", not
+as the conversation being gone.
+
 The wait for the lock, the mark and the stop run on the stop's own task. The
 caller waits at most the owner's `stopMs`. Past that, it is told the owner went
 over budget (reported as a deadline), and the task carries on until the close
@@ -365,7 +370,7 @@ admission before it stops anything.
 
 | When | Stop | Message | Test |
 | --- | --- | --- | --- |
-| A send arrives while a stop is closing the agent | Marked before it; reads answer | Refused as closed, with nothing recorded; the next send after the release opens the conversation again | `a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`, `an_owner_marked_as_stopping_is_handed_no_message` |
+| A send arrives while a stop is closing the agent | Marked before it; reads answer | Refused as closed, with nothing recorded; the next send after the release opens the conversation again. A retry of a message the agent already has is answered with its own delivery | `a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`, `an_owner_marked_as_stopping_is_handed_no_message`, `a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery` |
 | The owner changed while the stop waited for the lock | Marks and stops the owner live when it takes the lock | Settles on that owner | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
 | Past its checks, before or in the enqueue | Waits for the lock, then marks and stops | Settles there: completed, cancelled by the close, or failed when the close cuts its turn short | `a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks`, `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` |
 | Enqueued | Marks and stops | Settles there | `a_desktop_stop_after_the_enqueue_settles_the_message` |
