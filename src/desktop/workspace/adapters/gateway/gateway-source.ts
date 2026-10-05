@@ -26,7 +26,12 @@
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
  *   it is, for `failureReason` to log. A connection that could not be made
- *   is `signed-out` or `unavailable` by why (`connectFailure`, #419).
+ *   is `signed-out` or `unavailable` by why (`connectFailure`, #419). A read
+ *   or the index that is refused is also traced (`noteReadAsked`,
+ *   `noteReadRefused`): the session, whether it was the index or a
+ *   conversation, the reason, and the gateway or socket hint already on the
+ *   error. The ask is a debug line; the refusal is a warning the dev console
+ *   already forwards.
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed),
  *   and on the first list that answers after a poll or an index read failed.
@@ -274,23 +279,43 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     emit({ kind: "resync" })
   }
 
+  /** A read trace, unless the source was disposed: that answer says nothing (S13). */
+  const noteTraced = (
+    trace: ReadTrace | undefined,
+    refused: unknown,
+    cause?: unknown,
+  ) => {
+    if (!trace || disposed) return
+    noteReadRefused(trace.subject, trace.sessionId, refused, cause ?? refused)
+  }
+
   /**
    * Settles `work` within the call budget, rejecting `unavailable` when it
    * runs out. The work may go on after its caller was answered; it is told
    * whether its call is still open (`live`), and sends nothing consequential
-   * once it is not (`dispatch`, C6).
+   * once it is not (`dispatch`, C6). A `trace` records the ask and, when the
+   * call is refused, the reason — on this same turn, not a later one.
    */
-  const within = <T>(work: (live: () => boolean) => Promise<T>): Promise<T> =>
+  const within = <T>(
+    work: (live: () => boolean) => Promise<T>,
+    trace?: ReadTrace,
+  ): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (disposed) return reject(new WorkspaceSourceError("unavailable"))
       let settled = false
       const cancel = clock.after(timing.callMs, () => {
+        const already = settled
         settled = true
+        // The budget ran out: the same refusal the caller is about to get.
+        if (!already) noteTraced(trace, new WorkspaceSourceError("unavailable"))
         reject(new WorkspaceSourceError("unavailable"))
       })
       const live = () => !settled && !disposed
       Promise.resolve()
-        .then(() => work(live))
+        .then(() => {
+          if (!disposed) noteReadAsked(trace)
+          return work(live)
+        })
         .then(
           (value) => {
             settled = true
@@ -299,9 +324,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             else resolve(value)
           },
           (error: unknown) => {
+            const already = settled
             settled = true
             cancel()
-            reject(refusalOf(error))
+            const refused = refusalOf(error)
+            if (!already) noteTraced(trace, refused, error)
+            reject(refused)
           },
         )
     })
@@ -503,7 +531,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const list = (who: Caller, caller: () => boolean = always): Promise<void> => {
     const { turn, settled } = inTurn(listing, async () => {
       if (!caller()) throw new WorkspaceSourceError("unavailable")
-      const result = await within(async () => (await client(who)).conversation.list())
+      const result = await within(async () => (await client(who)).conversation.list(), {
+        subject: "index",
+      })
       if (!caller()) throw new WorkspaceSourceError("unavailable")
       applyList(result)
     })
@@ -578,8 +608,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       reading.get(sessionId) ?? Promise.resolve(),
       async () => {
         for (let asked = 0; asked < 2; asked++) {
-          held(sessionId)
-          if (!caller()) throw new WorkspaceSourceError("unavailable")
+          try {
+            held(sessionId)
+          } catch (error) {
+            noteTraced({ subject: "conversation", sessionId }, error, error)
+            throw error
+          }
+          if (!caller()) {
+            const error = new WorkspaceSourceError("unavailable")
+            noteTraced({ subject: "conversation", sessionId }, error, error)
+            throw error
+          }
           const against = rows.get(sessionId)
           const removed = removals.get(sessionId) ?? 0
           let view: ConversationView
@@ -587,11 +626,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           // `refusalOf` keeps only that it is gone.
           let deleted = false
           try {
-            view = await within(async () =>
-              (await client(who)).conversation.read(sessionId).catch((error: unknown) => {
-                deleted = deletedConversation(error)
-                throw error
-              }),
+            view = await within(
+              async () =>
+                (await client(who)).conversation
+                  .read(sessionId)
+                  .catch((error: unknown) => {
+                    deleted = deletedConversation(error)
+                    throw error
+                  }),
+              { subject: "conversation", sessionId },
             )
           } catch (error) {
             if (!caller()) throw new WorkspaceSourceError("unavailable")
@@ -611,8 +654,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           if ((removals.get(sessionId) ?? 0) === removed)
             return applyRead(sessionId, view, against)
         }
-        held(sessionId)
-        throw new WorkspaceSourceError("unavailable")
+        try {
+          held(sessionId)
+        } catch (error) {
+          noteTraced({ subject: "conversation", sessionId }, error, error)
+          throw error
+        }
+        const error = new WorkspaceSourceError("unavailable")
+        noteTraced({ subject: "conversation", sessionId }, error, error)
+        throw error
       },
     )
     reading.set(sessionId, settled)
@@ -899,6 +949,79 @@ function connectFailure(error: unknown): WorkspaceFailureReason {
 /** Whether a failure is a refusal that asking again changes nothing of (`reasonFor`). */
 function refusedForGood(error: unknown): boolean {
   return error instanceof WorkspaceSourceError && error.reason === "not-supported"
+}
+
+/** Which read the desktop asked for. `index` is `conversation.list`. */
+type ReadTrace = { subject: "index" | "conversation"; sessionId?: string }
+
+/**
+ * The desktop asked to read. A debug line: a watched conversation is read
+ * every poll, and the dev console forwards warnings, not this. No trace
+ * means this call is not a read.
+ */
+function noteReadAsked(trace: ReadTrace | undefined): void {
+  if (!trace) return
+  try {
+    console.debug(
+      "[nessa] conversation read asked",
+      readTrace(trace.subject, trace.sessionId),
+    )
+  } catch {
+    // A diagnostic must not change the read.
+  }
+}
+
+/**
+ * The read was refused. A warning, so the dev console's existing forward
+ * keeps it: the subject, the session, the workspace reason, and a gateway or
+ * socket hint already on the error. Never the error's message.
+ */
+function noteReadRefused(
+  subject: "index" | "conversation",
+  sessionId: string | undefined,
+  refused: unknown,
+  cause: unknown,
+): void {
+  try {
+    console.warn("[nessa] conversation read refused", {
+      ...readTrace(subject, sessionId),
+      reason: refused instanceof WorkspaceSourceError ? refused.reason : "unavailable",
+      ...readHint(cause),
+    })
+  } catch {
+    // A diagnostic must not change the refusal.
+  }
+}
+
+function readTrace(subject: "index" | "conversation", sessionId?: string) {
+  return {
+    subject,
+    method: subject === "index" ? "conversation.list" : "conversation.read",
+    ...(sessionId === undefined ? {} : { sessionId }),
+  }
+}
+
+/** The gateway or socket fact already on the error, and nothing it says in prose. */
+function readHint(error: unknown): {
+  code?: string
+  closeReason?: string
+  socket?: string
+} {
+  if (error instanceof NessaRpcError) return { code: error.code }
+  if (
+    error instanceof NessaConversationMutationError ||
+    error instanceof NessaConversationControlError
+  )
+    return error.code === undefined ? {} : { code: error.code }
+  if (error instanceof NessaConnectionClosedError)
+    return {
+      code: String(error.code),
+      closeReason: error.closeReason,
+      socket: "closed",
+    }
+  if (error instanceof NessaSessionUnavailableError) return { socket: "unavailable" }
+  if (isRetryableConnectionError(error)) return { socket: "retryable" }
+  return {}
 }
 
 /**

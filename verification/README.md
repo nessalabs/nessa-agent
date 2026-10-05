@@ -23,6 +23,8 @@ verification/
     fixture.tsx             typed current gateway view cases
   desktop/
     CHECKLIST.md            what we always test and reproduce, with the contract each item holds
+    evidence/
+      conversation-unread/  screenshots the pull request shows for that check
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
@@ -39,6 +41,7 @@ verification/
       safe-area.mjs         nothing painted under the window controls, per frame
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
+      conversation-unread.mjs a listed conversation the window could not read: the transcript and the Agents peek say what (#433)
       gateway-window.mjs    the desktop app's window over a real gateway (#419): its handshake, a conversation, a live turn (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for the text-reply scenario and none)
       scripted-scenarios.mjs  a scenario through the gateway and the window (#510): permission, a mid-turn failure, cancel (signed out; `--mode prod` previews a production build)
       scripted-e2e.mjs      one signed-out command: the gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
