@@ -1,11 +1,7 @@
 //! Native storage for the panel's surface credential, which the panel, setup and
 //! the desktop window read. Renderer input never selects a file.
 use crate::composition::HostDependencies;
-use crate::gateway::{
-    application::Gateway,
-    infrastructure::{GatewayReader, GatewayUnread},
-};
-use crate::gateway_endpoint::application::EndpointError;
+use crate::gateway::{application::Gateway, infrastructure::GatewayReader};
 use crate::host_refusal::SurfaceCommandError;
 use std::{io::Read, path::PathBuf, sync::Arc};
 use tauri::State;
@@ -218,22 +214,6 @@ impl SurfaceCredentials for SurfaceCredential {
 /// held by the desktop-window tests below); a build without a gateway
 /// does not wait at all; and the refusal for the wrong window happens before
 /// any of those, so a stray webview cannot make the app register a service.
-fn unread(error: GatewayUnread) -> SurfaceCommandError {
-    match error {
-        GatewayUnread::NotReady => SurfaceCommandError::not_ready(),
-        GatewayUnread::Other(message) => SurfaceCommandError::message(message),
-    }
-}
-
-fn endpoint_error(error: EndpointError) -> SurfaceCommandError {
-    match error {
-        EndpointError::WrongStage { bundle, requested } => {
-            SurfaceCommandError::wrong_stage(bundle, requested)
-        }
-        other => SurfaceCommandError::message(other.to_string()),
-    }
-}
-
 fn credential_error(refusal: CredentialRefusal) -> SurfaceCommandError {
     match refusal {
         CredentialRefusal::NotProvisioned => SurfaceCommandError::not_provisioned(),
@@ -254,7 +234,10 @@ async fn load_for(
 ) -> Result<String, SurfaceCommandError> {
     let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
-        reader.ready(gateway).await.map_err(unread)?;
+        reader
+            .ready(gateway)
+            .await
+            .map_err(SurfaceCommandError::from)?;
     }
     let stage_for_endpoint = stage.to_owned();
     let requested_url = url.to_owned();
@@ -263,7 +246,7 @@ async fn load_for(
     })
     .await
     .map_err(|error| SurfaceCommandError::message(error.to_string()))?
-    .map_err(endpoint_error)?;
+    .map_err(SurfaceCommandError::from)?;
     credential.read(stage).map_err(credential_error)
 }
 

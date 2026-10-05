@@ -1,30 +1,11 @@
 use crate::{
     composition::HostDependencies,
-    gateway::{
-        application::Gateway,
-        infrastructure::{GatewayReader, GatewayUnread},
-    },
-    gateway_endpoint::application::{EndpointError, GatewayEndpointAccess},
+    gateway::{application::Gateway, infrastructure::GatewayReader},
+    gateway_endpoint::application::GatewayEndpointAccess,
     host_refusal::SurfaceCommandError,
 };
 use std::sync::Arc;
 use tauri::{State, WebviewWindow};
-
-fn unread(error: GatewayUnread) -> SurfaceCommandError {
-    match error {
-        GatewayUnread::NotReady => SurfaceCommandError::not_ready(),
-        GatewayUnread::Other(message) => SurfaceCommandError::message(message),
-    }
-}
-
-fn endpoint_error(error: EndpointError) -> SurfaceCommandError {
-    match error {
-        EndpointError::WrongStage { bundle, requested } => {
-            SurfaceCommandError::wrong_stage(bundle, requested)
-        }
-        other => SurfaceCommandError::message(other.to_string()),
-    }
-}
 
 async fn load_for(
     label: &str,
@@ -34,13 +15,16 @@ async fn load_for(
 ) -> Result<Option<String>, SurfaceCommandError> {
     let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
-        reader.ready(gateway).await.map_err(unread)?;
+        reader
+            .ready(gateway)
+            .await
+            .map_err(SurfaceCommandError::from)?;
     }
     let stage = stage.to_owned();
     tauri::async_runtime::spawn_blocking(move || endpoint.resolve(&stage))
         .await
         .map_err(|error| SurfaceCommandError::message(error.to_string()))?
-        .map_err(endpoint_error)
+        .map_err(SurfaceCommandError::from)
 }
 
 #[tauri::command]

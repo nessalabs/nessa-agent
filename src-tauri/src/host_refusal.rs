@@ -3,6 +3,8 @@
 //! reads too: this module formats them for the host's log and for the document
 //! it shows when the dev server never answers.
 
+use crate::gateway::infrastructure::GatewayUnread;
+use crate::gateway_endpoint::application::EndpointError;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -104,6 +106,24 @@ impl SurfaceCommandError {
     }
 }
 
+impl From<GatewayUnread> for SurfaceCommandError {
+    fn from(error: GatewayUnread) -> Self {
+        match error {
+            GatewayUnread::NotReady => Self::not_ready(),
+            GatewayUnread::Other(message) => Self::message(message),
+        }
+    }
+}
+
+impl From<EndpointError> for SurfaceCommandError {
+    fn from(error: EndpointError) -> Self {
+        match error {
+            EndpointError::WrongStage { bundle, requested } => Self::wrong_stage(bundle, requested),
+            other => Self::message(other.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +164,30 @@ mod tests {
         assert_eq!(code("host"), "STARTUP_HOST");
         let absent = sentence("not-provisioned");
         assert!(absent.contains("just start"), "{absent}");
+    }
+
+    #[test]
+    fn an_unread_gateway_and_an_endpoint_error_share_one_surface_error() {
+        assert_eq!(
+            SurfaceCommandError::from(GatewayUnread::NotReady),
+            SurfaceCommandError::not_ready()
+        );
+        assert_eq!(
+            SurfaceCommandError::from(GatewayUnread::Other("disk".into())),
+            SurfaceCommandError::message("disk")
+        );
+        assert_eq!(
+            SurfaceCommandError::from(EndpointError::WrongStage {
+                bundle: "dev".into(),
+                requested: "prod".into(),
+            }),
+            SurfaceCommandError::wrong_stage("dev", "prod")
+        );
+        assert_eq!(
+            SurfaceCommandError::from(EndpointError::DestinationMismatch),
+            SurfaceCommandError::message(
+                "The credential request does not match the verified gateway endpoint"
+            )
+        );
     }
 }
