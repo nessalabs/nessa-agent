@@ -38,13 +38,17 @@ pub fn unique_value(text: &str) -> Result<Value, serde_json::Error> {
 /// For deciding which request an already-rejected frame belongs to. A nested
 /// duplicate does not make `id` ambiguous, so such a frame can still be answered;
 /// a frame that names `id` or `method` twice cannot, and is rejected here rather
-/// than having the server pick one. Nested values are decoded as they arrive and
-/// counted against the same budget; nothing is selected from them.
+/// than having the server pick one
+/// (`the_envelope_decode_judges_only_the_envelopes_own_names`). Nested values
+/// are decoded as they arrive and counted against the same budget; nothing is
+/// selected from them.
 ///
-/// A string serde_json cannot turn into Unicode — a lone UTF-16 surrogate — is
-/// not text. The walk leaves JSON null in its place and continues, so an `id`
-/// that itself is Unicode can still be read. Callers read `type` and `id` only
-/// when they are strings; that null is not the sender's value.
+/// A lone UTF-16 surrogate is not text serde_json accepts
+/// (`an_undecodable_string_does_not_hide_a_readable_request_id` asserts
+/// `unique_value` rejects it). The walk leaves JSON null in its place and
+/// continues, so an `id` that itself is Unicode can still be read. Callers
+/// read `type` and `id` only when they are strings; that null is not the
+/// sender's value.
 pub fn unique_envelope(text: &str) -> Result<Value, serde_json::Error> {
     let mut parser = EnvelopeParser {
         text,
@@ -281,7 +285,8 @@ impl<'a> EnvelopeParser<'a> {
     /// Finish a string that is already not Unicode. A `"` ends it unless a
     /// backslash escapes that quote. The tail is not interpreted, so a short
     /// `\u`, an invalid escape, or a non-ASCII byte cannot fail the envelope
-    /// or split a character.
+    /// or split a character. Pinned by
+    /// `an_undecodable_string_does_not_hide_a_readable_request_id`.
     fn finish_undecodable_string(&mut self) -> Result<(), serde_json::Error> {
         let mut escaped = false;
         loop {
