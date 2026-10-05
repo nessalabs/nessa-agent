@@ -128,6 +128,37 @@ async fn scheduling_native_retry_recovers_injection_and_ambiguous_error_without_
     }
 }
 
+/// A message the model cannot take, steered while a turn is running, is the
+/// typed refusal. The running turn's writes stay as they were, and the
+/// provider is not asked to steer.
+#[tokio::test]
+async fn a_refused_steer_during_a_turn_saves_nothing_and_steers_nothing() {
+    let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
+    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let running = started(&mut calls, "active").await;
+    let writes = storage.writes();
+    let saved = storage.snapshot().invocations.len();
+    let mut steered = request("image");
+    steered.user_message = UserMessage::new(
+        Some(PromptText::new("look").unwrap()),
+        vec![
+            ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap(),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(matches!(
+        agent.steer(steered, actor()).await,
+        Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
+    ));
+    assert_eq!(storage.writes(), writes);
+    assert_eq!(storage.snapshot().invocations.len(), saved);
+    assert!(provider.steered.lock().unwrap().is_empty());
+    complete(running);
+    within(active.wait()).await.unwrap();
+    agent.close(close_action()).await.unwrap();
+}
+
 #[tokio::test]
 async fn scheduling_restore_returns_saved_result_without_dispatching_again() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;

@@ -112,6 +112,11 @@ impl SavedState {
 }
 #[derive(Clone, Default)]
 pub(super) struct MemoryStorage(Arc<Mutex<SavedState>>);
+impl MemoryStorage {
+    pub(super) fn writes(&self) -> usize {
+        self.0.lock().unwrap().writes
+    }
+}
 struct MemoryStore(Arc<Mutex<SavedState>>, SessionId);
 impl Drop for MemoryStore {
     fn drop(&mut self) {

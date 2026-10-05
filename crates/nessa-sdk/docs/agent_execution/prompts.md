@@ -131,9 +131,10 @@ advertised `promptCapabilities.image` at `initialize`, reported as
 
 Every one of those, with the app and text-input rules in the last two rows, is
 checked when a message is submitted, before it is accepted, by `Agent::invoke`,
-`enqueue`, and `enqueue_steering`. A refusal there saved nothing, queued
-nothing, and sent nothing. `steer` checks the app rule the same way, but every
-other row only after the steered message is saved (#477):
+`enqueue`, `enqueue_steering`, and `steer`. A refusal there saved nothing,
+queued nothing, and sent nothing. The connected agent's image answer is the
+exception at every entry, `steer` included: it is checked when the provider is
+called, and a refusal is saved:
 
 | Refused because | Error |
 | --- | --- |

@@ -106,10 +106,11 @@ impl ProviderSession {
     pub fn operation_capabilities(&self) -> OperationCapabilities {
         OperationCapabilities::resolve(self.backend.operation_capabilities())
     }
-    /// Decide whether `input` may be accepted at all. Every way in runs this
-    /// before anything is saved, queued, or sent: an immediate invocation, a
-    /// queued one, queued steering, and native steering, and again when the
-    /// backend is finally called.
+    /// Decide whether `input` may be accepted at all. The configured limits
+    /// run before anything is saved, queued, or sent, at an immediate
+    /// invocation, a queued one, queued steering, and native steering. The
+    /// connected agent's image answer and the backend's own refusal run
+    /// here, when the backend is called.
     ///
     /// In order: the text's byte limit; the modalities and token budget of the
     /// selected model; each image against that model's recorded limits; the
