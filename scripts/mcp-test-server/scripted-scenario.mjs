@@ -14,7 +14,8 @@
  * | running | text | one `agent_message_chunk` per chunk, one message id, still running |
  * | running | tool | the MCP call, then its completion, still running |
  * | running | permission | the call is announced, the request is sent, waiting |
- * | waiting | selected, and the turn is not cancelled | that answer's steps, then the steps after the request |
+ * | waiting | selected, and the branch does not end or fail the turn | that answer's steps, then the steps after the request |
+ * | waiting | selected, and the branch ends or fails the turn | stop there; the steps after the request do not run |
  * | waiting | selected, and the turn is already cancelled | stop `cancelled`; the answer's steps do not run |
  * | waiting | outcome cancelled, a `cancelled` branch, turn not cancelled | that branch |
  * | waiting | outcome cancelled, no branch, or the turn is cancelled | stop `cancelled` |

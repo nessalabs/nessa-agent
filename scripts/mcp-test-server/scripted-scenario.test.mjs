@@ -447,6 +447,55 @@ test("allow runs the branch's tool call; deny does not; a cancel beats a later a
   )
 })
 
+test("end inside a branch ends the turn, and a branch that finishes runs the next step", async () => {
+  const permission = (branch) => ({
+    turns: [
+      {
+        steps: [
+          {
+            do: "permission",
+            tool: "report_rows",
+            arguments: {},
+            title: "Report",
+            on: { "allow-once": branch },
+          },
+          { do: "text", chunks: ["After."] },
+        ],
+      },
+    ],
+  })
+  const ended = start("claude", permission([{ do: "end" }]))
+  await ended.request("initialize", {})
+  const endedId = (await ended.request("session/new", claudeOpen)).result.sessionId
+  const ending = ended.request("session/prompt", { sessionId: endedId, prompt: [] })
+  const endedAsk = await ended.nextRequest()
+  ended.respond(endedAsk.id, { outcome: { outcome: "selected", optionId: ALLOW_ONCE } })
+  const stopped = await ending
+  assert.equal(stopped.result.stopReason, "end_turn")
+  assert.equal(
+    stopped.notes.some((note) => note.params.update.content?.text === "After."),
+    false,
+  )
+
+  const continued = start("claude", permission([{ do: "text", chunks: ["Branch."] }]))
+  await continued.request("initialize", {})
+  const continuedId = (await continued.request("session/new", claudeOpen)).result
+    .sessionId
+  const continuing = continued.request("session/prompt", {
+    sessionId: continuedId,
+    prompt: [],
+  })
+  const continuedAsk = await continued.nextRequest()
+  continued.respond(continuedAsk.id, {
+    outcome: { outcome: "selected", optionId: ALLOW_ONCE },
+  })
+  const finished = await continuing
+  assert.equal(finished.result.stopReason, "end_turn")
+  const texts = finished.notes.map((note) => note.params.update.content?.text)
+  assert.equal(texts.includes("Branch."), true)
+  assert.equal(texts.includes("After."), true)
+})
+
 test("an unusable permission answer fails the announced call", async () => {
   const agent = start("claude", {
     turns: [
