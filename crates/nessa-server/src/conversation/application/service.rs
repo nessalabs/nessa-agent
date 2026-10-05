@@ -116,10 +116,12 @@ pub struct ConversationDeletionBudgets {
     /// stop: a delete's stop still unconfirmed after it is carried on
     /// in-process until it is (`waiting_for`).
     pub stop: Duration,
-    /// How long a delete asks again for the lease on a conversation's saved
-    /// history before it reports the history still held. A stopped agent's
-    /// last handles let go of their lease as the tasks holding them finish,
-    /// which is soon after the stop but not at it.
+    /// How long a delete, or an opening, asks again for the lease on a
+    /// conversation's saved history before it reports the history still held.
+    /// A stopped agent's last handles let go of their lease as the tasks
+    /// holding them finish, which is soon after the stop but not at it
+    /// (`a_read_right_after_a_persons_close_is_not_busy`,
+    /// `an_opening_stops_waiting_for_a_history_lease_at_its_bound`).
     pub history_lease: Duration,
 }
 
@@ -1302,13 +1304,23 @@ impl ConversationService {
                                 }
                             };
                             let session_id = conversation_session(&id);
-                            let manager = SessionManager::open(
-                                Some(session_id),
-                                service.inner.storage.clone(),
-                                service.inner.message_commit_clock.clone(),
-                            )
-                            .await
-                            .map_err(|error| {
+                            let storage = service.inner.storage.clone();
+                            let clock = service.inner.message_commit_clock.clone();
+                            // The stopped agent's last handles may still hold
+                            // this history. Wait them out, within the lease
+                            // bound, instead of answering Busy once.
+                            let manager = service
+                                .while_history_busy(|| {
+                                    let storage = storage.clone();
+                                    let clock = clock.clone();
+                                    let session_id = session_id.clone();
+                                    async move {
+                                        SessionManager::open(Some(session_id), storage, clock)
+                                            .await
+                                    }
+                                })
+                                .await
+                                .map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),
@@ -1470,7 +1482,10 @@ impl ConversationService {
         .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         if let Some(slot) = slot {
-            self.stop_slot(id, slot, &actor, &McpAppInitiator::System)
+            // Past the budget the stop carries on and lets the slot go once
+            // the close is confirmed. Leaving it would keep the reopened
+            // agent, and the next submission would be admitted there.
+            self.stop_and_release(id, slot, &actor, &McpAppInitiator::System)
                 .await
                 .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         }
@@ -2780,7 +2795,7 @@ impl ConversationService {
                 match slot {
                     Some(slot) => {
                         let stopped = service
-                            .stop_slot(&id, slot, &actor, &initiator_of(&actor))
+                            .stop_and_release(&id, slot, &actor, &initiator_of(&actor))
                             .await
                             .map_err(|_| ConversationError::ApprovalModeUncertain);
                         let may_release = stopped.is_ok();
@@ -3427,14 +3442,36 @@ impl ConversationService {
         &self,
         id: &ConversationId,
     ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
+        let storage = self.inner.storage.clone();
         let session = conversation_session(id);
+        self.while_history_busy(|| {
+            let storage = storage.clone();
+            let session = session.clone();
+            async move { storage.open_existing(session).await }
+        })
+        .await
+    }
+
+    /// Call `attempt` again while it answers [`StorageError::Busy`], for at
+    /// most [`ConversationDeletionBudgets::history_lease`]. One wait, for a
+    /// delete taking the lease and for an opening taking it: a stopped
+    /// agent's last handles let the history go soon after the stop, not at
+    /// it. Still busy at the bound is [`StorageError::Busy`]
+    /// (`a_read_right_after_a_persons_close_is_not_busy`,
+    /// `an_opening_stops_waiting_for_a_history_lease_at_its_bound`,
+    /// `a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).
+    async fn while_history_busy<T, F, Fut>(&self, mut attempt: F) -> Result<T, StorageError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, StorageError>>,
+    {
         let deadline = Instant::now() + self.inner.deletion_budgets.history_lease;
         loop {
-            match self.inner.storage.open_existing(session.clone()).await {
+            match attempt().await {
                 Err(StorageError::Busy) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                opened => return opened,
+                result => return result,
             }
         }
     }
@@ -3908,10 +3945,42 @@ impl ConversationService {
                 )
                 .await
         });
+        self.join_stop(stop).await
+    }
+
+    /// Stop one owner, as [`Self::stop_slot`] does, except a stop past the
+    /// budget is not abandoned. This answers [`StopFailure::OverBudget`], and
+    /// the stop carries on until the close is confirmed and the slot is
+    /// released, as the desktop stop does ([`Self::stop_after_submissions`]).
+    /// The slot is gone before the next submission, which opens the
+    /// conversation again
+    /// (`a_pending_mode_close_past_its_budget_lets_the_agent_go`,
+    /// `a_mode_retirement_past_its_budget_lets_the_agent_go`).
+    async fn stop_and_release(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+        ended_by: &McpAppInitiator,
+    ) -> Result<(), StopFailure> {
+        let service = self.clone();
+        let id = id.clone();
+        let actor = actor.clone();
+        let ended_by = ended_by.clone();
+        let stop =
+            tokio::spawn(async move { service.stopping(&id, slot, None, &actor, &ended_by).await });
+        self.join_stop(stop).await
+    }
+
+    /// Join `stop` for at most the owner's stop budget. Past that, this
+    /// answers [`StopFailure::OverBudget`] and detaches the task, which
+    /// carries on until the close is confirmed
+    /// (`a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go`,
+    /// `a_pending_mode_close_past_its_budget_lets_the_agent_go`).
+    /// A panic, or the runtime ending the task, is cleanup unconfirmed.
+    async fn join_stop(&self, stop: JoinHandle<Result<(), AgentError>>) -> Result<(), StopFailure> {
         match tokio::time::timeout(self.inner.deletion_budgets.stop, stop).await {
             Ok(Ok(stopped)) => stopped.map_err(StopFailure::Failed),
-            // A panic, or the runtime ending it: what it had done is unknown,
-            // so its cleanup is too.
             Ok(Err(_ended)) => Err(StopFailure::Failed(AgentError::CleanupUncertain)),
             Err(_) => Err(StopFailure::OverBudget),
         }
@@ -4462,6 +4531,10 @@ mod retirement_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/desktop_stop.rs"]
 mod desktop_stop_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/stop_release.rs"]
+mod stop_release_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/opening_diagnostics.rs"]

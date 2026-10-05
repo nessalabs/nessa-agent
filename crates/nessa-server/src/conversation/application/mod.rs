@@ -28,6 +28,12 @@
 //! repository intent -> attached Agent verification (or deferred cold choice)
 //! -> ConversationModeAudit -> atomic repository result. Uncertain application
 //! retires the old session and restores the last committed choice before a turn.
+//! A retirement, or a close while a mode change is pending, whose stop runs past
+//! its budget carries on until that slot is released
+//! (`a_mode_retirement_past_its_budget_lets_the_agent_go`,
+//! `a_pending_mode_close_past_its_budget_lets_the_agent_go`). Opening waits out
+//! the stopped agent's history lease for at most `history_lease`
+//! (`a_read_right_after_a_persons_close_is_not_busy`).
 //! Archive and delete: archiving is a flag in the summary, written as a
 //! person's decision and so failing visibly. Deleting runs in one order —
 //! authorize, fence (a tombstone in the repository, under the creation lock),

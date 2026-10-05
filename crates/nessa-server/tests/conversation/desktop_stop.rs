@@ -203,22 +203,14 @@ impl Fixture {
     }
 
     /// Each message's status, by its execution id, once none of them is
-    /// queued or running: a message left admitted and never run fails this,
-    /// and so does a conversation that keeps answering `Busy`.
-    ///
-    /// One `Busy` right after a stop is not the fault this is about: a
-    /// stopped agent's last handles let go of its history soon after the
-    /// stop, not at it, as after any close (`ConversationDeletionBudgets`'s
-    /// `history_lease`). So it is asked again, within the bound.
+    /// queued or running. A message left admitted and never run fails this.
+    /// So does `Busy`: opening waits out the stopped agent's history lease
+    /// (`a_read_right_after_a_desktop_stop_is_not_busy`).
     async fn settled(&self) -> Vec<(String, ConversationMessageStatus)> {
         tokio::time::timeout(BOUND, async {
             loop {
                 let view = match self.service.read(self.id.clone(), caller("read")).await {
                     Ok(view) => view,
-                    Err(ConversationError::Storage(StorageError::Busy)) => {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                        continue;
-                    }
                     Err(error) => panic!("the conversation stays readable: {error:?}"),
                 };
                 let settled = view.messages.iter().all(|message| {
@@ -241,22 +233,15 @@ impl Fixture {
         .expect("no message is left admitted and never run, and the conversation opens again")
     }
 
-    /// Send `text` until it is admitted, asking again after a `Busy` within
-    /// the bound, as [`Self::settled`] does.
+    /// Send `text` and require it to be admitted. `Busy` is a failure:
+    /// opening waits out the stopped agent's history lease, as
+    /// [`Self::settled`] does.
     async fn admitted(&self, action: &str, text: &str) {
-        tokio::time::timeout(BOUND, async {
-            loop {
-                match self.send(action, text, false).await.unwrap() {
-                    Ok(_) => return,
-                    Err(ConversationError::Storage(StorageError::Busy)) => {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                    Err(error) => panic!("{action} is admitted: {error:?}"),
-                }
-            }
-        })
-        .await
-        .expect("a message is admitted, not refused as busy for good");
+        let submitted = tokio::time::timeout(BOUND, self.send(action, text, false))
+            .await
+            .expect("a message is admitted")
+            .unwrap();
+        assert!(submitted.is_ok(), "{action} is admitted: {submitted:?}");
     }
 
     /// The conversation still takes a message and runs it.

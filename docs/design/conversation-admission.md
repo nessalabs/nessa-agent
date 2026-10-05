@@ -358,8 +358,30 @@ that never ran. The receipt watcher kept that agent, and its history lease, so
 every later read answered `Busy` (#528).
 
 A stopped agent lets go of its history soon after the stop, not at the same
-moment, as after any close. So the first read after a stop can still answer
-`Busy` once; it does not last (#542).
+moment, as after any close. Opening waits out `Storage(Busy)` for at most
+`history_lease` — the same bound a delete uses — so a read or send right after
+a close or a desktop stop is not `Busy` because of that agent. A lease still
+held after the bound is `Busy` (#542).
+
+| When | Opening | Test |
+| --- | --- | --- |
+| A person's close, then a read at once, while the stopped agent still holds the history | Waits, then answers | `a_read_right_after_a_persons_close_is_not_busy` |
+| The same, then a send | Waits, then the send is admitted | `a_send_right_after_a_persons_close_is_not_busy` |
+| A desktop stop, then a read at once | Waits, then answers | `a_read_right_after_a_desktop_stop_is_not_busy` |
+| The lease is still held when `history_lease` ends | `Busy` | `an_opening_stops_waiting_for_a_history_lease_at_its_bound` |
+
+A close that retires a pending mode change, and mode recovery's retirement,
+are stops while admission is open. Past `stopMs` each answers over budget, and
+its own task carries on until the close is confirmed and the slot is released.
+A send while that slot remains is not admitted onto the closed agent. The next
+send after the release opens the conversation again (#541). A delete, and
+retirement after admission has drained, keep `stop_slot`: over budget leaves
+the slot owned, and the delete is carried on in-process.
+
+| When | Stop | Message | Test |
+| --- | --- | --- | --- |
+| Close with a pending mode change, and the close runs past the budget | Over budget (`ApprovalModeUncertain`); carries on until the slot is released, with no second close | Not admitted while the close is still unconfirmed; the next send after the release runs | `a_pending_mode_close_past_its_budget_lets_the_agent_go` |
+| Mode recovery retires the session, and the close runs past the budget | The same | The same | `a_mode_retirement_past_its_budget_lets_the_agent_go` |
 
 A send refused as closed is not final. The refusal lasts while the stop runs,
 until its slot is let go, and the next send after that opens the conversation
