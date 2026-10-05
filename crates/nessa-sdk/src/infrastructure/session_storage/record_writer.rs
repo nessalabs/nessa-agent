@@ -357,16 +357,21 @@ impl RecordWriter {
                 Self::encode_unit(units, &headers, index)?
                     .ok_or_else(|| corrupt("save unit disappeared from immutable plan"))?
             };
-            let frames = stream_fact::frame_fact(&fact, next_offset + 1)
-                .map_err(|error| self.live_error(FactCommitError::Frame(error)))?;
-            let adding = payload_bytes(&frames);
-            if !retain_next_fact(retained, adding) {
-                self.commit_framed(runtime, batch, &framed, std::mem::take(&mut facts), &ranges)
-                    .await?;
-                framed.clear();
+            if !retain_next_fact(retained, fact.body.len()) {
+                self.commit_framed(
+                    runtime,
+                    batch,
+                    std::mem::take(&mut framed),
+                    std::mem::take(&mut facts),
+                    &ranges,
+                )
+                .await?;
                 ranges.clear();
                 retained = 0;
             }
+            let frames = stream_fact::frame_fact(&fact, next_offset + 1)
+                .map_err(|error| self.live_error(FactCommitError::Frame(error)))?;
+            let adding = payload_bytes(&frames);
             let start = framed.len();
             next_offset +=
                 u64::try_from(frames.len()).map_err(|_| corrupt("save frame count exhausted"))?;
@@ -375,7 +380,7 @@ impl RecordWriter {
             facts.push(fact);
             retained = retained.saturating_add(adding);
         }
-        self.commit_framed(runtime, batch, &framed, facts, &ranges)
+        self.commit_framed(runtime, batch, framed, facts, &ranges)
             .await?;
         Ok(self.receipt.clone().expect("completion installed receipt"))
     }
@@ -384,7 +389,7 @@ impl RecordWriter {
         &mut self,
         runtime: &R,
         batch: Option<&Arc<SaveCommits>>,
-        framed: &[NewEvent],
+        framed: Vec<NewEvent>,
         facts: Vec<FramedFact>,
         ranges: &[std::ops::Range<usize>],
     ) -> Result<(), StorageError> {
@@ -507,11 +512,11 @@ fn payload_bytes(frames: &[NewEvent]) -> usize {
     })
 }
 
-/// Frame the next fact into the current attempt while the payloads already
-/// retained still fit in one store batch with it. The first fact is kept even
-/// when it is larger than that batch: holding one fact's frames is the
-/// existing per-fact cost, and a second large fact waits until those frames
-/// are committed and dropped.
+/// Keep the next fact in the current attempt when its body still fits with the
+/// payloads already retained. The caller checks this before framing. The first
+/// fact is kept even when it is larger than one store batch: holding one
+/// fact's frames is the existing per-fact cost, and a second large fact waits
+/// until those frames are committed and dropped.
 fn retain_next_fact(retained_payload: usize, next_payload: usize) -> bool {
     retained_payload == 0
         || retained_payload.saturating_add(next_payload) <= super::MAX_STORED_RECORD_BYTES

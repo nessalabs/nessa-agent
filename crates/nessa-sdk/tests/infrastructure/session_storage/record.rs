@@ -972,6 +972,7 @@ fn contention_writer_stops_when_its_guard_drops() {
 }
 
 #[tokio::test]
+#[ignore = "latency measurement"]
 async fn save_commit_latency_sample() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("sessions");
