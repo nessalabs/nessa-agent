@@ -1240,11 +1240,12 @@ fn action_for_method(method: &str) -> Option<&'static str> {
 
 // Which request to blame for a frame that did not decode. Answer
 // `invalid_request` when the envelope parser reads one JSON object, no decoded
-// name appears twice, `type` is `req`, and `id` is one Unicode string of 1 to
-// 256 bytes. A name that is not Unicode is skipped, so two of them are not a
-// duplicate, and a nested string that is not Unicode still leaves that id.
-// Deeper than 127 containers, the envelope is not read. Anything else gets no
-// reply, and the caller's own timeout settles it.
+// envelope name appears twice, `type` is `req`, and `id` is one Unicode string
+// of 1 to 256 bytes. An envelope name that is not Unicode is skipped, so two
+// of them are not a duplicate. A repeated name inside a nested value, or a
+// nested string that is not Unicode, still leaves that id. Deeper than 127
+// containers, the envelope is not read. Anything else gets no reply, and the
+// caller's own timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
     let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
@@ -2860,6 +2861,12 @@ mod tests {
         };
         assert_eq!(response.id, "request-9");
         assert_eq!(response.error.unwrap().code, "invalid_request");
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{"p":1,"p":2}}"#,
+        ) else {
+            panic!("a repeated nested name hid the id");
+        };
+        assert_eq!(response.id, "request-9");
         let mut nested = "0".to_string();
         for _ in 0..127 {
             nested = format!("[{nested}]");

@@ -257,9 +257,11 @@ app widgets alike.
   4 slots per socket are shared by every app in the window (#398); an app is
   told `{}` for arguments the view does not carry (#394); a frame the gateway
   cannot decode is answered `invalid_request` when the envelope parser reads
-  one JSON object, no decoded name appears twice, `type` is `req`, and `id`
-  is one Unicode string of 1 to 256 bytes. A name that is not Unicode is not
-  a second name, and a frame deeper than 127 containers is not read (#403),
+  one JSON object, no decoded envelope name appears twice, `type` is `req`,
+  and `id` is one Unicode string of 1 to 256 bytes. An envelope name that is
+  not Unicode is not a second name, a repeated name inside a nested value
+  still leaves that id, and a frame deeper than 127 containers is not read
+  (#403),
   so the client refuses a lone surrogate in what it sends; and it closes the
   socket on a frame past its
   message limit, so the client refuses one before sending
