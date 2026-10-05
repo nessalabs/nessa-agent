@@ -302,6 +302,8 @@ describe("gateway conversation projection", () => {
     expect(store.getState().conversation.conversations).toHaveLength(1)
     sendGate.resolve()
     await sending
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(stop).toHaveBeenNthCalledWith(2, stop.mock.calls[0]![0], turn.executionId)
   })
 
   it("Stop names the running turn when a later turn is only queued", async () => {

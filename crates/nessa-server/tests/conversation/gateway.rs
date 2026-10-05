@@ -1092,6 +1092,15 @@ mod gateway {
             .await
             .ok
         );
+        let looked_up = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"running","operation":"submit","executionId":"running","text":"running"}),
+        )
+        .await;
+        assert!(looked_up.ok, "{looked_up:?}");
+        assert_eq!(looked_up.payload.as_ref().unwrap()["found"], true);
         timeout(
             Duration::from_secs(1),
             provider.execution_started.notified(),

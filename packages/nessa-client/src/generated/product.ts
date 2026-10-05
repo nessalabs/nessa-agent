@@ -728,9 +728,9 @@ export interface ConversationReceiptParams {
   executionId?: string
   /** Original submit or steer text. Required for those operations, omitted for create and stop. */
   text?: string
-  /** Original submit or steer images, in attachment order. */
+  /** Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
   attachments?: ImageAttachment[]
-  /** Original submit or steer file paths, in attachment order. */
+  /** Original submit or steer file paths, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
   files?: LinkedFile[]
   /** Creation hint. Omitted when the original creation named no agent. */
   agent?: string

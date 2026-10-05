@@ -45,6 +45,18 @@ fn message(text: &str) -> SubmittedMessage {
         ..SubmittedMessage::default()
     }
 }
+fn image_message(media_type: &str, size: u64) -> SubmittedMessage {
+    SubmittedMessage {
+        text: "hello".into(),
+        images: vec![crate::conversation::application::SubmittedImage {
+            digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+            media_type: media_type.into(),
+            size,
+        }],
+        ..SubmittedMessage::default()
+    }
+}
 fn fixture(
     root: &Path,
     provider: Arc<ProviderFactory>,
@@ -434,6 +446,49 @@ async fn a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request() 
     ));
     assert_eq!(provider.executions.lock().unwrap().len(), queued);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn a_changed_image_type_or_size_conflicts_with_the_saved_submit() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let _ = service
+        .submit_command(
+            storage.clone(),
+            target.clone(),
+            caller("picture"),
+            "turn".into(),
+            image_message("image/png", 4),
+            SubmissionMode::Queue,
+        )
+        .await;
+    for changed in [
+        image_message("image/jpeg", 4),
+        image_message("image/png", 5),
+    ] {
+        match service
+            .submit_command(
+                storage.clone(),
+                target.clone(),
+                caller("picture"),
+                "turn".into(),
+                changed,
+                SubmissionMode::Queue,
+            )
+            .await
+        {
+            Err(MutationFailure::Conflict) => {}
+            Err(MutationFailure::Interrupted(_)) => panic!("changed image bytes were interrupted"),
+            Err(MutationFailure::Target(error)) => panic!("changed image bytes target {error}"),
+            Err(MutationFailure::Storage(_)) => panic!("changed image bytes storage"),
+            Err(MutationFailure::TaskFault(_)) => panic!("changed image bytes fault"),
+            Ok(_) => panic!("changed image bytes enqueued"),
+        }
+    }
     retire(service, storage, metadata).await;
 }
 

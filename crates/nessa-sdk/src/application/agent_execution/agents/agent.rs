@@ -150,7 +150,10 @@ impl Agent {
             .map_err(|error| {
                 ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
             })?;
-        attached.session.cancel_turn(id).await
+        self.inner
+            .lifecycle
+            .run_control_observed(&permit, attached.session.cancel_turn(id))
+            .await
     }
     /// Query a committed review against the exact live invocation's domain owner.
     /// This does not alter history or reserve an answer. Absent backend authority

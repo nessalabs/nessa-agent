@@ -8,8 +8,10 @@ receipts. Its `CreationTarget` consumer checks current access/deletion before an
 saved readiness or interrupted response, and again after initialization.
 
 The first actual host consumer is `ConversationService::create_command`, with a
-shared `RecordStorage` supplied explicitly to that entry point. Product socket
-activation, turn acceptance/Stop receipts and a client outbox are later increments.
+shared `RecordStorage` supplied explicitly to that entry point. The product
+socket uses that store for create, submit, steer, Stop, and read-only lookup.
+Stop names the captured turn and does not close the attachment. The phone
+client outbox remains a separate increment.
 The command waits for the original provider attachment and its publication;
 ordinary conversation preparation alone is not a successful initialization.
 `CreationInitializationFailure` preserves a host refusal separately from the

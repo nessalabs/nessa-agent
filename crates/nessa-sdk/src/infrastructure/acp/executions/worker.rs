@@ -343,6 +343,10 @@ struct Worker<P> {
     /// for reporting the state this runtime had not asked for yet.
     configured: bool,
     closing: bool,
+    /// Set only after `session/cancel` for the active turn is written.
+    /// A later `Cancelled` prompt result is that turn ending. Any other
+    /// cancelled result is still session teardown.
+    turn_cancel_requested: Option<ExecutionId>,
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
     settlement_facts: SettlementFacts,
@@ -400,6 +404,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         shutdown_deadline: None,
         configured: false,
         closing: false,
+        turn_cancel_requested: None,
         deferred_outcome: None,
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
@@ -1393,6 +1398,9 @@ impl<P: AcpProfile> Worker<P> {
         let result = self.send_encoded(frame, None).await.map_err(|error| {
             ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
         });
+        if result.is_ok() {
+            self.turn_cancel_requested = Some(turn);
+        }
         let _ = reply.send(result);
         Ok(())
     }
@@ -1988,7 +1996,15 @@ impl<P: AcpProfile> Worker<P> {
                 .ok_or_else(|| json_rpc::protocol("missing prompt result"))?,
         )?;
         self.provider_result = Some(Ok(result));
-        if result == ExecutionOutcome::Cancelled {
+        let active_turn = self
+            .active
+            .as_ref()
+            .expect("validated active prompt")
+            .execution_id
+            .clone();
+        let turn_cancel_requested =
+            self.turn_cancel_requested.take().as_ref() == Some(&active_turn);
+        if result == ExecutionOutcome::Cancelled && !turn_cancel_requested {
             // Keep pending reviews until correlated session teardown. Never publish
             // tool/process cancellation from protocol evidence alone.
             self.deferred_outcome = Some(result);

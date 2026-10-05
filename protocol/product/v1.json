@@ -1777,13 +1777,13 @@
           "maxItems": 10,
           "x-maxTotalBytes": 10485760,
           "items": { "$ref": "#/$defs/ImageAttachment" },
-          "description": "Original submit or steer images, in attachment order."
+          "description": "Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none."
         },
         "files": {
           "type": "array",
           "maxItems": 10,
           "items": { "$ref": "#/$defs/LinkedFile" },
-          "description": "Original submit or steer file paths, in attachment order."
+          "description": "Original submit or steer file paths, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none."
         },
         "agent": {
           "type": "string",

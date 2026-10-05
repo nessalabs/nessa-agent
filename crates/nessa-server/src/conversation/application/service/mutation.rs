@@ -480,7 +480,7 @@ fn submit_binding(
         message
             .images
             .iter()
-            .map(|image| image.digest.as_str())
+            .map(|image| (image.digest.as_str(), image.media_type.as_str(), image.size))
             .collect::<Vec<_>>(),
         message
             .files

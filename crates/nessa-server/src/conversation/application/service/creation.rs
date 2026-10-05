@@ -22,8 +22,8 @@ impl ConversationService {
     /// point is supplied explicitly with the shared record storage. It
     /// waits for the original provider attachment and required publication before
     /// saving readiness; preparation of the live conversation is not completion.
-    /// It preserves the original admitted owner through that wait. Product socket
-    /// activation is a separate integration step.
+    /// It preserves the original admitted owner through that wait. The product
+    /// socket calls this entry point for create.
     pub async fn create_command(
         &self,
         storage: Arc<dyn CreationStorage>,
@@ -159,8 +159,12 @@ impl CreationTarget for Target {
         Box::pin(async move {
             if let Some(record) = self.service.inner.metadata.load(&self.id).await? {
                 record.check_access(&self.caller.organization_id, &self.caller.principal_id)?;
-                if record.creation_action() != self.caller.action_id
-                    || record.creator_surface() != self.caller.surface_id
+                // A missing receipt is not a conflict. The creator comparison
+                // applies to a saved stage for this request. Lookup of an
+                // unknown request on a live conversation is absent evidence.
+                if stage.is_some()
+                    && (record.creation_action() != self.caller.action_id
+                        || record.creator_surface() != self.caller.surface_id)
                 {
                     return Err(ConversationError::RequestConflict);
                 }

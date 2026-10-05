@@ -745,12 +745,15 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
             let commands = {
-                let generation = self.live_generation().await.map_err(|error| {
-                    ProviderOperationFailure::new(
-                        error.cause,
+                // A stopped generation has no active turn. Starting another
+                // provider here would cancel nothing and admit a new process.
+                let generation = self.generation.lock().await;
+                if generation.stopped() {
+                    return Err(ProviderOperationFailure::new(
+                        AgentError::Closed,
                         ProviderSessionState::CleanupRequired,
-                    )
-                })?;
+                    ));
+                }
                 generation.commands.clone()
             };
             enqueue(&commands, Command::CancelTurn(turn, sender)).map_err(|error| {

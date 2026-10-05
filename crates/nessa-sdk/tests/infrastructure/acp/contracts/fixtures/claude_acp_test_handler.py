@@ -520,6 +520,15 @@ for line in sys.stdin:
                 "sessionId": session, "toolCall": call, "options": options}})
             if mode == "declined-write-failure":
                 signal.pause()
+        elif mode == "turn-cancel":
+            # The first prompt waits until session/cancel. That result is this
+            # turn ending, and the process stays up for the next prompt.
+            if (root / "cancel-observed").exists():
+                text(user_text)
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+            else:
+                text("running")
         elif mode in ("stall", "image-stall", "complete-on-stop", "ignore-stop", "late-tool-close", "consumer-loss-during-close"):
             if mode == "late-tool-close":
                 update({"sessionUpdate": "tool_call", **tool()})

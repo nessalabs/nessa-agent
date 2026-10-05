@@ -129,6 +129,13 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
 const readFailure = (error: unknown): ReadFailure =>
   error instanceof ConversationReadFailedError ? error.reason : "unavailable"
 
+/**
+ * Stop asked for a turn whose submit has not returned. The admission keeps
+ * going; once it has, the same execution is stopped even if the tab was
+ * closed locally in between.
+ */
+const stopAfterAdmission = new Set<string>()
+
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
   "conversation/sendDraft",
@@ -188,6 +195,8 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       if (receipt.executionId !== executionId)
         throw new Error("Gateway returned a different submission identity.")
       dispatch(submissionAccepted({ id, executionId }))
+      if (stopAfterAdmission.delete(executionId))
+        await extra.conversation.stop(serverId, executionId)
       await dispatch(refreshConversation(id))
     } catch (error) {
       dispatch(
@@ -528,6 +537,13 @@ export const stopGenerating = createAsyncThunk<
   const current = getState().conversation.conversations.find((item) => item.id === id)
   const executionId = current ? capturedTurn(current.turns) : undefined
   if (!executionId) return
+  const admitting = current?.turns.some(
+    (turn) =>
+      turn.from === "user" &&
+      turn.executionId === executionId &&
+      turn.receipt === "sending",
+  )
+  if (admitting) stopAfterAdmission.add(executionId)
   await dispatch(
     controlConversation({
       id,

@@ -792,7 +792,8 @@ on the shared `RecordStorage` runtime. Its non-content binding and original
 attempt precede initialization; attempted recovery stays interrupted without
 provider reopening. Current target access/deletion remains in the conversation
 service. The existing host admission guard spans the full command and terminal
-commit. Socket activation and turn/Stop receipts are separate increments; see
+commit. The product socket creates, sends, steers, stops, and reads those
+receipts through the same command store; see
 [command creation](design/command-creation.md).
 
 Behavior belongs in the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md),
@@ -811,8 +812,9 @@ The floating panel polls current replacement views, displays streaming output an
 permission choices, distinguishes provider startup from model thinking, and queues
 follow-ups while attachment is pending. Create, read, and queue admission use the
 ordinary client command deadline; provider startup settles later through the same
-replacement view and durable SDK receipt. Closing a tab detaches a view;
-Stop explicitly closes active and queued work.
+replacement view and durable SDK receipt. Closing a tab detaches a view.
+Stop names the captured turn: it withdraws a queued turn or cancels the
+active one, and it leaves the attachment open.
 
 See [gateway chat](guides/gateway-chat.md) for configuration, ownership, commands,
 limits, and durability. The server stores SDK semantic records in one SQLite runtime at consequential

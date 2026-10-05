@@ -1371,6 +1371,16 @@ async fn a_new_request_reopens_an_owned_conversation_and_attaches_after_restart(
         .unwrap()
         .unwrap();
     assert_eq!(record.creation_action(), "original");
+    assert!(service
+        .lookup_creation(
+            storage.clone(),
+            target,
+            caller("request-reopen"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap()
+        .is_none());
     retire(service, storage, metadata).await;
 }
 

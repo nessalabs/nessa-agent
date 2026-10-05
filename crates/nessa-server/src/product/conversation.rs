@@ -498,8 +498,8 @@ fn submitted_message_from_receipt(
         text: params.text.clone().ok_or(ConversationError::InvalidInput)?,
         images: params
             .attachments
-            .as_ref()
-            .ok_or(ConversationError::InvalidInput)?
+            .as_deref()
+            .unwrap_or_default()
             .iter()
             .map(|image| SubmittedImage {
                 digest: image.digest.clone(),
@@ -509,8 +509,8 @@ fn submitted_message_from_receipt(
             .collect(),
         files: params
             .files
-            .as_ref()
-            .ok_or(ConversationError::InvalidInput)?
+            .as_deref()
+            .unwrap_or_default()
             .iter()
             .map(|file| SubmittedFile {
                 path: file.path.clone(),
