@@ -701,7 +701,9 @@ messages and model context (#390), are the conversation service's
 (`conversation/application/service/app_calls.rs`, with the reviews, held
 contexts and messages in flight in `app_reviews.rs` and the ports in
 `mcp_apps.rs`), their audit
-`conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
+`conversation/infrastructure/mcp_app_audit.rs` — with every held context's
+drop written by the one recorder in `conversation/infrastructure/context_drops.rs`,
+which composition stops after the conversations — and their wire methods
 `product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
 one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
 `@nessa/client` they share `application/gateway-http.ts` (the origin, the
