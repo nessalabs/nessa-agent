@@ -372,7 +372,12 @@ impl QueueAdmissionRecord {
         self.effort_level = effort_level;
         self
     }
-    /// Provider approval preset at admission, when the binding publishes one.
+    /// Approval preset in force when this input was admitted
+    /// ([`Agent::approval_mode`](crate::application::agent_execution::agents::Agent::approval_mode)):
+    /// a live change on the current attachment, or else the binding's preset,
+    /// which a new attachment opens at. A turn still queued when its
+    /// attachment is replaced runs at the new attachment's preset, which this
+    /// record does not name.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
         self.approval_mode
     }

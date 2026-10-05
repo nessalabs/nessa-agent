@@ -845,7 +845,7 @@ impl Agent {
         let audit_actor = actor.clone();
         let admission_generation =
             format!("{}:{}", self.inner.instance_id, work.provider_generation());
-        let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
+        let approval_mode = self.approval_mode();
         let effort_level = self.effort_level();
         let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
         let audit_record = ExecutionAuditRecord::QueueAdmitted(
@@ -1557,7 +1557,7 @@ impl Agent {
                         .expect("admitted steering owner")
                         .provider_generation()
                 );
-                let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
+                let approval_mode = self.approval_mode();
                 let effort_level = self.effort_level();
                 let receipt = Self::accept_pending(
                     &mut scheduler,

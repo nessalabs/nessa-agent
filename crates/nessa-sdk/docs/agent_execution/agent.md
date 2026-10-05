@@ -162,8 +162,23 @@ starts at the binding's level. `agent.effort_level()` is the level in force: the
 last one verified on the current attachment, or else the binding's, including
 while detached. Every queued admission records it as of admission
 (`QueueAdmissionRecord::effort_level`); a turn still queued when its attachment
-is replaced runs at the new attachment's level
-([#313](https://github.com/nessalabs/nessa-agent/issues/313)).
+is replaced runs at the new attachment's level, which that record does not name.
+
+### Approval mode
+
+`agent.approval_mode()` is the preset in force, the same way
+`agent.effort_level()` is the level in force. `agent.set_approval_mode` verifies
+a change on the current idle attachment. While that attachment is in use, the
+report and every queued admission (`QueueAdmissionRecord::approval_mode`,
+from a queued turn and from steering that waits for the next turn) name the
+verified preset. A new attachment, including one after an explicit close,
+opens at the binding's preset (`AgentProvider::approval_mode`). While nothing is
+attached, the report is that preset, so work admitted then names the mode the
+next attachment opens at. After the new attachment is up, the report and the
+next admission both name it
+(`a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachment_admits_the_binding_mode`).
+A turn still queued when its attachment is replaced runs at the new attachment's
+preset; the record written at admission keeps the preset it was admitted under.
 
 ## Session manager and storage
 

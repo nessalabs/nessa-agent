@@ -94,7 +94,10 @@ pub struct Agent {
 }
 pub(super) struct Inner {
     pub(super) instance_id: String,
-    pub(super) approval_mode: RwLock<Option<ApprovalMode>>,
+    /// A preset verified by a live change, and the provider generation of the
+    /// attachment it was applied to. It is in force only while that
+    /// attachment is: any other opens at the provider's own preset.
+    pub(super) live_approval_mode: RwLock<Option<(u64, ApprovalMode)>>,
     /// A level verified by a live change, and the provider generation of the
     /// attachment it was applied to. It is in force only while that
     /// attachment is: any other opens at the provider's own level.
@@ -166,16 +169,39 @@ impl Agent {
         })
         .await
     }
-    /// The preset this agent generation was configured with or last verified
-    /// through a live mode change. `None` means this provider makes no claim.
+    /// The approval preset in force: the one last verified by a live change
+    /// on the current attachment, or else the provider's own
+    /// ([`AgentProvider::approval_mode`]), which every new attachment opens
+    /// at — including while none is attached, so work admitted then names
+    /// the mode the next attachment will run at. `None` means this provider
+    /// makes no claim.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
-        *self.inner.approval_mode.read().expect("approval mode lock")
+        let live = *self
+            .inner
+            .live_approval_mode
+            .read()
+            .expect("approval mode lock");
+        match live {
+            Some((generation, mode))
+                if self.inner.lifecycle.attached_generation() == Some(generation) =>
+            {
+                Some(mode)
+            }
+            _ => self.inner.provider.approval_mode(),
+        }
     }
     /// Apply and verify a native approval preset on an attached, idle provider
     /// generation. The scheduler lock excludes queued admission and dispatch
     /// until the response is checked. A failed application carries explicit
     /// session status; callers must retire an uncertain generation before
     /// admitting another turn.
+    ///
+    /// A verified change is recorded against this attachment's provider
+    /// generation. [`Self::approval_mode`] reports it only while that
+    /// attachment is the one in use. A later attachment opens at
+    /// [`AgentProvider::approval_mode`], and every admission after that
+    /// records that mode
+    /// ([`QueueAdmissionRecord::approval_mode`](crate::application::agent_execution::executions::QueueAdmissionRecord::approval_mode)).
     ///
     /// Waiting for the scheduler lock registers the polling task's `Waker`
     /// with it. A panic from that waker when another task releases the lock
@@ -207,9 +233,9 @@ impl Agent {
         if result.is_ok() {
             *self
                 .inner
-                .approval_mode
+                .live_approval_mode
                 .write()
-                .expect("approval mode lock") = Some(mode);
+                .expect("approval mode lock") = Some((permit.provider_generation(), mode));
         }
         drop(permit);
         drop(scheduler);
@@ -535,7 +561,7 @@ impl Agent {
         Ok(Self {
             inner: Arc::new(Inner {
                 instance_id: uuid::Uuid::new_v4().to_string(),
-                approval_mode: RwLock::new(provider.approval_mode()),
+                live_approval_mode: RwLock::new(None),
                 live_effort_level: RwLock::new(None),
                 provider,
                 capabilities,
