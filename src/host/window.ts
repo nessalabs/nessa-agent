@@ -14,6 +14,7 @@ import {
   type AgentApiKeySaveRejectionReason,
 } from "../onboarding/application/ports"
 import type { GatewayStartup, HostStartup } from "../startup/application/ports"
+import { hostRefusalFromInvoke } from "./startup-refusals"
 export type { GatewayStartup, HostStartup } from "../startup/application/ports"
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
@@ -946,21 +947,7 @@ export async function loadAssignedSurfaceCredential(
   try {
     return await invoke<string>("load_surface_credential", { stage, url })
   } catch (error) {
-    // Tauri serializes command failures rather than constructing JS Errors.
-    // Preserve only the native boundary's safe message, never arbitrary payloads.
-    if (error instanceof Error) throw error
-    const message =
-      typeof error === "string"
-        ? error
-        : error && typeof error === "object" && "message" in error
-          ? error.message
-          : undefined
-    throw new Error(
-      typeof message === "string" && message.trim()
-        ? message
-        : "Could not load the desktop gateway credential.",
-      { cause: error },
-    )
+    throw invokeFailure(error, "Could not load the desktop gateway credential.")
   }
 }
 
@@ -973,20 +960,32 @@ export async function loadAssignedGatewayEndpoint(
   try {
     return (await invoke<string | null>("load_gateway_endpoint", { stage })) ?? undefined
   } catch (error) {
-    if (error instanceof Error) throw error
-    const message =
-      typeof error === "string"
-        ? error
-        : error && typeof error === "object" && "message" in error
-          ? error.message
-          : undefined
-    throw new Error(
-      typeof message === "string" && message.trim()
-        ? message
-        : "Could not verify the desktop gateway endpoint.",
-      { cause: error },
-    )
+    throw invokeFailure(error, "Could not verify the desktop gateway endpoint.")
   }
+}
+
+/**
+ * A command rejection as an Error the page can branch on.
+ *
+ * A startup refusal is the host's typed payload. An Error is kept. A string,
+ * or an object whose `message` is text, is that text. Anything else stays
+ * off the page: the fallback names the command, not the payload.
+ */
+function textField(error: unknown, key: string): string | undefined {
+  if (typeof error !== "object" || error === null || !Object.hasOwn(error, key))
+    return undefined
+  const value = error[key as keyof typeof error]
+  return typeof value === "string" ? value : undefined
+}
+
+function invokeFailure(error: unknown, fallback: string): Error {
+  const refusal = hostRefusalFromInvoke(error)
+  if (refusal) return refusal
+  if (error instanceof Error) return error
+  const message = typeof error === "string" ? error : textField(error, "message")
+  return new Error(typeof message === "string" && message.trim() ? message : fallback, {
+    cause: error,
+  })
 }
 
 /** Opens the provider CLI login; launch acknowledgement is not authentication. */

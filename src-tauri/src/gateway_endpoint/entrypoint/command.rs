@@ -1,25 +1,46 @@
 use crate::{
     composition::HostDependencies,
-    gateway::{application::Gateway, infrastructure::GatewayReader},
-    gateway_endpoint::application::GatewayEndpointAccess,
+    gateway::{
+        application::Gateway,
+        infrastructure::{GatewayReader, GatewayUnread},
+    },
+    gateway_endpoint::application::{EndpointError, GatewayEndpointAccess},
+    host_refusal::SurfaceCommandError,
 };
 use std::sync::Arc;
 use tauri::{State, WebviewWindow};
+
+fn unread(error: GatewayUnread) -> SurfaceCommandError {
+    match error {
+        GatewayUnread::NotReady => SurfaceCommandError::not_ready(),
+        GatewayUnread::Other(message) => SurfaceCommandError::message(message),
+    }
+}
+
+fn endpoint_error(error: EndpointError) -> SurfaceCommandError {
+    match error {
+        EndpointError::WrongStage { bundle, requested } => {
+            SurfaceCommandError::wrong_stage(bundle, requested)
+        }
+        other => SurfaceCommandError::message(other.to_string()),
+    }
+}
 
 async fn load_for(
     label: &str,
     gateway: Option<&Gateway>,
     endpoint: Arc<GatewayEndpointAccess>,
     stage: &str,
-) -> Result<Option<String>, String> {
-    let reader = GatewayReader::of_window(label)?;
+) -> Result<Option<String>, SurfaceCommandError> {
+    let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
-        reader.ready(gateway).await?;
+        reader.ready(gateway).await.map_err(unread)?;
     }
     let stage = stage.to_owned();
     tauri::async_runtime::spawn_blocking(move || endpoint.resolve(&stage))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| SurfaceCommandError::message(error.to_string()))?
+        .map_err(endpoint_error)
 }
 
 #[tauri::command]
@@ -27,7 +48,7 @@ pub async fn load_gateway_endpoint(
     window: WebviewWindow,
     deps: State<'_, HostDependencies>,
     stage: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, SurfaceCommandError> {
     let gateway = deps.gateway.clone();
     let endpoint = Arc::clone(&deps.endpoint);
     load_for(window.label(), gateway.as_deref(), endpoint, &stage).await
@@ -102,7 +123,7 @@ mod tests {
             endpoint.clone(),
             "ci",
         ));
-        assert_eq!(refused, Err("The local server isn't ready yet".to_string()));
+        assert_eq!(refused, Err(SurfaceCommandError::not_ready()));
         assert_eq!(discovery.calls.load(Ordering::SeqCst), 0);
         assert_eq!(*host.registrations.lock().unwrap(), 0);
 

@@ -1,6 +1,6 @@
 import { loadWorkspace } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
-import type { WorkspaceFailureReason } from "../../model/failure"
+import type { StageMismatch, WorkspaceFailureReason } from "../../model/failure"
 import { readFailureCopy } from "../failure-copy"
 
 /**
@@ -12,12 +12,18 @@ import { readFailureCopy } from "../failure-copy"
  * the one thing to do next. (No pane shows a session that is not there: a
  * removal starts the last pane over — `usecases/updates.ts`.)
  */
-export function EmptyWorkspace({ failure }: { failure: WorkspaceFailureReason | null }) {
+export function EmptyWorkspace({
+  failure,
+  stages,
+}: {
+  failure: WorkspaceFailureReason | null
+  stages?: StageMismatch | null
+}) {
   const dispatch = useWorkspaceDispatch()
   if (!failure) return null
   return (
     <div className="workspace-empty" role="status">
-      <p>{readFailureCopy(failure)}</p>
+      <p>{readFailureCopy(failure, stages)}</p>
       <button
         type="button"
         className="workspace-button"

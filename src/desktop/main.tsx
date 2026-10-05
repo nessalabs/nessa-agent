@@ -19,6 +19,8 @@ import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
+document.documentElement.dataset.nessaModule = "started"
+
 // Composition: the window's outside things and its widget plugins, then the
 // store over them, then the tree. The store follows the workspace source for
 // the window's life. Where the workspace comes from is `workspaceBackend`'s
@@ -74,6 +76,7 @@ void store.dispatch(loadWorkspace())
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
+document.documentElement.dataset.nessaMounted = "1"
 createRoot(container).render(
   <React.StrictMode>
     <Provider store={store}>

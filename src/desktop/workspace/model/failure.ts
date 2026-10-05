@@ -18,6 +18,26 @@
  * request refused was not sent (a first message's conversation may already
  * have been created before the connection closed); asking again changes
  * nothing until it is signed in again.
+ *
+ * `not-started`: this window was opened with no local server, so no chat
+ * credential exists yet. `not-ready`: the server is still starting.
+ * `not-listening`: the server is not answering. `wrong-stage`: this window
+ * and the server were asked for different stages; the two values are
+ * `StageMismatch`, beside the reason, because a reason cannot carry them.
  */
 export type WorkspaceFailureReason =
-  "unavailable" | "unknown-session" | "not-waiting" | "not-supported" | "signed-out"
+  | "unavailable"
+  | "unknown-session"
+  | "not-waiting"
+  | "not-supported"
+  | "signed-out"
+  | "not-started"
+  | "not-ready"
+  | "not-listening"
+  | "wrong-stage"
+
+/** The stage this window is on, and the stage the local server was asked for. */
+export type StageMismatch = {
+  readonly bundle: string
+  readonly requested: string
+}

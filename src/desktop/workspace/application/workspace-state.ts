@@ -8,7 +8,7 @@
  * window decides. Use cases in `usecases/` are pure functions over it, and
  * the store in `adapters/store/` applies them.
  */
-import type { WorkspaceFailureReason } from "../model/failure"
+import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
 import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
 import {
   focusedPane,
@@ -80,6 +80,11 @@ export interface WorkspaceState {
   readonly status: LoadStatus
   /** Why the index could not be read, when it could not. */
   readonly failure: WorkspaceFailureReason | null
+  /**
+   * Both stages when `failure` is `wrong-stage`. Absent for every other
+   * reason, including after a later read clears the failure.
+   */
+  readonly failureStages: StageMismatch | null
   /**
    * The reads of the index on their way, each by the name it was asked
    * under, with the sessions the stream brought since that read was asked —
@@ -195,6 +200,7 @@ export interface OverviewState {
 export const initialWorkspace: WorkspaceState = {
   status: "loading",
   failure: null,
+  failureStages: null,
   reading: [],
   sections: [],
   channels: [],

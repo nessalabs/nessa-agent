@@ -2,7 +2,11 @@ import { memo, useCallback } from "react"
 import { shallowEqual } from "react-redux"
 import { SplitPanes, type ShownPane, type SplitPanesSource } from "../../../split-panes"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectFailure, selectPaneWidget } from "../../adapters/store/selectors"
+import {
+  selectFailure,
+  selectFailureStages,
+  selectPaneWidget,
+} from "../../adapters/store/selectors"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { EmptyWorkspace } from "./empty-state"
 import { Pane } from "./pane"
@@ -20,13 +24,14 @@ import "./panes.css"
  */
 export const PaneGrid = memo(function PaneGrid({ source }: { source: SplitPanesSource }) {
   const failure = useWorkspaceSelector(selectFailure)
+  const stages = useWorkspaceSelector(selectFailureStages)
   const renderPane = useCallback((shown: ShownPane) => <ShownPaneOf {...shown} />, [])
   return (
     <main className="workspace-chat" aria-label="Conversations">
       <SplitPanes
         source={source}
         renderPane={renderPane}
-        empty={<EmptyWorkspace failure={failure} />}
+        empty={<EmptyWorkspace failure={failure} stages={stages} />}
       />
       <WidgetWindow />
     </main>

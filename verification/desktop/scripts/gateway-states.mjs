@@ -37,6 +37,9 @@
  */
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { attempt, CannotRun } from "./lib/cli.mjs"
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { main } from "./lib/run.mjs"
 import { css, modules } from "./lib/selectors.mjs"
@@ -45,7 +48,24 @@ import { inside, modelValue } from "./lib/workspace.mjs"
 const fakeGateway = "ws://127.0.0.1:7499"
 // Nothing listens here and nothing routes it: the connection is refused.
 const noGateway = "ws://127.0.0.1:7498"
-const unread = "Nessa couldn’t read the local server’s conversations just now."
+const sentences = JSON.parse(
+  readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../src/host/startup-refusals.json",
+    ),
+    "utf8",
+  ),
+)
+function sentence(key) {
+  if (
+    !Object.hasOwn(sentences, key) ||
+    typeof sentences[key] !== "string" ||
+    !sentences[key]
+  )
+    throw new Error(`missing startup sentence ${key}`)
+  return sentences[key]
+}
 const signedOut = "This window isn’t signed in to the local server."
 // How long, in real time, the paused page has to show Try Again's ask (C1).
 // It only ends the wait: with the clock paused nothing else asks the host.
@@ -133,7 +153,7 @@ const scenarios = [
     name: "the host refuses the credential",
     endpoint: fakeGateway,
     credential: null,
-    says: unread,
+    says: sentence("not-provisioned"),
   },
   {
     // The refusal a window meets at every launch, until the host's startup
@@ -142,7 +162,7 @@ const scenarios = [
     name: "the gateway is not ready yet",
     endpoint: null,
     credential: "fixture-only",
-    says: unread,
+    says: sentence("not-ready"),
     credentialNeverAsked: true,
     cadence: true,
   },
@@ -150,7 +170,7 @@ const scenarios = [
     name: "no gateway listening",
     endpoint: noGateway,
     credential: "fixture-only",
-    says: unread,
+    says: sentence("not-listening"),
   },
 ]
 

@@ -11,11 +11,10 @@
  * forever, as an unanswered host does.
  */
 export function gatewayHost({ endpoint, credential }) {
-  // The host's own sentences (`GatewayReader::ready`, `CredentialRefusal::NotProvisioned`).
-  const notReady = "The local server isn't ready yet"
-  const notProvisioned =
-    "No chat credential has been provisioned yet. Start the local server " +
-    "(`just start`, or `just server`), which creates one on first run."
+  // The host's typed refusals (`SurfaceCommandError`). The page maps the
+  // reason; a sentence here would be an untyped failure.
+  const notReady = { reason: "not-ready" }
+  const notProvisioned = { reason: "not-provisioned" }
   let callbacks = 0
   const asked = { load_gateway_endpoint: 0, load_surface_credential: 0 }
   window.__fakeHostAsked = asked

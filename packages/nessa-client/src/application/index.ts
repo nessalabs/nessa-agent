@@ -37,5 +37,6 @@ export {
 export { NessaProtocolCompatibilityError } from "./protocol-compatibility-error.js"
 
 export type { ProductConnectRetryOptions } from "./connect-retry.js"
+export { RetryableConnectError } from "./connect-retry.js"
 
 export { NessaClientConfig, type NessaClientConfigOptions } from "./client-config.js"

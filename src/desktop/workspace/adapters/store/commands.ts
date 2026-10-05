@@ -21,6 +21,7 @@ import {
 import { messageText, type Message } from "../../model/transcript"
 import {
   failureReason,
+  failureStages,
   type ApprovalScope,
   type Initiator,
   type WorkspaceDependencies,
@@ -125,7 +126,13 @@ export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
         console.warn("The index contradicted itself; left out, by id:", contradictions)
       dispatch(indexLoaded({ index, draftId: newId(), read }))
     } catch (error) {
-      dispatch(indexFailed({ reason: failureReason(error), read }))
+      dispatch(
+        indexFailed({
+          reason: failureReason(error),
+          stages: failureStages(error),
+          read,
+        }),
+      )
     }
   }
 }

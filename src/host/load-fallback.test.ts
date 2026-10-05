@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { existsSync, readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { embedLoadFallback } from "./load-fallback.mjs"
 
 // jsdom resolves no `var()` and lays nothing out, so where the fallback lands
 // on a stage larger than the window is measured in real WebKit and Chromium by
@@ -10,7 +11,7 @@ import { describe, expect, it } from "vitest"
 
 describe("embedded load fallback", () => {
   function load(search: string) {
-    const source = readFileSync("index.html", "utf8")
+    const source = embedLoadFallback(readFileSync("index.html", "utf8"))
     const parsed = new DOMParser().parseFromString(source, "text/html")
     document.documentElement.innerHTML = parsed.documentElement.innerHTML
     document.documentElement.dataset.nessaSurface =
@@ -82,5 +83,108 @@ describe("embedded load fallback", () => {
     expect(style.width).toBe("auto")
     expect(style.height).toBe("auto")
     expect(style.placeContent).toBe("center")
+  })
+})
+
+describe("a page the dev server did not serve", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    delete document.documentElement.dataset.nessaModule
+    delete document.documentElement.dataset.nessaMounted
+  })
+
+  function boot(html = readFileSync("index.html", "utf8")) {
+    vi.useFakeTimers()
+    const source = embedLoadFallback(html)
+    const parsed = new DOMParser().parseFromString(source, "text/html")
+    document.documentElement.innerHTML = parsed.documentElement.innerHTML
+    if (parsed.documentElement.dataset.nessaSurface)
+      document.documentElement.dataset.nessaSurface =
+        parsed.documentElement.dataset.nessaSurface
+    else delete document.documentElement.dataset.nessaSurface
+    const bootstrap = document.querySelector<HTMLScriptElement>(
+      "script[data-nessa-load-bootstrap]",
+    )
+    expect(bootstrap?.hasAttribute("src")).toBe(false)
+    expect(bootstrap?.textContent).toContain("did not serve")
+    window.eval(bootstrap?.textContent ?? "")
+    const title = document.querySelector<HTMLElement>("[data-nessa-load-title]")
+    if (!title) throw new Error("missing load title")
+    return { title }
+  }
+
+  it("names the page and the script when the module is not served", () => {
+    const { title } = boot()
+    const script = document.querySelector<HTMLScriptElement>("script[type=module]")
+    script?.dispatchEvent(new Event("error"))
+    expect(title.textContent).toContain(window.location.href)
+    expect(title.textContent).toContain("/src/main.tsx")
+    expect(title.textContent).toContain("did not serve")
+  })
+
+  it("names a module tag that is parsed after the bootstrap runs", () => {
+    vi.useFakeTimers()
+    const source = embedLoadFallback(readFileSync("index.html", "utf8"))
+    const parsed = new DOMParser().parseFromString(source, "text/html")
+    document.documentElement.innerHTML = parsed.documentElement.innerHTML
+    const script = document.querySelector<HTMLScriptElement>("script[type=module]")
+    script?.remove()
+    const bootstrap = document.querySelector<HTMLScriptElement>(
+      "script[data-nessa-load-bootstrap]",
+    )
+    window.eval(bootstrap?.textContent ?? "")
+    if (!script) throw new Error("missing module script")
+    document.body.append(script)
+    script.dispatchEvent(new Event("error"))
+    const title = document.querySelector("[data-nessa-load-title]")
+    expect(title?.textContent).toContain("/src/main.tsx")
+    expect(title?.textContent).toContain("did not serve")
+  })
+
+  it("names the app module, not an earlier inline module, while it is still compiling", () => {
+    vi.useFakeTimers()
+    const { title } = boot()
+    const inline = document.createElement("script")
+    inline.type = "module"
+    inline.textContent = "inline"
+    const client = document.createElement("script")
+    client.type = "module"
+    client.src = "/@vite/client"
+    const app = document.querySelector("script[type=module]")
+    app?.before(inline, client)
+    vi.advanceTimersByTime(15_000)
+    expect(title.textContent).toContain("/src/main.tsx")
+    expect(title.textContent).not.toContain("@vite/client")
+  })
+
+  it("says the dev server may still be compiling when the module has not started", () => {
+    vi.useFakeTimers()
+    const { title } = boot()
+    vi.advanceTimersByTime(15_000)
+    expect(title.textContent).toContain("compiling")
+    expect(title.textContent).toContain("/src/main.tsx")
+  })
+
+  it("leaves Loading once the module has started", () => {
+    vi.useFakeTimers()
+    document.documentElement.dataset.nessaModule = "started"
+    const { title } = boot()
+    vi.advanceTimersByTime(15_000)
+    expect(title.textContent).toBe("Loading")
+  })
+
+  it("names a runtime error that happens before the page mounts", () => {
+    const { title } = boot()
+    window.dispatchEvent(new ErrorEvent("error", { message: "boom" }))
+    expect(title.textContent).toContain("Could not load")
+    expect(title.textContent).toContain("boom")
+  })
+
+  it("fills the desktop window, which has no surface", () => {
+    const { title } = boot(readFileSync("desktop.html", "utf8"))
+    const message = title.parentElement
+    if (!message) throw new Error("missing load message")
+    const style = getComputedStyle(message)
+    expect(style.inset).toBe("0px")
   })
 })

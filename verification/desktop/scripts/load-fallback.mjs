@@ -10,7 +10,8 @@
  * never answers, so the panel never mounts, and which reports the window's
  * size (or never does, or refuses); `main.tsx` writes that size through
  * `windowSize()` and `publishWindowSize()`. A browser scenario holds every
- * script back instead. Each checks that the avatar and "Loading" sit wholly
+ * script back instead. A held-back script names the page it could not load.
+ * Each other scenario checks that the avatar and "Loading" sit wholly
  * inside the visible window, centred in it once its size is known, and that
  * nothing paints over them.
  */
@@ -208,7 +209,11 @@ function check(scenario, m) {
         `off centre of the visible window by ${dx.toFixed(1)}, ${dy.toFixed(1)}`,
       )
   }
-  if (m.text !== "Loading") failures.push(`says ${JSON.stringify(m.text)}, not "Loading"`)
+  if (scenario.host === null) {
+    if (!m.text.includes("did not serve"))
+      failures.push(`says ${JSON.stringify(m.text)}, not that the script was not served`)
+  } else if (m.text !== "Loading")
+    failures.push(`says ${JSON.stringify(m.text)}, not "Loading"`)
   if (!m.titleOnTop) failures.push("something paints over the title")
   if (m.overflow) failures.push("the page scrolls")
   return { failures, measured: { clip, content, layout, markCentre } }
@@ -287,6 +292,12 @@ await main(
                       document.documentElement.style.getPropertyValue(
                         "--nessa-window-width",
                       ),
+                    )
+                  else if (scenario.host === null)
+                    await page.waitForFunction(() =>
+                      document
+                        .querySelector("[data-nessa-load-title]")
+                        ?.textContent?.includes("did not serve"),
                     )
                   else await page.waitForLoadState("networkidle")
                   await page.evaluate(() => new Promise(requestAnimationFrame))

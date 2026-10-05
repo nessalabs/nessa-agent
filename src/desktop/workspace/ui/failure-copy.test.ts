@@ -10,6 +10,10 @@ const every: Record<WorkspaceFailureReason, true> = {
   "not-waiting": true,
   "not-supported": true,
   "signed-out": true,
+  "not-started": true,
+  "not-ready": true,
+  "not-listening": true,
+  "wrong-stage": true,
 }
 const reasons = Object.keys(every) as WorkspaceFailureReason[]
 

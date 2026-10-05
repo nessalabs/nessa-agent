@@ -87,6 +87,24 @@ describe("the index arriving", () => {
     const state = indexFailed(initialWorkspace, { reason: "unavailable", read: "r" })
     expect(state.status).toBe("failed")
     expect(state.failure).toBe("unavailable")
+    expect(state.failureStages).toBeNull()
+  })
+
+  it("keeps both stages when the window and the server disagree, and a new read drops them", () => {
+    const state = indexFailed(initialWorkspace, {
+      reason: "wrong-stage",
+      stages: { bundle: "dev", requested: "prod" },
+      read: "r",
+    })
+    expect(state.failureStages).toEqual({ bundle: "dev", requested: "prod" })
+    expect(indexRequested(state, { read: "again" }).failureStages).toBeNull()
+    expect(
+      indexFailed(initialWorkspace, {
+        reason: "not-ready",
+        stages: { bundle: "dev", requested: "prod" },
+        read: "r",
+      }).failureStages,
+    ).toBeNull()
   })
 })
 

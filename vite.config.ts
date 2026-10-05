@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync } from "node:fs"
-import { dirname, resolve } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { defineConfig, searchForWorkspaceRoot } from "vite"
@@ -8,6 +8,7 @@ import tailwindcss from "@tailwindcss/vite"
 
 import { sharedPackages, viteAliases } from "./scripts/nessa-ui-paths.mjs"
 import { appSandbox } from "./src/desktop/widgets/app/sandbox/serve"
+import { embedLoadFallback } from "./src/host/load-fallback.mjs"
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
 import { loadEnvironment } from "./src/env/environment"
 
@@ -71,6 +72,19 @@ let bundledStage: string | undefined
 
 export default defineConfig({
   plugins: [
+    {
+      name: "nessa-load-fallback",
+      transformIndexHtml: {
+        order: "pre",
+        handler(html, ctx) {
+          const filename = ctx.filename ?? ""
+          const name = basename(filename)
+          if (name !== "index.html" && name !== "desktop.html") return html
+          if (filename.includes("/verification/")) return html
+          return embedLoadFallback(html)
+        },
+      },
+    },
     react(),
     tailwindcss(),
     // The MCP Apps sandbox proxy's own origin, beside the dev server.

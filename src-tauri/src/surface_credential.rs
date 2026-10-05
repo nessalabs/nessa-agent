@@ -1,7 +1,12 @@
 //! Native storage for the panel's surface credential, which the panel, setup and
 //! the desktop window read. Renderer input never selects a file.
 use crate::composition::HostDependencies;
-use crate::gateway::{application::Gateway, infrastructure::GatewayReader};
+use crate::gateway::{
+    application::Gateway,
+    infrastructure::{GatewayReader, GatewayUnread},
+};
+use crate::gateway_endpoint::application::EndpointError;
+use crate::host_refusal::SurfaceCommandError;
 use std::{io::Read, path::PathBuf, sync::Arc};
 use tauri::State;
 
@@ -12,14 +17,17 @@ use tauri::State;
 /// [`Display`] writes, and the command hands that to the webview — but the fact
 /// is the variant, so a test asserts which refusal happened instead of matching
 /// a fragment of prose that any rewording breaks.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialRefusal {
     /// Never provisioned. Starting the local server creates one.
     NotProvisioned,
     /// There, and the operating system would not open it.
     Refused,
     /// Asked for a stage this credential was not built for.
-    WrongStage,
+    ///
+    /// `bundle` is the stage this window was started on. `requested` is the
+    /// stage the page asked the local server for.
+    WrongStage { bundle: String, requested: String },
     /// The environment named a namespace that cannot hold a credential.
     UnusableNamespace,
     /// Opened, and what came out is not a token.
@@ -39,17 +47,19 @@ impl std::fmt::Display for CredentialRefusal {
     /// what to do.
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotProvisioned => out.write_str(
-                "No chat credential has been provisioned yet. Start the local server \
-                 (`just start`, or `just server`), which creates one on first run.",
-            ),
+            Self::NotProvisioned => {
+                out.write_str(&crate::host_refusal::sentence("not-provisioned"))
+            }
             Self::Refused => out.write_str(
                 "The chat credential was refused: it, or a directory above it, must be \
                  yours alone (mode 0600/0700 on Unix, a private DACL on Windows). Repair \
                  those permissions, or remove the credential file and start the local \
                  server to provision a new one.",
             ),
-            Self::WrongStage => out.write_str("Desktop and gateway stages must match"),
+            Self::WrongStage { bundle, requested } => out.write_str(&crate::host_refusal::fill(
+                "wrong-stage",
+                &[("bundle", bundle), ("requested", requested)],
+            )),
             Self::UnusableNamespace => out.write_str("Invalid native credential namespace"),
             Self::NotAToken(why) => write!(out, "Chat credential is {why}"),
             Self::Unopenable(error) => {
@@ -162,7 +172,10 @@ fn unreadable(error: &std::io::Error) -> CredentialRefusal {
 impl SurfaceCredentials for SurfaceCredential {
     fn read(&self, stage: &str) -> Result<String, CredentialRefusal> {
         if stage != self.stage {
-            return Err(CredentialRefusal::WrongStage);
+            return Err(CredentialRefusal::WrongStage {
+                bundle: self.stage.clone(),
+                requested: stage.to_owned(),
+            });
         }
         let root = self
             .root
@@ -205,6 +218,32 @@ impl SurfaceCredentials for SurfaceCredential {
 /// held by the desktop-window tests below); a build without a gateway
 /// does not wait at all; and the refusal for the wrong window happens before
 /// any of those, so a stray webview cannot make the app register a service.
+fn unread(error: GatewayUnread) -> SurfaceCommandError {
+    match error {
+        GatewayUnread::NotReady => SurfaceCommandError::not_ready(),
+        GatewayUnread::Other(message) => SurfaceCommandError::message(message),
+    }
+}
+
+fn endpoint_error(error: EndpointError) -> SurfaceCommandError {
+    match error {
+        EndpointError::WrongStage { bundle, requested } => {
+            SurfaceCommandError::wrong_stage(bundle, requested)
+        }
+        other => SurfaceCommandError::message(other.to_string()),
+    }
+}
+
+fn credential_error(refusal: CredentialRefusal) -> SurfaceCommandError {
+    match refusal {
+        CredentialRefusal::NotProvisioned => SurfaceCommandError::not_provisioned(),
+        CredentialRefusal::WrongStage { bundle, requested } => {
+            SurfaceCommandError::wrong_stage(bundle, requested)
+        }
+        other => SurfaceCommandError::message(other.to_string()),
+    }
+}
+
 async fn load_for(
     label: &str,
     gateway: Option<&Gateway>,
@@ -212,10 +251,10 @@ async fn load_for(
     credential: &dyn SurfaceCredentials,
     stage: &str,
     url: &str,
-) -> Result<String, String> {
-    let reader = GatewayReader::of_window(label)?;
+) -> Result<String, SurfaceCommandError> {
+    let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
-        reader.ready(gateway).await?;
+        reader.ready(gateway).await.map_err(unread)?;
     }
     let stage_for_endpoint = stage.to_owned();
     let requested_url = url.to_owned();
@@ -223,12 +262,9 @@ async fn load_for(
         endpoint.permits_credential_for(&stage_for_endpoint, &requested_url)
     })
     .await
-    .map_err(|error| error.to_string())??;
-    // The variant becomes a sentence here, at the edge: the webview takes a
-    // string, and everything above this point can still tell the refusals apart.
-    credential
-        .read(stage)
-        .map_err(|refusal| refusal.to_string())
+    .map_err(|error| SurfaceCommandError::message(error.to_string()))?
+    .map_err(endpoint_error)?;
+    credential.read(stage).map_err(credential_error)
 }
 
 #[tauri::command]
@@ -237,7 +273,7 @@ pub async fn load_surface_credential(
     deps: State<'_, HostDependencies>,
     stage: String,
     url: String,
-) -> Result<String, String> {
+) -> Result<String, SurfaceCommandError> {
     let gateway = deps.gateway.clone();
     let endpoint = deps.endpoint.clone();
     let credential = deps.credential.clone();
@@ -321,19 +357,7 @@ mod tests {
     impl SurfaceCredentials for FakeCredentials {
         fn read(&self, _stage: &str) -> Result<String, CredentialRefusal> {
             *self.reads.lock().unwrap() += 1;
-            match &self.outcome {
-                Ok(token) => Ok(token.clone()),
-                Err(CredentialRefusal::NotProvisioned) => Err(CredentialRefusal::NotProvisioned),
-                Err(CredentialRefusal::Refused) => Err(CredentialRefusal::Refused),
-                Err(CredentialRefusal::WrongStage) => Err(CredentialRefusal::WrongStage),
-                Err(CredentialRefusal::UnusableNamespace) => {
-                    Err(CredentialRefusal::UnusableNamespace)
-                }
-                Err(CredentialRefusal::NotAToken(why)) => Err(CredentialRefusal::NotAToken(why)),
-                Err(CredentialRefusal::Unopenable(error)) => {
-                    Err(CredentialRefusal::Unopenable(error.clone()))
-                }
-            }
+            self.outcome.clone()
         }
     }
 
@@ -341,7 +365,7 @@ mod tests {
         label: &str,
         gateway: Option<&Gateway>,
         credential: &dyn SurfaceCredentials,
-    ) -> Result<String, String> {
+    ) -> Result<String, SurfaceCommandError> {
         tauri::async_runtime::block_on(load_for(
             label,
             gateway,
@@ -415,7 +439,7 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(
                 load(DESKTOP_WINDOW, Some(&gateway), &credential).err(),
-                Some("The local server isn't ready yet".to_string())
+                Some(SurfaceCommandError::not_ready())
             );
         }
         assert_eq!(*host.registrations.lock().unwrap(), 0);
@@ -428,7 +452,7 @@ mod tests {
         let registered = *host.registrations.lock().unwrap();
         assert_eq!(
             load(DESKTOP_WINDOW, Some(&failed), &credential).err(),
-            Some("The local server isn't ready yet".to_string())
+            Some(SurfaceCommandError::not_ready())
         );
         assert_eq!(*host.registrations.lock().unwrap(), registered);
         assert_eq!(credential.reads(), 0);
@@ -469,10 +493,7 @@ mod tests {
         let while_starting =
             while_starting.expect("the window's asks waited on the host's startup");
         for told in while_starting {
-            assert_eq!(
-                told.err(),
-                Some("The local server isn't ready yet".to_string())
-            );
+            assert_eq!(told.err(), Some(SurfaceCommandError::not_ready()));
         }
         assert_eq!(registered, 1);
         assert_eq!(read, 0);
@@ -519,11 +540,13 @@ mod tests {
                 url,
             ));
             let expected = if stage == "dev" {
-                "Desktop and gateway stages must match"
+                SurfaceCommandError::wrong_stage("ci", "dev")
             } else {
-                "The credential request does not match the verified gateway endpoint"
+                SurfaceCommandError::message(
+                    "The credential request does not match the verified gateway endpoint",
+                )
             };
-            assert_eq!(result.err().as_deref(), Some(expected));
+            assert_eq!(result.err(), Some(expected));
             assert_eq!(credential.reads(), 0);
         }
     }
@@ -538,7 +561,9 @@ mod tests {
 
         assert_eq!(
             load("untrusted", Some(&gateway), &credential).err(),
-            Some("Only Nessa's own windows can read the gateway".to_string())
+            Some(SurfaceCommandError::message(
+                "Only Nessa's own windows can read the gateway",
+            ))
         );
         assert_eq!(*host.registrations.lock().unwrap(), 0);
         assert_eq!(credential.reads(), 0);
@@ -555,7 +580,7 @@ mod tests {
 
         assert_eq!(
             load(panel::MAIN_WINDOW, Some(&gateway), &credential).err(),
-            Some("not installed".to_string())
+            Some(SurfaceCommandError::message("not installed"))
         );
         assert_eq!(credential.reads(), 0);
     }
@@ -601,7 +626,7 @@ mod tests {
 
         assert_eq!(
             load(panel::MAIN_WINDOW, None, &credential).err(),
-            Some(CredentialRefusal::NotProvisioned.to_string())
+            Some(SurfaceCommandError::not_provisioned())
         );
     }
 
@@ -635,8 +660,17 @@ mod tests {
         let absent = CredentialRefusal::NotProvisioned.to_string();
         let refused = CredentialRefusal::Refused.to_string();
 
-        assert!(absent.contains("provisioned yet"), "{absent}");
+        assert!(absent.contains("without the local server"), "{absent}");
         assert!(absent.contains("just start"), "{absent}");
+        let mismatch = CredentialRefusal::WrongStage {
+            bundle: "dev".into(),
+            requested: "prod".into(),
+        }
+        .to_string();
+        assert!(
+            mismatch.contains("dev") && mismatch.contains("prod"),
+            "{mismatch}"
+        );
         assert!(refused.contains("refused"), "{refused}");
         assert!(!refused.contains("provisioned yet"), "{refused}");
         assert!(CredentialRefusal::Unopenable("disk fell off".into())
@@ -739,7 +773,13 @@ mod tests {
             stage: "ci".into(),
         };
         assert_eq!(storage.read("ci").unwrap(), "fixture-only");
-        assert!(storage.read("prod").is_err());
+        assert_eq!(
+            storage.read("prod").unwrap_err(),
+            CredentialRefusal::WrongStage {
+                bundle: "ci".into(),
+                requested: "prod".into(),
+            }
+        );
         let absent = SurfaceCredential {
             root: Some(root.clone()),
             relative: "never-provisioned.token".into(),

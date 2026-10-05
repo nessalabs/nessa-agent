@@ -26,7 +26,8 @@
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
  *   it is, for `failureReason` to log. A connection that could not be made
- *   is `signed-out` or `unavailable` by why (`connectFailure`, #419).
+ *   is `signed-out`, `not-started`, `not-ready`, `not-listening`,
+ *   `wrong-stage`, or `unavailable` by why (`connectFailure`, #419).
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed),
  *   and on the first list that answers after a poll or an index read failed.
@@ -66,6 +67,7 @@ import {
   conversationErrorCode,
   isRetryableConnectionError,
   NessaConnectionClosedError,
+  RetryableConnectError,
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
@@ -76,6 +78,7 @@ import {
   type ConversationSummary,
   type ConversationView,
 } from "@nessa/client"
+import { HostRefusalError } from "../../../../host/startup-refusals"
 import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
@@ -374,10 +377,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
     const attempt = new Promise<C>((resolve, reject) => {
       let over = false
-      const giveUp = (reason: WorkspaceFailureReason = "unavailable") => {
+      const giveUp = (
+        failure: WorkspaceSourceError = new WorkspaceSourceError("unavailable"),
+      ) => {
         over = true
         connectFailed()
-        reject(new WorkspaceSourceError(reason))
+        reject(failure)
       }
       const cancel = clock.after(timing.callMs, () => giveUp())
       options.connect().then(
@@ -886,14 +891,34 @@ function deletedConversation(error: unknown): boolean {
 }
 
 /**
- * Why no client connected, by the error's type: `signed-out` when the
- * gateway refused the credential (`isSignedOut`, the session's rule), so the
- * request was not sent; `unavailable` for everything else — no credential
- * to present, no answer, a gateway that is not running, or a host refusal,
- * which crosses IPC as a sentence that cannot be told apart by type.
+ * Why no client connected, by the error's type.
+ *
+ * A host refusal is `HostRefusalError` (the command's typed payload). A
+ * socket that never opened is `RetryableConnectError`, or a close `1006`
+ * on this error itself — a health probe that wraps one stays whatever the
+ * probe is, so a later RPC timeout is not rewritten as "not answering".
+ * `signed-out` is the gateway refusing the credential (`isSignedOut`).
+ * Anything else, including a host sentence this code does not parse, is
+ * `unavailable`.
  */
-function connectFailure(error: unknown): WorkspaceFailureReason {
-  return isSignedOut(error) ? "signed-out" : "unavailable"
+function connectFailure(error: unknown): WorkspaceSourceError {
+  if (error instanceof HostRefusalError) {
+    if (error.reason === "not-provisioned") return new WorkspaceSourceError("not-started")
+    if (error.reason === "not-ready") return new WorkspaceSourceError("not-ready")
+    if (error.reason === "wrong-stage" && error.bundle && error.requested) {
+      return new WorkspaceSourceError("wrong-stage", {
+        bundle: error.bundle,
+        requested: error.requested,
+      })
+    }
+  }
+  if (
+    error instanceof RetryableConnectError ||
+    (error instanceof NessaConnectionClosedError && error.code === 1006)
+  )
+    return new WorkspaceSourceError("not-listening")
+  if (isSignedOut(error)) return new WorkspaceSourceError("signed-out")
+  return new WorkspaceSourceError("unavailable")
 }
 
 /** Whether a failure is a refusal that asking again changes nothing of (`reasonFor`). */

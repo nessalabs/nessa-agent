@@ -46,7 +46,6 @@ mod retirement;
 mod selection;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
-pub(crate) use commands::GatewayReader;
 pub use commands::{
     __cmd__gateway_startup, __cmd__retry_gateway_startup,
     __cmd__set_claude_configuration_directory, __tauri_command_name_gateway_startup,
@@ -54,6 +53,7 @@ pub use commands::{
     __tauri_command_name_set_claude_configuration_directory, gateway_startup,
     retry_gateway_startup, set_claude_configuration_directory, startup_events,
 };
+pub(crate) use commands::{GatewayReader, GatewayUnread};
 pub use selection::{
     current, login_shell_path, platform_context, reconciliation_audit, reconciliation_ids,
 };

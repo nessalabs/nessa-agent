@@ -30,6 +30,8 @@ import { publishWindowSize } from "./panel/adapters/panel-frame"
 import { environmentFromVite } from "./env/vite"
 import { installDevConsoleForwarding } from "./diagnostics/dev-console"
 
+document.documentElement.dataset.nessaModule = "started"
+
 if (import.meta.env.DEV) installDevConsoleForwarding()
 
 const environment = environmentFromVite()
@@ -74,6 +76,7 @@ void hostStartup()
   .catch(() => ({ state: "ready" }) as const)
   .then((startup) => {
     if (startup.state === "refused") {
+      document.documentElement.dataset.nessaMounted = "1"
       root.render(
         <React.StrictMode>
           <StartupRefused
@@ -89,6 +92,7 @@ void hostStartup()
   })
 
 function renderApplication() {
+  document.documentElement.dataset.nessaMounted = "1"
   root.render(
     <React.StrictMode>
       {windowSurface() === "setup" ? (

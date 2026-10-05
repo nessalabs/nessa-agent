@@ -1,0 +1,119 @@
+//! Why a window was not given the local server, as a value the page can branch
+//! on. The sentences live in `src/host/startup-refusals.json`, which the page
+//! reads too: this module formats them for the host's log and for the document
+//! it shows when the dev server never answers.
+
+use serde::Serialize;
+use serde_json::Value;
+
+fn copies() -> Value {
+    serde_json::from_str(include_str!("../../src/host/startup-refusals.json"))
+        .expect("startup refusal sentences are JSON")
+}
+
+pub(crate) fn sentence(key: &str) -> String {
+    copies()
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or(key)
+        .to_string()
+}
+
+pub(crate) fn fill(key: &str, values: &[(&str, &str)]) -> String {
+    let mut text = sentence(key);
+    for (name, value) in values {
+        text = text.replace(&format!("{{{name}}}"), value);
+    }
+    text
+}
+
+/// A refusal the page branches on. Other failures stay a sentence
+/// ([`SurfaceCommandError::Message`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRefusal {
+    pub reason: HostRefusalReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostRefusalReason {
+    NotProvisioned,
+    NotReady,
+    WrongStage,
+}
+
+/// What a gateway command returns to the page: a typed refusal, or the
+/// sentence an untyped failure already had.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum SurfaceCommandError {
+    Refusal(HostRefusal),
+    Message(String),
+}
+
+impl SurfaceCommandError {
+    pub(crate) fn not_provisioned() -> Self {
+        Self::Refusal(HostRefusal {
+            reason: HostRefusalReason::NotProvisioned,
+            bundle: None,
+            requested: None,
+        })
+    }
+
+    pub(crate) fn not_ready() -> Self {
+        Self::Refusal(HostRefusal {
+            reason: HostRefusalReason::NotReady,
+            bundle: None,
+            requested: None,
+        })
+    }
+
+    pub(crate) fn wrong_stage(bundle: impl Into<String>, requested: impl Into<String>) -> Self {
+        let bundle = bundle.into();
+        let requested = requested.into();
+        Self::Refusal(HostRefusal {
+            reason: HostRefusalReason::WrongStage,
+            bundle: Some(bundle),
+            requested: Some(requested),
+        })
+    }
+
+    pub(crate) fn message(message: impl Into<String>) -> Self {
+        Self::Message(message.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_typed_refusal_serializes_as_its_reason_and_a_sentence_stays_a_string() {
+        let typed = serde_json::to_value(SurfaceCommandError::wrong_stage("dev", "prod")).unwrap();
+        assert_eq!(typed["reason"], "wrong-stage");
+        assert_eq!(typed["bundle"], "dev");
+        assert_eq!(typed["requested"], "prod");
+        assert!(typed.get("message").is_none());
+
+        let sentence = serde_json::to_value(SurfaceCommandError::message("disk fell off")).unwrap();
+        assert_eq!(sentence, "disk fell off");
+    }
+
+    #[test]
+    fn the_sentences_name_the_repair_and_both_stages() {
+        let absent = sentence("not-provisioned");
+        assert!(absent.contains("just start"), "{absent}");
+        assert!(absent.contains("without the local server"), "{absent}");
+        let mismatch = fill("wrong-stage", &[("bundle", "dev"), ("requested", "prod")]);
+        assert!(
+            mismatch.contains("dev") && mismatch.contains("prod"),
+            "{mismatch}"
+        );
+        assert!(!mismatch.contains("{bundle}"), "{mismatch}");
+    }
+}

@@ -707,8 +707,7 @@ mounts, `index.html` shows the fallback on that stage.
 
 - [ ] **The painted avatar and "Loading" sit inside the visible window; their
   layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
-  height, a narrow panel and setup; with the size pending or refused, or the
-  frontend never loading, they stay inside the bottom-right 320 × 320; nothing
+  height, and a narrow panel; with the size pending or refused they stay inside the bottom-right 320 × 320 and still say "Loading". When the frontend script is not served (the panel with no host, and setup), the title names the page and that the dev server did not serve the script, and the avatar stays inside the same box (setup, centred in the window). Nothing
   paints over the title, the page does not scroll, and nothing animates with
   reduced motion. The breathing avatar stays centred on its layout box; its
   full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
@@ -723,8 +722,11 @@ says why where the conversations would be.
 - [ ] **Signed out, the host refusing the credential, the gateway not ready
   yet, and no gateway listening each say why in the chat area, with Try
   Again; never the sample in its place.** A gateway refusing the credential
-  says "This window isn’t signed in to the local server."; the rest say "Nessa
-  couldn’t read the local server’s conversations just now." While the gateway
+  says "This window isn’t signed in to the local server." The host refusing
+  the credential says the window was started without the local server. The
+  gateway not ready yet says the local server is still starting. No gateway
+  listening says the local server is not answering. Those three sentences are
+  `src/host/startup-refusals.json`. While the gateway
   is not ready the host refuses the endpoint and the credential is never asked
   for. The status sits
   inside the chat area and the window, Try Again is at least 24px tall with

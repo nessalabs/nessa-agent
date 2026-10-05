@@ -173,7 +173,13 @@ fn app_frame(url: &Url) -> bool {
 /// alternative — rewriting a person's link before their mail client sees it —
 /// would break the ordinary `?subject=` this is mostly used for.
 pub fn decide(url: &Url, serving: Serving) -> Navigation {
-    if own_page(url, serving) || app_frame(url) {
+    // The page a dev build shows when its own document never arrived. A
+    // packaged build refuses it: the scheme is registered either way, and
+    // only `tauri dev` may navigate there.
+    if own_page(url, serving)
+        || app_frame(url)
+        || crate::page_load::is_load_failure_page(url, serving == Serving::DevServer)
+    {
         return Navigation::Allow;
     }
     match url.scheme() {
@@ -420,6 +426,34 @@ mod tests {
         }
     }
 
+    /// The dev server's own explanation when a window's document never
+    /// arrived. Exact path, no port, and only while `tauri dev` serves the app.
+    #[test]
+    fn a_dev_build_may_show_why_its_page_did_not_load() {
+        for url in [
+            "nessa-status://localhost/load-failure",
+            "nessa-status://localhost/load-failure?page=http%3A%2F%2Flocalhost%3A1420%2F",
+        ] {
+            assert_eq!(in_dev(url), Navigation::Allow, "{url}");
+            assert_eq!(packaged(url), Navigation::Refuse, "{url}");
+        }
+        assert_eq!(
+            in_dev("http://nessa-status.localhost/load-failure"),
+            Navigation::Allow
+        );
+        assert_eq!(
+            packaged("http://nessa-status.localhost/load-failure"),
+            Navigation::HandToBrowser
+        );
+        for url in [
+            "nessa-status://localhost/other",
+            "nessa-status://localhost:9/load-failure",
+            "nessa-status://evil/load-failure",
+        ] {
+            assert_eq!(in_dev(url), Navigation::Refuse, "{url}");
+        }
+    }
+
     /// The MCP Apps sandbox proxy, and the app document it loads, are frames
     /// the window draws; only the proxy's own origin and `about:srcdoc` are.
     #[test]
@@ -435,6 +469,7 @@ mod tests {
             "nessa-sandbox://localhost:8080/proxy.html",
             "nessa-sandbox://evil/proxy.html",
             "about:blank",
+            "nessa-status://localhost/load-failure",
         ] {
             assert_eq!(decision(url), Navigation::Refuse, "{url}");
         }

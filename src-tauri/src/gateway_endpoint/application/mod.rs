@@ -2,4 +2,4 @@
 
 mod resolve;
 
-pub use resolve::GatewayEndpointAccess;
+pub use resolve::{EndpointError, GatewayEndpointAccess};
