@@ -22,7 +22,7 @@ use nessa_sdk::{
 use rusqlite::Connection;
 use std::{
     future::Future,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read, Seek, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -925,6 +925,52 @@ async fn concurrent_opening_saves_on_two_sessions_both_publish() {
     storage.shutdown().await.unwrap();
 }
 
+struct StopWriter {
+    flag: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for StopWriter {
+    fn drop(&mut self) {
+        self.flag.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[test]
+fn contention_writer_stops_when_its_guard_drops() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("fsync-contention");
+    let flag = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
+    let flag_worker = Arc::clone(&flag);
+    let started_worker = Arc::clone(&started);
+    let finished_worker = Arc::clone(&finished);
+    let worker = thread::spawn(move || {
+        let mut file = std::fs::File::create(&path).unwrap();
+        let bytes = vec![1u8; 1024];
+        while !flag_worker.load(Ordering::Relaxed) {
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap();
+            file.rewind().unwrap();
+            started_worker.store(true, Ordering::Relaxed);
+        }
+        finished_worker.store(true, Ordering::Relaxed);
+    });
+    let guard = StopWriter {
+        flag,
+        worker: Some(worker),
+    };
+    while !started.load(Ordering::Relaxed) {
+        thread::yield_now();
+    }
+    drop(guard);
+    assert!(finished.load(Ordering::Relaxed));
+}
+
 #[tokio::test]
 async fn save_commit_latency_sample() {
     let directory = tempfile::tempdir().unwrap();
@@ -939,11 +985,15 @@ async fn save_commit_latency_sample() {
         while !flag.load(Ordering::Relaxed) {
             file.write_all(&bytes).unwrap();
             file.sync_all().unwrap();
+            file.rewind().unwrap();
         }
     });
+    let _guard = StopWriter {
+        flag: stop,
+        worker: Some(worker),
+    };
     let (busy_p50, busy_p95, busy_version) = time_saves(&root, "latency-contention").await;
-    stop.store(true, Ordering::Relaxed);
-    worker.join().unwrap();
+    drop(_guard);
     eprintln!(
         "SAVE_LATENCY idle_p50_us={} idle_p95_us={} busy_p50_us={} busy_p95_us={} idle_delta={} busy_delta={}",
         idle_p50.as_micros(),

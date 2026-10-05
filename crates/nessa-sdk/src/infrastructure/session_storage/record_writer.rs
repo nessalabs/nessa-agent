@@ -349,6 +349,7 @@ impl RecordWriter {
         let mut ranges = Vec::new();
         let mut facts = Vec::new();
         let mut next_offset = self.cursor.offset;
+        let mut retained = 0usize;
         for index in confirmed..=units.len() {
             let fact = if index == units.len() {
                 terminal.clone()
@@ -356,14 +357,39 @@ impl RecordWriter {
                 Self::encode_unit(units, &headers, index)?
                     .ok_or_else(|| corrupt("save unit disappeared from immutable plan"))?
             };
-            let start = framed.len();
             let frames = stream_fact::frame_fact(&fact, next_offset + 1)
                 .map_err(|error| self.live_error(FactCommitError::Frame(error)))?;
+            let adding = payload_bytes(&frames);
+            if !retain_next_fact(retained, adding) {
+                self.commit_framed(runtime, batch, &framed, std::mem::take(&mut facts), &ranges)
+                    .await?;
+                framed.clear();
+                ranges.clear();
+                retained = 0;
+            }
+            let start = framed.len();
             next_offset +=
                 u64::try_from(frames.len()).map_err(|_| corrupt("save frame count exhausted"))?;
             framed.extend(frames);
             ranges.push(start..framed.len());
             facts.push(fact);
+            retained = retained.saturating_add(adding);
+        }
+        self.commit_framed(runtime, batch, &framed, facts, &ranges)
+            .await?;
+        Ok(self.receipt.clone().expect("completion installed receipt"))
+    }
+
+    async fn commit_framed<R: EventRuntime>(
+        &mut self,
+        runtime: &R,
+        batch: Option<&Arc<SaveCommits>>,
+        framed: &[NewEvent],
+        facts: Vec<FramedFact>,
+        ranges: &[std::ops::Range<usize>],
+    ) -> Result<(), StorageError> {
+        if facts.is_empty() {
+            return Ok(());
         }
         let framed: Arc<[NewEvent]> = Arc::from(framed);
         let _attempt = batch.map(|batch| batch.arm(self.stream.clone(), Arc::clone(&framed)));
@@ -381,7 +407,7 @@ impl RecordWriter {
             let fact = self.pending.take().expect("retained across await");
             self.accept(fact, cursor)?;
         }
-        Ok(self.receipt.clone().expect("completion installed receipt"))
+        Ok(())
     }
 }
 fn completion_for_prefix(
@@ -475,6 +501,22 @@ fn fact_error(error: FactCommitError) -> StorageError {
     }
 }
 
+fn payload_bytes(frames: &[NewEvent]) -> usize {
+    frames.iter().fold(0usize, |total, event| {
+        total.saturating_add(event.payload.len())
+    })
+}
+
+/// Frame the next fact into the current attempt while the payloads already
+/// retained still fit in one store batch with it. The first fact is kept even
+/// when it is larger than that batch: holding one fact's frames is the
+/// existing per-fact cost, and a second large fact waits until those frames
+/// are committed and dropped.
+fn retain_next_fact(retained_payload: usize, next_payload: usize) -> bool {
+    retained_payload == 0
+        || retained_payload.saturating_add(next_payload) <= super::MAX_STORED_RECORD_BYTES
+}
+
 fn is_invalid_fact(error: &FactCommitError) -> bool {
     matches!(
         error,
@@ -497,6 +539,15 @@ mod tests {
         EventConfig, EventReader, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
     };
     use std::time::Duration;
+
+    #[test]
+    fn retain_next_fact_holds_one_oversized_fact_and_splits_before_a_second() {
+        let ceiling = super::super::MAX_STORED_RECORD_BYTES;
+        assert!(retain_next_fact(0, ceiling + 1));
+        assert!(retain_next_fact(32, 32));
+        assert!(!retain_next_fact(ceiling, 1));
+        assert!(!retain_next_fact(ceiling / 2 + 1, ceiling / 2 + 1));
+    }
 
     #[tokio::test]
     async fn sqlite_restart_replays_committed_decisions_without_provider_effects() {
