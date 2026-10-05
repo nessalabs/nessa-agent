@@ -434,6 +434,7 @@ first-frame and complete-exchange durations in
 | Ordering | Write result | First frame | Phase result | Regression case |
 | --- | --- | --- | --- | --- |
 | Preparation refused before write | Absent | Absent | Error | `preparation_error` |
+| Write-result logging advances the clock before decoding | Success, excludes logging time | Includes time since write completion | Success | `startup_first_frame_duration_includes_write_result_logging_delay` |
 | Initial write refused | Error | Absent | Error | `write_error` |
 | Initial write blocked until deadline | Error | Absent | Error | `startup_write_duration_reports_blocked_pipe_until_deadline` |
 | Write succeeds, close observed | Success | Absent | Error | `close` |

@@ -440,3 +440,71 @@ async fn startup_write_duration_reports_blocked_pipe_until_deadline() {
         .await
         .unwrap();
 }
+
+/// Simulate a synchronous subscriber consuming time after the write completes.
+#[derive(Clone)]
+struct SlowWriteLog {
+    captured: TimingLog,
+    clock: Arc<ManualClock>,
+}
+impl Write for SlowWriteLog {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if String::from_utf8_lossy(bytes).contains("agent startup request write finished") {
+            self.clock.advance(Duration::from_millis(25));
+        }
+        self.captured.write(bytes)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.captured.flush()
+    }
+}
+
+#[tokio::test]
+async fn startup_first_frame_duration_includes_write_result_logging_delay() {
+    let frames = [json!({"jsonrpc":"2.0","id":1,"result":{}})];
+    let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&frames, "").await;
+    let clock = manual_clock(&mut worker.config);
+    let captured = TimingLog::default();
+    let writer = SlowWriteLog {
+        captured: captured.clone(),
+        clock: clock.clone(),
+    };
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    promptly(
+        worker
+            .rpc(
+                "initialize",
+                json!({}),
+                clock.now() + Duration::from_secs(1),
+                None,
+            )
+            .with_subscriber(subscriber),
+    )
+    .await
+    .unwrap();
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    let write = log
+        .lines()
+        .find(|line| line.contains("agent startup request write finished"))
+        .unwrap();
+    assert!(write.contains("elapsed_ms=0.0"), "{log}");
+    let first = log
+        .lines()
+        .find(|line| line.contains("agent startup first frame received"))
+        .unwrap();
+    assert!(first.contains("elapsed_ms=25.0"), "{log}");
+    let phase = log
+        .lines()
+        .find(|line| line.contains("agent startup phase finished"))
+        .unwrap();
+    assert!(phase.contains("elapsed_ms=25.0"), "{log}");
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}

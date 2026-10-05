@@ -831,12 +831,13 @@ impl<P: AcpProfile> Worker<P> {
         )?;
         let write_started = self.config.clock.now();
         let sent = self.send_encoded(frame, Some(deadline)).await;
+        let write_finished = self.config.clock.now();
         tracing::info!(target: "nessa_sdk::timing", phase = method, request_id = id,
-            elapsed_ms = self.config.clock.now().saturating_duration_since(write_started).as_secs_f64() * 1000.0,
+            elapsed_ms = write_finished.saturating_duration_since(write_started).as_secs_f64() * 1000.0,
             outcome = if sent.is_ok() { "success" } else { "error" },
             "agent startup request write finished");
         sent?;
-        let response_started = self.config.clock.now();
+        let response_started = write_finished;
         let mut first_frame = true;
         loop {
             if let Some(request) = self.close_requested.borrow().clone() {
