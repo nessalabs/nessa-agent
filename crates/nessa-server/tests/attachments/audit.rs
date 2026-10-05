@@ -385,6 +385,69 @@ async fn a_record_is_committed_privately_with_its_own_identity_and_observation_t
     assert_ne!(identities[0], identities[1]);
 }
 
+#[tokio::test]
+async fn a_durable_write_does_not_start_until_the_previous_one_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let audit = Arc::new(
+        DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap(),
+    );
+    audit.pause_writes_for_test();
+    // A failing assertion must still let the blocked write return, or the
+    // runtime waits on that thread and the failure never prints.
+    let release_writes = ReleaseWrites(Arc::clone(&audit));
+    let first = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..100 {
+        if audit.writes_started() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(audit.writes_started(), 1, "the first write did not start");
+    // The place is still held inside the blocking write. Dropping it before
+    // `spawn_blocking` leaves this at 1.
+    assert_eq!(
+        audit.write_permits_available(),
+        0,
+        "the write dropped its place before it finished"
+    );
+    let second = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..40 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        audit.writes_started(),
+        1,
+        "a second write started while the first still held its place"
+    );
+    drop(release_writes);
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(audit.writes_started(), 2);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+struct ReleaseWrites(Arc<DurableAttachmentAudit>);
+impl Drop for ReleaseWrites {
+    fn drop(&mut self) {
+        self.0.resume_writes_for_test();
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_failure() {
