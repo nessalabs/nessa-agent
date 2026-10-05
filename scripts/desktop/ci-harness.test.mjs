@@ -82,16 +82,25 @@ test("local and CI aggregate the same named frontend and native checks", () => {
 
 test("Linux coverage is its own job, and assembly stays with the native smoke", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
-  const localAuthStart = workflow.indexOf("\n  local-auth:\n")
-  const coverageStart = workflow.indexOf("\n  sdk-domain-coverage:\n")
-  const checksStart = workflow.indexOf("\n  required-checks:\n")
-  assert.ok(
-    localAuthStart !== -1 &&
-      coverageStart > localAuthStart &&
-      checksStart > coverageStart,
-  )
-  const localAuth = workflow.slice(localAuthStart, coverageStart)
-  const coverage = workflow.slice(coverageStart, checksStart)
+  // Hosted Windows checks this file out with CRLF. A search that requires a
+  // bare LF after the job key misses every header there, and check-desktop
+  // fails the matrix leg after the Rust tests have already passed.
+  const asWindowsCheckout = workflow.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
+  for (const checkout of [workflow, asWindowsCheckout]) {
+    const jobAt = (name) => checkout.search(new RegExp(`\\n  ${name}:\\r?\\n`))
+    const localAuthStart = jobAt("local-auth")
+    const coverageStart = jobAt("sdk-domain-coverage")
+    const checksStart = jobAt("required-checks")
+    assert.ok(localAuthStart !== -1, "local-auth job")
+    assert.ok(coverageStart > localAuthStart, "sdk-domain-coverage follows local-auth")
+    assert.ok(checksStart > coverageStart, "required-checks follows sdk-domain-coverage")
+    const localAuth = checkout.slice(localAuthStart, coverageStart)
+    const coverage = checkout.slice(coverageStart, checksStart)
+    assertCoverageJobSplit(localAuth, coverage, checkout)
+  }
+})
+
+function assertCoverageJobSplit(localAuth, coverage, workflow) {
   assert.match(localAuth, /name: Assemble the Linux desktop runtime/)
   assert.match(localAuth, /pnpm desktop:smoke/)
   assert.doesNotMatch(localAuth, /run: bash scripts\/check-sdk-domain-coverage\.sh/)
@@ -107,7 +116,7 @@ test("Linux coverage is its own job, and assembly stays with the native smoke", 
     "a cold measurement skips the cache and nothing else",
   )
   assert.match(workflow, /options:\s+- restore\s+- cold\s+default: restore/)
-})
+}
 
 test("the existing Linux matrix leg uniquely owns direct runtime assembly", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
