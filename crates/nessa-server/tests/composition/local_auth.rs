@@ -310,3 +310,29 @@ fn a_journal_left_under_conversations_is_moved() {
     assert!(!kept_journal.exists());
     assert!(kept_dir.join("metadata.sqlite3").is_file());
 }
+
+/// Both journals on disk: the current file stays, and the old rollback is not
+/// renamed onto it.
+#[test]
+fn both_journals_present_leaves_the_current_file() {
+    let (_directory, namespace, _store) = namespace_with_registry();
+    let current = receiver_journal(&namespace);
+    nessa_local_storage::create_directory(current.parent().unwrap()).unwrap();
+    std::fs::write(&current, b"current").unwrap();
+    let legacy_dir = conversation_root(&namespace);
+    nessa_local_storage::create_directory(&legacy_dir).unwrap();
+    let legacy = legacy_dir.join("receiver-access.sqlite3");
+    std::fs::write(&legacy, b"legacy").unwrap();
+    std::fs::write(
+        legacy_dir.join("receiver-access.sqlite3-journal"),
+        b"old-journal",
+    )
+    .unwrap();
+    adopt_legacy_journal(&namespace, &current).unwrap();
+    assert_eq!(std::fs::read(&current).unwrap(), b"current");
+    assert_eq!(std::fs::read(&legacy).unwrap(), b"legacy");
+    assert_eq!(
+        std::fs::read(legacy_dir.join("receiver-access.sqlite3-journal")).unwrap(),
+        b"old-journal"
+    );
+}
