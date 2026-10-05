@@ -71,6 +71,10 @@ pub(super) fn restart(error: &RunError) -> Restart {
         RunError::Runtime(_) => Restart::Pointless,
         // Another version, or not a database: the same bytes next time.
         RunError::Dataset(_) => Restart::Pointless,
+        // The journal is gone and an enrollment still owes a fence. Creating
+        // an empty one would make that fence a missing receiver, and the
+        // file does not reappear on its own (design row RJ2).
+        RunError::ReceiverJournal(_) => Restart::Pointless,
         // The command line named nothing this build can run. Under launchd
         // that command line is this installation's own plist, which the next
         // attempt reads unchanged, so retrying is the relaunch loop and not a
@@ -177,6 +181,9 @@ mod tests {
             RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
                 PairingStoreError::PrivateState(PrivateStateError::Conflict),
             ))),
+            RunError::ReceiverJournal(crate::core::MissingReceiverJournal::new(
+                std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
+            )),
         ] {
             assert_eq!(restart(&error), Restart::Pointless, "{error}");
         }

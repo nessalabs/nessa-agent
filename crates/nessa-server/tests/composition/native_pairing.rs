@@ -41,18 +41,11 @@ impl Namespace {
     fn root(&self) -> PathBuf {
         self.directory.path().join("namespace")
     }
-    /// The namespace's receiver-access store, as composition opens it.
+    /// The namespace's receiver journal, as composition opens it.
     fn receivers(&self) -> Arc<LocalReceiverAuthority> {
-        let root = self.root().join("conversations");
-        nessa_local_storage::create_directory(&root).unwrap();
-        Arc::new(
-            LocalReceiverAuthority::open(
-                &root.join("receiver-access.sqlite3"),
-                "policy",
-                Arc::new(SystemClock),
-            )
-            .unwrap(),
-        )
+        let path = super::super::local_auth::receiver_journal(&self.root());
+        nessa_local_storage::create_directory(path.parent().unwrap()).unwrap();
+        Arc::new(LocalReceiverAuthority::open(&path, "policy", Arc::new(SystemClock)).unwrap())
     }
     fn registry(&self) -> Arc<LocalCredentialStore> {
         Arc::new(LocalCredentialStore::open(self.root().join("auth"), "credentials.json").unwrap())

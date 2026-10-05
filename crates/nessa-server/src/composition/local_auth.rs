@@ -56,10 +56,12 @@ use nessa_auth::{
             ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
         dto::CredentialMetadataDto,
+        pairing::PairingStore,
         ports::{Clock, PortFuture},
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_local_database::OpenError;
 use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
@@ -87,6 +89,7 @@ use nessa_sync::replication::domain::Id as RecordId;
 use std::collections::HashSet;
 use std::{
     collections::HashMap,
+    io,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -211,6 +214,7 @@ pub(super) async fn product_state(
     let receivers = if settings.agents.is_some() || settings.native.is_some() {
         Some(receiver_access(
             namespace,
+            &store,
             &CedarPolicyEvaluator::profile_digest(),
         )?)
     } else {
@@ -478,22 +482,269 @@ pub(super) fn mcp_app_ports(
     }
 }
 
-/// Open the namespace's receiver-access store, creating its directory.
+/// Open the namespace's receiver journal.
+///
+/// The file is `receiver-access/receiver-access.sqlite3`, not a file under
+/// [`conversation_root`]: that directory's absence is how retirement reports
+/// conversation data gone (ADR 221), and a gateway with only native pairing
+/// has none. When an enrollment still owes receiver cleanup, the existing
+/// file is opened and a missing one is not created, including when the file
+/// disappears after it was last seen. An empty journal would make the owed
+/// fence a missing receiver, which startup then refuses for good
+/// (`a_missing_journal_is_not_recreated_while_cleanup_is_owed`). A failed
+/// pending-pairings read is authentication setup, and creates nothing
+/// (`a_failed_pending_pairings_read_is_authentication_and_creates_no_journal`).
 fn receiver_access(
     namespace: &Path,
+    store: &LocalCredentialStore,
     policy_revision: &str,
 ) -> Result<Arc<LocalReceiverAuthority>, RunError> {
-    let root = conversation_root(namespace);
-    nessa_local_storage::create_directory(&root)
-        .map_err(|error| RunError::Agent(error.to_string()))?;
-    let path = root.join("receiver-access.sqlite3");
+    open_receiver_journal(
+        namespace,
+        policy_revision,
+        receiver_cleanup_owed(store)?,
+        &OsJournalFiles,
+    )
+}
+
+fn open_receiver_journal(
+    namespace: &Path,
+    policy_revision: &str,
+    cleanup_owed: bool,
+    files: &dyn JournalFiles,
+) -> Result<Arc<LocalReceiverAuthority>, RunError> {
+    let path = receiver_journal(namespace);
+    // Also when the database is already at `path`: a previous start may have
+    // moved it and left the rollback file under `conversations/`.
+    adopt_legacy_journal(namespace, &path, files)?;
+    if cleanup_owed {
+        return open_owed_journal(&path, policy_revision);
+    }
+    if journal_absent(&path, files)? {
+        let root = path
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
+        files
+            .create_directory(root)
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+    }
     LocalReceiverAuthority::open(&path, policy_revision, Arc::new(SystemClock))
         .map(Arc::new)
         .map_err(|cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &path, cause))
 }
 
+/// What startup needs from the journal's directories. Composition passes
+/// [`OsJournalFiles`]; a test passes a substitute that never touches a disk
+/// (`a_legacy_move_syncs_its_directories_before_it_finishes`).
+trait JournalFiles {
+    fn metadata(&self, path: &Path) -> io::Result<JournalEntry>;
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    fn remove_dir(&self, path: &Path) -> io::Result<()>;
+    fn sync_directory(&self, path: &Path) -> io::Result<()>;
+    fn create_directory(&self, path: &Path) -> io::Result<()>;
+}
+
+enum JournalEntry {
+    RegularFile,
+    Other,
+}
+
+struct OsJournalFiles;
+
+impl JournalFiles for OsJournalFiles {
+    fn metadata(&self, path: &Path) -> io::Result<JournalEntry> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        Ok(if metadata.is_file() {
+            JournalEntry::RegularFile
+        } else {
+            JournalEntry::Other
+        })
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_dir(path)
+    }
+
+    fn sync_directory(&self, path: &Path) -> io::Result<()> {
+        nessa_local_storage::sync_directory(path)
+    }
+
+    fn create_directory(&self, path: &Path) -> io::Result<()> {
+        nessa_local_storage::create_directory(path)
+    }
+}
+
+/// Open the journal that cleanup still has to read. The file is opened as it
+/// is: a path that is not there stays absent, rather than a check followed by
+/// a create that can fill the gap with an empty database.
+fn open_owed_journal(
+    path: &Path,
+    policy_revision: &str,
+) -> Result<Arc<LocalReceiverAuthority>, RunError> {
+    match LocalReceiverAuthority::open_existing(path, policy_revision, Arc::new(SystemClock)) {
+        Ok(authority) => Ok(Arc::new(authority)),
+        Err(OpenError::File(error) | OpenError::Directory(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Err(RunError::ReceiverJournal(
+                crate::core::MissingReceiverJournal::new(path.to_path_buf()),
+            ))
+        }
+        Err(cause) => Err(RunError::opening(
+            crate::core::Dataset::ReceiverAccess,
+            path,
+            cause,
+        )),
+    }
+}
+
+/// Suffixes SQLite writes beside the database file: the rollback journal, and
+/// the write-ahead log and its shared memory when a file was left in that mode.
+const JOURNAL_SIDECARS: &[&str] = &["-journal", "-wal", "-shm"];
+
+/// Move a journal that still sits under `conversations/` to `path`.
+///
+/// This is the current location, not a second reader: after the move, only
+/// `path` is opened. The rollback journal and write-ahead files move with the
+/// database; they are that journal, not conversation records. A crash between
+/// the two moves is finished on the next start. An empty conversation
+/// directory is then removed, because retirement would otherwise report it as
+/// conversation data. A directory that still holds anything else is left.
+/// When the current file is already present, the old database is left where
+/// it is, sidecars included.
+fn adopt_legacy_journal(
+    namespace: &Path,
+    path: &Path,
+    files: &dyn JournalFiles,
+) -> Result<(), RunError> {
+    let legacy_dir = conversation_root(namespace);
+    let legacy = legacy_dir.join("receiver-access.sqlite3");
+    let legacy_is_file = match files.metadata(&legacy) {
+        Ok(JournalEntry::RegularFile) => true,
+        Ok(JournalEntry::Other) => false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(journal_io(&legacy, error)),
+    };
+    // Both files present: the current journal is the one to open. Do not
+    // lay the old file's rollback over it.
+    if legacy_is_file && !journal_absent(path, files)? {
+        return Ok(());
+    }
+    let root = path
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
+    let mut moved = false;
+    if legacy_is_file {
+        files
+            .create_directory(root)
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+        files
+            .rename(&legacy, path)
+            .map_err(|error| journal_io(&legacy, error))?;
+        moved = true;
+    }
+    if journal_absent(path, files)? {
+        return Ok(());
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
+    for suffix in JOURNAL_SIDECARS {
+        moved |= move_regular_file(
+            files,
+            &legacy_dir.join(format!("{file_name}{suffix}")),
+            &root.join(format!("{file_name}{suffix}")),
+        )?;
+    }
+    // The new directory is an entry in the namespace. That parent is synced
+    // before the old directory, so a power loss cannot drop the new directory
+    // after the old name is already durable
+    // (`a_legacy_move_syncs_its_directories_before_it_finishes`,
+    // `a_legacy_move_syncs_the_namespace_when_the_old_directory_stays`).
+    // A start that moved nothing has no directory entry to make durable.
+    if moved {
+        sync_journal_directory(files, root)?;
+        sync_journal_directory(files, namespace)?;
+        sync_journal_directory(files, &legacy_dir)?;
+    }
+    // Empty only. A directory that still holds conversation records stays,
+    // and that is not a failure to move the journal. Removing it is its own
+    // directory entry, so the namespace is synced again after it is gone.
+    match files.remove_dir(&legacy_dir) {
+        Ok(()) => sync_journal_directory(files, namespace)?,
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
+        Err(error) => {
+            return Err(RunError::Agent(format!(
+                "conversations directory at {}: {error}",
+                legacy_dir.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sync_journal_directory(files: &dyn JournalFiles, path: &Path) -> Result<(), RunError> {
+    files
+        .sync_directory(path)
+        .map_err(|error| journal_io(path, error))
+}
+
+fn journal_io(path: &Path, error: io::Error) -> RunError {
+    RunError::Agent(format!("receiver access at {}: {error}", path.display()))
+}
+
+/// Rename a regular file. Anything else, including a missing path, is left.
+/// `true` when a file was renamed.
+fn move_regular_file(files: &dyn JournalFiles, from: &Path, to: &Path) -> Result<bool, RunError> {
+    match files.metadata(from) {
+        Ok(JournalEntry::RegularFile) => {}
+        Ok(JournalEntry::Other) => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(journal_io(from, error)),
+    }
+    files
+        .rename(from, to)
+        .map_err(|error| journal_io(from, error))?;
+    Ok(true)
+}
+
+/// Whether any enrollment still has to fence a receiver through the journal.
+fn receiver_cleanup_owed(store: &LocalCredentialStore) -> Result<bool, RunError> {
+    let pending = store.pending_pairings().map_err(|error| {
+        RunError::Authentication(format!(
+            "could not read whether receiver cleanup is owed: {error}"
+        ))
+    })?;
+    Ok(pending.iter().any(|record| record.cleanup_pending()))
+}
+
+/// The journal file is not there. A stat that fails any other way is that
+/// failure, not an absent journal. A path that exists is opened as it is.
+fn journal_absent(path: &Path, files: &dyn JournalFiles) -> Result<bool, RunError> {
+    match files.metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(journal_io(path, error)),
+        Ok(_) => Ok(false),
+    }
+}
+
+/// Where a namespace keeps its receiver journal. Not under `conversations/`.
+pub(super) fn receiver_journal(namespace: &Path) -> std::path::PathBuf {
+    namespace
+        .join("receiver-access")
+        .join("receiver-access.sqlite3")
+}
+
 /// Where a namespace keeps its conversations. Read by composition and by the
-/// retirement that reports whether they are still there.
+/// retirement that reports whether they are still there. The receiver journal
+/// is not in this directory.
 pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }

@@ -314,9 +314,10 @@ impl Fixture {
     }
 }
 
-/// The fixture's receiver-access store, opened as composition opens it.
+/// The fixture's receiver journal, opened as composition opens it:
+/// `receiver-access/receiver-access.sqlite3`, not under `conversations/`.
 pub fn receiver_authority(parent: &Path) -> Arc<LocalReceiverAuthority> {
-    let root = private_root(parent, "conversations");
+    let root = private_root(parent, "receiver-access");
     Arc::new(
         LocalReceiverAuthority::open(
             &root.join("receiver-access.sqlite3"),

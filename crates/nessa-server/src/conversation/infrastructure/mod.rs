@@ -6,7 +6,9 @@
 //! listing and the owner-scoped catalogue at once.
 //!
 //! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
-//! epochs and transition evidence in its own private SQLite dataset. It supplies
+//! epochs and transition evidence in its own private SQLite dataset,
+//! `receiver-access/receiver-access.sqlite3` under the namespace. That file is
+//! not conversation data and is not under `conversations/`. It supplies
 //! passive admission, and device pairing pairs a receiver with an issued device
 //! credential and fences it, as the system, once that enrollment has ended
 //! (`device_pairing::infrastructure::ConversationReceivers`).
