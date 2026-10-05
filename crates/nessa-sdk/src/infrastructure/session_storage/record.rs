@@ -10,6 +10,7 @@ use super::{
     record_lifecycle::{join, shutdown_result, StorageOwner},
     record_source::CachedCommittedRead,
     record_writer::RecordWriter,
+    save_batch::{RecordRuntime, RecordStoreOptions, SaveCommits},
     terminal_discovery::TerminalCache,
 };
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
@@ -25,9 +26,8 @@ use crate::{
     domain::agent_execution::sessions::SessionId,
 };
 use event_stream::{
-    infrastructure::{SqliteOptions, SqliteStore},
-    EventConfig, EventReader, EventRuntime, LifecycleAction, LifecycleOperationId,
-    LifecycleRequest, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+    infrastructure::SqliteOptions, EventConfig, EventReader, EventRuntime, LifecycleAction,
+    LifecycleOperationId, LifecycleRequest, PersistenceProfile, RuntimeConfig, StreamId,
 };
 use nessa_sync::replication::domain::Scope;
 use sha2::{Digest, Sha256};
@@ -51,7 +51,8 @@ pub const MAX_STORED_RECORD_BYTES: usize = 1024 * 1024;
 pub struct RecordStorage {
     root: PathBuf,
     options: SqliteOptions,
-    runtime: Arc<OnceCell<Runtime<SqliteStore>>>,
+    saves: Arc<SaveCommits>,
+    runtime: Arc<OnceCell<RecordRuntime>>,
     pub(super) owner: Arc<StorageOwner>,
     changes: RecordChanges,
     pub(super) committed_views: Arc<Mutex<HashMap<Scope, Arc<CachedCommittedRead>>>>,
@@ -73,6 +74,7 @@ impl RecordStorage {
         Ok(Self {
             root,
             options,
+            saves: Arc::new(SaveCommits::new()),
             runtime: Arc::new(OnceCell::new()),
             owner: Arc::default(),
             changes: RecordChanges::default(),
@@ -135,11 +137,11 @@ impl RecordStorage {
     /// The worker thread's ready oneshot wakes this wait. `contain_caller_wake`
     /// is the only owner of that fault, for `initialize` and for every other
     /// method whose first call opens the runtime.
-    pub(super) async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
+    pub(super) async fn runtime(&self) -> Result<&RecordRuntime, StorageError> {
         self.owner.initialize()?;
         contain_caller_wake(
             "record storage runtime",
-            initialize_runtime(&self.runtime, &self.options),
+            initialize_runtime(&self.runtime, &self.options, &self.saves),
         )
         .await
     }
@@ -165,6 +167,11 @@ impl RecordStorage {
             ));
         }
         let runtime = self.runtime().await?.clone();
+        let batch = self
+            .options
+            .failure_injection
+            .is_none()
+            .then(|| Arc::clone(&self.saves));
         let stream_id =
             StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
         let stream = if existing {
@@ -189,6 +196,7 @@ impl RecordStorage {
                 inner: Arc::new(LeaseInner {
                     _reservation: reservation,
                     runtime,
+                    batch,
                     changes,
                     state: AsyncMutex::new(LeaseState {
                         writer,
@@ -215,6 +223,7 @@ impl SessionStorage for RecordStorage {
             if let Some(work) = work {
                 let runtime = self.runtime.clone();
                 let options = self.options.clone();
+                let saves = Arc::clone(&self.saves);
                 tokio::spawn(async move {
                     let read = tokio::task::spawn_blocking(move || {
                         let mut failure = work.read_failure;
@@ -228,7 +237,7 @@ impl SessionStorage for RecordStorage {
                     .await
                     .unwrap_or_else(|error| Err(StorageError::Io(error.to_string())));
                     let cleanup = if work.initialized {
-                        match initialize_runtime(&runtime, &options).await {
+                        match initialize_runtime(&runtime, &options, &saves).await {
                             Ok(runtime) => match runtime
                                 .shutdown(Duration::from_secs(10))
                                 .await
@@ -272,9 +281,11 @@ impl SessionStorage for RecordStorage {
 }
 
 async fn initialize_runtime<'a>(
-    cell: &'a OnceCell<Runtime<SqliteStore>>,
+    cell: &'a OnceCell<RecordRuntime>,
     options: &SqliteOptions,
-) -> Result<&'a Runtime<SqliteStore>, StorageError> {
+    saves: &Arc<SaveCommits>,
+) -> Result<&'a RecordRuntime, StorageError> {
+    let saves = Arc::clone(saves);
     cell.get_or_try_init(|| async {
         let config = RuntimeConfig {
             events: EventConfig {
@@ -283,9 +294,15 @@ async fn initialize_runtime<'a>(
             },
             ..RuntimeConfig::default()
         };
-        Runtime::<SqliteStore>::open(options.clone(), config)
-            .await
-            .map_err(store_error)
+        event_stream::Runtime::open(
+            RecordStoreOptions {
+                sqlite: options.clone(),
+                saves,
+            },
+            config,
+        )
+        .await
+        .map_err(store_error)
     })
     .await
 }
@@ -312,7 +329,8 @@ impl Drop for Reservation {
 struct LeaseInner {
     // Kept by every detached operation until its read, write or reset finishes.
     _reservation: Reservation,
-    runtime: Runtime<SqliteStore>,
+    runtime: RecordRuntime,
+    batch: Option<Arc<SaveCommits>>,
     changes: RecordChanges,
     state: AsyncMutex<LeaseState>,
     #[cfg(test)]
@@ -400,7 +418,13 @@ impl SessionStorageLease for RecordLease {
                 state.reconcile_erasure(&inner).await?;
                 state
                     .writer
-                    .save(&inner.runtime, generation, &snapshot, &units)
+                    .save(
+                        &inner.runtime,
+                        inner.batch.as_ref(),
+                        generation,
+                        &snapshot,
+                        &units,
+                    )
                     .await
             })
             .await
