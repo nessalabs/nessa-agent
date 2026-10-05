@@ -354,7 +354,10 @@ async fn a_record_is_committed_privately_with_its_own_identity_and_observation_t
         DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap();
     for _ in 0..2 {
         audit
-            .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+            .record(
+                AttachmentAuditRecord::TicketExpired { ticket: ticket() },
+                None,
+            )
             .await
             .unwrap();
     }
@@ -401,7 +404,10 @@ async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_fai
     fs::remove_dir(&directory).unwrap();
     assert_eq!(
         audit
-            .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+            .record(
+                AttachmentAuditRecord::TicketExpired { ticket: ticket() },
+                None,
+            )
             .await,
         Err(AuditUnavailable)
     );
@@ -464,4 +470,43 @@ fn substitutable_retirement_reports_refuse_contradictory_inputs() {
         assert!(RemovedBlob::new(vec![valid.clone(), other.clone()]).is_none());
         assert!(RemovedBlob::new(vec![other, valid]).is_none());
     }
+}
+
+#[tokio::test]
+async fn a_write_that_outlives_its_deadline_keeps_its_admission_slot() {
+    use crate::attachments::application::BulkAuditSlot;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+    use tokio::{sync::Semaphore, time::timeout};
+
+    let slots = Arc::new(Semaphore::new(1));
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let mut joins = Vec::new();
+    for _ in 0..4 {
+        let slots = Arc::clone(&slots);
+        let in_flight = Arc::clone(&in_flight);
+        let max_in_flight = Arc::clone(&max_in_flight);
+        joins.push(tokio::spawn(async move {
+            let slot = BulkAuditSlot::new(slots.acquire_owned().await.unwrap());
+            let _ = timeout(Duration::from_millis(40), async move {
+                super::spawn_held(Some(slot), move || {
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_in_flight.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(120));
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                })
+                .await
+                .unwrap();
+            })
+            .await;
+        }));
+    }
+    for join in joins {
+        join.await.unwrap();
+    }
+    assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
 }

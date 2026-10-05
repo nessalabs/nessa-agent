@@ -8,17 +8,19 @@ use crate::attachments::domain::{
     Attachment, Caller, Hold, HoldState, MediaType, RetiredFrom, TicketLifetime, TicketLimits,
     UploadTicket, TICKET_LIFETIME_MS,
 };
-use crate::attachments::infrastructure::DurableAttachmentAudit;
+use crate::attachments::infrastructure::{spawn_held, DurableAttachmentAudit};
 use crate::attachments_test_support::{
     attachment, begin_request, caller, conversation, digest_of, organization, principal,
     ChannelBody, CountingSecrets, FixedOwnership, Fixture, ManualClock, MemoryStore,
     RecordingAudit, StubNormalizer, CONVERSATION, NOW_MS, OTHER_CONVERSATION,
 };
+use futures_util::FutureExt;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use serde_json::Value;
 use std::{
+    panic::AssertUnwindSafe,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -1275,6 +1277,244 @@ async fn a_zero_admission_still_attempts_every_record() {
 
     assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(fixture.audit.taken().len(), 2);
+}
+
+#[tokio::test]
+async fn dropping_the_service_stops_bulk_attempts_that_have_not_started() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let audit = Arc::clone(&fixture.audit);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    drop(fixture);
+    let _ = gate.send(());
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(audit.attempts.load(Ordering::SeqCst), attempts + 1);
+}
+
+#[tokio::test]
+async fn a_panicked_delivery_does_not_drop_the_next_phase_s_records() {
+    let fixture = fixture();
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(OTHER_CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    fixture.audit.panic_in_record.store(true, Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    fixture.audit.panic_in_record.store(false, Ordering::SeqCst);
+
+    // The other conversation still has its hold. Its release must own those
+    // records before the parked panic is resumed. Beginning again would sweep,
+    // and an empty sweep would resume that panic before any new records existed.
+    let before = fixture.audit.attempts.load(Ordering::SeqCst);
+    let caught = AssertUnwindSafe(fixture.service.release(release_request(OTHER_CONVERSATION)))
+        .catch_unwind()
+        .await;
+    assert!(caught.is_err());
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) >= before + 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), before + 2);
+}
+
+#[tokio::test]
+async fn an_empty_phase_surfaces_a_panicked_delivery() {
+    let fixture = fixture();
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    fixture.audit.panic_in_record.store(true, Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    fixture.audit.panic_in_record.store(false, Ordering::SeqCst);
+
+    let caught = AssertUnwindSafe(fixture.service.release(release_request(OTHER_CONVERSATION)))
+        .catch_unwind()
+        .await;
+    assert!(caught.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged() {
+    let fixture = Fixture::new(AttachmentLimits {
+        tickets: tickets(4),
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(1),
+        ..AttachmentLimits::default()
+    });
+    let _stale = fixture.ticket(CONVERSATION, b"stale", PDF).await;
+    fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS - 1);
+    let fresh = fixture
+        .ticket_as("begin-2", OTHER_CONVERSATION, b"fresh", PDF)
+        .await;
+    fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS + 1);
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+
+    let stored = fixture
+        .service
+        .receive(&fresh, Some(5), ChannelBody::of(b"fresh", 7))
+        .await
+        .unwrap();
+
+    assert_eq!(stored, attachment(b"fresh", PDF));
+    assert!(fixture.audit.attempts.load(Ordering::SeqCst) > attempts);
+    assert!(fixture
+        .audit
+        .taken()
+        .iter()
+        .any(|record| matches!(record, AttachmentAuditRecord::HoldCreated { .. })));
+    gate.send(()).unwrap();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(fixture
+        .audit
+        .taken_all()
+        .iter()
+        .any(|record| matches!(record, AttachmentAuditRecord::TicketExpired { .. })));
+}
+
+/// A bulk sink whose write keeps running after the deadline, holding the slot
+/// it was given. Single-record calls pass no slot and return at once.
+struct DetachedAudit {
+    in_flight: Arc<AtomicUsize>,
+    max_in_flight: Arc<AtomicUsize>,
+    measured_attempts: Arc<AtomicUsize>,
+    /// Set once the uploads are done, so only the bulk release is measured.
+    /// A bulk call that arrives without its slot still counts: that is the
+    /// failure where the slot was dropped instead of being held.
+    measure: Arc<AtomicBool>,
+}
+impl AttachmentAudit for DetachedAudit {
+    fn record(
+        &self,
+        _record: AttachmentAuditRecord,
+        slot: Option<BulkAuditSlot>,
+    ) -> PortFuture<'_, (), AuditUnavailable> {
+        let measure = self.measure.load(Ordering::SeqCst);
+        let in_flight = Arc::clone(&self.in_flight);
+        let max_in_flight = Arc::clone(&self.max_in_flight);
+        let measured_attempts = Arc::clone(&self.measured_attempts);
+        Box::pin(async move {
+            spawn_held(slot, move || {
+                if !measure {
+                    return Ok(());
+                }
+                measured_attempts.fetch_add(1, Ordering::SeqCst);
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(120));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .map_err(|_| AuditUnavailable)?
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_bulk_write_that_outlives_its_deadline_keeps_the_admission_slot() {
+    let store = Arc::new(MemoryStore::default());
+    let audit = Arc::new(DetachedAudit {
+        in_flight: Arc::new(AtomicUsize::new(0)),
+        max_in_flight: Arc::new(AtomicUsize::new(0)),
+        measured_attempts: Arc::new(AtomicUsize::new(0)),
+        measure: Arc::new(AtomicBool::new(false)),
+    });
+    let ownership = Arc::new(FixedOwnership::default());
+    ownership.give(CONVERSATION, "org", "owner");
+    let service = AttachmentService::new(
+        AttachmentDependencies {
+            store: store.clone(),
+            audit: audit.clone(),
+            ownership,
+            secrets: Arc::new(CountingSecrets::default()),
+            normalizer: Arc::new(StubNormalizer::failing(NormalizeError::Failed)),
+            clock: Arc::new(ManualClock::at(NOW_MS)),
+        },
+        AttachmentLimits {
+            audit_deadline: Duration::from_millis(40),
+            audit_budget: Duration::from_millis(20),
+            audit_admission: 1,
+            ..AttachmentLimits::default()
+        },
+    );
+    let fixture_service = service.clone();
+    // Two held files, so release hands over four records.
+    for bytes in [b"first".as_slice(), b"second".as_slice()] {
+        let ticket = match fixture_service
+            .begin(caller("org", "owner"), {
+                let mut request = begin_request(CONVERSATION, bytes, PDF);
+                request.request_id = format!("begin-{}", bytes[0]);
+                request
+            })
+            .await
+            .unwrap()
+        {
+            BeginOutcome::UploadRequired { ticket, .. } => ticket.expose(),
+            BeginOutcome::Stored(_) => panic!("a ticket was expected"),
+        };
+        fixture_service
+            .receive(&ticket, Some(bytes.len() as u64), ChannelBody::of(bytes, 7))
+            .await
+            .unwrap();
+    }
+    audit.measure.store(true, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let result = service.release(release_request(CONVERSATION)).await;
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert_eq!(
+        result,
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 4
+        })
+    );
+    for _ in 0..50 {
+        if audit.measured_attempts.load(Ordering::SeqCst) == 4
+            && audit.in_flight.load(Ordering::SeqCst) == 0
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert_eq!(audit.measured_attempts.load(Ordering::SeqCst), 4);
+    assert_eq!(audit.max_in_flight.load(Ordering::SeqCst), 1);
+    assert_eq!(audit.in_flight.load(Ordering::SeqCst), 0);
 }
 
 /// Both uploads were released in the closer's name, for the close that asked.

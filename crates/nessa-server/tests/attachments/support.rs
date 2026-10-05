@@ -4,11 +4,11 @@ use crate::attachments::{
     application::{
         AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
         AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
-        BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
-        Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable,
-        PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold,
-        RetirementEvidence, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
-        TicketSecrets, UploadBody, UploadInterrupted,
+        BeginUpload, BulkAuditSlot, Confirmation, ConversationOwnership, Discard, HoldClaim,
+        ImageNormalizer, Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
+        OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport,
+        RemovedBlob, RetiredHold, RetirementEvidence, RevertCause, SecretsUnavailable,
+        StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted,
     },
     domain::{Attachment, Hold, MediaType, RetiredFrom},
 };
@@ -104,6 +104,9 @@ pub(crate) struct RecordingAudit {
     records: Mutex<Vec<AttachmentAuditRecord>>,
     pub(crate) refusing: AtomicBool,
     pub(crate) stalled: AtomicBool,
+    /// The next `record` panics after it has been counted, so a delivery task
+    /// can be left finished with a panic.
+    pub(crate) panic_in_record: AtomicBool,
     pub(crate) attempts: AtomicUsize,
     /// How long each `record` future lived, in call order. A deadline drops
     /// the future, so this is the attempt the service actually gave it.
@@ -169,8 +172,15 @@ impl Drop for AttemptSpan<'_> {
 }
 
 impl AttachmentAudit for RecordingAudit {
-    fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
+    fn record(
+        &self,
+        record: AttachmentAuditRecord,
+        slot: Option<BulkAuditSlot>,
+    ) -> PortFuture<'_, (), AuditUnavailable> {
         Box::pin(async move {
+            // Held until this future ends. A stall stops when the deadline
+            // drops the future, and the slot goes with it.
+            let _slot = slot;
             let _span = AttemptSpan {
                 audit: self,
                 started: tokio::time::Instant::now(),
@@ -186,6 +196,11 @@ impl AttachmentAudit for RecordingAudit {
                 if gate.then_refuse {
                     return Err(AuditUnavailable);
                 }
+            }
+            // After a held gate, so a test can drop the caller while this
+            // attempt is still inside the sink and only then let it panic.
+            if self.panic_in_record.load(Ordering::SeqCst) {
+                panic!("attachment audit sink panicked");
             }
             if self.stalled.load(Ordering::SeqCst) {
                 std::future::pending::<()>().await;

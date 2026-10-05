@@ -10,6 +10,8 @@ mod normalizer;
 mod secrets;
 mod store;
 
+#[cfg(test)]
+pub(crate) use audit::spawn_held;
 pub use audit::DurableAttachmentAudit;
 pub use conversation::{ConversationHolds, RepositoryOwnership};
 pub use images::StoredUserImages;

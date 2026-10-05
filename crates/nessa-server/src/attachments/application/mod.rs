@@ -9,7 +9,9 @@
 //! reported without stopping cleanup. A bulk phase (a release, or one sweep of
 //! expired tickets) gives every record its own deadline; the caller waits at
 //! most the phase budget and does not cancel the attempts by returning or by
-//! being dropped. The order is `docs/design/artifact-sync.md`.
+//! being dropped. Dropping the service aborts attempts not yet in the sink. A
+//! write that already holds its admission slot finishes and keeps that slot.
+//! The order is `docs/design/artifact-sync.md`.
 //!
 //! ```text
 //! begin   -> ConversationOwnership, AttachmentStore::find_upload, TicketSecrets -> TicketBook
@@ -32,8 +34,8 @@ pub use artifacts::{
 };
 pub use error::{AuditDelivery, BeginError, ReleaseError, UploadError};
 pub use ports::{
-    AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, Confirmation,
-    ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,
+    AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, BulkAuditSlot,
+    Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,
     NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable, PortFuture, ReceivedBytes,
     ReleaseCause, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
     RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,

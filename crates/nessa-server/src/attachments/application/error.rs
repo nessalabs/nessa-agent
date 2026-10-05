@@ -77,8 +77,9 @@ pub enum ReleaseError {
         /// Holds or bytes that could not be read or removed. A store that
         /// could not be asked at all counts as one.
         storage_failures: usize,
-        /// Transitions that happened but whose evidence was not acknowledged,
-        /// including records the release's audit budget did not reach.
+        /// Transitions that happened but were not yet acknowledged when the
+        /// caller stopped waiting. Each one is still handed to the sink. A
+        /// later accept does not change this count.
         audit_failures: usize,
     },
 }

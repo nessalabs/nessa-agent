@@ -1,9 +1,9 @@
 use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
-    BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
-    NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
-    ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
-    TicketSecrets, UploadBody, UploadError, UploadRejection,
+    BeginError, BulkAuditSlot, Confirmation, ConversationOwnership, Discard, HoldClaim,
+    ImageNormalizer, Kept, NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes,
+    ReleaseCause, ReleaseError, ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload,
+    StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError, UploadRejection,
 };
 use crate::attachments::domain::{
     Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
@@ -208,13 +208,14 @@ impl AttachmentService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Give one record its own bounded delivery attempt. The sink owns the
-    /// write once started, so running out of time here abandons the wait, not
-    /// the record.
+    /// Give one record its own bounded delivery attempt. This is not a bulk
+    /// phase, so it does not take an admission slot. Running out of time here
+    /// abandons the wait. A durable write already started still finishes, and
+    /// that write is outside the bulk cap.
     async fn audit(&self, record: AttachmentAuditRecord) -> AuditDelivery {
         match timeout(
             self.inner.limits.audit_deadline,
-            self.inner.audit.record(record),
+            self.inner.audit.record(record, None),
         )
         .await
         {
@@ -234,9 +235,11 @@ impl AttachmentService {
     async fn audit_all(&self, records: Vec<AttachmentAuditRecord>) -> usize {
         let total = records.len();
         if total == 0 {
+            // An earlier phase may have panicked after its caller left. Surface
+            // that here too, when this phase has nothing of its own to hand over.
+            self.reap_audit_tasks().await;
             return 0;
         }
-        self.reap_audit_tasks().await;
         let acknowledged = Arc::new(AtomicUsize::new(0));
         let (finished_tx, finished_rx) = oneshot::channel();
         let audit = Arc::clone(&self.inner.audit);
@@ -257,12 +260,17 @@ impl AttachmentService {
                     let slots = Arc::clone(&slots);
                     let acknowledged_task = Arc::clone(&acknowledged_task);
                     in_flight.push(async move {
-                        // A closed semaphore means the service is going away.
-                        // Still hand the record over: skipping it is the
-                        // failure this phase exists to avoid.
-                        let permit = slots.acquire_owned().await.ok();
-                        let delivered = timeout(deadline, audit.record(record)).await;
-                        drop(permit);
+                        // A closed semaphore has no slot to give. Do not call
+                        // the sink: a call with no slot would be another write
+                        // past the admission cap. The record stays unacknowledged.
+                        let Ok(permit) = slots.acquire_owned().await else {
+                            return;
+                        };
+                        let delivered = timeout(
+                            deadline,
+                            audit.record(record, Some(BulkAuditSlot::new(permit))),
+                        )
+                        .await;
                         if matches!(delivered, Ok(Ok(()))) {
                             acknowledged_task.fetch_add(1, Ordering::SeqCst);
                         }
@@ -274,7 +282,10 @@ impl AttachmentService {
             }
             let _ = finished_tx.send(());
         });
+        // The task owns this phase's records before an older panic is resumed,
+        // so that panic cannot drop them on the way out.
         self.park_audit_task(supervisor);
+        self.reap_audit_tasks().await;
         // Waiting on the signal, not the task. Dropping this wait — the budget,
         // or the caller — leaves the task parked on the service.
         let _ = timeout(budget, finished_rx).await;
@@ -318,15 +329,33 @@ impl AttachmentService {
             }
         }
     }
+}
 
-    /// Remove every ticket whose time has passed and record each expiry. They
-    /// are gone whether or not that can be recorded. Returns how many could not.
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .audit_tasks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        for task in tasks {
+            task.abort();
+        }
+    }
+}
+
+impl AttachmentService {
+    /// Remove every ticket whose time has passed and hand each expiry to the
+    /// sink. The tickets are gone either way. Returns how many were not yet
+    /// acknowledged when the caller stopped waiting. A later accept still
+    /// writes the original record and does not change this count.
     async fn sweep_expired(&self, now_ms: u64) -> usize {
         let expired = self.book().expire(now_ms);
         if expired.is_empty() {
-            return 0;
+            return self.audit_all(Vec::new()).await;
         }
-        let unrecorded = self
+        let unacknowledged = self
             .audit_all(
                 expired
                     .into_iter()
@@ -334,13 +363,13 @@ impl AttachmentService {
                     .collect(),
             )
             .await;
-        if unrecorded != 0 {
+        if unacknowledged != 0 {
             tracing::error!(
-                unrecorded,
-                "expired upload tickets were removed without audit evidence"
+                unacknowledged,
+                "expired upload tickets were removed before their audit records were acknowledged"
             );
         }
-        unrecorded
+        unacknowledged
     }
 
     /// Answer `attachment.begin`: either the conversation already has this
@@ -357,12 +386,12 @@ impl AttachmentService {
     ) -> Result<BeginOutcome, BeginError> {
         // Tickets whose time has passed leave the book first, on every begin,
         // whoever asks and whether or not the rest of the request is any good:
-        // stale tickets must not be what fills the book. An expiry that could
-        // not be recorded fails this request visibly.
+        // stale tickets must not be what fills the book. An expiry that was
+        // not yet acknowledged fails this request visibly.
         let now_ms = self.inner.clock.unix_milliseconds();
-        let unrecorded = self.sweep_expired(now_ms).await;
+        let unacknowledged = self.sweep_expired(now_ms).await;
         let upload = describe_upload(&caller, &request)?;
-        if unrecorded != 0 {
+        if unacknowledged != 0 {
             return Err(BeginError::Audit);
         }
         match self.owns(&caller, &upload.conversation_id).await? {
@@ -552,9 +581,10 @@ impl AttachmentService {
             Redemption::Usable(_) | Redemption::Unknown => None,
         };
         // Every upload also clears out the tickets nobody came back for, so
-        // stale tickets cannot fill the book while nobody begins anything. A
-        // sweep that could not be recorded is logged, and does not fail an
-        // upload that had nothing to do with those tickets.
+        // stale tickets cannot fill the book while nobody begins anything. The
+        // sweep's count is how many expiries were not yet acknowledged. It is
+        // logged and does not fail an upload that had nothing to do with those
+        // tickets. This upload's own record does not take a bulk slot.
         self.sweep_expired(now_ms).await;
         let ticket = match (redemption, expired) {
             (Redemption::Usable(ticket), _) => ticket,

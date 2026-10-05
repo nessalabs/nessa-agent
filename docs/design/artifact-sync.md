@@ -332,19 +332,26 @@ constructed service admits at least one call; a configured zero is raised to
 one so a phase cannot be left with no slot.
 
 This covers two bulk phases: `release` (withdrawn tickets, then retired holds,
-then removed blobs) and the expiry sweep inside `begin`. Single-record writes
-— issuance, redemption, refusal, creation — keep their own `audit_deadline`
-and do not take an admission slot. Cleanup of tickets, holds, and unheld bytes
-finishes before either bulk phase starts, and it is not undone by audit.
+then removed blobs) and the expiry sweep. `begin` fails when that sweep's
+count is not zero. An upload (`redeem`) runs the same sweep, logs the count,
+and does not fail the upload for it. Single-record writes — issuance,
+redemption, refusal, creation — keep their own `audit_deadline` and do not take
+an admission slot. A single-record write that continues after its deadline is
+outside the bulk cap. Cleanup of tickets, holds, and unheld bytes finishes
+before either bulk phase starts, and it is not undone by audit.
 
 One phase moves its records into one delivery task. That task is not one task
 per record, and it is not a queue that accepts further work. It admits the
 next record only when a service-wide slot is free, then waits at most
-`audit_deadline`. The slot's wait is not part of the deadline. The caller
-waits until every record in the phase has been acknowledged or `audit_budget`
-elapses, whichever comes first, and then returns. The delivery task keeps
-going. Dropping the caller does not cancel it. Dropping the service does: the
-service is the owner of the task.
+`audit_deadline`. The slot's wait is not part of the deadline. The slot stays
+with that attempt until the sink's work finishes. A durable write that
+continues after the deadline keeps the slot, so the next record waits and then
+gets a full deadline of its own. The caller waits until every record in the
+phase has been acknowledged or `audit_budget` elapses, whichever comes first,
+and then returns. The delivery task keeps going. Dropping the caller does not
+cancel it. Dropping the service aborts the delivery task: a record not yet
+handed to the sink is not attempted. A durable write that has already taken
+its slot still finishes; the slot stays with that write until it returns.
 
 The count returned to the caller is how many records were not yet acknowledged
 when the caller stopped waiting. A sink that accepts a record after that is
@@ -355,8 +362,10 @@ did not see acknowledged: not acknowledged in time. Storage failures stay a
 separate count.
 
 The records are the phase's metadata, not blob bytes. The task retains that
-list until it has handed each record over, and at most `audit_admission`
-records are inside a sink call.
+list until it has handed each record over. At most `audit_admission` bulk
+attempts are in the sink at once, counting a durable write that has continued
+past its deadline. The current phase's records are owned by its delivery task
+before an older panicked task is resumed. An empty phase still resumes one.
 
 ```mermaid
 sequenceDiagram
@@ -390,3 +399,8 @@ sequenceDiagram
 | Sink accepts only after the caller has returned | The returned failure count stays. The stored record keeps the original cause and caller | `a_record_acknowledged_after_the_caller_gave_up_stays_a_failure` |
 | More records than `audit_admission` | Only that many sink calls are in flight. The next record starts when a slot frees | `bulk_delivery_does_not_admit_more_than_its_limit` |
 | `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |
+| Durable write outlives its deadline | The admission slot stays with that write. A second write does not overlap it. The next record's deadline starts after the slot is free | `a_write_that_outlives_its_deadline_keeps_its_admission_slot`, `a_bulk_write_that_outlives_its_deadline_keeps_the_admission_slot` |
+| Service dropped after the first attempt has started | Attempts not yet inside the sink stop. The one already inside is not followed by the rest | `dropping_the_service_stops_bulk_attempts_that_have_not_started` |
+| A delivery task panicked, then another phase has records | The new phase's task owns its records before the older panic is resumed, and those records are still handed to the sink | `a_panicked_delivery_does_not_drop_the_next_phase_s_records` |
+| A delivery task panicked, then an empty phase | The empty phase still resumes the panic | `an_empty_phase_surfaces_a_panicked_delivery` |
+| Upload while an expiry sweep is not yet acknowledged | The upload completes. The sweep's count does not fail it. The upload's own record does not take the sweep's slot | `an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged` |
