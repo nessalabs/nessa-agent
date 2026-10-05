@@ -15,7 +15,7 @@
  *                                    ▼
  *   ui/integrations-tab.tsx ──▶ model/mcp-servers.ts ◀── adapters/mcp-servers-gateway.ts
  *   (Integrations: the          (its states and rules,   (`client.mcpServers` read
- *    gateway's MCP servers,      the design's U1–U31)     into the model's words)
+ *    gateway's MCP servers,      the design's U1–U43)     into the model's words)
  *    drawn and sent)
  * ```
  *

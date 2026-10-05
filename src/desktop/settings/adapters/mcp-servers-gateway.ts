@@ -62,11 +62,18 @@ export interface McpServersGateway {
 }
 
 /** The refusals that carry details, each read with them in `refused`. */
-type Detailed = "mcp_servers_invalid" | "audit_unavailable" | "mcp_server_remote_error"
+type Detailed =
+  | "mcp_servers_invalid"
+  | "audit_unavailable"
+  | "mcp_servers_storage_unavailable"
+  | "mcp_server_remote_error"
 
 const refusalCodes: Record<
   Exclude<McpServersErrorCode, Detailed>,
-  Exclude<RefusalCode, "invalid" | "auditUnavailable" | "remoteError">
+  Exclude<
+    RefusalCode,
+    "invalid" | "auditUnavailable" | "storageUnavailable" | "remoteError"
+  >
 > = {
   mcp_servers_not_configured: "notConfigured",
   mcp_servers_reserved_name: "reservedName",
@@ -76,11 +83,19 @@ const refusalCodes: Record<
   mcp_servers_stopping: "stopping",
   mcp_servers_config_invalid: "configInvalid",
   mcp_servers_config_too_large: "configTooLarge",
-  mcp_servers_storage_unavailable: "storageUnavailable",
   mcp_server_start_failed: "startFailed",
   mcp_server_timed_out: "timedOut",
   mcp_server_gone: "gone",
   mcp_server_malformed: "malformed",
+}
+
+/** Every code in the window's words: what an audit refusal says stopped its request. */
+const causeCodes: Record<McpServersErrorCode, RefusalCode> = {
+  ...refusalCodes,
+  mcp_servers_invalid: "invalid",
+  audit_unavailable: "auditUnavailable",
+  mcp_servers_storage_unavailable: "storageUnavailable",
+  mcp_server_remote_error: "remoteError",
 }
 
 const problems: Record<McpServerProblemCode, Problem> = {
@@ -119,9 +134,16 @@ function refused(refusal: McpServersRefusal): Failure {
         ...(refusal.details
           ? {
               applied: refusal.details.applied,
-              ...(refusal.details.code ? { code: refusal.details.code } : {}),
+              ...(refusal.details.code
+                ? { cause: causeCodes[refusal.details.code] }
+                : {}),
             }
           : {}),
+      }
+    case "mcp_servers_storage_unavailable":
+      return {
+        kind: "storageUnavailable",
+        ...(refusal.details ? { applied: refusal.details.applied } : {}),
       }
     case "mcp_server_remote_error":
       return { kind: "remoteError", ...(refusal.details ?? {}) }

@@ -1,4 +1,5 @@
 import {
+  bounds,
   McpServerKind,
   McpServerProblemCode,
   McpServersErrorCode,
@@ -10,9 +11,10 @@ import {
   type McpServersInvalidDetails,
   type McpServersListResult,
   type McpServersRevisionConflictDetails,
+  type McpServersStorageUnavailableDetails,
   type McpServersWriteResult,
 } from "../generated/product.js"
-import { csp, object, permissions } from "./mcp-app-validate.js"
+import { boundedName, csp, object, permissions } from "./mcp-app-validate.js"
 
 /**
  * The answers of `mcpServers.list`, `.save`, `.remove` and `.inspect`, and
@@ -104,7 +106,9 @@ function tool(value: unknown): McpInspectedTool {
   let ui: McpInspectedTool["ui"]
   if (item.ui !== undefined) {
     const declared = object(item.ui, ["uri", "csp", "permissions"], "inspected tool UI")
-    if (!text(declared.uri)) throw new Error("Invalid inspected tool UI")
+    // The schema's 1 to 2048 UTF-8 bytes: the one bound every app resource URI has.
+    if (!boundedName(declared.uri, bounds.maxMcpResourceUriBytes))
+      throw new Error("Invalid inspected tool UI")
     ui = {
       uri: declared.uri,
       csp: csp(declared.csp),
@@ -186,6 +190,18 @@ export function mcpServersAuditUnavailableDetails(
     )
       return { applied: item.applied }
     return { applied: item.applied, ...(code ? { code } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
+/** `mcp_servers_storage_unavailable`'s details, or undefined when they are not that shape. */
+export function mcpServersStorageUnavailableDetails(
+  details: unknown,
+): McpServersStorageUnavailableDetails | undefined {
+  try {
+    const item = object(details, ["applied"], "storage details")
+    return typeof item.applied === "boolean" ? { applied: item.applied } : undefined
   } catch {
     return undefined
   }

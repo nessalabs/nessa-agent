@@ -15,7 +15,8 @@
  * the tab: add the test MCP server (`scripts/mcp-test-server/server.mjs`,
  * slow to start, so an inspection is seen running) with one variable,
  * inspect it, follow focus through each part that opens and closes, turn it
- * off, rename it, measure it narrow, meet a conflict a Node client makes
+ * off, rename it, give it another command (every value entered again),
+ * measure it narrow, meet a conflict a Node client makes
  * first, remove it, see a failed list's notice go once a reconnect lists;
  * then a credential that may only converse sees the administrator notice and
  * sends no mcpServers request. Last, the issue's Done-when: the server added
@@ -35,7 +36,7 @@
  * those after it, which are reported as not run.
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
@@ -75,6 +76,7 @@ const steps = [
   "focus",
   "toggle",
   "rename",
+  "relaunch",
   "narrow",
   "conflict",
   "remove",
@@ -86,7 +88,7 @@ const steps = [
 const meta = {
   name: "mcp-servers-gateway",
   summary:
-    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, conflict, remove, reconnect, non-admin, and an app drawn from a server added there",
+    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, non-admin, and an app drawn from a server added there",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
   help: `
@@ -115,11 +117,17 @@ Steps, per engine, in order on one page (--only <names> to pick):
   toggle     the switch turns it off: one save, the switch resting in flight,
              and off as the new list says
   rename     renamed to ${RENAMED}: one row, its variable kept
+  relaunch   the gateway refuses another command with a value kept
+             (environment_value_missing, from a Node client); in the window,
+             another command asks for the value again, says why, and holds
+             Save until it is typed; saved, the row shows the new command and
+             still one variable, the value nowhere in the page
   narrow     with the row, the form and the inspection open, at 800 and 390px:
              nothing outside its card, no sideways scroll, the fold held, the
              row's actions under its text under a 420px page
-  conflict   a Node client saves first; the window's save is refused, says so,
-             reloads, and keeps what was typed
+  conflict   a Node client turns it back on first; the window's save is
+             refused, says so, reloads, keeps what was typed, and refills
+             the switch it left untouched from the reload
   remove     asked first while an inspection runs, then removed: the row
              gone, "No servers yet", the inspection saying the server is gone
   reconnect  config.json made unreadable, the socket dropped: the list's
@@ -195,7 +203,20 @@ async function startStack(options) {
       "mcp-servers-gateway",
       "config.json",
     )
-    return { url: dev.url, mode: "dev", close, client, agent, timings, token, config }
+    // Another path to the same node, for the relaunch step's new command.
+    const relaunch = join(gateway.directory, "node-again")
+    if (!existsSync(relaunch)) symlinkSync(process.execPath, relaunch)
+    return {
+      url: dev.url,
+      mode: "dev",
+      close,
+      client,
+      agent,
+      timings,
+      token,
+      config,
+      relaunch,
+    }
   } catch (error) {
     await close()
     throw error
@@ -366,21 +387,33 @@ const row = (page, name) => page.locator(css.mcpRowNamed(name))
 const button = (scope, name) => scope.getByRole("button", { name, exact: true })
 const form = (page) => page.locator(css.mcpForm)
 
+/** Types `value` as a new argument, after those the form holds. */
+async function addArgument(scope, value) {
+  await button(scope, names.mcp.addArgument).click()
+  await scope.locator(css.mcpArgument).last().locator("textarea").fill(value)
+}
+
+/** The form's arguments, as its fields hold them. */
+const argumentsOf = (scope) =>
+  scope
+    .locator(`${css.mcpArgument} textarea`)
+    .evaluateAll((fields) => fields.map((field) => field.value))
+
 /**
- * Fills the add form and saves it: `args`, one per line, and `secret` as one
- * variable's value, when given.
+ * Fills the add form and saves it: `args`, one field each, and `secret` as
+ * one variable's value, when given.
  */
 async function addServer(page, { secret, args = [serverScript] } = {}) {
   await button(page.locator(css.mcpGroup), names.mcp.add).click()
   const add = form(page)
   await add.getByLabel(names.mcp.name, { exact: true }).fill(SERVER)
   await add.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
-  await add.getByLabel(names.mcp.args, { exact: true }).fill(args.join("\n"))
+  for (const value of args) await addArgument(add, value)
   if (secret !== undefined) {
     await button(add, names.mcp.addVariable).click()
     const variable = add.locator(css.mcpVariable).last()
     await variable.getByLabel(names.mcp.variableName, { exact: true }).fill(VARIABLE)
-    await variable.locator('input[type="password"]').fill(secret)
+    await variable.locator(css.mcpSecret).fill(secret)
   }
   await button(add, names.mcp.save).click()
 }
@@ -643,9 +676,7 @@ const checks = {
     const failures = []
     await button(row(page, SERVER), names.mcp.edit).click()
     const edit = form(page)
-    const placeholder = await edit
-      .locator('input[type="password"]')
-      .getAttribute("placeholder")
+    const placeholder = await edit.locator(css.mcpSecret).getAttribute("placeholder")
     await edit.getByLabel(names.mcp.name, { exact: true }).fill(RENAMED)
     await button(edit, names.mcp.save).click()
     const closed = await gone(edit)
@@ -659,12 +690,111 @@ const checks = {
       variables: shown ? await row(page, RENAMED).locator("small").textContent() : null,
       secretInPage: await pageHolds(page, context.secret),
     }
-    if (placeholder !== "Stored value kept")
+    if (placeholder !== names.mcp.storedValue)
       failures.push(`the stored value's placeholder is "${placeholder}"`)
     if (!closed) failures.push("the form is still open after the save")
     if (JSON.stringify(seen.rows) !== JSON.stringify([RENAMED]))
       failures.push(`rows ${JSON.stringify(seen.rows)}, expected [${RENAMED}]`)
     if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    if (seen.secretInPage) failures.push("the variable's value is in the page")
+    return { seen, failures }
+  },
+
+  relaunch: async (page, stack, context) => {
+    const failures = []
+    // The gateway's rule first: another command with the value kept is refused.
+    const listed = await stack.client.mcpServers.list()
+    const server = listed.servers.find((each) => each.name === RENAMED)
+    if (!server) throw new CannotRun(`the gateway lists no ${RENAMED}`)
+    const refused = await stack.client.mcpServers
+      .save({
+        revision: listed.revision,
+        server: {
+          kind: server.kind,
+          name: server.name,
+          command: stack.relaunch,
+          args: server.args,
+          env: server.envNames.map((name) => ({ name, value: null })),
+          enabled: server.enabled,
+        },
+      })
+      .then(
+        () => null,
+        (error) => error.refusal ?? { code: String(error) },
+      )
+    // In the window: the value asked for again, and Save held until typed.
+    await button(row(page, RENAMED), names.mcp.edit).click()
+    const edit = form(page)
+    const secret = edit.locator(css.mcpSecret)
+    const note = edit.locator(css.mcpValuesNeeded)
+    const save = button(edit, names.mcp.save)
+    const before = {
+      placeholder: await secret.getAttribute("placeholder"),
+      note: await note.textContent(),
+      saveEnabled: await save.isEnabled(),
+    }
+    await edit.locator(css.mcpField("command")).fill(stack.relaunch)
+    const changed = {
+      placeholder: await secret.getAttribute("placeholder"),
+      note: await note.textContent(),
+      saveEnabled: await save.isEnabled(),
+    }
+    await secret.fill(context.secret)
+    const typed = { note: await note.textContent(), saveEnabled: await save.isEnabled() }
+    const sentFrom = context.opened.sent.length
+    await save.click()
+    const closed = await gone(edit)
+    await settled(page)
+    const after = await stack.client.mcpServers.list()
+    const now = after.servers.find((each) => each.name === RENAMED)
+    const seen = {
+      refused,
+      before,
+      changed,
+      typed,
+      command: await row(page, RENAMED).locator("code").textContent(),
+      variables: await row(page, RENAMED).locator("small").textContent(),
+      listed: now && { command: now.command, envNames: now.envNames },
+      requests: context.opened.sent.slice(sentFrom),
+      secretInPage: await pageHolds(page, context.secret),
+    }
+    if (
+      refused?.code !== "mcp_servers_invalid" ||
+      refused.details?.problem !== "environment_value_missing"
+    )
+      failures.push(
+        `the gateway answered a kept value under another command with ${JSON.stringify(refused)}`,
+      )
+    if (
+      before.placeholder !== names.mcp.storedValue ||
+      before.note !== "" ||
+      !before.saveEnabled
+    )
+      failures.push(`before the change: ${JSON.stringify(before)}`)
+    if (
+      changed.placeholder !== names.mcp.storedValueAgain ||
+      changed.note !== names.mcp.valuesAgain ||
+      changed.saveEnabled
+    )
+      failures.push(`with another command: ${JSON.stringify(changed)}`)
+    if (typed.note !== "" || !typed.saveEnabled)
+      failures.push(`with the value typed again: ${JSON.stringify(typed)}`)
+    if (!closed) failures.push("the form is still open after the save")
+    if (!seen.command?.startsWith(stack.relaunch))
+      failures.push(`the row shows "${seen.command}", not the new command`)
+    if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    if (
+      JSON.stringify(seen.listed) !==
+      JSON.stringify({ command: stack.relaunch, envNames: [VARIABLE] })
+    )
+      failures.push(`the gateway lists ${JSON.stringify(seen.listed)}`)
+    if (
+      JSON.stringify(seen.requests) !==
+      JSON.stringify(["mcpServers.save", "mcpServers.list"])
+    )
+      failures.push(
+        `requests ${JSON.stringify(seen.requests)}, expected one save then one list`,
+      )
     if (seen.secretInPage) failures.push("the variable's value is in the page")
     return { seen, failures }
   },
@@ -709,8 +839,14 @@ const checks = {
     const before = context.opened.sent.length
     await button(row(page, RENAMED), names.mcp.edit).click()
     const edit = form(page)
-    const args = edit.getByLabel(names.mcp.args, { exact: true })
-    await args.fill(`${serverScript}\n--typed`)
+    const formSwitch = () =>
+      edit
+        .locator(css.mcpSwitch)
+        .evaluate((element) => element.getAttribute("aria-checked"))
+    const switchBefore = await formSwitch()
+    // Another argument is another launch: the value is typed again (U33).
+    await addArgument(edit, "--typed")
+    await edit.locator(css.mcpSecret).fill(context.secret)
     await button(edit, names.mcp.save).click()
     const said = await waitFor(
       async () => (await page.locator(css.mcpNotice).allTextContents()).join(" "),
@@ -720,15 +856,21 @@ const checks = {
     const seen = {
       notice: said,
       formOpen: (await form(page).count()) === 1,
-      kept: await args.inputValue().catch(() => null),
+      kept: await argumentsOf(edit).catch(() => null),
+      formSwitch: { before: switchBefore, after: await formSwitch().catch(() => null) },
       switch: await switchOf(page, RENAMED),
       requests: context.opened.sent.slice(before),
     }
     if (!seen.notice.includes(names.mcp.conflict))
       failures.push(`the window says "${seen.notice}", not the conflict`)
     if (!seen.formOpen) failures.push("the form closed on the conflict")
-    if (seen.kept !== `${serverScript}\n--typed`)
-      failures.push("what was typed was not kept")
+    if (JSON.stringify(seen.kept) !== JSON.stringify([...server.args, "--typed"]))
+      failures.push(`the arguments are ${JSON.stringify(seen.kept)}, not as typed`)
+    // Untouched in the form, the switch follows the other writer (U42).
+    if (seen.formSwitch.before !== "false" || seen.formSwitch.after !== "true")
+      failures.push(
+        `the form's switch went ${JSON.stringify(seen.formSwitch)}, not off to the other writer's on`,
+      )
     // The other writer turned it back on: the reload shows it.
     if (seen.switch.checked !== "true")
       failures.push(

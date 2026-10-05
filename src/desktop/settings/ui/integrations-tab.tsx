@@ -12,7 +12,10 @@ import type { McpServersGateway } from "../adapters/mcp-servers-gateway"
 import {
   canInspect,
   canWrite,
+  editedServer,
   formReady,
+  launchChanged,
+  valuesNeeded,
   initialMcpServersState,
   mcpServersReducer,
   sentences,
@@ -346,9 +349,10 @@ function ServersBody({
         </div>
       ) : (
         <>
-          {stored.map((server) => (
+          {/* Keyed by where each is listed: a name stored twice by hand is two rows. */}
+          {stored.map((server, at) => (
             <ServerRow
-              key={server.name}
+              key={`${at}:${server.name}`}
               server={server}
               state={state}
               dispatch={dispatch}
@@ -357,8 +361,13 @@ function ServersBody({
           <div className="settings-row settings-servers-add">{add}</div>
         </>
       )}
-      {managed.map((server) => (
-        <ServerRow key={server.name} server={server} state={state} dispatch={dispatch} />
+      {managed.map((server, at) => (
+        <ServerRow
+          key={`managed:${at}:${server.name}`}
+          server={server}
+          state={state}
+          dispatch={dispatch}
+        />
       ))}
     </>
   )
@@ -515,7 +524,7 @@ function FormGroup({
   form: ServerForm
   dispatch: Dispatch
 }) {
-  const ids = { name: useId(), command: useId(), args: useId() }
+  const ids = { name: useId(), command: useId(), args: useId(), values: useId() }
   const problems = {
     form: useId(),
     name: useId(),
@@ -539,6 +548,9 @@ function FormGroup({
   }
   const described = (field: FormField) =>
     form.problem?.field === field ? problems[field] : undefined
+  const listed = editedServer(state)
+  const relaunched = launchChanged(form, listed)
+  const waiting = valuesNeeded(form, listed)
   return (
     <section
       className="settings-group"
@@ -574,6 +586,7 @@ function FormGroup({
           <textarea
             id={ids.command}
             className="settings-input settings-input-mono settings-input-wrapped"
+            data-mcp-field="command"
             rows={1}
             value={form.command}
             autoComplete="off"
@@ -584,18 +597,51 @@ function FormGroup({
           />
           <FieldProblem form={form} field="command" id={problems.command} />
         </div>
-        <div className="settings-field">
-          <label htmlFor={ids.args}>Arguments, one per line</label>
-          <textarea
-            id={ids.args}
-            className="settings-input settings-input-mono"
-            rows={3}
-            value={form.args}
-            spellCheck={false}
-            aria-invalid={form.problem?.field === "args" || undefined}
-            aria-describedby={described("args")}
-            onChange={(event) => change({ args: event.target.value })}
-          />
+        <div className="settings-field" role="group" aria-labelledby={ids.args}>
+          <span id={ids.args} className="settings-field-label">
+            Arguments
+          </span>
+          {/* One field each, so an empty argument, or one with a line break,
+              is one argument as typed. */}
+          {form.args.map((row, at) => (
+            <div className="settings-argument" key={row.key} data-mcp-argument={at}>
+              <textarea
+                className="settings-input settings-input-mono settings-input-wrapped"
+                rows={1}
+                aria-label={`Argument ${at + 1}`}
+                value={row.value}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={form.problem?.field === "args" || undefined}
+                aria-describedby={described("args")}
+                onChange={(event) =>
+                  dispatch({
+                    type: "changeArgument",
+                    key: row.key,
+                    value: event.target.value,
+                  })
+                }
+              />
+              <button
+                type="button"
+                className="settings-button"
+                aria-label={`Remove argument ${at + 1}`}
+                onClick={() => dispatch({ type: "removeArgument", key: row.key })}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <div>
+            <button
+              type="button"
+              className="settings-button"
+              data-mcp-action="add-argument"
+              onClick={() => dispatch({ type: "addArgument" })}
+            >
+              Add argument
+            </button>
+          </div>
           <FieldProblem form={form} field="args" id={problems.args} />
         </div>
         <div className="settings-field">
@@ -620,14 +666,29 @@ function FormGroup({
               />
               {/* Uncontrolled, with no value or default given: React writes a
                   controlled field's value, and a default, into the markup as its
-                  value attribute; this field's is only ever its own (U31). */}
-              <input
-                className="settings-input settings-input-mono"
-                type="password"
+                  value attribute; this field's is only ever its own (U31).
+                  Multiline and masked, so a pasted key keeps its line breaks. */}
+              <textarea
+                className="settings-input settings-input-mono settings-input-secret"
+                rows={1}
                 aria-label={`Value of ${row.name || "the variable"}`}
-                aria-describedby={described("env")}
-                placeholder={row.stored ? sentences.storedValue : "Value"}
+                aria-describedby={
+                  [described("env"), row.stored && waiting ? ids.values : undefined]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                placeholder={
+                  row.stored
+                    ? relaunched
+                      ? sentences.storedValueAgain
+                      : sentences.storedValue
+                    : "Value"
+                }
                 autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                data-mcp-secret
                 onChange={(event) =>
                   dispatch({
                     type: "changeVariable",
@@ -655,6 +716,14 @@ function FormGroup({
               Add variable
             </button>
           </div>
+          <p
+            id={ids.values}
+            className="settings-field-note"
+            aria-live="polite"
+            data-mcp-values-needed
+          >
+            {waiting ? sentences.valuesAgain : null}
+          </p>
           <FieldProblem form={form} field="env" id={problems.env} />
         </div>
         <div className="settings-field settings-field-inline">
@@ -678,7 +747,7 @@ function FormGroup({
           <button
             type="button"
             className="settings-button settings-button-primary"
-            disabled={!formReady(form) || !canWrite(state)}
+            disabled={!formReady(form, listed) || !canWrite(state)}
             onClick={() => dispatch({ type: "save" })}
           >
             Save
@@ -744,8 +813,9 @@ function InspectionGroup({
           <>
             {inspection.result.tools.length === 0 ? null : (
               <ul className="settings-tools">
-                {inspection.result.tools.map((tool) => (
-                  <li key={tool.name} data-mcp-tool={tool.name}>
+                {/* By place too: a server may list one name twice. */}
+                {inspection.result.tools.map((tool, at) => (
+                  <li key={`${at}:${tool.name}`} data-mcp-tool={tool.name}>
                     <div className="settings-tool-head">
                       <code>{tool.name}</code>
                       {hints(tool).map((hint) => (

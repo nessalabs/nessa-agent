@@ -1,8 +1,8 @@
 /**
  * Settings › Connections › Integrations: the gateway's stored MCP servers, as
  * the window manages them (#391). One reducer, from the design's state table
- * (rows U1–U31, issue #391's PR 3 design); its tests are one row at least one
- * test, in `mcp-servers.test.ts`.
+ * (rows U1–U31, issue #391's PR 3 design, and U32–U43 from its review); its
+ * tests are one row at least one test, in `mcp-servers.test.ts`.
  *
  * The window never retypes a gateway rule (gate 13). Whether a name, command,
  * argument or variable is acceptable is the gateway's to answer, as a typed
@@ -138,13 +138,22 @@ export type Failure =
     }
   | {
       readonly kind: "auditUnavailable"
+      /** Whether the change was published, or the inspected server started. */
       readonly applied?: boolean
-      /** What stopped the request, as the gateway's code spells it, to show. */
-      readonly code?: string
+      /** What stopped the request, or what it would have been answered, in the window's words. */
+      readonly cause?: RefusalCode
+    }
+  | {
+      readonly kind: "storageUnavailable"
+      /** true: published and live, but it may not survive a crash. false: nothing was written. */
+      readonly applied?: boolean
     }
   | { readonly kind: "remoteError"; readonly code?: number; readonly message?: string }
   | {
-      readonly kind: Exclude<RefusalCode, "invalid" | "auditUnavailable" | "remoteError">
+      readonly kind: Exclude<
+        RefusalCode,
+        "invalid" | "auditUnavailable" | "storageUnavailable" | "remoteError"
+      >
     }
 
 type Invalid = Extract<Failure, { readonly kind: "invalid" }>
@@ -168,6 +177,12 @@ export interface VariableRow {
   readonly stored: boolean
 }
 
+/** An argument row in the form: one argument, any text, the empty one and line breaks included. */
+export interface ArgumentRow {
+  readonly key: number
+  readonly value: string
+}
+
 export type FormField = "name" | "command" | "args" | "env" | "form"
 
 export interface FormProblem {
@@ -178,10 +193,14 @@ export interface FormProblem {
 export interface ServerForm {
   /** The stored name of the server being edited; absent while adding. */
   readonly editing?: string
+  /**
+   * The server as listed when the form was filled, or last refilled: a field
+   * still equal to it is untouched, and follows the list (U42).
+   */
+  readonly base?: ListedServer
   readonly name: string
   readonly command: string
-  /** One argument per line. */
-  readonly args: string
+  readonly args: readonly ArgumentRow[]
   readonly env: readonly VariableRow[]
   readonly enabled: boolean
   readonly problem?: FormProblem
@@ -252,8 +271,11 @@ export type McpServersEvent =
   | { readonly type: "edit"; readonly name: string }
   | {
       readonly type: "change"
-      readonly patch: Partial<Pick<ServerForm, "name" | "command" | "args" | "enabled">>
+      readonly patch: Partial<Pick<ServerForm, "name" | "command" | "enabled">>
     }
+  | { readonly type: "addArgument" }
+  | { readonly type: "changeArgument"; readonly key: number; readonly value: string }
+  | { readonly type: "removeArgument"; readonly key: number }
   | { readonly type: "addVariable" }
   | {
       readonly type: "changeVariable"
@@ -303,6 +325,9 @@ export const sentences = {
   empty: "No servers yet",
   managed: "Managed by Nessa",
   storedValue: "Stored value kept",
+  /** A stored variable's placeholder once the command or arguments changed (U33). */
+  storedValueAgain: "Enter the value again",
+  valuesAgain: "Changing the command or arguments needs every value entered again.",
   listFailed: "The servers couldn't be listed.",
   conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
   notFound: "That server is no longer stored. The list was reloaded.",
@@ -317,6 +342,17 @@ export const sentences = {
   configTooLarge: "The configuration would be too large, so nothing was changed.",
   storageUnavailable:
     "The configuration file couldn't be read or written, so nothing was changed.",
+  storageUnknown:
+    "The configuration file couldn't be read or written. The list shows where things stand.",
+  /** Published and live, but its directory not synced (U36). */
+  notDurable: (what: "save" | "remove" | "change") =>
+    `${what === "save" ? "Saved" : what === "remove" ? "Removed" : "Changed"}, but it may not survive a crash.`,
+  inspectUnanswered: (name: string) =>
+    `${quoted(name)}'s inspection didn't answer in time, or the connection was lost.`,
+  formGone: (name: string) =>
+    `${quoted(name)} is no longer stored, so the form was closed.`,
+  changedThere: (fields: readonly string[]) =>
+    `Changed elsewhere too, and kept as typed here: ${fields.join(", ")}.`,
   unanswered: "Not confirmed. The list shows where things stand.",
   forbidden: "Only an administrator can manage MCP servers.",
   gone: (name: string) => `${quoted(name)} is no longer stored.`,
@@ -340,28 +376,65 @@ export const sentences = {
   } satisfies Record<InspectCut, string>,
 } as const
 
+/**
+ * What stopped a request whose record could not be written, as a clause:
+ * total over the refusals, so one the protocol adds is a type error here, not
+ * a wire code shown (U43). `auditUnavailable` is never one, says the schema.
+ */
+const causes: Record<RefusalCode, string> = {
+  notConfigured: "MCP servers aren't managed here",
+  invalid: "the server was refused as it is",
+  reservedName: "the name is Nessa's own server's",
+  notFound: "the server is no longer stored",
+  revisionConflict: "it was changed elsewhere",
+  busy: "another change was in progress",
+  stopping: "the gateway was stopping",
+  configInvalid: "the configuration file can't be read as it is",
+  configTooLarge: "the configuration would be too large",
+  storageUnavailable: "the configuration file couldn't be read or written",
+  auditUnavailable: "nothing could be recorded",
+  startFailed: "the server couldn't be started",
+  timedOut: "the server didn't finish in time",
+  gone: "the server stopped before it answered",
+  malformed: "the server's answer isn't MCP",
+  remoteError: "the server answered with an error",
+}
+
 function auditSentence(
   failure: Extract<Failure, { kind: "auditUnavailable" }>,
   what: "change" | "inspection",
+  name?: string,
 ) {
-  const code = failure.code ? ` (${failure.code})` : ""
+  const { applied, cause } = failure
+  const why =
+    cause === undefined
+      ? ""
+      : cause === "storageUnavailable" && applied === true
+        ? " (it may not survive a crash)"
+        : ` (${causes[cause]})`
+  if (what === "inspection") {
+    const it = quoted(name ?? "The server")
+    // An inspection lists nothing again: no reload is claimed.
+    return applied === undefined
+      ? `Whether ${it} started isn't known, and the inspection couldn't be recorded${why}.`
+      : applied
+        ? `${it} may have started, but the inspection couldn't be recorded${why}.`
+        : `${it} wasn't started, and the inspection couldn't be recorded${why}.`
+  }
   const done =
-    failure.applied === undefined
-      ? `Whether the ${what} happened isn't known`
-      : failure.applied
-        ? what === "change"
-          ? "The change was made"
-          : "The server was started"
-        : what === "change"
-          ? "Nothing was changed"
-          : "The server wasn't started"
-  return `${done}${code}, but it couldn't be recorded. The list was reloaded.`
+    applied === undefined
+      ? "Whether the change happened isn't known"
+      : applied
+        ? "The change was made"
+        : "Nothing was changed"
+  return `${done}, but it couldn't be recorded${why}. The list was reloaded.`
 }
 
 /** What a problem says, at the field it is about. Never the rule's pattern: what is wrong. */
 function problemAt(failure: Invalid): FormProblem {
   const { problem, server, name } = failure
-  const it = name === undefined ? "A variable" : quoted(name)
+  // A variable with no name, or an empty one, is "A variable", never “”.
+  const it = name ? quoted(name) : "A variable"
   switch (problem) {
     case "tooMany":
       return { field: "form", text: "There are too many servers. Remove one first." }
@@ -411,7 +484,9 @@ function inspectSentence(name: string, failure: Failure, state: McpServersState)
     case "stopping":
       return `The gateway is stopping, so ${quoted(name)} wasn't started.`
     case "auditUnavailable":
-      return auditSentence(failure, "inspection")
+      return auditSentence(failure, "inspection", name)
+    case "unanswered":
+      return sentences.inspectUnanswered(name)
     default:
       return writeSentence(failure, state)
   }
@@ -437,7 +512,11 @@ function writeSentence(failure: Failure, state: McpServersState): string {
     case "configTooLarge":
       return sentences.configTooLarge
     case "storageUnavailable":
-      return sentences.storageUnavailable
+      return failure.applied === undefined
+        ? sentences.storageUnknown
+        : failure.applied
+          ? sentences.notDurable("change")
+          : sentences.storageUnavailable
     case "auditUnavailable":
       return auditSentence(failure, "change")
     case "forbidden":
@@ -483,9 +562,49 @@ export function canInspect(state: McpServersState): boolean {
   )
 }
 
-/** Whether the form holds what a save needs before the gateway can judge it: a non-blank name and command (U7). */
-export function formReady(form: ServerForm): boolean {
-  return form.name.trim() !== "" && form.command.trim() !== ""
+const sameArgs = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((each, at) => each === b[at])
+
+const argsOf = (form: ServerForm) => form.args.map((row) => row.value)
+
+/**
+ * Whether the form launches the server it edits otherwise than the list
+ * says: another command or other arguments. The gateway keeps no stored
+ * value across a change of launch (U33), so every value is entered again.
+ */
+export function launchChanged(
+  form: ServerForm,
+  listed: ListedServer | undefined,
+): boolean {
+  if (form.editing === undefined || listed === undefined) return false
+  return form.command !== listed.command || !sameArgs(argsOf(form), listed.args)
+}
+
+/** Whether a stored variable still waits for its value, the launch having changed (U33). */
+export function valuesNeeded(
+  form: ServerForm,
+  listed: ListedServer | undefined,
+): boolean {
+  return (
+    launchChanged(form, listed) && form.env.some((row) => row.stored && row.value === "")
+  )
+}
+
+/**
+ * Whether the form holds what a save needs before the gateway can judge it: a
+ * non-blank name and command (U7), and every stored value again once the
+ * launch changed (U33).
+ */
+export function formReady(form: ServerForm, listed: ListedServer | undefined): boolean {
+  return (
+    form.name.trim() !== "" && form.command.trim() !== "" && !valuesNeeded(form, listed)
+  )
+}
+
+/** The listed server the open form edits, when it edits one and the list still has it. */
+export function editedServer(state: McpServersState): ListedServer | undefined {
+  const editing = state.form?.editing
+  return editing === undefined ? undefined : server(state, editing)
 }
 
 /** The servers the form edits, and the managed one, from a list. */
@@ -497,12 +616,6 @@ export function storedServers(list: ServerList) {
 }
 
 /* ——— The requests ——— */
-
-/** One argument per line; a final line break is not an argument of its own. */
-export function argsOf(text: string): string[] {
-  if (text === "") return []
-  return (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n")
-}
 
 /**
  * The save a form asks for. A stored variable left empty keeps its value
@@ -516,7 +629,7 @@ export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {
     server: {
       name: form.name,
       command: form.command,
-      args: argsOf(form.args),
+      args: argsOf(form),
       env: form.env
         .filter((row) => row.stored || row.name !== "" || row.value !== "")
         .map((row) => ({
@@ -582,16 +695,24 @@ function inspectionOfStored(state: McpServersState): McpServersState {
   }
 }
 
+/** Rows for what a list says, each with a key handed out after `rows`. */
+function rowsOf(rows: number, args: readonly string[], envNames: readonly string[]) {
+  return {
+    args: args.map((value) => ({ key: ++rows, value })),
+    env: envNames.map((variable) => ({
+      key: ++rows,
+      name: variable,
+      value: "",
+      stored: true,
+    })),
+    rows,
+  }
+}
+
 function editForm(state: McpServersState, name: string): McpServersState {
   const found = server(state, name)
   if (!found || found.managed) return state
-  let rows = state.rows
-  const env = found.envNames.map((variable) => ({
-    key: ++rows,
-    name: variable,
-    value: "",
-    stored: true,
-  }))
+  const { args, env, rows } = rowsOf(state.rows, found.args, found.envNames)
   return {
     ...state,
     rows,
@@ -599,12 +720,78 @@ function editForm(state: McpServersState, name: string): McpServersState {
     confirming: null,
     form: {
       editing: found.name,
+      base: found,
       name: found.name,
       command: found.command,
-      args: found.args.join("\n"),
+      args,
       env,
       enabled: found.enabled,
     },
+  }
+}
+
+/**
+ * The open form against a list just read (U41, U42). A server no longer
+ * listed closes the form, saying so. A server changed there has each field
+ * still as the form was filled refilled from the list; a field typed here
+ * and changed there too is kept as typed, and the notice names it, so the
+ * other change is not overwritten unsaid.
+ */
+function refilled(state: McpServersState): McpServersState {
+  const form = state.form
+  if (!form || form.editing === undefined || !form.base) return state
+  const now = server(state, form.editing)
+  if (!now || now.managed)
+    return {
+      ...state,
+      form: null,
+      notice: said(sentences.formGone(form.editing), "write"),
+    }
+  const base = form.base
+  const clashes: string[] = []
+  let rows = state.rows
+  let { command, args, enabled, env } = form
+  if (now.command !== base.command) {
+    if (form.command === base.command) command = now.command
+    else if (form.command !== now.command) clashes.push("the command")
+  }
+  if (!sameArgs(now.args, base.args)) {
+    if (sameArgs(argsOf(form), base.args)) {
+      args = now.args.map((value) => ({ key: ++rows, value }))
+    } else if (!sameArgs(argsOf(form), now.args)) clashes.push("the arguments")
+  }
+  if (now.enabled !== base.enabled) {
+    if (form.enabled === base.enabled) enabled = now.enabled
+    else if (form.enabled !== now.enabled) clashes.push("whether it is offered")
+  }
+  if (!sameArgs(now.envNames, base.envNames)) {
+    let typedGone = false
+    env = form.env.flatMap((row) => {
+      if (!row.stored || now.envNames.includes(row.name)) return [row]
+      // Removed there: untouched, it goes; with a value typed, it is a new one.
+      if (row.value === "") return []
+      typedGone = true
+      return [{ ...row, stored: false }]
+    })
+    const added = now.envNames
+      .filter((name) => !base.envNames.includes(name))
+      .filter((name) => !env.some((row) => row.name === name))
+      .map((name) => ({ key: ++rows, name, value: "", stored: true }))
+    env = [...env, ...added]
+    if (typedGone) clashes.push("the variables")
+  }
+  const notice =
+    clashes.length === 0
+      ? state.notice
+      : said(
+          [state.notice?.text, sentences.changedThere(clashes)].filter(Boolean).join(" "),
+          "write",
+        )
+  return {
+    ...state,
+    rows,
+    notice,
+    form: { ...form, base: now, command, args, enabled, env },
   }
 }
 
@@ -627,12 +814,14 @@ function answeredList(
 ): McpServersState {
   const done = { ...state, pending: null }
   if (outcome.ok)
-    return inspectionOfStored({
-      ...done,
-      list: { phase: "listed", list: outcome.value as ServerList },
-      // This list answers a list that failed; a write's notice stands.
-      notice: state.notice?.from === "list" ? null : state.notice,
-    })
+    return refilled(
+      inspectionOfStored({
+        ...done,
+        list: { phase: "listed", list: outcome.value as ServerList },
+        // This list answers a list that failed; a write's notice stands.
+        notice: state.notice?.from === "list" ? null : state.notice,
+      }),
+    )
   const { failure } = outcome
   if (failure.kind === "forbidden") return forbidden(state)
   if (failure.kind === "notConfigured")
@@ -679,7 +868,15 @@ function answeredWrite(
         ? {
             ...done,
             notice: null,
-            form: { ...state.form, problem: problemAt(failure) },
+            form: {
+              ...state.form,
+              // A value missing because the launch changed says why (U35).
+              problem:
+                failure.problem === "environmentValueMissing" &&
+                launchChanged(state.form, editedServer(state))
+                  ? { field: "env", text: sentences.valuesAgain }
+                  : problemAt(failure),
+            },
           }
         : { ...done, notice: said(writeSentence(failure, state), "write") }
     case "busy":
@@ -691,6 +888,20 @@ function answeredWrite(
       return listAgain({
         ...done,
         notice: said(writeSentence(failure, state), "write"),
+        form: failure.applied === true && fromForm ? null : state.form,
+        confirming: null,
+      })
+    case "storageUnavailable":
+      // Published but not synced is a change made: said as one, the form
+      // closed, as a write that was recorded would be (U36).
+      return listAgain({
+        ...done,
+        notice: said(
+          failure.applied === true
+            ? sentences.notDurable(pending.kind)
+            : writeSentence(failure, state),
+          "write",
+        ),
         form: failure.applied === true && fromForm ? null : state.form,
         confirming: null,
       })
@@ -738,13 +949,43 @@ export function mcpServersReducer(
         ...state,
         notice: null,
         confirming: null,
-        form: { name: "", command: "", args: "", env: [], enabled: true },
+        form: { name: "", command: "", args: [], env: [], enabled: true },
       }
     case "edit":
       return canWrite(state) ? editForm(state, event.name) : state
     case "change":
       if (!state.form || state.pending) return state
       return { ...state, form: { ...state.form, ...event.patch } }
+    case "addArgument":
+      if (!state.form || state.pending) return state
+      return {
+        ...state,
+        rows: state.rows + 1,
+        form: {
+          ...state.form,
+          args: [...state.form.args, { key: state.rows + 1, value: "" }],
+        },
+      }
+    case "changeArgument":
+      if (!state.form || state.pending) return state
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          args: state.form.args.map((row) =>
+            row.key === event.key ? { ...row, value: event.value } : row,
+          ),
+        },
+      }
+    case "removeArgument":
+      if (!state.form || state.pending) return state
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          args: state.form.args.filter((row) => row.key !== event.key),
+        },
+      }
     case "addVariable":
       if (!state.form || state.pending) return state
       return {
@@ -786,7 +1027,13 @@ export function mcpServersReducer(
       return { ...state, form: null }
     case "save": {
       const list = listed(state)
-      if (!state.form || !list || !canWrite(state) || !formReady(state.form)) return state
+      if (
+        !state.form ||
+        !list ||
+        !canWrite(state) ||
+        !formReady(state.form, editedServer(state))
+      )
+        return state
       const seq = state.seq + 1
       const form = { ...state.form, problem: undefined }
       return {

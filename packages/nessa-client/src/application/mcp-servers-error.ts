@@ -5,6 +5,7 @@ import {
   type McpServersAuditUnavailableDetails,
   type McpServersInvalidDetails,
   type McpServersRevisionConflictDetails,
+  type McpServersStorageUnavailableDetails,
 } from "../generated/product.js"
 import { mcpRemoteErrorDetails } from "../protocol/mcp-app-validate.js"
 import {
@@ -12,6 +13,7 @@ import {
   mcpServersErrorCode,
   mcpServersInvalidDetails,
   mcpServersRevisionConflictDetails,
+  mcpServersStorageUnavailableDetails,
 } from "../protocol/mcp-servers-validate.js"
 
 /**
@@ -34,6 +36,10 @@ export type McpServersRefusal =
       details: McpServersAuditUnavailableDetails | undefined
     }
   | {
+      code: typeof McpServersErrorCode.McpServersStorageUnavailable
+      details: McpServersStorageUnavailableDetails | undefined
+    }
+  | {
       code: typeof McpServersErrorCode.McpServerRemoteError
       details: McpRemoteErrorDetails | undefined
     }
@@ -43,6 +49,7 @@ export type McpServersRefusal =
         | typeof McpServersErrorCode.McpServersInvalid
         | typeof McpServersErrorCode.McpServersRevisionConflict
         | typeof McpServersErrorCode.AuditUnavailable
+        | typeof McpServersErrorCode.McpServersStorageUnavailable
         | typeof McpServersErrorCode.McpServerRemoteError
       >
       details?: undefined
@@ -66,6 +73,8 @@ function refusalOf(cause: NessaRpcError): McpServersRefusal | undefined {
       return { code, details: mcpServersRevisionConflictDetails(cause.details) }
     case McpServersErrorCode.AuditUnavailable:
       return { code, details: mcpServersAuditUnavailableDetails(cause.details) }
+    case McpServersErrorCode.McpServersStorageUnavailable:
+      return { code, details: mcpServersStorageUnavailableDetails(cause.details) }
     case McpServersErrorCode.McpServerRemoteError:
       return { code, details: mcpRemoteErrorDetails(cause.details) }
     default:

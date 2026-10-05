@@ -908,9 +908,37 @@ html:not(.dark) .settings-glass {
   gap: 6px;
 }
 
-.settings-variable .settings-input {
+.settings-variable .settings-input,
+.settings-argument .settings-input {
   flex: 1 1 8rem;
   width: auto;
+}
+
+.settings-argument {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/*
+ * A variable's value: masked like a password field, but multiline, so a
+ * pasted key keeps its line breaks. It grows with what is pasted.
+ */
+.settings-input-secret {
+  -webkit-text-security: disc;
+  field-sizing: content;
+  resize: none;
+  max-height: 8lh;
+}
+
+.settings-field-note {
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: 12px;
+}
+
+.settings-field-note:empty {
+  position: absolute;
 }
 
 .settings-field-problem {

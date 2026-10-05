@@ -535,7 +535,8 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
 
 ### Integrations: the gateway's MCP servers
 
-#391 PR 3's design (the issue's comment of its state table, rows U1–U31):
+#391 PR 3's design (the issue's comments of its state table, rows U1–U31,
+and U32–U43 from its review):
 Settings › Connections › Integrations manages the gateway's stored MCP
 servers over `client.mcpServers`. Every row is a test of
 `settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
@@ -554,13 +555,16 @@ publish, and refuses nothing the gateway would judge.
   destructive, complete (U22, U23); the switch
   rests while its save is in flight and shows the new list's state (U12);
   renamed, one row, its variable kept, the stored value "Stored value kept"
-  (U10, U11); a conflict made by another writer first is refused, said, the
-  list reloaded and what was typed kept (U15); removal asked first, nothing
+  (U10, U11); given another command, the gateway refusing a kept value under
+  it, the value asked for again, why said, and Save held until it is typed,
+  then saved with the row showing the new command (U33); a conflict made by
+  another writer first is refused, said, the list reloaded, what was typed
+  kept and what was not refilled from the reload (U15, U42); removal asked first, nothing
   sent until confirmed, then the row gone (U13, U14), and an inspection
   running as its server is removed says the server is gone; Inspect rests
   while a write is in flight (U21). Each write is exactly
   one `mcpServers` request and one list after it. _Check:_
-  `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,conflict,remove`
+  `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,relaunch,conflict,remove`
   (needs the gateway built and an agent's harness installed).
 - [ ] **Focus follows what opens and closes** — Add and Edit put it on the
   form's first field; Remove on the confirm's Cancel, which its sentence
@@ -570,6 +574,11 @@ publish, and refuses nothing the gateway would judge.
   and never Settings. _Check:_ `mcp-servers-gateway.mjs --only focus`
   (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
   (`focus`).
+- [ ] **Arguments and values are kept as typed** — one field per argument,
+  so an empty argument and one with a line break are each one argument; a
+  variable's value is masked and multiline, so a pasted key keeps its line
+  breaks (a pasted CRLF reads back as LF, as every textarea's value does).
+  _Check:_ unit tests `mcp-servers.test.ts`, `integrations-tab.test.tsx`.
 - [ ] **What the gateway says is read out** — the notices, each field's
   problem and the inspection's status are live regions drawn before their
   text arrives, a field naming its problem with `aria-describedby`; no

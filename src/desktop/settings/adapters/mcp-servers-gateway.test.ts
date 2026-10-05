@@ -71,15 +71,36 @@ describe("failureOf", () => {
     })
   })
 
-  it("keeps an audit refusal's applied and code, and a remote error's message", () => {
+  it("keeps an audit refusal's applied and its code in the window's words, and a remote error's message", () => {
     expect(
       failureOf(
         refusal("audit_unavailable", { applied: true, code: "mcp_servers_busy" }),
       ),
-    ).toEqual({ kind: "auditUnavailable", applied: true, code: "mcp_servers_busy" })
+    ).toEqual({ kind: "auditUnavailable", applied: true, cause: "busy" })
+    expect(
+      failureOf(
+        refusal("audit_unavailable", {
+          applied: true,
+          code: "mcp_servers_storage_unavailable",
+        }),
+      ),
+    ).toEqual({ kind: "auditUnavailable", applied: true, cause: "storageUnavailable" })
     expect(
       failureOf(refusal("mcp_server_remote_error", { code: 1, message: "m" })),
     ).toEqual({ kind: "remoteError", code: 1, message: "m" })
+  })
+
+  it.each([true, false])("keeps a storage refusal's applied (%s)", (applied) => {
+    expect(failureOf(refusal("mcp_servers_storage_unavailable", { applied }))).toEqual({
+      kind: "storageUnavailable",
+      applied,
+    })
+  })
+
+  it("reads a storage refusal without its details as not knowing whether it applied", () => {
+    expect(failureOf(refusal("mcp_servers_storage_unavailable"))).toEqual({
+      kind: "storageUnavailable",
+    })
   })
 
   it("is forbidden for the session's refusal, unanswered for anything else", () => {

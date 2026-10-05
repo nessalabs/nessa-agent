@@ -189,6 +189,10 @@ export const css = {
   mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
   mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
   mcpVariable: "[data-mcp-variable]", // a variable's row in the form
+  mcpSecret: "[data-mcp-secret]", // a variable's value: masked, multiline, uncontrolled
+  mcpArgument: "[data-mcp-argument]", // an argument's row in the form; its value is its place
+  mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
+  mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
   mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
   mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's button by what it does: add | edit | inspect | remove | cancel | confirm | close
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
@@ -350,8 +354,12 @@ export const names = {
     close: "Close",
     name: "Name",
     command: "Command",
-    args: "Arguments, one per line",
+    addArgument: "Add argument",
+    argument: (place) => `Argument ${place}`,
     variableName: "Variable name",
+    storedValue: "Stored value kept",
+    storedValueAgain: "Enter the value again",
+    valuesAgain: "Changing the command or arguments needs every value entered again.",
     empty: "No servers yet",
     notAdmin: "Only an administrator can manage MCP servers.",
     conflict: "Changed elsewhere, the list was reloaded. Check and try again.",

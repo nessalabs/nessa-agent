@@ -1,16 +1,19 @@
 /**
  * Settings › Integrations' reducer, one row of the design's state table
- * (#391 PR 3, U1–U31) at least one test, each named for its row. Rows the
+ * (#391 PR 3, U1–U31, and U32–U43 from its review) at least one test, each
+ * named for its row. Rows the
  * reducer cannot see — the pending row with no gateway (U1), skeletons (U3),
  * widths (U29, U30) and the DOM (U31) — are `integrations-tab.test.tsx`'s and
  * the browser check's (`verification/desktop/scripts/mcp-servers-gateway.mjs`).
  */
 import { describe, expect, it } from "vitest"
 import {
-  argsOf,
   canInspect,
   canWrite,
+  editedServer,
   formReady,
+  launchChanged,
+  valuesNeeded,
   initialMcpServersState,
   mcpServersReducer,
   sentences,
@@ -53,6 +56,22 @@ const no = (failure: Failure): Outcome<never> => ({ ok: false, failure })
 function answer(state: McpServersState, outcome: Outcome<unknown>) {
   if (!state.pending) throw new Error("nothing in flight")
   return mcpServersReducer(state, { type: "answered", seq: state.pending.seq, outcome })
+}
+
+/** The key of the form's variable row named `name`. */
+function keyOf(state: McpServersState, name: string) {
+  const row = state.form?.env.find((each) => each.name === name)
+  if (!row) throw new Error(`no variable ${name}`)
+  return row.key
+}
+
+/** Arguments typed into new rows, one each. */
+function typedArgs(state: McpServersState, ...values: string[]) {
+  return values.reduce((typed, value) => {
+    const next = run(typed, { type: "addArgument" })
+    const key = next.form!.args[next.form!.args.length - 1].key
+    return run(next, { type: "changeArgument", key, value })
+  }, state)
 }
 
 /** Connected as an administrator, the list answered. */
@@ -190,25 +209,29 @@ describe("the form", () => {
     expect(state.form).toEqual({
       name: "",
       command: "",
-      args: "",
+      args: [],
       env: [],
       enabled: true,
     })
-    expect(formReady(state.form!)).toBe(false)
+    expect(formReady(state.form!, undefined)).toBe(false)
     expect(run(state, { type: "save" }).pending).toBeNull()
     state = run(state, { type: "change", patch: { name: "x" } })
-    expect(formReady(state.form!)).toBe(false)
+    expect(formReady(state.form!, undefined)).toBe(false)
     state = run(state, { type: "change", patch: { command: "/bin/x" } })
-    expect(formReady(state.form!)).toBe(true)
+    expect(formReady(state.form!, undefined)).toBe(true)
   })
 
   it("U8: a saved server closes the form and lists again", () => {
-    let state = run(
-      listed(),
-      { type: "add" },
-      { type: "change", patch: { name: "maps", command: "/bin/maps", args: "a\nb\n" } },
-      { type: "addVariable" },
+    let state = typedArgs(
+      run(
+        listed(),
+        { type: "add" },
+        { type: "change", patch: { name: "maps", command: "/bin/maps" } },
+      ),
+      "a",
+      "b",
     )
+    state = run(state, { type: "addVariable" })
     const key = state.form!.env[0].key
     state = run(
       state,
@@ -295,7 +318,7 @@ describe("the form", () => {
       editing: "charts",
       name: "charts",
       command: "/usr/bin/node",
-      args: "server.mjs\n--port\n1",
+      args: [{ value: "server.mjs" }, { value: "--port" }, { value: "1" }],
       env: [{ name: "TOKEN", value: "", stored: true }],
       enabled: true,
     })
@@ -335,10 +358,133 @@ describe("the form", () => {
     })
   })
 
-  it("arguments are one per line, a final line break no argument of its own", () => {
-    expect(argsOf("")).toEqual([])
-    expect(argsOf("a\n")).toEqual(["a"])
-    expect(argsOf("a\n\nb")).toEqual(["a", "", "b"])
+  it("arguments are rows: an empty one and one with a line break round-trip as typed", () => {
+    // Listed, edited, saved unchanged: the same arguments.
+    const odd = { ...charts, args: ["", "a\nb", "a\r\nb"] }
+    const saved = run(
+      listed(listOf(odd, nessa)),
+      { type: "edit", name: "charts" },
+      {
+        type: "save",
+      },
+    )
+    expect(saved.pending).toMatchObject({
+      request: { server: { args: ["", "a\nb", "a\r\nb"] } },
+    })
+    // Typed: the same.
+    const typed = run(
+      typedArgs(
+        run(
+          listed(),
+          { type: "add" },
+          {
+            type: "change",
+            patch: { name: "maps", command: "/bin/maps" },
+          },
+        ),
+        "",
+        "a\nb",
+      ),
+      { type: "save" },
+    )
+    expect(typed.pending).toMatchObject({ request: { server: { args: ["", "a\nb"] } } })
+    // Removed by its own row, the others kept.
+    const [first, second] = typed.form!.args
+    const removed = run(
+      run(listed(), { type: "add" }),
+      { type: "addArgument" },
+      { type: "addArgument" },
+    )
+    const [a, b] = removed.form!.args
+    expect(run(removed, { type: "removeArgument", key: a.key }).form!.args).toEqual([b])
+    expect(first.value).toBe("")
+    expect(second.value).toBe("a\nb")
+  })
+})
+
+describe("a changed launch (U32–U35)", () => {
+  const editing = () => run(listed(), { type: "edit", name: "charts" })
+
+  it("U32: the launch unchanged keeps every stored value, Save ready", () => {
+    const state = editing()
+    expect(launchChanged(state.form!, editedServer(state))).toBe(false)
+    expect(valuesNeeded(state.form!, editedServer(state))).toBe(false)
+    expect(formReady(state.form!, editedServer(state))).toBe(true)
+  })
+
+  it("U33: another command needs every stored value again before Save", () => {
+    let state = run(editing(), { type: "change", patch: { command: "/bin/new" } })
+    expect(launchChanged(state.form!, editedServer(state))).toBe(true)
+    expect(valuesNeeded(state.form!, editedServer(state))).toBe(true)
+    expect(formReady(state.form!, editedServer(state))).toBe(false)
+    expect(run(state, { type: "save" }).pending).toBeNull()
+    state = run(state, {
+      type: "changeVariable",
+      key: keyOf(state, "TOKEN"),
+      patch: { value: "again" },
+    })
+    expect(formReady(state.form!, editedServer(state))).toBe(true)
+    expect(run(state, { type: "save" }).pending).toMatchObject({
+      request: {
+        server: { command: "/bin/new", env: [{ name: "TOKEN", value: "again" }] },
+      },
+    })
+  })
+
+  it("U33: other arguments need every stored value again too", () => {
+    const state = editing()
+    const removed = run(state, { type: "removeArgument", key: state.form!.args[2].key })
+    expect(launchChanged(removed.form!, editedServer(removed))).toBe(true)
+    expect(formReady(removed.form!, editedServer(removed))).toBe(false)
+    const changed = run(state, {
+      type: "changeArgument",
+      key: state.form!.args[0].key,
+      value: "other.mjs",
+    })
+    expect(formReady(changed.form!, editedServer(changed))).toBe(false)
+    const added = typedArgs(state, "--more")
+    expect(formReady(added.form!, editedServer(added))).toBe(false)
+    // A stored variable removed needs no value; a renamed server alone is no new launch.
+    const without = run(removed, { type: "removeVariable", key: keyOf(removed, "TOKEN") })
+    expect(formReady(without.form!, editedServer(without))).toBe(true)
+    const renamed = run(state, { type: "change", patch: { name: "graphs" } })
+    expect(formReady(renamed.form!, editedServer(renamed))).toBe(true)
+  })
+
+  it("U34: changed back to the listed launch, the stored values are kept again", () => {
+    let state = run(editing(), { type: "change", patch: { command: "/bin/new" } })
+    state = run(state, { type: "change", patch: { command: charts.command } })
+    expect(launchChanged(state.form!, editedServer(state))).toBe(false)
+    expect(formReady(state.form!, editedServer(state))).toBe(true)
+    const args = editing()
+    const key = args.form!.args[0].key
+    const back = run(
+      args,
+      { type: "changeArgument", key, value: "x" },
+      { type: "changeArgument", key, value: "server.mjs" },
+    )
+    expect(launchChanged(back.form!, editedServer(back))).toBe(false)
+    expect(run(back, { type: "save" }).pending).toMatchObject({
+      request: { server: { env: [{ name: "TOKEN", value: null }] } },
+    })
+  })
+
+  it("U35: a value refused as missing after a changed launch says why", () => {
+    // The list changed under the form: the gateway is the judge.
+    let state = run(editing(), { type: "change", patch: { command: "/bin/new" } })
+    state = run(state, {
+      type: "changeVariable",
+      key: keyOf(state, "TOKEN"),
+      patch: { value: "again" },
+    })
+    state = answer(
+      run(state, { type: "save" }),
+      no({ kind: "invalid", problem: "environmentValueMissing", name: "OTHER" }),
+    )
+    expect(state.form?.problem).toEqual({ field: "env", text: sentences.valuesAgain })
+    expect(sentences.valuesAgain).toBe(
+      "Changing the command or arguments needs every value entered again.",
+    )
   })
 })
 
@@ -411,19 +557,132 @@ describe("removing", () => {
 })
 
 describe("refusals", () => {
-  const saving = () =>
-    run(
+  /** An edit changing the command, so its stored value is entered again (U33). */
+  const saving = () => {
+    const state = run(
       listed(),
       { type: "edit", name: "charts" },
       { type: "change", patch: { command: "/bin/new" } },
+    )
+    const sent = run(
+      state,
+      { type: "changeVariable", key: keyOf(state, "TOKEN"), patch: { value: "again" } },
       { type: "save" },
     )
+    expect(sent.pending).toMatchObject({
+      request: { server: { env: [{ name: "TOKEN", value: "again" }] } },
+    })
+    return sent
+  }
 
   it("U15: a conflict reloads, says so, and keeps what was typed", () => {
     const state = answer(saving(), no({ kind: "revisionConflict" }))
     expect(state.notice?.text).toBe(sentences.conflict)
     expect(state.form?.command).toBe("/bin/new")
     expect(state.pending?.kind).toBe("list")
+  })
+
+  it("U41: the server edited no longer listed after the reload closes the form, saying so", () => {
+    const state = answer(
+      answer(saving(), no({ kind: "revisionConflict" })),
+      ok(listOf(nessa)),
+    )
+    expect(state.form).toBeNull()
+    expect(state.notice?.text).toBe(
+      "“charts” is no longer stored, so the form was closed.",
+    )
+  })
+
+  it("U42: the reload refills what was not typed, and names what was typed and changed there too", () => {
+    const conflicted = answer(saving(), no({ kind: "revisionConflict" }))
+    const elsewhere: ListedServer = {
+      ...charts,
+      command: "/bin/theirs",
+      args: ["theirs.mjs"],
+      envNames: ["TOKEN", "REGION"],
+      enabled: false,
+    }
+    const state = answer(conflicted, ok({ revision: "r2", servers: [elsewhere, nessa] }))
+    // Typed here: kept, and named.
+    expect(state.form?.command).toBe("/bin/new")
+    // Untouched: the other window's.
+    expect(state.form?.args.map((row) => row.value)).toEqual(["theirs.mjs"])
+    expect(state.form?.enabled).toBe(false)
+    expect(state.form?.env.map((row) => [row.name, row.value, row.stored])).toEqual([
+      ["TOKEN", "again", true],
+      ["REGION", "", true],
+    ])
+    expect(state.notice?.text).toBe(
+      `${sentences.conflict} Changed elsewhere too, and kept as typed here: the command.`,
+    )
+    // The next save is judged against the list now.
+    expect(state.form?.base).toEqual(elsewhere)
+    expect(launchChanged(state.form!, editedServer(state))).toBe(true)
+    expect(formReady(state.form!, editedServer(state))).toBe(false)
+  })
+
+  it("U42: an untouched command and arguments follow the reload; a touched switch is kept", () => {
+    const editing = run(
+      listed(),
+      { type: "edit", name: "charts" },
+      { type: "change", patch: { enabled: false } },
+    )
+    const elsewhere = { ...charts, command: "/bin/theirs", args: ["x"] }
+    const state = answer(run(editing, { type: "retry" }), ok(listOf(elsewhere, nessa)))
+    expect(state.form?.command).toBe("/bin/theirs")
+    expect(state.form?.args.map((row) => row.value)).toEqual(["x"])
+    expect(state.form?.enabled).toBe(false)
+    expect(state.notice).toBeNull()
+    // Refilled to the list, the launch is the listed one: the value is kept.
+    expect(launchChanged(state.form!, editedServer(state))).toBe(false)
+  })
+
+  it("U42: nothing changed there leaves the form as typed, the notice alone", () => {
+    const conflicted = answer(saving(), no({ kind: "revisionConflict" }))
+    const state = answer(conflicted, ok(listOf(charts, nessa)))
+    expect(state.form).toEqual(conflicted.form)
+    expect(state.notice?.text).toBe(sentences.conflict)
+  })
+
+  it("U42: a variable removed there goes if untouched, and stays as a new one if typed", () => {
+    const untouched = run(listed(), { type: "edit", name: "charts" })
+    const gone = answer(
+      run(untouched, { type: "retry" }),
+      ok(listOf({ ...charts, envNames: [] }, nessa)),
+    )
+    expect(gone.form?.env).toEqual([])
+    expect(gone.notice).toBeNull()
+    const typed = run(untouched, {
+      type: "changeVariable",
+      key: keyOf(untouched, "TOKEN"),
+      patch: { value: "mine" },
+    })
+    const kept = answer(
+      run(typed, { type: "retry" }),
+      ok(listOf({ ...charts, envNames: [] }, nessa)),
+    )
+    expect(kept.form?.env).toMatchObject([
+      { name: "TOKEN", value: "mine", stored: false },
+    ])
+    expect(kept.notice?.text).toBe(
+      "Changed elsewhere too, and kept as typed here: the variables.",
+    )
+  })
+
+  it("a variable problem with no name, or an empty one, is said of “A variable”", () => {
+    for (const name of [undefined, ""]) {
+      const state = answer(
+        run(listed(), { type: "edit", name: "charts" }, { type: "save" }),
+        no({
+          kind: "invalid",
+          problem: "environmentName",
+          ...(name === undefined ? {} : { name }),
+        }),
+      )
+      expect(state.form?.problem?.text).toBe(
+        "A variable isn't a name a variable can have.",
+      )
+    }
   })
 
   it("U16: not found says so and reloads", () => {
@@ -458,22 +717,56 @@ describe("refusals", () => {
   })
 
   it.each([
-    ["configInvalid", sentences.configInvalid],
-    ["configTooLarge", sentences.configTooLarge],
-    ["storageUnavailable", sentences.storageUnavailable],
-  ] as const)("U18: %s says nothing changed and reloads", (kind, text) => {
-    const state = answer(saving(), no({ kind }))
-    expect(state.notice?.text).toBe(text)
+    [{ kind: "configInvalid" }, sentences.configInvalid],
+    [{ kind: "configTooLarge" }, sentences.configTooLarge],
+    [{ kind: "storageUnavailable", applied: false }, sentences.storageUnavailable],
+  ] as [Failure, string][])(
+    "U18, U37: %o says nothing changed, keeps the form and reloads",
+    (failure, text) => {
+      const state = answer(saving(), no(failure))
+      expect(state.notice?.text).toBe(text)
+      expect(state.form?.command).toBe("/bin/new")
+      expect(state.pending?.kind).toBe("list")
+    },
+  )
+
+  it("U36: storage unavailable but applied is saved, may not survive a crash, and closes the form", () => {
+    const state = answer(saving(), no({ kind: "storageUnavailable", applied: true }))
+    expect(state.notice?.text).toBe("Saved, but it may not survive a crash.")
+    expect(state.form).toBeNull()
+    expect(state.pending?.kind).toBe("list")
+    const removed = answer(
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      no({ kind: "storageUnavailable", applied: true }),
+    )
+    expect(removed.notice?.text).toBe("Removed, but it may not survive a crash.")
+    expect(removed.confirming).toBeNull()
+    expect(removed.pending?.kind).toBe("list")
+  })
+
+  it("U38: storage unavailable without its details claims neither, keeps the form and reloads", () => {
+    const state = answer(saving(), no({ kind: "storageUnavailable" }))
+    expect(state.notice?.text).toBe(sentences.storageUnknown)
+    expect(state.notice?.text).not.toMatch(/nothing was changed/)
+    expect(state.form?.command).toBe("/bin/new")
     expect(state.pending?.kind).toBe("list")
   })
 
-  it("U19: audit unavailable says whether it was applied, with the code, and reloads", () => {
+  it("U19, U43: audit unavailable says whether it was applied, what stopped it in words, and reloads", () => {
     const applied = answer(
       saving(),
-      no({ kind: "auditUnavailable", applied: true, code: "mcp_servers_busy" }),
+      no({ kind: "auditUnavailable", applied: true, cause: "busy" }),
     )
     expect(applied.notice?.text).toBe(
-      "The change was made (mcp_servers_busy), but it couldn't be recorded. The list was reloaded.",
+      "The change was made, but it couldn't be recorded (another change was in progress). The list was reloaded.",
+    )
+    expect(applied.notice?.text).not.toMatch(/mcp_|_/)
+    const durable = answer(
+      saving(),
+      no({ kind: "auditUnavailable", applied: true, cause: "storageUnavailable" }),
+    )
+    expect(durable.notice?.text).toBe(
+      "The change was made, but it couldn't be recorded (it may not survive a crash). The list was reloaded.",
     )
     expect(applied.form).toBeNull()
     expect(applied.pending?.kind).toBe("list")
@@ -620,10 +913,21 @@ describe("inspecting", () => {
     [{ kind: "stopping" }, "The gateway is stopping, so “charts” wasn't started."],
     [
       { kind: "auditUnavailable", applied: true },
-      "The server was started, but it couldn't be recorded. The list was reloaded.",
+      "“charts” may have started, but the inspection couldn't be recorded.",
+    ],
+    [
+      { kind: "auditUnavailable", applied: false, cause: "startFailed" },
+      "“charts” wasn't started, and the inspection couldn't be recorded (the server couldn't be started).",
+    ],
+    [
+      { kind: "auditUnavailable" },
+      "Whether “charts” started isn't known, and the inspection couldn't be recorded.",
     ],
     [{ kind: "notFound" }, sentences.notFound],
-    [{ kind: "unanswered" }, sentences.unanswered],
+    [
+      { kind: "unanswered" },
+      "“charts”'s inspection didn't answer in time, or the connection was lost.",
+    ],
   ] as [Failure, string][])("U25: %o says its sentence, and Close", (failure, text) => {
     const state = started()
     const failed = run(state, {

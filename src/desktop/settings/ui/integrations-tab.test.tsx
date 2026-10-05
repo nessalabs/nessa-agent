@@ -3,7 +3,8 @@
  * Settings › Integrations as drawn: the rows of the design's table the
  * reducer cannot see (#391 PR 3) — the pending row with no gateway (U1), no
  * request without the grant (U2), skeletons (U3), the rows (U5, U6, U27),
- * stored values (U10), and no variable value left in the DOM (U31) — and one
+ * stored values (U10), and no variable value left in the DOM (U31) — the
+ * argument rows, a value's line breaks, and a changed launch (U33) — and one
  * request for each the reducer names, under StrictMode too.
  */
 import { act, StrictMode } from "react"
@@ -211,8 +212,8 @@ describe("Integrations", () => {
     await answer(fake, "list", list(charts, nessa))
     await click(button("Edit", host.querySelector('[data-mcp-server="charts"]') ?? host))
     const value = host.querySelector(
-      '[data-mcp-variable="TOKEN"] input[type="password"]',
-    ) as HTMLInputElement
+      '[data-mcp-variable="TOKEN"] [data-mcp-secret]',
+    ) as HTMLTextAreaElement
     expect(value.value).toBe("")
     expect(value.placeholder).toBe("Stored value kept")
     await type(value, "very-secret-value")
@@ -240,7 +241,7 @@ describe("Integrations", () => {
     await answer(fake, "list", list(charts, nessa))
     await click(button("Edit", row("charts")))
     const command = host.querySelector(
-      "[data-mcp-form] textarea.settings-input-wrapped",
+      "[data-mcp-form] [data-mcp-field=command]",
     ) as HTMLTextAreaElement
     const problem = host.querySelector('[data-mcp-problem="command"]')
     // Drawn, empty, before any refusal: what arrives in it is read out.
@@ -248,7 +249,7 @@ describe("Integrations", () => {
     expect(problem?.textContent).toBe("")
     expect(command.getAttribute("aria-describedby")).toBeNull()
     const value = host.querySelector(
-      '[data-mcp-variable="TOKEN"] input[type="password"]',
+      '[data-mcp-variable="TOKEN"] [data-mcp-secret]',
     ) as HTMLInputElement
     await type(value, "kept-after-refusal")
     await click(button("Save"))
@@ -265,6 +266,101 @@ describe("Integrations", () => {
     expect(host.querySelector("[data-mcp-form]")).not.toBeNull()
     expect(value.value).toBe("kept-after-refusal")
     expect(host.innerHTML).not.toContain("kept-after-refusal")
+  })
+
+  it("a value is masked and multiline: a pasted key keeps its line breaks", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Edit", row("charts")))
+    const value = host.querySelector(
+      '[data-mcp-variable="TOKEN"] [data-mcp-secret]',
+    ) as HTMLTextAreaElement
+    expect(value.tagName).toBe("TEXTAREA")
+    expect(value.classList.contains("settings-input-secret")).toBe(true)
+    const pem = "-----BEGIN KEY-----\nAAAA\nBBBB\n-----END KEY-----\n"
+    await type(value, pem)
+    await click(button("Save"))
+    expect(fake.requests.find((each) => each.method === "save")?.argument).toMatchObject({
+      server: { env: [{ name: "TOKEN", value: pem }] },
+    })
+    expect(host.innerHTML).not.toContain("AAAA")
+  })
+
+  it("arguments are one field each: an empty one and one with a line break are sent as typed", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list({ ...charts, args: ["", "a\nb"] }, nessa))
+    await click(button("Edit", row("charts")))
+    const fields = () =>
+      [
+        ...form().querySelectorAll("[data-mcp-argument] textarea"),
+      ] as HTMLTextAreaElement[]
+    expect(fields().map((each) => each.value)).toEqual(["", "a\nb"])
+    await click(button("Add argument", form()))
+    await type(fields()[2], "c\nd")
+    await click(form().querySelector('[aria-label="Remove argument 1"]') ?? undefined)
+    expect(fields().map((each) => each.value)).toEqual(["a\nb", "c\nd"])
+    // The launch changed: TOKEN's value again, before Save.
+    await type(host.querySelector('[data-mcp-variable="TOKEN"] [data-mcp-secret]'), "t")
+    await click(button("Save"))
+    expect(fake.requests.find((each) => each.method === "save")?.argument).toMatchObject({
+      server: { args: ["a\nb", "c\nd"] },
+    })
+  })
+
+  it("U33: a changed command asks for every stored value again, says why, and holds Save", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Edit", row("charts")))
+    const value = host.querySelector(
+      '[data-mcp-variable="TOKEN"] [data-mcp-secret]',
+    ) as HTMLTextAreaElement
+    const note = host.querySelector("[data-mcp-values-needed]")
+    expect(note?.textContent).toBe("")
+    expect(button("Save")?.disabled).toBe(false)
+    const command = host.querySelector("[data-mcp-field=command]")
+    await type(command, "/bin/new")
+    expect(value.placeholder).toBe("Enter the value again")
+    expect(note?.textContent).toBe(
+      "Changing the command or arguments needs every value entered again.",
+    )
+    expect(value.getAttribute("aria-describedby")).toContain(note?.id)
+    expect(button("Save")?.disabled).toBe(true)
+    await type(value, "again")
+    expect(note?.textContent).toBe("")
+    expect(button("Save")?.disabled).toBe(false)
+    // Back to the listed command: kept again.
+    await type(value, "")
+    await type(command, charts.command)
+    expect(value.placeholder).toBe("Stored value kept")
+    expect(button("Save")?.disabled).toBe(false)
+  })
+
+  it("rows are keyed by where they are listed: a name stored twice draws twice, with no key warning", async () => {
+    const warnings: unknown[] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => warnings.push(args)
+    try {
+      const fake = fakeGateway()
+      await mount(fake.gateway)
+      await answer(
+        fake,
+        "list",
+        list(charts, { ...charts, command: "/bin/other" }, nessa),
+      )
+      expect(host.querySelectorAll('[data-mcp-server="charts"]').length).toBe(2)
+      await click(button("Inspect", row("charts")))
+      await answer(fake, "inspect", {
+        ok: true,
+        value: { complete: true, tools: [{ name: "t" }, { name: "t" }] },
+      })
+      expect(host.querySelectorAll('[data-mcp-tool="t"]').length).toBe(2)
+      expect(JSON.stringify(warnings)).not.toMatch(/same key/)
+    } finally {
+      console.error = original
+    }
   })
 
   it("the notices' live region is drawn before what it says", async () => {

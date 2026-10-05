@@ -196,6 +196,7 @@ export type {
   McpServersRemoveParams,
   McpServersRevisionConflictDetails,
   McpServersSaveParams,
+  McpServersStorageUnavailableDetails,
   McpServersWriteResult,
 } from "./generated/product.js"
 export { NessaRequestTooLargeError } from "./application/request-too-large-error.js"

@@ -497,6 +497,7 @@ const bounds = {
   maxMcpResourceUriBytes: agreeing("app resource URI bytes", [
     mcpRead.uri["x-utf8MaxBytes"],
     mcpResource.uri["x-utf8MaxBytes"],
+    schema.$defs.McpInspectedUi.properties.uri["x-utf8MaxBytes"],
   ]),
   mcpAppMimeType: mcpResource.mimeType.const,
   maxMcpResourceBytes: mcpResource.size.maximum,

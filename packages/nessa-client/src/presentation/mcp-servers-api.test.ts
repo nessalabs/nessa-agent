@@ -76,10 +76,10 @@ describe("client.mcpServers answers", () => {
     expect(listed.servers[0]).toEqual(byHand)
     const tool = session(() => ({
       complete: true,
-      tools: [{ name: "", ui: { uri: "", csp, permissions } }],
+      tools: [{ name: "", ui: { uri: "ui://c", csp, permissions } }],
     }))
     await expect(tool.api.inspect("charts")).resolves.toMatchObject({
-      tools: [{ name: "", ui: { uri: "" } }],
+      tools: [{ name: "", ui: { uri: "ui://c" } }],
     })
     const write = session(() => ({ revision: "" }))
     await expect(write.api.remove({ revision: "r1", name: "" })).resolves.toEqual({
@@ -169,6 +169,20 @@ describe("client.mcpServers answers", () => {
       { complete: true, cut: "ui", tools: [] },
     ],
     [
+      "an app URI that is empty",
+      "inspect",
+      { complete: true, tools: [{ name: "t", ui: { uri: "", csp, permissions } }] },
+    ],
+    [
+      "an app URI past 2048 UTF-8 bytes",
+      "inspect",
+      {
+        complete: true,
+        // 683 three-byte characters are 2049 bytes in 683 code units.
+        tools: [{ name: "t", ui: { uri: "€".repeat(683), csp, permissions } }],
+      },
+    ],
+    [
       "a hint that is not a boolean",
       "inspect",
       { complete: true, tools: [{ name: "t", readOnlyHint: "yes" }] },
@@ -250,6 +264,34 @@ describe("NessaMcpServersError narrows the refusal", () => {
       details: { applied: false },
     })
   })
+
+  it("reads an app URI of exactly 2048 UTF-8 bytes", async () => {
+    const uri = `ui://${"€".repeat(681)}` // 5 + 2043 bytes
+    const { api } = session(() => ({
+      complete: true,
+      tools: [{ name: "t", ui: { uri, csp, permissions } }],
+    }))
+    expect((await api.inspect("n")).tools[0].ui?.uri).toBe(uri)
+  })
+
+  it.each([true, false])("types a storage refusal's applied (%s)", async (applied) => {
+    const { api } = refusing("mcp_servers_storage_unavailable", { applied })
+    expect((await failure(api.save({} as never))).refusal).toEqual({
+      code: "mcp_servers_storage_unavailable",
+      details: { applied },
+    })
+  })
+
+  it.each([undefined, {}, { applied: "yes" }, { applied: true, extra: 1 }])(
+    "keeps a storage refusal and drops details %o, which are not its shape",
+    async (details) => {
+      const { api } = refusing("mcp_servers_storage_unavailable", details)
+      expect((await failure(api.save({} as never))).refusal).toEqual({
+        code: "mcp_servers_storage_unavailable",
+        details: undefined,
+      })
+    },
+  )
 
   it("types a remote error's code and message", async () => {
     const { api } = refusing("mcp_server_remote_error", { code: -32601, message: "no" })
