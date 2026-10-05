@@ -336,3 +336,61 @@ fn both_journals_present_leaves_the_current_file() {
         b"old-journal"
     );
 }
+
+/// A parent that is a file is not an absent journal.
+#[test]
+fn a_non_notfound_stat_is_agent_not_a_missing_journal() {
+    let (_directory, namespace, _store) = namespace_with_registry();
+    std::fs::write(namespace.join("receiver-access"), b"not-a-directory").unwrap();
+    let error = match open_receiver_journal(&namespace, "policy", true) {
+        Err(error) => error,
+        Ok(_) => panic!("a file where the journal directory should be was opened"),
+    };
+    assert!(
+        matches!(error, RunError::Agent(_)),
+        "expected Agent, got {error}"
+    );
+
+    let (_directory, blocked, _store) = namespace_with_registry();
+    std::fs::write(conversation_root(&blocked), b"not-a-directory").unwrap();
+    let error = match open_receiver_journal(&blocked, "policy", true) {
+        Err(error) => error,
+        Ok(_) => panic!("a file where conversations/ should be was opened"),
+    };
+    assert!(
+        matches!(error, RunError::Agent(_)),
+        "expected Agent for the legacy path, got {error}"
+    );
+}
+
+/// A symlink sidecar is not a regular file, so it stays and the directory stays.
+#[test]
+fn a_symlink_sidecar_is_left_and_keeps_conversations() {
+    let (_directory, namespace, _store) = namespace_with_registry();
+    let current = receiver_journal(&namespace);
+    nessa_local_storage::create_directory(current.parent().unwrap()).unwrap();
+    std::fs::write(&current, b"current").unwrap();
+    let legacy_dir = conversation_root(&namespace);
+    nessa_local_storage::create_directory(&legacy_dir).unwrap();
+    let target = namespace.join("sidecar-target");
+    std::fs::write(&target, b"linked").unwrap();
+    let sidecar = legacy_dir.join("receiver-access.sqlite3-journal");
+    std::os::unix::fs::symlink(&target, &sidecar).unwrap();
+    std::fs::write(legacy_dir.join("receiver-access.sqlite3-wal"), b"wal").unwrap();
+    adopt_legacy_journal(&namespace, &current).unwrap();
+    assert!(sidecar.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&target).unwrap(), b"linked");
+    assert!(legacy_dir.is_dir());
+    assert!(!legacy_dir.join("receiver-access.sqlite3-wal").exists());
+    assert_eq!(
+        std::fs::read(
+            current
+                .parent()
+                .unwrap()
+                .join("receiver-access.sqlite3-wal")
+        )
+        .unwrap(),
+        b"wal"
+    );
+    assert_eq!(std::fs::read(&current).unwrap(), b"current");
+}
