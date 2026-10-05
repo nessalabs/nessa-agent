@@ -182,8 +182,9 @@ export const css = {
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
   mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
   mcpStoredRow: "[data-mcp-server]:not([data-managed])",
-  mcpRowAt: (at) => `[data-mcp-row="${at}"]`, // a stored row by its place in stored order
-  mcpShared: "[data-mcp-shared]", // a row's "Two servers share this name…"
+  mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
+  mcpShared: "[data-mcp-shared]", // a group's "N servers share this name…"
+  mcpSharedRow: "[data-mcp-shared-row]", // one read-only server of a group
   mcpManagedRow: "[data-mcp-server][data-managed]",
   mcpRowText: ".settings-row-text", // class: a row's name, command and variables
   mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
@@ -194,12 +195,14 @@ export const css = {
   mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
   mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
   mcpVariable: "[data-mcp-variable]", // a variable's row in the form
-  mcpSecret: "[data-mcp-secret]", // a variable's value: masked, multiline, uncontrolled
+  mcpSecret: "[data-mcp-secret]", // a variable's value: a password field, uncontrolled
+  mcpSecretHeld: "[data-mcp-secret-held]", // a value pasted with line breaks, held and not drawn (S4)
+  mcpPasted: "[data-mcp-pasted]", // its "Pasted value: N lines"
   mcpArgument: "[data-mcp-argument]", // an argument's row in the form; its value is its place
   mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
   mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
   mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
-  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | cancel | confirm | close | removeByName (the name field)
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
   mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
   mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
@@ -369,17 +372,25 @@ export const names = {
     notAdmin: "Only an administrator can manage MCP servers.",
     conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
     gone: (name) => `“${name}” is no longer stored.`,
-    configInvalid:
-      "The configuration file can't be read as it is, so nothing was changed.",
+    listUnreadable:
+      "The servers couldn't be listed: the configuration file can't be read as it is.",
     listTooLarge:
       "The server list is too large to show. Removing a server fixes it: enter its name.",
     saveTooLarge:
       "This would make the server list too large; remove a server or shorten its arguments.",
     removeAsk: (name) =>
       `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    removeFirst: (name) => `Remove the first server named “${name}”`,
     removeFirstAsk: (name) =>
-      `Remove the first server stored under “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
-    nameShared: "Two servers share this name: remove one to edit the other.",
+      `Remove the first server named “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    nameShared: (count) =>
+      `${count} servers share this name. Only the first can be removed here, and none edited.`,
+    storedValueCleared: "Empty: the stored value will be cleared",
+    keepStored: "Keep stored value",
+    pasted: (lines, endsWithBreak) =>
+      `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}${endsWithBreak ? ", ends with a line break" : ""}`,
+    trimBreak: "Remove line break",
+    clearPasted: "Clear",
   },
   /** A sample session (in-memory source) that waits on an approval. */
   approvalSession: "Release build signing",

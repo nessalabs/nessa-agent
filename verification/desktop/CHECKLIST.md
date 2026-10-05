@@ -536,7 +536,8 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
 ### Integrations: the gateway's MCP servers
 
 #391 PR 3's design (the issue's comments of its state table, rows U1–U31,
-U32–U43 from its review, and U44–U50 for a list too large to show):
+U32–U43 from its review, U44–U50 for a list too large to show, and S1–S8,
+G1–G9 and F8–F12 for the secret field and names stored more than once):
 Settings › Connections › Integrations manages the gateway's stored MCP
 servers over `client.mcpServers`. Every row is a test of
 `settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
@@ -575,10 +576,24 @@ publish, and refuses nothing the gateway would judge.
   (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
   (`focus`).
 - [ ] **Arguments and values are kept as typed** — one field per argument,
-  so an empty argument and one with a line break are each one argument; a
-  variable's value is masked and multiline, so a pasted key keeps its line
-  breaks (a pasted CRLF reads back as LF, as every textarea's value does).
-  _Check:_ unit tests `mcp-servers.test.ts`, `integrations-tab.test.tsx`.
+  so an empty argument and one with a line break are each one argument;
+  Enter adds the next argument after it, Shift+Enter is a line break, marked
+  under its field; removing an argument or variable focuses the next one, or
+  Add (F11, F12). A variable's value is a password field, so a typed value is
+  in no accessibility tree; a paste with line breaks is held and never drawn,
+  "Pasted value: N lines", a trailing line break pointed out and trimmed only
+  when asked, Clear to drop it (S3–S6). A stored value not edited is kept; edited
+  to empty, it is cleared, said so, with "Keep stored value" (S1, S2, Codex
+  P1). _Check:_ `mcp-servers-gateway.mjs --only secret` (the accessibility
+  tree over CDP in Chromium, the ARIA snapshot in WebKit); unit tests
+  `mcp-servers.test.ts`, `integrations-tab.test.tsx`.
+- [ ] **A name stored more than once is one read-only group** — config.json
+  edited to store three servers under one name: "3 servers share this name",
+  each read-only with no Edit, Inspect or switch, and one action "Remove the
+  first server named …", asked first in those words; each removal takes the
+  first stored, focus staying on the group while it lasts, then on the row
+  left (G3–G6). _Check:_ `mcp-servers-gateway.mjs --only duplicate-names`;
+  unit tests (G1–G9).
 - [ ] **What the gateway says is read out** — the notices, each field's
   problem and the inspection's status are live regions drawn before their
   text arrives, a field naming its problem with `aria-describedby`; no

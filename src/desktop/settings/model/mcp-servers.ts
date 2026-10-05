@@ -1,9 +1,11 @@
 /**
  * Settings › Connections › Integrations: the gateway's stored MCP servers, as
  * the window manages them (#391). One reducer, from the design's state table
- * (rows U1–U31, issue #391's PR 3 design, U32–U43 from its review, and
- * U44–U50 for a list too large to show, #391 comment 5986496625); its
- * tests are one row at least one test, in `mcp-servers.test.ts`.
+ * (rows U1–U31, issue #391's PR 3 design, U32–U43 from its review,
+ * U44–U50 for a list too large to show, #391 comment 5986496625, and S1–S8,
+ * G1–G9 and F8–F12 for the secret field and rows sharing a name, #391
+ * comment 5987640015); its tests are one row at least one test, in
+ * `mcp-servers.test.ts`.
  *
  * The window never retypes a gateway rule (gate 13). Whether a name, command,
  * argument or variable is acceptable is the gateway's to answer, as a typed
@@ -182,13 +184,23 @@ export interface McpServersLimits {
   readonly inspectDeadlineMs: number
 }
 
-/** A variable row in the form. A stored one keeps its value unless one is typed. */
+/**
+ * A variable row in the form. A stored one keeps its value until its value
+ * field is edited; edited and left empty, it saves the empty value (S1, S2).
+ */
 export interface VariableRow {
   readonly key: number
   readonly name: string
   readonly value: string
-  /** Listed with the server: its value is kept while this row's is empty. */
+  /** Listed with the server: its value is kept while this row's is not edited. */
   readonly stored: boolean
+  /** Whether the value field was typed in, pasted into, cleared or trimmed. */
+  readonly edited: boolean
+  /**
+   * The value came from a paste with a line break, which a password field
+   * cannot hold: it is held here and never drawn (S4).
+   */
+  readonly held: boolean
 }
 
 /** An argument row in the form: one argument, any text, the empty one and line breaks included. */
@@ -218,6 +230,12 @@ export interface ServerForm {
   readonly env: readonly VariableRow[]
   readonly enabled: boolean
   readonly problem?: FormProblem
+  /**
+   * Its save's outcome is not known (unanswered, or not said whether it was
+   * applied): the list read next may no longer have the name it edits, and
+   * that is the save's doing, not news to report (F9).
+   */
+  readonly unconfirmed?: true
 }
 
 /** The one request in flight. */
@@ -234,7 +252,12 @@ export type PendingRequest =
 
 export type ListState =
   | { readonly phase: "loading" }
-  | { readonly phase: "listed"; readonly list: ServerList }
+  | {
+      readonly phase: "listed"
+      readonly list: ServerList
+      /** Each listed server's occurrence id, by its place in `list.servers` (G1). */
+      readonly ids: readonly number[]
+    }
   | { readonly phase: "notConfigured" }
   | { readonly phase: "failed" }
   /**
@@ -260,14 +283,14 @@ export interface Notice {
 }
 
 /**
- * The removal being asked about: the name the request will carry, and the
- * listed row it was asked from, by its place among the stored servers — two
- * rows may share a name stored by hand. `at` is `null` for a name typed
- * against a list too large to show (U44).
+ * The removal being asked about: the name the request will carry, and how
+ * many stored servers had it when asked — the gateway removes the first
+ * stored under it, so a confirm stands only while that count does (G7).
+ * `count` is `null` for a name typed against a list too large to show (U44).
  */
 export interface Confirming {
   readonly name: string
-  readonly at: number | null
+  readonly count: number | null
 }
 
 export interface McpServersState {
@@ -290,7 +313,7 @@ export interface McpServersState {
   readonly notice: Notice | null
   /** The last request number handed out. */
   readonly seq: number
-  /** The last variable row key handed out. */
+  /** The last row key, or listed server's occurrence id, handed out. */
   readonly rows: number
 }
 
@@ -309,7 +332,8 @@ export type McpServersEvent =
       readonly type: "change"
       readonly patch: Partial<Pick<ServerForm, "name" | "command" | "enabled">>
     }
-  | { readonly type: "addArgument" }
+  /** A new argument, after the row keyed `after`, or last. */
+  | { readonly type: "addArgument"; readonly after?: number }
   | { readonly type: "changeArgument"; readonly key: number; readonly value: string }
   | { readonly type: "removeArgument"; readonly key: number }
   | { readonly type: "addVariable" }
@@ -318,12 +342,20 @@ export type McpServersEvent =
       readonly key: number
       readonly patch: Partial<Pick<VariableRow, "name" | "value">>
     }
+  /** A paste with a line break: held, never drawn (S4). */
+  | { readonly type: "pasteVariable"; readonly key: number; readonly value: string }
+  /** One trailing line break of a held value removed (S5). */
+  | { readonly type: "trimVariable"; readonly key: number }
+  /** A held value dropped: the field is empty and edited (S6). */
+  | { readonly type: "clearVariable"; readonly key: number }
+  /** A stored variable back to keeping its stored value (S2 → S1). */
+  | { readonly type: "keepVariable"; readonly key: number }
   | { readonly type: "removeVariable"; readonly key: number }
   | { readonly type: "cancelForm" }
   | { readonly type: "save" }
   | { readonly type: "toggle"; readonly name: string }
-  /** Remove asked from the stored row at `at`, which lists `name`. */
-  | { readonly type: "askRemove"; readonly name: string; readonly at: number }
+  /** Remove asked for `name`: its row's, or the group's when it is shared (G5). */
+  | { readonly type: "askRemove"; readonly name: string }
   | { readonly type: "cancelRemove" }
   /** The name typed to remove a server from a list too large to show (U44). */
   | { readonly type: "changeRemoveName"; readonly name: string }
@@ -369,6 +401,8 @@ export const sentences = {
   storedValueAgain: "Enter the value again",
   valuesAgain: "Changing the command or arguments needs every value entered again.",
   listFailed: "The servers couldn't be listed.",
+  /** A list refused for a reason a list can have (F10). */
+  listRefused: (why: string) => `The servers couldn't be listed: ${why}.`,
   conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
   notFound: "That server is no longer stored. The list was reloaded.",
   busy: "Another change is in progress. Try again in a moment.",
@@ -414,10 +448,29 @@ export const sentences = {
         : `It offers ${count} tools.`,
   removeAsk: (name: string) =>
     `Remove ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
-  /** The gateway removes by name, the first stored under it. */
+  /** A group's one action: the gateway removes by name, the first stored under it (G3). */
+  removeFirst: (name: string) => `Remove the first server named ${quoted(name)}`,
   removeFirstAsk: (name: string) =>
-    `Remove the first server stored under ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
-  nameShared: "Two servers share this name: remove one to edit the other.",
+    `Remove the first server named ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
+  /** A name typed against a list too large to show may be stored more than once (G9). */
+  removeByNameAsk: (name: string) =>
+    `Remove ${quoted(name)}? This removes the first server stored under that name. New conversations stop getting it. Open ones keep it until they close.`,
+  nameShared: (count: number) =>
+    `${count} servers share this name. Only the first can be removed here, and none edited.`,
+  /** A form whose server's name a list read since stores more than once (G8). */
+  formShared: (name: string) =>
+    `${quoted(name)} is now stored more than once, so the form was closed.`,
+  notOffered: "Not offered",
+  /** A stored variable's placeholder once its value was edited to empty (S2). */
+  storedValueCleared: "Empty: the stored value will be cleared",
+  keepStored: "Keep stored value",
+  pasted: (lines: number) => `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}`,
+  endsWithBreak: "ends with a line break",
+  trimBreak: "Remove line break",
+  clearPasted: "Clear",
+  /** The marker of an argument holding a line break (F11). */
+  argumentBreaks: (count: number) =>
+    count === 1 ? "Has a line break" : `Has ${count} line breaks`,
   inspecting: (name: string, ms: number) =>
     `Starting ${quoted(name)}… It has up to ${seconds(ms)}.`,
   variables: (count: number) => (count === 1 ? "1 variable" : `${count} variables`),
@@ -546,6 +599,29 @@ function inspectSentence(name: string, failure: Failure, state: McpServersState)
   }
 }
 
+/**
+ * What a failed list says (F10): that it failed, and why when a refusal
+ * says; never what a write's refusal says of a change. A file too large to
+ * read is its own (U47).
+ */
+function listSentence(failure: Failure, state: McpServersState): string {
+  switch (failure.kind) {
+    case "configTooLarge":
+      return sentences.configFileTooLarge
+    case "forbidden":
+    case "notConfigured":
+    case "reservedName":
+      return writeSentence(failure, state)
+    case "unanswered":
+    case "invalid":
+    case "remoteError":
+    case "auditUnavailable":
+      return sentences.listFailed
+    default:
+      return sentences.listRefused(causes[failure.kind])
+  }
+}
+
 /** What a failed list, save or remove says when it is not at a field. */
 function writeSentence(failure: Failure, state: McpServersState): string {
   switch (failure.kind) {
@@ -648,14 +724,15 @@ export function launchChanged(
   return form.command !== listed.command || !sameArgs(argsOf(form), listed.args)
 }
 
-/** Whether a stored variable still waits for its value, the launch having changed (U33). */
+/**
+ * Whether a stored variable still waits for its value, the launch having
+ * changed (U33): one not edited. An edited empty value is one entered (S7).
+ */
 export function valuesNeeded(
   form: ServerForm,
   listed: ListedServer | undefined,
 ): boolean {
-  return (
-    launchChanged(form, listed) && form.env.some((row) => row.stored && row.value === "")
-  )
+  return launchChanged(form, listed) && form.env.some((row) => row.stored && !row.edited)
 }
 
 /**
@@ -683,22 +760,74 @@ export function storedServers(list: ServerList) {
   }
 }
 
+/** How many stored servers a list has under `name`. */
+function countIn(list: ServerList, name: string): number {
+  return storedServers(list).stored.filter((each) => each.name === name).length
+}
+
 /**
  * Whether more than one stored server is listed under `name` — a config
- * edited by hand. The gateway addresses a server by name, so neither can be
- * edited or switched; a remove takes the first stored.
+ * edited by hand. The gateway addresses a server by name, so none of them
+ * can be edited, switched or inspected; a remove takes the first stored (G3).
  */
 export function sharesName(state: McpServersState, name: string): boolean {
   const list = listed(state)
-  if (!list) return false
-  return storedServers(list).stored.filter((each) => each.name === name).length > 1
+  return list !== undefined && countIn(list, name) > 1
 }
+
+/** A stored server as drawn: keyed by its occurrence id (G1). */
+export interface ListedRow {
+  readonly id: number
+  readonly server: ListedServer
+}
+
+/** The stored servers under one name, at the first one's place (G2, G3). */
+export interface ServerGroup {
+  readonly name: string
+  readonly rows: readonly ListedRow[]
+}
+
+/** A listed state's stored servers, grouped by name in stored order, and the managed ones. */
+export function groupsOf(list: Extract<ListState, { phase: "listed" }>) {
+  const groups: { name: string; rows: ListedRow[] }[] = []
+  const managed: ListedRow[] = []
+  list.list.servers.forEach((server, at) => {
+    const row = { id: list.ids[at], server }
+    if (server.managed) return managed.push(row)
+    const group = groups.find((each) => each.name === server.name)
+    if (group) group.rows.push(row)
+    else groups.push({ name: server.name, rows: [row] })
+  })
+  return {
+    groups: groups as readonly ServerGroup[],
+    managed: managed as readonly ListedRow[],
+  }
+}
+
+/* ——— A variable's value ——— */
+
+const lineBreak = /\r\n|\r|\n/g
+const trailingBreak = /(?:\r\n|\r|\n)$/
+
+/** Whether a value holds a line break: a password field cannot (S4). */
+export const hasLineBreak = (value: string) => /[\r\n]/.test(value)
+
+/** How many line breaks a value holds, a CRLF one. */
+export const lineBreaks = (value: string) => value.match(lineBreak)?.length ?? 0
+
+/** Whether a value ends in a line break, as a key copied from a terminal may (S5). */
+export const endsWithLineBreak = (value: string) => trailingBreak.test(value)
+
+/** How many lines a held value is: its line breaks, but for one at its end, and one. */
+export const linesOf = (value: string) =>
+  lineBreaks(value) - (endsWithLineBreak(value) ? 1 : 0) + 1
 
 /* ——— The requests ——— */
 
 /**
- * The save a form asks for. A stored variable left empty keeps its value
- * (`null`); a row with neither name nor value is a blank one and is not sent.
+ * The save a form asks for. A stored variable not edited keeps its value
+ * (`null`); edited, its value is sent, the empty one too (S1, S2). A row with
+ * neither name nor value is a blank one and is not sent.
  */
 export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {
   const renamed = form.editing !== undefined && form.editing !== form.name
@@ -713,7 +842,7 @@ export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {
         .filter((row) => row.stored || row.name !== "" || row.value !== "")
         .map((row) => ({
           name: row.name,
-          value: row.stored && row.value === "" ? null : row.value,
+          value: row.stored && !row.edited ? null : row.value,
         })),
       enabled: form.enabled,
     },
@@ -774,16 +903,20 @@ function inspectionOfStored(state: McpServersState): McpServersState {
   }
 }
 
+const storedRow = (key: number, name: string): VariableRow => ({
+  key,
+  name,
+  value: "",
+  stored: true,
+  edited: false,
+  held: false,
+})
+
 /** Rows for what a list says, each with a key handed out after `rows`. */
 function rowsOf(rows: number, args: readonly string[], envNames: readonly string[]) {
   return {
     args: args.map((value) => ({ key: ++rows, value })),
-    env: envNames.map((variable) => ({
-      key: ++rows,
-      name: variable,
-      value: "",
-      stored: true,
-    })),
+    env: envNames.map((variable) => storedRow(++rows, variable)),
     rows,
   }
 }
@@ -824,7 +957,18 @@ function refilled(state: McpServersState): McpServersState {
     return {
       ...state,
       form: null,
-      notice: said(sentences.formGone(form.editing), "write"),
+      // A save not confirmed may itself have moved it (a rename): what it
+      // said stands (F9).
+      notice: form.unconfirmed
+        ? state.notice
+        : said(sentences.formGone(form.editing), "write"),
+    }
+  // Stored more than once since: no save could say which (G8).
+  if (sharesName(state, form.editing))
+    return {
+      ...state,
+      form: null,
+      notice: said(sentences.formShared(form.editing), "write"),
     }
   const base = form.base
   const clashes: string[] = []
@@ -847,17 +991,21 @@ function refilled(state: McpServersState): McpServersState {
     let typedGone = false
     env = form.env.flatMap((row) => {
       if (!row.stored || now.envNames.includes(row.name)) return [row]
-      // Removed there: untouched, it goes; with a value typed, it is a new one.
-      if (row.value === "") return []
+      // Removed there: untouched, it goes; edited, it is a new one (S8).
+      if (!row.edited) return []
       typedGone = true
       return [{ ...row, stored: false }]
     })
-    const added = now.envNames
-      .filter((name) => !base.envNames.includes(name))
+    const addedThere = now.envNames.filter((name) => !base.envNames.includes(name))
+    // Added there and typed here too: the save would replace that value (F8).
+    const typedBoth = addedThere.some((name) =>
+      env.some((row) => !row.stored && row.name === name),
+    )
+    const added = addedThere
       .filter((name) => !env.some((row) => row.name === name))
-      .map((name) => ({ key: ++rows, name, value: "", stored: true }))
+      .map((name) => storedRow(++rows, name))
     env = [...env, ...added]
-    if (typedGone) clashes.push("the variables")
+    if (typedGone || typedBoth) clashes.push("the variables")
   }
   const notice =
     clashes.length === 0
@@ -870,19 +1018,41 @@ function refilled(state: McpServersState): McpServersState {
     ...state,
     rows,
     notice,
-    form: { ...form, base: now, command, args, enabled, env },
+    form: { ...form, base: now, command, args, enabled, env, unconfirmed: undefined },
   }
 }
 
 /**
- * A confirm kept across a list read only while its row still lists the name
- * asked about: the rows below a removed one move up.
+ * A confirm kept across a list read only while its name is stored as many
+ * times as when it was asked: which server is first, and what the confirm
+ * says, hold only then (G7).
  */
 function stillAsked(confirming: Confirming | null, list: ServerList): Confirming | null {
-  if (confirming === null || confirming.at === null) return confirming
-  return storedServers(list).stored[confirming.at]?.name === confirming.name
-    ? confirming
-    : null
+  if (confirming === null || confirming.count === null) return confirming
+  return countIn(list, confirming.name) === confirming.count ? confirming : null
+}
+
+/**
+ * Each listed server's occurrence id (G1): the k-th server named N reuses the
+ * id of the k-th one named N the previous list had, else gets a new one, so a
+ * row keeps its key when the rows around it come and go.
+ */
+function idsFor(state: McpServersState, list: ServerList) {
+  const before = state.list.phase === "listed" ? state.list : undefined
+  const place = (server: ListedServer) => `${server.managed}:${server.name}`
+  const previous = new Map<string, number[]>()
+  before?.list.servers.forEach((server, at) => {
+    const ids = previous.get(place(server)) ?? []
+    previous.set(place(server), [...ids, before.ids[at]])
+  })
+  const seen = new Map<string, number>()
+  let rows = state.rows
+  const ids = list.servers.map((server) => {
+    const k = seen.get(place(server)) ?? 0
+    seen.set(place(server), k + 1)
+    return previous.get(place(server))?.[k] ?? ++rows
+  })
+  return { ids, rows }
 }
 
 /** A forbidden answer: this credential may not manage servers, whatever was shown. */
@@ -905,12 +1075,14 @@ function answeredList(
   const done = { ...state, pending: null }
   if (outcome.ok) {
     const list = outcome.value as ServerList
+    const { ids, rows } = idsFor(state, list)
     return refilled(
       inspectionOfStored({
         ...done,
+        rows,
         // A list given is the gateway's yes.
         access: "admin",
-        list: { phase: "listed", list },
+        list: { phase: "listed", list, ids },
         confirming: stillAsked(state.confirming, list),
         // This list answers a list that failed; a write's notice stands.
         notice: state.notice?.from === "list" ? null : state.notice,
@@ -940,16 +1112,13 @@ function answeredList(
   return {
     ...done,
     list: { phase: "failed" },
-    notice: said(
-      failure.kind === "unanswered"
-        ? sentences.listFailed
-        : failure.kind === "configTooLarge"
-          ? sentences.configFileTooLarge
-          : writeSentence(failure, state),
-      "list",
-    ),
+    notice: said(listSentence(failure, state), "list"),
   }
 }
+
+/** The form, marked as one whose save's outcome is not known (F9). */
+const unconfirmedIf = (form: ServerForm | null, unknown: boolean): ServerForm | null =>
+  form && unknown ? { ...form, unconfirmed: true } : form
 
 function answeredWrite(
   state: McpServersState,
@@ -1036,7 +1205,10 @@ function answeredWrite(
       return listAgain({
         ...done,
         notice: said(writeSentence(failure, state), "write"),
-        form: failure.applied === true && fromForm ? null : state.form,
+        form:
+          failure.applied === true && fromForm
+            ? null
+            : unconfirmedIf(state.form, fromForm && failure.applied === undefined),
         confirming: null,
       })
     case "storageUnavailable":
@@ -1050,16 +1222,42 @@ function answeredWrite(
             : writeSentence(failure, state),
           "write",
         ),
-        form: failure.applied === true && fromForm ? null : state.form,
+        form:
+          failure.applied === true && fromForm
+            ? null
+            : unconfirmedIf(state.form, fromForm && failure.applied === undefined),
         confirming: null,
       })
     default:
       // The list shows where things stand: what was typed is kept to try again.
+      // A conflict or a file unreadable wrote nothing; the rest may have.
       return listAgain({
         ...done,
         notice: said(writeSentence(failure, state), "write"),
+        form: unconfirmedIf(
+          state.form,
+          fromForm &&
+            failure.kind !== "revisionConflict" &&
+            failure.kind !== "configInvalid",
+        ),
         confirming: null,
       })
+  }
+}
+
+/** The form with its variable keyed `key` changed, while nothing is in flight. */
+function withVariable(
+  state: McpServersState,
+  key: number,
+  change: (row: VariableRow) => VariableRow,
+): McpServersState {
+  if (!state.form || state.pending) return state
+  return {
+    ...state,
+    form: {
+      ...state.form,
+      env: state.form.env.map((row) => (row.key === key ? change(row) : row)),
+    },
   }
 }
 
@@ -1106,16 +1304,20 @@ export function mcpServersReducer(
     case "change":
       if (!state.form || state.pending) return state
       return { ...state, form: { ...state.form, ...event.patch } }
-    case "addArgument":
+    case "addArgument": {
       if (!state.form || state.pending) return state
-      return {
-        ...state,
-        rows: state.rows + 1,
-        form: {
-          ...state.form,
-          args: [...state.form.args, { key: state.rows + 1, value: "" }],
-        },
-      }
+      const row = { key: state.rows + 1, value: "" }
+      const after = state.form.args.findIndex((each) => each.key === event.after)
+      const args =
+        after === -1
+          ? [...state.form.args, row]
+          : [
+              ...state.form.args.slice(0, after + 1),
+              row,
+              ...state.form.args.slice(after + 1),
+            ]
+      return { ...state, rows: row.key, form: { ...state.form, args } }
+    }
     case "changeArgument":
       if (!state.form || state.pending) return state
       return {
@@ -1145,24 +1347,51 @@ export function mcpServersReducer(
           ...state.form,
           env: [
             ...state.form.env,
-            { key: state.rows + 1, name: "", value: "", stored: false },
+            {
+              key: state.rows + 1,
+              name: "",
+              value: "",
+              stored: false,
+              edited: false,
+              held: false,
+            },
           ],
         },
       }
-    case "changeVariable":
-      if (!state.form || state.pending) return state
-      return {
-        ...state,
-        form: {
-          ...state.form,
-          env: state.form.env.map((row) =>
-            row.key !== event.key
-              ? row
-              : // A stored variable's name is the one stored; only its value changes.
-                { ...row, ...event.patch, ...(row.stored ? { name: row.name } : {}) },
-          ),
-        },
-      }
+    case "changeVariable": {
+      const { name, value } = event.patch
+      return withVariable(state, event.key, (row) => ({
+        ...row,
+        // A stored variable's name is the one stored; only its value changes.
+        ...(name === undefined || row.stored ? {} : { name }),
+        // Typed: what the field holds, drawn (S3).
+        ...(value === undefined ? {} : { value, edited: true, held: false }),
+      }))
+    }
+    case "pasteVariable":
+      return withVariable(state, event.key, (row) => ({
+        ...row,
+        value: event.value,
+        edited: true,
+        held: true,
+      }))
+    case "trimVariable":
+      return withVariable(state, event.key, (row) =>
+        row.held && endsWithLineBreak(row.value)
+          ? { ...row, value: row.value.replace(trailingBreak, "") }
+          : row,
+      )
+    case "clearVariable":
+      return withVariable(state, event.key, (row) => ({
+        ...row,
+        value: "",
+        edited: true,
+        held: false,
+      }))
+    case "keepVariable":
+      return withVariable(state, event.key, (row) =>
+        row.stored ? { ...row, value: "", edited: false, held: false } : row,
+      )
     case "removeVariable":
       if (!state.form || state.pending) return state
       return {
@@ -1185,7 +1414,7 @@ export function mcpServersReducer(
       )
         return state
       const seq = state.seq + 1
-      const form = { ...state.form, problem: undefined }
+      const form = { ...state.form, problem: undefined, unconfirmed: undefined }
       return {
         ...state,
         seq,
@@ -1220,9 +1449,9 @@ export function mcpServersReducer(
     }
     case "askRemove": {
       const list = listed(state)
-      const found = list && storedServers(list).stored[event.at]
-      if (!found || found.name !== event.name || !canWrite(state)) return state
-      return { ...state, confirming: { name: found.name, at: event.at }, notice: null }
+      const count = list ? countIn(list, event.name) : 0
+      if (count === 0 || !canWrite(state)) return state
+      return { ...state, confirming: { name: event.name, count }, notice: null }
     }
     case "cancelRemove":
       if (state.pending) return state
@@ -1236,7 +1465,11 @@ export function mcpServersReducer(
       }
     case "askRemoveByName":
       if (state.list.phase !== "tooLarge" || !canRemoveByName(state)) return state
-      return { ...state, confirming: { name: state.list.name, at: null }, notice: null }
+      return {
+        ...state,
+        confirming: { name: state.list.name, count: null },
+        notice: null,
+      }
     case "confirmRemove": {
       // At the list's revision, or the one the too-large refusal named (U45).
       const revision =
@@ -1257,7 +1490,9 @@ export function mcpServersReducer(
     }
     case "inspect": {
       const found = server(state, event.name)
-      if (!found || found.managed || !canInspect(state)) return state
+      // Shared, the gateway would start the first: not the one asked about (G4).
+      if (!found || found.managed || sharesName(state, found.name) || !canInspect(state))
+        return state
       const seq = state.seq + 1
       return { ...state, seq, inspection: { phase: "running", seq, name: found.name } }
     }

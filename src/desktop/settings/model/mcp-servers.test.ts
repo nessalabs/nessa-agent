@@ -20,6 +20,11 @@ import {
   mcpServersReducer,
   sentences,
   sharesName,
+  groupsOf,
+  hasLineBreak,
+  lineBreaks,
+  linesOf,
+  endsWithLineBreak,
   type Failure,
   type Inspection,
   type ListedServer,
@@ -168,7 +173,7 @@ describe("listing", () => {
 
   it("U5: only the managed server is an empty list, Add offered", () => {
     const state = listed(listOf(nessa))
-    expect(state.list).toEqual({ phase: "listed", list: listOf(nessa) })
+    expect(state.list).toMatchObject({ phase: "listed", list: listOf(nessa) })
     expect(canWrite(state)).toBe(true)
   })
 
@@ -196,9 +201,12 @@ describe("listing", () => {
       run(initialMcpServersState(limits), { type: "connected" }),
       no({ kind: "configInvalid" }),
     )
-    expect(state.notice).toEqual({ text: sentences.configInvalid, from: "list" })
+    const unreadable = sentences.listRefused(
+      "the configuration file can't be read as it is",
+    )
+    expect(state.notice).toEqual({ text: unreadable, from: "list" })
     state = run(state, { type: "unreachable" }, { type: "connected" })
-    expect(state.notice?.text).toBe(sentences.configInvalid)
+    expect(state.notice?.text).toBe(unreadable)
     state = answer(state, ok(listOf(charts, nessa)))
     expect(state.list.phase).toBe("listed")
     expect(state.notice).toBeNull()
@@ -546,15 +554,15 @@ describe("the switch", () => {
   it("U27: the managed server's switch sends nothing", () => {
     const state = listed()
     expect(run(state, { type: "toggle", name: "nessa" })).toBe(state)
-    expect(run(state, { type: "askRemove", name: "nessa", at: 1 }).confirming).toBeNull()
+    expect(run(state, { type: "askRemove", name: "nessa" }).confirming).toBeNull()
     expect(run(state, { type: "inspect", name: "nessa" }).inspection).toBeNull()
   })
 })
 
 describe("removing", () => {
   it("U13: confirmed, the removal is sent and the list read again", () => {
-    let state = run(listed(), { type: "askRemove", name: "charts", at: 0 })
-    expect(state.confirming).toEqual({ name: "charts", at: 0 })
+    let state = run(listed(), { type: "askRemove", name: "charts" })
+    expect(state.confirming).toEqual({ name: "charts", count: 1 })
     expect(state.pending).toBeNull()
     state = run(state, { type: "confirmRemove" })
     expect(state.pending).toMatchObject({
@@ -571,7 +579,7 @@ describe("removing", () => {
   it("U14: cancelled, nothing is sent", () => {
     const state = run(
       listed(),
-      { type: "askRemove", name: "charts", at: 0 },
+      { type: "askRemove", name: "charts" },
       { type: "cancelRemove" },
     )
     expect(state.confirming).toBeNull()
@@ -713,11 +721,7 @@ describe("refusals", () => {
 
   it("U16: not found says so and reloads", () => {
     const state = answer(
-      run(
-        listed(),
-        { type: "askRemove", name: "charts", at: 0 },
-        { type: "confirmRemove" },
-      ),
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
       no({ kind: "notFound" }),
     )
     expect(state.notice?.text).toBe(sentences.notFound)
@@ -739,11 +743,7 @@ describe("refusals", () => {
     expect(state.pending).toBeNull()
     expect(state.form?.command).toBe("/bin/new")
     const removing = answer(
-      run(
-        listed(),
-        { type: "askRemove", name: "charts", at: 0 },
-        { type: "confirmRemove" },
-      ),
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
       no({ kind: "stopping" }),
     )
     expect(removing.notice?.text).toBe(sentences.stopping)
@@ -769,11 +769,7 @@ describe("refusals", () => {
     expect(state.form).toBeNull()
     expect(state.pending?.kind).toBe("list")
     const removed = answer(
-      run(
-        listed(),
-        { type: "askRemove", name: "charts", at: 0 },
-        { type: "confirmRemove" },
-      ),
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
       no({ kind: "storageUnavailable", applied: true }),
     )
     expect(removed.notice?.text).toBe("Removed, but it may not survive a crash.")
@@ -860,7 +856,7 @@ describe("in flight", () => {
       { type: "toggle", name: "charts" },
       { type: "add" },
       { type: "edit", name: "charts" },
-      { type: "askRemove", name: "charts", at: 0 },
+      { type: "askRemove", name: "charts" },
       { type: "retry" },
     ] as const)
       expect(run(state, event).pending).toBe(state.pending)
@@ -994,11 +990,7 @@ describe("inspecting", () => {
   it("a server removed while it was inspected: the panel says it is gone", () => {
     // Inspected, removed while it ran; the inspection answers, then the list.
     let state = started()
-    state = run(
-      state,
-      { type: "askRemove", name: "charts", at: 0 },
-      { type: "confirmRemove" },
-    )
+    state = run(state, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
     state = answer(state, ok(undefined))
     state = run(state, { type: "inspected", seq: seqOf(state), outcome: ok(result) })
     state = answer(state, ok(listOf(nessa)))
@@ -1009,11 +1001,7 @@ describe("inspecting", () => {
     })
     // The list first, then the inspection's answer: the same.
     let later = started()
-    later = run(
-      later,
-      { type: "askRemove", name: "charts", at: 0 },
-      { type: "confirmRemove" },
-    )
+    later = run(later, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
     later = answer(answer(later, ok(undefined)), ok(listOf(nessa)))
     expect(later.inspection?.phase).toBe("running")
     later = run(later, { type: "inspected", seq: seqOf(later), outcome: ok(result) })
@@ -1108,7 +1096,7 @@ describe("a list too large to show (U44–U49)", () => {
       { type: "changeRemoveName", name: "big" },
       { type: "askRemoveByName" },
     )
-    expect(state.confirming).toEqual({ name: "big", at: null })
+    expect(state.confirming).toEqual({ name: "big", count: null })
     expect(state.pending).toBeNull()
     state = run(state, { type: "confirmRemove" })
     expect(state.pending).toMatchObject({
@@ -1161,7 +1149,7 @@ describe("a list too large to show (U44–U49)", () => {
   it("U46: a row's removal of a server gone keeps its own sentence", () => {
     let state = run(
       listed(),
-      { type: "askRemove", name: "charts", at: 0 },
+      { type: "askRemove", name: "charts" },
       { type: "confirmRemove" },
     )
     state = answer(state, no({ kind: "notFound" }))
@@ -1211,95 +1199,412 @@ describe("a list too large to show (U44–U49)", () => {
   })
 })
 
-describe("two stored servers sharing a name (D1–D9)", () => {
+describe("stored servers sharing a name (G1–G9)", () => {
   const first: ListedServer = { ...charts, args: ["first.mjs"] }
   const second: ListedServer = { ...charts, args: ["second.mjs"], enabled: false }
+  const third: ListedServer = { ...charts, args: ["third.mjs"] }
   const other: ListedServer = { ...charts, name: "docs" }
-  const twice = () => listed(listOf(other, first, second, nessa))
+  const thrice = () => listed(listOf(other, first, second, third, nessa))
+  const idsOf = (state: McpServersState) =>
+    state.list.phase === "listed" ? state.list.ids : []
 
-  it("D1: a name stored once is not shared; the managed one never is", () => {
-    const state = twice()
+  it("G1: each listed server has an occurrence id, kept by the k-th of its name", () => {
+    const state = thrice()
+    const ids = idsOf(state)
+    expect(new Set(ids).size).toBe(5)
+    // The first "charts" goes, the docs row stays: docs keeps its id, the
+    // remaining two "charts" take the first two ids "charts" had.
+    const after = run(state, { type: "unreachable" }, { type: "connected" })
+    const relisted = answer(after, ok(listOf(other, second, third, nessa)))
+    expect(idsOf(relisted)).toEqual([ids[0], ids[1], ids[2], ids[4]])
+    // A server new to the list has an id no other row had.
+    const grown = answer(
+      run(relisted, { type: "unreachable" }, { type: "connected" }),
+      ok(listOf({ ...charts, name: "new" }, other, second, third, nessa)),
+    )
+    expect(idsOf(grown).slice(1)).toEqual(idsOf(relisted))
+    expect(ids).not.toContain(idsOf(grown)[0])
+    expect(idsOf(relisted)).not.toContain(idsOf(grown)[0])
+  })
+
+  it("G1: the ids are not the rows' places", () => {
+    const state = thrice()
+    const removed = answer(
+      run(state, { type: "unreachable" }, { type: "connected" }),
+      ok(listOf(first, second, third, nessa)),
+    )
+    // docs, the first, went: "charts" rows keep theirs.
+    expect(idsOf(removed)).toEqual(idsOf(state).slice(1))
+  })
+
+  it("G2: a name stored once is not shared; the managed one never is", () => {
+    const state = thrice()
     expect(sharesName(state, "docs")).toBe(false)
     expect(sharesName(state, "nessa")).toBe(false)
     expect(sharesName(listed(listOf(charts, nessa)), "charts")).toBe(false)
   })
 
-  it("D2: a name stored twice is shared", () => {
-    expect(sharesName(twice(), "charts")).toBe(true)
+  it("G3: a name stored three times is one group of three, at the first one's place", () => {
+    const state = thrice()
+    if (state.list.phase !== "listed") throw new Error("not listed")
+    const { groups, managed } = groupsOf(state.list)
+    expect(groups.map((group) => [group.name, group.rows.length])).toEqual([
+      ["docs", 1],
+      ["charts", 3],
+    ])
+    expect(groups[1].rows.map((row) => row.server)).toEqual([first, second, third])
+    expect(managed.map((row) => row.server)).toEqual([nessa])
+    expect(sentences.nameShared(3)).toBe(
+      "3 servers share this name. Only the first can be removed here, and none edited.",
+    )
   })
 
-  it("D3: neither row of a shared name is edited or switched", () => {
-    const state = twice()
+  it("G4: a shared name is not edited, switched or inspected", () => {
+    const state = thrice()
     expect(run(state, { type: "edit", name: "charts" })).toBe(state)
     expect(run(state, { type: "toggle", name: "charts" })).toBe(state)
+    expect(run(state, { type: "inspect", name: "charts" })).toBe(state)
     // The name stored once still is.
     expect(run(state, { type: "edit", name: "docs" }).form?.editing).toBe("docs")
     expect(run(state, { type: "toggle", name: "docs" }).pending?.kind).toBe("save")
+    expect(run(state, { type: "inspect", name: "docs" }).inspection?.phase).toBe(
+      "running",
+    )
   })
 
-  it("D4: Remove is asked from the one row it was pressed on", () => {
-    const state = run(twice(), { type: "askRemove", name: "charts", at: 2 })
-    expect(state.confirming).toEqual({ name: "charts", at: 2 })
+  it("G5: the group's action asks to remove the first, with how many share it", () => {
+    const state = run(thrice(), { type: "askRemove", name: "charts" })
+    expect(state.confirming).toEqual({ name: "charts", count: 3 })
+    expect(sentences.removeFirst("charts")).toBe("Remove the first server named “charts”")
     expect(sentences.removeFirstAsk("charts")).toBe(
-      "Remove the first server stored under “charts”? New conversations stop getting it. Open ones keep it until they close.",
+      "Remove the first server named “charts”? New conversations stop getting it. Open ones keep it until they close.",
     )
+    expect(run(state, { type: "cancelRemove" }).confirming).toBeNull()
   })
 
-  it("D5: cancelled, nothing is sent", () => {
-    const state = run(
-      twice(),
-      { type: "askRemove", name: "charts", at: 2 },
-      { type: "cancelRemove" },
-    )
-    expect(state.confirming).toBeNull()
-    expect(state.pending).toBeNull()
+  it("G5: a name not stored is not asked about", () => {
+    const state = thrice()
+    expect(run(state, { type: "askRemove", name: "gone" })).toBe(state)
+    expect(run(state, { type: "askRemove", name: "nessa" })).toBe(state)
   })
 
-  it("D6: confirmed, the removal names the server; the gateway takes the first", () => {
-    const state = run(
-      twice(),
-      { type: "askRemove", name: "charts", at: 2 },
+  it("G6: confirmed, the removal names the server; answered, the list is read", () => {
+    let state = run(
+      thrice(),
+      { type: "askRemove", name: "charts" },
       { type: "confirmRemove" },
     )
     expect(state.pending).toMatchObject({
       kind: "remove",
       request: { revision: "r1", name: "charts" },
     })
-  })
-
-  it("D7: answered, the confirm closes and the list is read", () => {
-    let state = run(
-      twice(),
-      { type: "askRemove", name: "charts", at: 2 },
-      { type: "confirmRemove" },
-    )
     state = answer(state, ok(undefined))
     expect(state.confirming).toBeNull()
-    state = answer(state, ok(listOf(other, second, nessa)))
-    expect(sharesName(state, "charts")).toBe(false)
-    expect(run(state, { type: "edit", name: "charts" }).form?.base).toEqual(second)
+    state = answer(state, ok(listOf(other, second, third, nessa)))
+    expect(sharesName(state, "charts")).toBe(true)
   })
 
-  it("D8: a list read meanwhile keeps the confirm only while its row still lists the name", () => {
-    const asked = run(twice(), { type: "askRemove", name: "charts", at: 1 })
+  it("G7: a list read meanwhile keeps the confirm only while the count holds", () => {
+    const asked = run(thrice(), { type: "askRemove", name: "charts" })
     const relisted = run(asked, { type: "unreachable" }, { type: "connected" })
-    expect(answer(relisted, ok(listOf(other, first, second, nessa))).confirming).toEqual({
+    expect(answer(relisted, ok(listOf(first, second, third, nessa))).confirming).toEqual({
       name: "charts",
-      at: 1,
+      count: 3,
     })
-    // The row above went: another server is at that place now.
-    expect(answer(relisted, ok(listOf(first, second, nessa))).confirming).toEqual({
-      name: "charts",
-      at: 1,
-    })
-    expect(answer(relisted, ok(listOf(first, other, nessa))).confirming).toBeNull()
+    expect(
+      answer(relisted, ok(listOf(other, second, third, nessa))).confirming,
+    ).toBeNull()
     expect(answer(relisted, ok(listOf(other, nessa))).confirming).toBeNull()
+    // A name stored once, asked as such, is not kept once it is shared.
+    const once = run(listed(listOf(charts, nessa)), { type: "askRemove", name: "charts" })
+    expect(once.confirming).toEqual({ name: "charts", count: 1 })
+    expect(
+      answer(
+        run(once, { type: "unreachable" }, { type: "connected" }),
+        ok(listOf(first, second, nessa)),
+      ).confirming,
+    ).toBeNull()
   })
 
-  it("D9: a Remove for a place that does not list that name is refused", () => {
-    const state = twice()
-    expect(run(state, { type: "askRemove", name: "charts", at: 0 })).toBe(state)
-    expect(run(state, { type: "askRemove", name: "charts", at: 3 })).toBe(state)
-    expect(run(state, { type: "askRemove", name: "nessa", at: 3 })).toBe(state)
+  it("G8: a form whose name becomes shared is closed, saying so", () => {
+    let state = run(listed(listOf(charts, nessa)), { type: "edit", name: "charts" })
+    state = run(state, { type: "unreachable" }, { type: "connected" })
+    state = answer(state, ok(listOf(charts, second, nessa)))
+    expect(state.form).toBeNull()
+    expect(state.notice).toEqual({
+      text: "“charts” is now stored more than once, so the form was closed.",
+      from: "write",
+    })
+  })
+
+  it("G9: removing by a typed name says it removes the first stored under it", () => {
+    expect(sentences.removeByNameAsk("big")).toBe(
+      "Remove “big”? This removes the first server stored under that name. New conversations stop getting it. Open ones keep it until they close.",
+    )
+  })
+})
+
+describe("a variable's value (S1–S8)", () => {
+  const edit = () => run(listed(), { type: "edit", name: "charts" })
+  const saved = (state: McpServersState) => {
+    const next = run(state, { type: "save" })
+    if (next.pending?.kind !== "save") throw new Error("no save")
+    return next.pending.request.server.env
+  }
+
+  it("S1: a stored variable not edited is kept", () => {
+    expect(saved(edit())).toEqual([{ name: "TOKEN", value: null }])
+  })
+
+  it("S2 (Codex P1): edited and emptied, it saves the empty value; kept again, null", () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(
+      state,
+      { type: "changeVariable", key, patch: { value: "x" } },
+      { type: "changeVariable", key, patch: { value: "" } },
+    )
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: "" }])
+    state = run(state, { type: "keepVariable", key })
+    expect(state.form?.env[0]).toMatchObject({ value: "", edited: false, held: false })
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: null }])
+  })
+
+  it("S2: keeping is for stored variables only", () => {
+    let state = run(listed(), { type: "add" }, { type: "addVariable" })
+    const key = state.form!.env[0].key
+    state = run(state, { type: "changeVariable", key, patch: { value: "v" } })
+    expect(run(state, { type: "keepVariable", key }).form).toEqual(state.form)
+  })
+
+  it("S3: typed, the value is drawn, not held", () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(state, { type: "changeVariable", key, patch: { value: "abc" } })
+    expect(state.form?.env[0]).toMatchObject({ value: "abc", edited: true, held: false })
+  })
+
+  it("S4: a paste with line breaks is held raw, CRLF and all, and saved as pasted", () => {
+    const pem = "-----BEGIN-----\r\nAAA\nBBB\r-----END-----"
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(state, { type: "pasteVariable", key, value: pem })
+    expect(state.form?.env[0]).toMatchObject({ value: pem, edited: true, held: true })
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: pem }])
+    expect(linesOf(pem)).toBe(4)
+    expect(sentences.pasted(4)).toBe("Pasted value: 4 lines")
+    expect(sentences.pasted(1)).toBe("Pasted value: 1 line")
+  })
+
+  it("S4: lines count the breaks but one at the end", () => {
+    expect(hasLineBreak("a")).toBe(false)
+    expect(hasLineBreak("a\r")).toBe(true)
+    expect(lineBreaks("a\r\nb\nc\rd")).toBe(3)
+    expect(linesOf("a\nb\n")).toBe(2)
+    expect(linesOf("a\n\n")).toBe(2)
+    expect(linesOf("\n")).toBe(1)
+    expect(linesOf("a\r\n")).toBe(1)
+  })
+
+  it("S5: one trailing line break is pointed out and trimmed only when asked", () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(state, { type: "pasteVariable", key, value: "sk-1\n" })
+    expect(endsWithLineBreak(state.form!.env[0].value)).toBe(true)
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: "sk-1\n" }])
+    state = run(state, { type: "trimVariable", key })
+    expect(state.form?.env[0]).toMatchObject({ value: "sk-1", held: true, edited: true })
+    // Nothing more to trim.
+    expect(run(state, { type: "trimVariable", key }).form).toEqual(state.form)
+    // A CRLF is one break.
+    state = run(state, { type: "pasteVariable", key, value: "a\nb\r\n" })
+    expect(run(state, { type: "trimVariable", key }).form?.env[0].value).toBe("a\nb")
+    // Two at the end: one goes, and the other is pointed out in turn.
+    state = run(state, { type: "pasteVariable", key, value: "a\n\n" })
+    expect(run(state, { type: "trimVariable", key }).form?.env[0].value).toBe("a\n")
+  })
+
+  it("S5: a value typed is never trimmed", () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(state, { type: "changeVariable", key, patch: { value: "a\n" } })
+    expect(run(state, { type: "trimVariable", key }).form).toEqual(state.form)
+  })
+
+  it("S6: Clear empties a held value, edited", () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(
+      state,
+      { type: "pasteVariable", key, value: "a\nb" },
+      { type: "clearVariable", key },
+    )
+    expect(state.form?.env[0]).toMatchObject({ value: "", edited: true, held: false })
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: "" }])
+  })
+
+  it("S7: with the launch changed, a stored variable waits until edited, empty counts", () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(state, { type: "change", patch: { command: "/usr/bin/other" } })
+    expect(valuesNeeded(state.form!, editedServer(state))).toBe(true)
+    expect(run(state, { type: "save" }).pending).toBeNull()
+    state = run(
+      state,
+      { type: "changeVariable", key, patch: { value: "x" } },
+      { type: "changeVariable", key, patch: { value: "" } },
+    )
+    expect(valuesNeeded(state.form!, editedServer(state))).toBe(false)
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: "" }])
+  })
+
+  it("S8: a stored variable removed elsewhere goes if not edited, stays as new if edited", () => {
+    const relist = (state: McpServersState) =>
+      answer(
+        run(state, { type: "unreachable" }, { type: "connected" }),
+        ok(listOf({ ...charts, envNames: [] }, nessa)),
+      )
+    const untouched = relist(edit())
+    expect(untouched.form?.env).toEqual([])
+    expect(untouched.notice).toBeNull()
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    state = run(
+      state,
+      { type: "changeVariable", key, patch: { value: "x" } },
+      { type: "changeVariable", key, patch: { value: "" } },
+    )
+    const edited = relist(state)
+    expect(edited.form?.env).toMatchObject([
+      { name: "TOKEN", value: "", stored: false, edited: true },
+    ])
+    expect(edited.notice?.text).toBe(sentences.changedThere(["the variables"]))
+  })
+})
+
+describe("also (F8–F12)", () => {
+  it("F8: a variable added both here and elsewhere is named in the clashes", () => {
+    let state = run(listed(), { type: "edit", name: "charts" }, { type: "addVariable" })
+    const key = state.form!.env[1].key
+    state = run(state, {
+      type: "changeVariable",
+      key,
+      patch: { name: "OTHER", value: "v" },
+    })
+    state = answer(
+      run(state, { type: "unreachable" }, { type: "connected" }),
+      ok(listOf({ ...charts, envNames: ["TOKEN", "OTHER"] }, nessa)),
+    )
+    expect(state.notice?.text).toBe(sentences.changedThere(["the variables"]))
+    // Kept as typed, once: not a second, stored row.
+    expect(state.form?.env.filter((row) => row.name === "OTHER")).toMatchObject([
+      { stored: false, value: "v" },
+    ])
+  })
+
+  it("F8: a variable added elsewhere only is added untouched, no clash", () => {
+    let state = run(listed(), { type: "edit", name: "charts" })
+    state = answer(
+      run(state, { type: "unreachable" }, { type: "connected" }),
+      ok(listOf({ ...charts, envNames: ["TOKEN", "OTHER"] }, nessa)),
+    )
+    expect(state.notice).toBeNull()
+    expect(state.form?.env.map((row) => [row.name, row.stored])).toEqual([
+      ["TOKEN", true],
+      ["OTHER", true],
+    ])
+  })
+
+  it.each([
+    ["unanswered", { kind: "unanswered" }],
+    ["audit, applied unknown", { kind: "auditUnavailable" }],
+    ["storage, applied unknown", { kind: "storageUnavailable" }],
+  ] as const)(
+    "F9: a rename not confirmed (%s) keeps its notice when the old name is gone",
+    (_, failure) => {
+      let state = run(
+        listed(),
+        { type: "edit", name: "charts" },
+        { type: "change", patch: { name: "graphs" } },
+        { type: "save" },
+      )
+      state = answer(state, no(failure as Failure))
+      const said = state.notice
+      expect(said).not.toBeNull()
+      state = answer(state, ok(listOf({ ...charts, name: "graphs" }, nessa)))
+      expect(state.form).toBeNull()
+      expect(state.notice).toEqual(said)
+    },
+  )
+
+  it("F9: only the list read right after it: a later one says the form is gone", () => {
+    let state = run(
+      listed(),
+      { type: "edit", name: "charts" },
+      { type: "change", patch: { name: "graphs" } },
+      { type: "save" },
+    )
+    state = answer(state, no({ kind: "unanswered" }))
+    // Not applied: still under its name, and the form is kept.
+    state = answer(state, ok(listOf(charts, nessa)))
+    expect(state.form?.unconfirmed).toBeUndefined()
+    state = answer(
+      run(state, { type: "unreachable" }, { type: "connected" }),
+      ok(listOf(nessa)),
+    )
+    expect(state.notice?.text).toBe(sentences.formGone("charts"))
+  })
+
+  it("F9: a save refused as applied false is not unconfirmed", () => {
+    let state = run(
+      listed(),
+      { type: "edit", name: "charts" },
+      { type: "change", patch: { name: "graphs" } },
+      { type: "save" },
+    )
+    state = answer(state, no({ kind: "storageUnavailable", applied: false }))
+    expect(state.form?.unconfirmed).toBeUndefined()
+  })
+
+  it.each([
+    [{ kind: "unanswered" }, sentences.listFailed],
+    [{ kind: "remoteError", code: 1 }, sentences.listFailed],
+    [{ kind: "auditUnavailable" }, sentences.listFailed],
+    [
+      { kind: "storageUnavailable" },
+      "The servers couldn't be listed: the configuration file couldn't be read or written.",
+    ],
+    [
+      { kind: "configInvalid" },
+      "The servers couldn't be listed: the configuration file can't be read as it is.",
+    ],
+    [{ kind: "busy" }, "The servers couldn't be listed: another change was in progress."],
+    [{ kind: "configTooLarge" }, sentences.configFileTooLarge],
+  ] as const)("F10: a list failing %o says it failed", (failure, text) => {
+    const state = answer(
+      run(initialMcpServersState(limits), { type: "connected" }),
+      no(failure as Failure),
+    )
+    expect(state.list.phase).toBe("failed")
+    expect(state.notice).toEqual({ text, from: "list" })
+  })
+
+  it("F11: an argument added after a row goes right after it", () => {
+    let state = typedArgs(run(listed(), { type: "add" }), "a", "c")
+    const firstKey = state.form!.args[0].key
+    state = run(state, { type: "addArgument", after: firstKey })
+    expect(state.form!.args.map((row) => row.value)).toEqual(["a", "", "c"])
+    expect(state.form!.args[1].key).toBe(state.rows)
+    // After an unknown row, or none, it goes last.
+    state = run(state, { type: "addArgument", after: -5 })
+    expect(state.form!.args.map((row) => row.value)).toEqual(["a", "", "c", ""])
+  })
+
+  it("F11: an argument with a line break is one argument, its breaks counted", () => {
+    const state = typedArgs(run(listed(), { type: "add" }), "a\nb\r\nc")
+    expect(state.form!.args.map((row) => row.value)).toEqual(["a\nb\r\nc"])
+    expect(lineBreaks(state.form!.args[0].value)).toBe(2)
+    expect(sentences.argumentBreaks(1)).toBe("Has a line break")
+    expect(sentences.argumentBreaks(2)).toBe("Has 2 line breaks")
   })
 })

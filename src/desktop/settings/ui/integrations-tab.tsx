@@ -14,20 +14,25 @@ import {
   canRemoveByName,
   canWrite,
   editedServer,
+  endsWithLineBreak,
   formReady,
+  groupsOf,
+  hasLineBreak,
   launchChanged,
+  lineBreaks,
+  linesOf,
   valuesNeeded,
   initialMcpServersState,
   mcpServersReducer,
   sentences,
-  sharesName,
-  storedServers,
   type FormField,
   type InspectedTool,
   type ListedServer,
   type McpServersEvent,
   type McpServersState,
   type ServerForm,
+  type ServerGroup,
+  type VariableRow,
 } from "../model/mcp-servers"
 import { DesktopIcon } from "../../ui/icons"
 import { PendingAction, SettingGroup, Toggle } from "./settings-controls"
@@ -42,8 +47,12 @@ import { PendingAction, SettingGroup, Toggle } from "./settings-controls"
  * Focus follows what opens and closes (CHECKLIST › Integrations): Add or
  * Edit puts it on the form's first field, Remove on the confirm's Cancel,
  * Inspect on the panel's heading; closing any of them puts it back on the
- * row's button that opened it, or on Add (`focusAfter`). Escape closes the
- * form and the confirm.
+ * row's or group's button that opened it, or on Add (`focusAfter`). Escape
+ * closes the form and the confirm.
+ *
+ * A name stored more than once is one group, read-only, whose one action
+ * removes the first stored under it: the gateway finds a server by name, so
+ * no other could be targeted (G3).
  */
 
 /** The stored servers of the window's gateway, given by composition (`main.tsx`); none without one. */
@@ -114,13 +123,12 @@ function useRequests(
 }
 
 /**
- * A button focus may go back to: a stored row's by its place (`at`), a row's
- * by its server's name, or Add.
+ * A button focus may go back to: a row's or a group's by its server's name,
+ * or one of the tab's own.
  */
 export interface FocusTarget {
-  readonly action: "edit" | "inspect" | "remove" | "add" | "removeByName"
+  readonly action: "edit" | "inspect" | "remove" | "removeFirst" | "add" | "removeByName"
   readonly server?: string
-  readonly at?: number
 }
 
 /**
@@ -128,9 +136,8 @@ export interface FocusTarget {
  * closes between `previous` and `next`: the first of these drawn, once it is
  * enabled. `null` when nothing closed. A saved form goes back to the row
  * under the name saved, a cancelled one to the row it edited. A confirm goes
- * back to the row it was asked from by place — rows may share a name — so a
- * removed row's place is taken by the row below it; past the last row, to a
- * row of that name (the other of two that shared it), else Add.
+ * back to the group it was asked from while the name is still shared, else
+ * to the one row left under it, else to Add (G6).
  */
 export function focusAfter(
   previous: McpServersState,
@@ -147,9 +154,7 @@ export function focusAfter(
         ]
   if (previous.confirming !== null && next.confirming === null)
     return [
-      ...(previous.confirming.at === null
-        ? []
-        : [{ action: "remove" as const, at: previous.confirming.at }]),
+      { action: "removeFirst", server: previous.confirming.name },
       { action: "remove", server: previous.confirming.name },
       // A list too large to show has no rows: back to the name field (U44).
       { action: "removeByName" },
@@ -162,13 +167,13 @@ export function focusAfter(
 
 function buttonFor(container: HTMLElement, target: FocusTarget) {
   const scope =
-    target.at !== undefined
-      ? container.querySelector(`[data-mcp-row="${target.at}"]`)
-      : target.server === undefined
-        ? container
-        : [...container.querySelectorAll("[data-mcp-server]")].find(
-            (row) => row.getAttribute("data-mcp-server") === target.server,
-          )
+    target.server === undefined
+      ? container
+      : [...container.querySelectorAll("[data-mcp-server], [data-mcp-group]")].find(
+          (row) =>
+            (row.getAttribute("data-mcp-server") ??
+              row.getAttribute("data-mcp-group")) === target.server,
+        )
   return scope?.querySelector<HTMLButtonElement | HTMLInputElement>(
     `[data-mcp-action="${target.action}"]`,
   )
@@ -362,10 +367,10 @@ function ServersBody({
         <div className="settings-row settings-servers-add">{add}</div>
       </>
     )
-  const { stored, managed } = storedServers(list.list)
+  const { groups, managed } = groupsOf(list)
   return (
     <>
-      {stored.length === 0 ? (
+      {groups.length === 0 ? (
         <div className="settings-empty" data-mcp-empty>
           <DesktopIcon name="connections" />
           <p>{sentences.empty}</p>
@@ -373,26 +378,29 @@ function ServersBody({
         </div>
       ) : (
         <>
-          {/* Keyed by where each is listed: a name stored twice by hand is two rows. */}
-          {stored.map((server, at) => (
-            <ServerRow
-              key={`${at}:${server.name}`}
-              at={at}
-              server={server}
-              state={state}
-              dispatch={dispatch}
-            />
-          ))}
+          {/* Keyed by occurrence id, which a row keeps across reloads (G1). */}
+          {groups.map((group) =>
+            group.rows.length === 1 ? (
+              <ServerRow
+                key={group.rows[0].id}
+                server={group.rows[0].server}
+                state={state}
+                dispatch={dispatch}
+              />
+            ) : (
+              <SharedGroup
+                key={group.rows[0].id}
+                group={group}
+                state={state}
+                dispatch={dispatch}
+              />
+            ),
+          )}
           <div className="settings-row settings-servers-add">{add}</div>
         </>
       )}
-      {managed.map((server, at) => (
-        <ServerRow
-          key={`managed:${at}:${server.name}`}
-          server={server}
-          state={state}
-          dispatch={dispatch}
-        />
+      {managed.map((row) => (
+        <ServerRow key={row.id} server={row.server} state={state} dispatch={dispatch} />
       ))}
     </>
   )
@@ -451,7 +459,7 @@ function TooLargeBody({
         />
         {state.confirming !== null ? (
           <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeAsk(state.confirming.name)}
+            {sentences.removeByNameAsk(state.confirming.name)}
           </p>
         ) : null}
       </div>
@@ -499,44 +507,80 @@ function TooLargeBody({
   )
 }
 
+/** The confirm's two buttons, keyed: they are not the row's, reused by place. */
+function ConfirmButtons({
+  askId,
+  state,
+  dispatch,
+}: {
+  askId: string
+  state: McpServersState
+  dispatch: Dispatch
+}) {
+  const cancel = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    cancel.current?.focus()
+  }, [])
+  return (
+    <>
+      <button
+        key="cancel"
+        ref={cancel}
+        type="button"
+        className="settings-button"
+        data-mcp-action="cancel"
+        aria-describedby={askId}
+        disabled={state.pending !== null}
+        onClick={() => dispatch({ type: "cancelRemove" })}
+      >
+        Cancel
+      </button>
+      <button
+        key="confirm"
+        type="button"
+        className="settings-button settings-button-danger"
+        data-mcp-action="confirm"
+        aria-describedby={askId}
+        disabled={!canWrite(state)}
+        onClick={() => dispatch({ type: "confirmRemove" })}
+      >
+        Remove
+      </button>
+    </>
+  )
+}
+
+/** The confirm's Escape: Settings' own never closes it. */
+function confirmEscape(confirming: boolean, state: McpServersState, dispatch: Dispatch) {
+  return (event: KeyboardEvent) => {
+    if (!confirming || event.key !== "Escape" || state.pending !== null) return
+    event.preventDefault()
+    event.stopPropagation()
+    dispatch({ type: "cancelRemove" })
+  }
+}
+
+/** A server stored once under its name, or the managed one (G2). */
 function ServerRow({
-  at,
   server,
   state,
   dispatch,
 }: {
-  /** Its place among the stored servers; none for the managed one. */
-  at?: number
   server: ListedServer
   state: McpServersState
   dispatch: Dispatch
 }) {
   const nameId = useId()
   const askId = useId()
-  const sharedId = useId()
-  const cancel = useRef<HTMLButtonElement>(null)
   const writable = canWrite(state) && state.form === null
-  // By place: two rows may share a name, and only one was asked from.
-  const confirming = at !== undefined && state.confirming?.at === at
-  const shared = !server.managed && sharesName(state, server.name)
+  const confirming = !server.managed && state.confirming?.name === server.name
   const command = [server.command, ...server.args].join(" ")
-  useEffect(() => {
-    if (confirming) cancel.current?.focus()
-  }, [confirming])
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (!confirming || event.key !== "Escape" || state.pending !== null) return
-    // The confirm's Escape: Settings' own never closes it.
-    event.preventDefault()
-    event.stopPropagation()
-    dispatch({ type: "cancelRemove" })
-  }
   return (
     <div
       className="settings-row settings-server"
       data-mcp-server={server.name}
-      data-mcp-row={at}
       data-managed={server.managed || undefined}
-      onKeyDown={onKeyDown}
+      onKeyDown={confirmEscape(confirming, state, dispatch)}
     >
       <div className="settings-row-text">
         <span id={nameId}>{server.name}</span>
@@ -546,93 +590,129 @@ function ServerRow({
             ? sentences.managed
             : sentences.variables(server.envNames.length)}
         </small>
-        {shared ? (
-          <small id={sharedId} data-mcp-shared>
-            {sentences.nameShared}
-          </small>
-        ) : null}
         {confirming ? (
           <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {shared
-              ? sentences.removeFirstAsk(server.name)
-              : sentences.removeAsk(server.name)}
+            {sentences.removeAsk(server.name)}
           </p>
         ) : null}
       </div>
       <div className="settings-row-control settings-server-actions">
-        {/* Each button keyed: the confirm's are not the row's, reused by place. */}
-        {server.managed
-          ? null
-          : confirming
-            ? [
-                <button
-                  key="cancel"
-                  ref={cancel}
-                  type="button"
-                  className="settings-button"
-                  data-mcp-action="cancel"
-                  aria-describedby={askId}
-                  disabled={state.pending !== null}
-                  onClick={() => dispatch({ type: "cancelRemove" })}
-                >
-                  Cancel
-                </button>,
-                <button
-                  key="confirm"
-                  type="button"
-                  className="settings-button settings-button-danger"
-                  data-mcp-action="confirm"
-                  aria-describedby={askId}
-                  disabled={!canWrite(state)}
-                  onClick={() => dispatch({ type: "confirmRemove" })}
-                >
-                  Remove
-                </button>,
-              ]
-            : [
-                <button
-                  key="edit"
-                  type="button"
-                  className="settings-button"
-                  data-mcp-action="edit"
-                  aria-describedby={shared ? `${nameId} ${sharedId}` : nameId}
-                  disabled={!writable || shared}
-                  onClick={() => dispatch({ type: "edit", name: server.name })}
-                >
-                  Edit
-                </button>,
-                <button
-                  key="inspect"
-                  type="button"
-                  className="settings-button"
-                  data-mcp-action="inspect"
-                  aria-describedby={nameId}
-                  disabled={!canInspect(state)}
-                  onClick={() => dispatch({ type: "inspect", name: server.name })}
-                >
-                  Inspect
-                </button>,
-                <button
-                  key="remove"
-                  type="button"
-                  className="settings-button"
-                  data-mcp-action="remove"
-                  aria-describedby={nameId}
-                  disabled={!writable}
-                  onClick={() =>
-                    at !== undefined &&
-                    dispatch({ type: "askRemove", name: server.name, at })
-                  }
-                >
-                  Remove
-                </button>,
-              ]}
+        {server.managed ? null : confirming ? (
+          <ConfirmButtons key="confirm" askId={askId} state={state} dispatch={dispatch} />
+        ) : (
+          [
+            <button
+              key="edit"
+              type="button"
+              className="settings-button"
+              data-mcp-action="edit"
+              aria-describedby={nameId}
+              disabled={!writable}
+              onClick={() => dispatch({ type: "edit", name: server.name })}
+            >
+              Edit
+            </button>,
+            <button
+              key="inspect"
+              type="button"
+              className="settings-button"
+              data-mcp-action="inspect"
+              aria-describedby={nameId}
+              disabled={!canInspect(state)}
+              onClick={() => dispatch({ type: "inspect", name: server.name })}
+            >
+              Inspect
+            </button>,
+            <button
+              key="remove"
+              type="button"
+              className="settings-button"
+              data-mcp-action="remove"
+              aria-describedby={nameId}
+              disabled={!writable}
+              onClick={() => dispatch({ type: "askRemove", name: server.name })}
+            >
+              Remove
+            </button>,
+          ]
+        )}
         <Toggle
           checked={server.enabled}
           label={server.name}
-          disabled={server.managed || !writable || confirming || shared}
+          disabled={server.managed || !writable || confirming}
           onChange={() => dispatch({ type: "toggle", name: server.name })}
         />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A name stored more than once (G3): its servers read-only, how many, and
+ * one action, which removes the first stored under it — the gateway's only
+ * way to address any of them.
+ */
+function SharedGroup({
+  group,
+  state,
+  dispatch,
+}: {
+  group: ServerGroup
+  state: McpServersState
+  dispatch: Dispatch
+}) {
+  const sharedId = useId()
+  const askId = useId()
+  const writable = canWrite(state) && state.form === null
+  const confirming = state.confirming?.name === group.name
+  return (
+    <div
+      className="settings-row settings-server settings-server-group"
+      data-mcp-group={group.name}
+      onKeyDown={confirmEscape(confirming, state, dispatch)}
+    >
+      <div className="settings-row-text">
+        <span>{group.name}</span>
+        <small id={sharedId} data-mcp-shared>
+          {sentences.nameShared(group.rows.length)}
+        </small>
+        <ul className="settings-server-shared">
+          {group.rows.map(({ id, server }) => (
+            <li key={id} data-mcp-shared-row>
+              <code className="settings-server-command">
+                {[server.command, ...server.args].join(" ")}
+              </code>
+              <small>
+                {[
+                  sentences.variables(server.envNames.length),
+                  ...(server.enabled ? [] : [sentences.notOffered]),
+                ].join(" · ")}
+              </small>
+            </li>
+          ))}
+        </ul>
+        {confirming ? (
+          <p id={askId} className="settings-server-confirm" data-mcp-confirm>
+            {sentences.removeFirstAsk(group.name)}
+          </p>
+        ) : null}
+      </div>
+      <div className="settings-row-control settings-server-actions">
+        {confirming ? (
+          <ConfirmButtons key="confirm" askId={askId} state={state} dispatch={dispatch} />
+        ) : (
+          <button
+            key="removeFirst"
+            type="button"
+            className="settings-button settings-button-wrapped"
+            data-mcp-action="removeFirst"
+            aria-describedby={sharedId}
+            disabled={!writable}
+            onClick={() => dispatch({ type: "askRemove", name: group.name })}
+          >
+            {sentences.removeFirst(group.name)}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -676,10 +756,48 @@ function FormGroup({
     env: useId(),
   } satisfies Record<FormField, string>
   const first = useRef<HTMLInputElement>(null)
+  const section = useRef<HTMLElement>(null)
+  // Where focus goes once the rows an action changed are drawn (F11, F12).
+  const focusNext = useRef<string | null>(null)
   const busy = state.pending !== null
   useEffect(() => {
     first.current?.focus()
   }, [])
+  useEffect(() => {
+    const selector = focusNext.current
+    if (selector === null) return
+    focusNext.current = null
+    section.current?.querySelector<HTMLElement>(selector)?.focus()
+  })
+  /** The key the reducer hands the next row it adds. */
+  const nextKey = state.rows + 1
+  const argumentField = (key: number) => `[data-mcp-argument-key="${key}"] textarea`
+  const variableField = (key: number) => `[data-mcp-variable-key="${key}"] input`
+  const addArgument = (after?: number) => {
+    focusNext.current = argumentField(nextKey)
+    dispatch({ type: "addArgument", after })
+  }
+  const onArgumentKeyDown = (event: KeyboardEvent, key: number) => {
+    // Enter is another argument; Shift+Enter a line break in this one (F11).
+    if (event.key !== "Enter" || event.shiftKey || event.altKey) return
+    if (event.metaKey || event.ctrlKey || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    addArgument(key)
+  }
+  const removeArgument = (at: number) => {
+    const following = form.args[at + 1]
+    focusNext.current = following
+      ? argumentField(following.key)
+      : '[data-mcp-action="add-argument"]'
+    dispatch({ type: "removeArgument", key: form.args[at].key })
+  }
+  const removeVariable = (at: number) => {
+    const following = form.env[at + 1]
+    focusNext.current = following
+      ? variableField(following.key)
+      : '[data-mcp-action="add-variable"]'
+    dispatch({ type: "removeVariable", key: form.env[at].key })
+  }
   const change = (patch: Extract<McpServersEvent, { type: "change" }>["patch"]) =>
     dispatch({ type: "change", patch })
   const onKeyDown = (event: KeyboardEvent) => {
@@ -696,6 +814,7 @@ function FormGroup({
   const waiting = valuesNeeded(form, listed)
   return (
     <section
+      ref={section}
       className="settings-group"
       data-mcp-form={form.editing ?? ""}
       onKeyDown={onKeyDown}
@@ -747,40 +866,26 @@ function FormGroup({
           {/* One field each, so an empty argument, or one with a line break,
               is one argument as typed. */}
           {form.args.map((row, at) => (
-            <div className="settings-argument" key={row.key} data-mcp-argument={at}>
-              <textarea
-                className="settings-input settings-input-mono settings-input-wrapped"
-                rows={1}
-                aria-label={`Argument ${at + 1}`}
-                value={row.value}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={form.problem?.field === "args" || undefined}
-                aria-describedby={described("args")}
-                onChange={(event) =>
-                  dispatch({
-                    type: "changeArgument",
-                    key: row.key,
-                    value: event.target.value,
-                  })
-                }
-              />
-              <button
-                type="button"
-                className="settings-button"
-                aria-label={`Remove argument ${at + 1}`}
-                onClick={() => dispatch({ type: "removeArgument", key: row.key })}
-              >
-                Remove
-              </button>
-            </div>
+            <ArgumentField
+              key={row.key}
+              at={at}
+              value={row.value}
+              rowKey={row.key}
+              invalid={form.problem?.field === "args"}
+              problemId={described("args")}
+              onKeyDown={(event) => onArgumentKeyDown(event, row.key)}
+              onChange={(value) =>
+                dispatch({ type: "changeArgument", key: row.key, value })
+              }
+              onRemove={() => removeArgument(at)}
+            />
           ))}
           <div>
             <button
               type="button"
               className="settings-button"
               data-mcp-action="add-argument"
-              onClick={() => dispatch({ type: "addArgument" })}
+              onClick={() => addArgument()}
             >
               Add argument
             </button>
@@ -789,8 +894,13 @@ function FormGroup({
         </div>
         <div className="settings-field">
           <span className="settings-field-label">Variables</span>
-          {form.env.map((row) => (
-            <div className="settings-variable" key={row.key} data-mcp-variable={row.name}>
+          {form.env.map((row, at) => (
+            <div
+              className="settings-variable"
+              key={row.key}
+              data-mcp-variable={row.name}
+              data-mcp-variable-key={row.key}
+            >
               <input
                 className="settings-input settings-input-mono"
                 aria-label="Variable name"
@@ -807,44 +917,24 @@ function FormGroup({
                   })
                 }
               />
-              {/* Uncontrolled, with no value or default given: React writes a
-                  controlled field's value, and a default, into the markup as its
-                  value attribute; this field's is only ever its own (U31).
-                  Multiline and masked, so a pasted key keeps its line breaks. */}
-              <textarea
-                className="settings-input settings-input-mono settings-input-secret"
-                rows={1}
-                aria-label={`Value of ${row.name || "the variable"}`}
-                aria-describedby={
+              <SecretField
+                row={row}
+                relaunched={relaunched}
+                describedBy={
                   [described("env"), row.stored && waiting ? ids.values : undefined]
                     .filter(Boolean)
                     .join(" ") || undefined
                 }
-                placeholder={
-                  row.stored
-                    ? relaunched
-                      ? sentences.storedValueAgain
-                      : sentences.storedValue
-                    : "Value"
-                }
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                data-mcp-secret
-                onChange={(event) =>
-                  dispatch({
-                    type: "changeVariable",
-                    key: row.key,
-                    patch: { value: event.target.value },
-                  })
-                }
+                dispatch={dispatch}
+                focusAfter={(selector) => {
+                  focusNext.current = `[data-mcp-variable-key="${row.key}"] ${selector}`
+                }}
               />
               <button
                 type="button"
                 className="settings-button"
                 aria-label={`Remove ${row.name || "this variable"}`}
-                onClick={() => dispatch({ type: "removeVariable", key: row.key })}
+                onClick={() => removeVariable(at)}
               >
                 Remove
               </button>
@@ -854,7 +944,11 @@ function FormGroup({
             <button
               type="button"
               className="settings-button"
-              onClick={() => dispatch({ type: "addVariable" })}
+              data-mcp-action="add-variable"
+              onClick={() => {
+                focusNext.current = variableField(nextKey)
+                dispatch({ type: "addVariable" })
+              }}
             >
               Add variable
             </button>
@@ -898,6 +992,193 @@ function FormGroup({
         </div>
       </fieldset>
     </section>
+  )
+}
+
+/**
+ * One argument: Enter adds the next (the form's `onKeyDown`), Shift+Enter
+ * puts a line break in it, and a line break held is marked under it (F11).
+ */
+function ArgumentField({
+  at,
+  rowKey,
+  value,
+  invalid,
+  problemId,
+  onKeyDown,
+  onChange,
+  onRemove,
+}: {
+  at: number
+  rowKey: number
+  value: string
+  invalid: boolean
+  problemId: string | undefined
+  onKeyDown: (event: KeyboardEvent) => void
+  onChange: (value: string) => void
+  onRemove: () => void
+}) {
+  const breaksId = useId()
+  const breaks = lineBreaks(value)
+  return (
+    <div
+      className="settings-argument"
+      data-mcp-argument={at}
+      data-mcp-argument-key={rowKey}
+    >
+      <div className="settings-argument-field">
+        <textarea
+          className="settings-input settings-input-mono settings-input-wrapped"
+          rows={1}
+          aria-label={`Argument ${at + 1}`}
+          value={value}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={invalid || undefined}
+          aria-describedby={
+            [problemId, breaks > 0 ? breaksId : undefined].filter(Boolean).join(" ") ||
+            undefined
+          }
+          onKeyDown={onKeyDown}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {breaks > 0 ? (
+          <small id={breaksId} className="settings-field-note" data-mcp-argument-breaks>
+            {sentences.argumentBreaks(breaks)}
+          </small>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        className="settings-button"
+        aria-label={`Remove argument ${at + 1}`}
+        onClick={onRemove}
+      >
+        Remove
+      </button>
+    </div>
+  )
+}
+
+/**
+ * A variable's value (S1–S6). A password field: masked, kept out of the
+ * accessibility tree and from copy, under Secure Event Input. Uncontrolled,
+ * with no value or default given: React writes a controlled field's value
+ * into the markup as its value attribute, and this field's is only ever its
+ * own (U31). A paste with a line break, which a password field would drop,
+ * is held instead and never drawn: the field gives way to how many lines it
+ * is, a trailing line break pointed out with a one-click trim, and Clear.
+ */
+function SecretField({
+  row,
+  relaunched,
+  describedBy,
+  dispatch,
+  focusAfter,
+}: {
+  row: VariableRow
+  relaunched: boolean
+  describedBy: string | undefined
+  dispatch: Dispatch
+  /** Where focus goes once this field is drawn again, within its row. */
+  focusAfter: (selector: string) => void
+}) {
+  const field = useRef<HTMLInputElement>(null)
+  const label = `Value of ${row.name || "the variable"}`
+  const keep =
+    row.stored && row.edited ? (
+      <button
+        type="button"
+        className="settings-button"
+        data-mcp-action="keep-value"
+        onClick={() => {
+          if (field.current) field.current.value = ""
+          focusAfter("[data-mcp-secret]")
+          dispatch({ type: "keepVariable", key: row.key })
+        }}
+      >
+        {sentences.keepStored}
+      </button>
+    ) : null
+  if (row.held)
+    return (
+      <div
+        className="settings-secret-held"
+        role="group"
+        aria-label={label}
+        aria-describedby={describedBy}
+        data-mcp-secret-held
+      >
+        <span data-mcp-pasted>
+          {sentences.pasted(linesOf(row.value))}
+          {endsWithLineBreak(row.value) ? `, ${sentences.endsWithBreak}` : null}
+        </span>
+        {endsWithLineBreak(row.value) ? (
+          <button
+            type="button"
+            className="settings-button"
+            data-mcp-action="trim-value"
+            onClick={() => dispatch({ type: "trimVariable", key: row.key })}
+          >
+            {sentences.trimBreak}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="settings-button"
+          data-mcp-action="clear-value"
+          onClick={() => {
+            focusAfter("[data-mcp-secret]")
+            dispatch({ type: "clearVariable", key: row.key })
+          }}
+        >
+          {sentences.clearPasted}
+        </button>
+        {keep}
+      </div>
+    )
+  return (
+    <>
+      <input
+        ref={field}
+        type="password"
+        className="settings-input settings-input-mono"
+        aria-label={label}
+        aria-describedby={describedBy}
+        placeholder={
+          row.stored
+            ? row.edited
+              ? row.value === ""
+                ? sentences.storedValueCleared
+                : undefined
+              : relaunched
+                ? sentences.storedValueAgain
+                : sentences.storedValue
+            : "Value"
+        }
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        data-mcp-secret
+        onPaste={(event) => {
+          const text = event.clipboardData.getData("text/plain")
+          if (!hasLineBreak(text)) return
+          // A password field would drop the line breaks: held instead (S4).
+          event.preventDefault()
+          focusAfter('[data-mcp-action="clear-value"]')
+          dispatch({ type: "pasteVariable", key: row.key, value: text })
+        }}
+        onChange={(event) =>
+          dispatch({
+            type: "changeVariable",
+            key: row.key,
+            patch: { value: event.target.value },
+          })
+        }
+      />
+      {keep}
+    </>
   )
 }
 

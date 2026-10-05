@@ -817,6 +817,31 @@ html:not(.dark) .settings-glass {
   justify-content: flex-end;
 }
 
+/* A name stored more than once: its servers, read-only, one under another. */
+.settings-server-shared {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-server-shared li {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A group's one action names the server: it wraps rather than overflows. */
+.settings-button-wrapped {
+  height: auto;
+  min-height: 26px;
+  padding-block: 4px;
+  white-space: normal;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
 .settings-button-danger:not(:disabled) {
   color: var(--destructive);
 }
@@ -920,15 +945,29 @@ html:not(.dark) .settings-glass {
   align-items: flex-start;
 }
 
+.settings-argument-field {
+  display: flex;
+  flex: 1 1 8rem;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-argument-field .settings-input {
+  width: 100%;
+}
+
 /*
- * A variable's value: masked like a password field, but multiline, so a
- * pasted key keeps its line breaks. It grows with what is pasted.
+ * A variable's value pasted with line breaks: held, never drawn, so it reads
+ * as how many lines it is, with its trim and Clear, where the field was.
  */
-.settings-input-secret {
-  -webkit-text-security: disc;
-  field-sizing: content;
-  resize: none;
-  max-height: 8lh;
+.settings-secret-held {
+  display: flex;
+  flex: 1 1 8rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--desktop-muted);
+  font-size: 12px;
 }
 
 .settings-field-note {

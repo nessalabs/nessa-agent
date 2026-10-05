@@ -80,6 +80,7 @@ const steps = [
   "toggle",
   "rename",
   "relaunch",
+  "secret",
   "narrow",
   "conflict",
   "remove",
@@ -146,6 +147,13 @@ Steps, per engine, in order on one page (--only <names> to pick):
              another command asks for the value again, says why, and holds
              Save until it is typed; saved, the row shows the new command and
              still one variable, the value nowhere in the page
+  secret     the value is a password field: typed, it is in neither the
+             page nor (Chromium) the engine's accessibility tree; a paste
+             with line breaks is held, never drawn, in neither, said as
+             "Pasted value: N lines, ends with a line break", trimmed only
+             when asked, and stored as pasted; then the stored value cleared
+             (edited to empty: said, and stored empty), and a value typed
+             again (S1–S6)
   narrow     with the row, the form and the inspection open, at 800 and 390px:
              nothing outside its card, no sideways scroll, the fold held, the
              row's actions under its text under a 420px page
@@ -169,12 +177,14 @@ Steps, per engine, in order on one page (--only <names> to pick):
              failure is said; config.json restored, the socket dropped again:
              the list shown and the failure's notice gone
   duplicate-names
-             config.json edited to store two servers under one name: each row
-             says so, Edit and the switch disabled, Inspect and Remove kept;
-             Remove asked from the second row asks there only, saying the
-             first stored goes, Cancel puts focus back on that row's Remove;
-             confirmed: one remove, one list, the gateway keeps the second,
-             focus on the row left (D2–D7); then config.json restored
+             config.json edited to store three servers under one name: one
+             group, "3 servers share this name", its rows read-only with no
+             Edit, Inspect or switch, one action "Remove the first server
+             named …"; asked, it says so, Cancel puts focus back on it;
+             confirmed twice: one remove and one list each, the gateway
+             removing the first stored each time, focus on the group while
+             it lasts, then on the row left, which is editable (G3–G6); then
+             config.json restored
   non-admin  a credential that may only converse (server.read and
              conversation.*) sends one list, is refused it, and sees the
              administrator notice and no control (U2)
@@ -488,8 +498,8 @@ const focused = (page) =>
             ? "inspection-heading"
             : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
       row: active.closest("[data-mcp-server]")?.getAttribute("data-mcp-server") ?? null,
-      // The stored row's place: two rows may share a name.
-      at: active.closest("[data-mcp-row]")?.getAttribute("data-mcp-row") ?? null,
+      // The group of a name stored more than once.
+      group: active.closest("[data-mcp-group]")?.getAttribute("data-mcp-group") ?? null,
       describedBy: active.getAttribute("aria-describedby")
         ? (document.getElementById(active.getAttribute("aria-describedby"))
             ?.textContent ?? null)
@@ -518,22 +528,68 @@ function bigConfig(original) {
   return { bytes: write(padding), padding, document }
 }
 
-/** The name the duplicate-names step stores twice, by hand. */
-const DUPLICATE = "twice"
+/** The name the duplicate-names step stores three times, by hand. */
+const DUPLICATE = "thrice"
+const OCCURRENCES = ["first", "second", "third"]
 
-/** config.json with `DUPLICATE` stored twice: the first on, the second off. */
+/** config.json with `DUPLICATE` stored three times, the second off. */
 function duplicateConfig(original) {
   const document = JSON.parse(original.toString("utf8"))
-  document.agents.mcpServers = [
-    { name: DUPLICATE, command: process.execPath, args: [serverScript, "first"] },
-    {
-      name: DUPLICATE,
-      command: process.execPath,
-      args: [serverScript, "second"],
-      enabled: false,
-    },
-  ]
+  document.agents.mcpServers = OCCURRENCES.map((which) => ({
+    name: DUPLICATE,
+    command: process.execPath,
+    args: [serverScript, which],
+    ...(which === "second" ? { enabled: false } : {}),
+  }))
   return Buffer.from(`${JSON.stringify(document, null, 2)}\n`)
+}
+
+/**
+ * A paste of `text` into `field`, as the page's handler sees one: a
+ * ClipboardEvent carrying it, never the system clipboard (the machine's own
+ * is left alone). Whether the page prevented its default.
+ */
+const paste = (field, text) =>
+  field.evaluate((element, text) => {
+    const data = new DataTransfer()
+    data.setData("text/plain", text)
+    const event = new ClipboardEvent("paste", {
+      clipboardData: data,
+      bubbles: true,
+      cancelable: true,
+    })
+    element.focus()
+    element.dispatchEvent(event)
+    return { prevented: event.defaultPrevented, carried: event.clipboardData !== null }
+  }, text)
+
+/**
+ * Whether the engine's own accessibility tree holds `text` anywhere (names,
+ * values, descriptions): Chromium's, over CDP. `null` in another engine,
+ * which has no such protocol here; the page's ARIA snapshot stands in.
+ */
+async function axHolds(page, text) {
+  if (page.context().browser()?.browserType().name() !== "chromium") return null
+  const session = await page.context().newCDPSession(page)
+  try {
+    const { nodes } = await session.send("Accessibility.getFullAXTree")
+    return JSON.stringify(nodes).includes(text)
+  } finally {
+    await session.detach()
+  }
+}
+
+/** Whether Playwright's ARIA snapshot of the page holds `text`. */
+const ariaHolds = async (page, text) =>
+  (await page.locator("body").ariaSnapshot()).includes(text)
+
+/** The value config.json stores for `variable` of the server `name`, if any. */
+function storedValue(config, name, variable) {
+  const document = JSON.parse(readFileSync(config, "utf8"))
+  const server = document.agents?.mcpServers?.find((each) => each.name === name)
+  const env = server?.env
+  if (Array.isArray(env)) return env.find((each) => each.name === variable)?.value
+  return env?.[variable]
 }
 
 /** The refusal a Node client's list gets, or `null` when it lists. */
@@ -889,6 +945,134 @@ const checks = {
     return { seen, failures }
   },
 
+  secret: async (page, stack, context) => {
+    const failures = []
+    const seen = {}
+    const variableOf = (scope) => scope.locator(`[data-mcp-variable="${VARIABLE}"]`)
+    await button(row(page, RENAMED), names.mcp.edit).click()
+    let edit = form(page)
+    let variable = variableOf(edit)
+    const field = variable.locator(css.mcpSecret)
+    seen.field = await field.evaluate((element) => ({
+      tag: element.tagName,
+      type: element.getAttribute("type"),
+      placeholder: element.getAttribute("placeholder"),
+    }))
+    // Typed: a password field's value is in no tree.
+    const typed = `typed-${randomUUID()}`
+    await field.fill(typed)
+    seen.typed = {
+      markup: await page.evaluate(
+        (text) => document.documentElement.outerHTML.includes(text),
+        typed,
+      ),
+      ax: await axHolds(page, typed),
+      aria: await ariaHolds(page, typed),
+    }
+    // Pasted with line breaks: held, never drawn.
+    const marker = `pem-${randomUUID()}`
+    const pem = `-----BEGIN KEY-----\n${marker}\nAAAA\n-----END KEY-----\n`
+    seen.paste = await paste(field, pem)
+    seen.heldShown = await visible(variable.locator(css.mcpSecretHeld), 5000)
+    seen.pasted = await variable
+      .locator(css.mcpPasted)
+      .textContent()
+      .catch(() => null)
+    seen.onPaste = await focused(page)
+    seen.held = {
+      page: await pageHolds(page, marker),
+      ax: await axHolds(page, marker),
+      // The control: the tree read is the page's, the summary in it.
+      axSummary: await axHolds(page, "Pasted value"),
+      aria: await ariaHolds(page, marker),
+      fieldLeft: await variable.locator(css.mcpSecret).count(),
+    }
+    await button(variable, names.mcp.trimBreak).click()
+    seen.trimmed = await variable.locator(css.mcpPasted).textContent()
+    let sentFrom = context.opened.sent.length
+    await button(edit, names.mcp.save).click()
+    seen.pasteSaved = await gone(edit)
+    await settled(page)
+    seen.pasteRequests = context.opened.sent.slice(sentFrom)
+    const storedPem = storedValue(stack.config, RENAMED, VARIABLE)
+    seen.storedPem =
+      storedPem === pem.slice(0, -1)
+        ? "as pasted, trimmed"
+        : storedPem === undefined
+          ? "absent"
+          : "other"
+    seen.pemInPage = await pageHolds(page, marker)
+
+    // The stored value cleared: edited to empty, said, and stored empty (S2).
+    await button(row(page, RENAMED), names.mcp.edit).click()
+    edit = form(page)
+    variable = variableOf(edit)
+    const again = variable.locator(css.mcpSecret)
+    await again.fill("x")
+    await again.fill("")
+    seen.cleared = {
+      placeholder: await again.getAttribute("placeholder"),
+      keep: await button(variable, names.mcp.keepStored).isVisible(),
+    }
+    sentFrom = context.opened.sent.length
+    await button(edit, names.mcp.save).click()
+    seen.clearSaved = await gone(edit)
+    await settled(page)
+    seen.clearRequests = context.opened.sent.slice(sentFrom)
+    seen.storedCleared = storedValue(stack.config, RENAMED, VARIABLE)
+    seen.variables = await row(page, RENAMED).locator("small").textContent()
+
+    // Typed again, so the steps after start from a value set.
+    await button(row(page, RENAMED), names.mcp.edit).click()
+    edit = form(page)
+    await variableOf(edit).locator(css.mcpSecret).fill(context.secret)
+    await button(edit, names.mcp.save).click()
+    seen.restored = await gone(edit)
+    await settled(page)
+    seen.storedRestored = storedValue(stack.config, RENAMED, VARIABLE) === context.secret
+
+    if (seen.field.tag !== "INPUT" || seen.field.type !== "password")
+      failures.push(`the value field is ${JSON.stringify(seen.field)}`)
+    if (seen.typed.markup || seen.typed.ax || seen.typed.aria)
+      failures.push(`a typed value is exposed: ${JSON.stringify(seen.typed)}`)
+    if (!seen.paste.carried)
+      throw new CannotRun("this engine's paste event carries no data")
+    if (!seen.paste.prevented) failures.push("the multiline paste was not prevented")
+    if (!seen.heldShown) failures.push("the multiline paste is not held")
+    if (seen.pasted !== names.mcp.pasted(4, true))
+      failures.push(`the held value says "${seen.pasted}"`)
+    if (seen.onPaste.on !== "clear-value")
+      failures.push(`after the paste, focus is on ${JSON.stringify(seen.onPaste)}`)
+    if (seen.held.page || seen.held.ax || seen.held.aria || seen.held.fieldLeft !== 0)
+      failures.push(`the pasted value is exposed: ${JSON.stringify(seen.held)}`)
+    if (seen.held.ax === false && seen.held.axSummary !== true)
+      failures.push("the accessibility tree read does not hold the page's summary")
+    if (seen.trimmed !== names.mcp.pasted(4, false))
+      failures.push(`trimmed, the held value says "${seen.trimmed}"`)
+    if (!seen.pasteSaved) failures.push("the form is open after the paste's save")
+    if (seen.storedPem !== "as pasted, trimmed")
+      failures.push(`config.json stores the pasted value ${seen.storedPem}`)
+    if (seen.pemInPage) failures.push("the pasted value is in the page after the save")
+    if (seen.cleared.placeholder !== names.mcp.storedValueCleared || !seen.cleared.keep)
+      failures.push(`emptied, the field shows ${JSON.stringify(seen.cleared)}`)
+    if (!seen.clearSaved) failures.push("the form is open after the clearing save")
+    if (seen.storedCleared !== "")
+      failures.push(`cleared, config.json stores ${JSON.stringify(seen.storedCleared)}`)
+    if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    for (const [what, requests] of [
+      ["paste", seen.pasteRequests],
+      ["clear", seen.clearRequests],
+    ])
+      if (
+        JSON.stringify(requests) !==
+        JSON.stringify(["mcpServers.save", "mcpServers.list"])
+      )
+        failures.push(`the ${what}'s requests are ${JSON.stringify(requests)}`)
+    if (!seen.restored || !seen.storedRestored)
+      failures.push("the value was not typed back afterwards")
+    return { seen, failures }
+  },
+
   narrow: async (page) => {
     // The row, the form and the finished inspection all open, then measured.
     await button(row(page, RENAMED), names.mcp.inspect).click()
@@ -1042,7 +1226,7 @@ const checks = {
       seen.failed = await waitFor(
         async () =>
           (await tab.getAttribute("data-mcp-servers")) === "failed" &&
-          (await notices.textContent())?.includes(names.mcp.configInvalid),
+          (await notices.textContent())?.includes(names.mcp.listUnreadable),
         20_000,
       )
       seen.failedNotice = await notices.textContent()
@@ -1235,101 +1419,119 @@ const checks = {
       // The premise, from the gateway itself: it lists both under one name.
       const premise = await stack.client.mcpServers.list()
       seen.nodeList = premise.servers.map((each) => [each.name, each.args.at(-1)])
-      if (premise.servers.filter((each) => each.name === DUPLICATE).length !== 2)
+      if (premise.servers.filter((each) => each.name === DUPLICATE).length !== 3)
         throw new CannotRun(
           `the gateway lists the hand-edited file as ${JSON.stringify(seen.nodeList)}`,
         )
       seen.dropped = await context.opened.drop()
+      const group = page.locator(css.mcpGroupNamed(DUPLICATE))
       seen.listed = await waitFor(
         async () =>
-          (await page.locator(css.mcpRowNamed(DUPLICATE)).count()) === 2 &&
+          (await group.count()) === 1 &&
           (await tab.getAttribute("data-mcp-servers")) === "listed",
         20_000,
       )
       if (!seen.listed) {
         failures.push(
-          `the tab is ${await tab.getAttribute("data-mcp-servers")} with ${await stored(page).count()} rows, not two named ${DUPLICATE}`,
+          `the tab is ${await tab.getAttribute("data-mcp-servers")} with no group named ${DUPLICATE}`,
         )
         return { seen, failures }
       }
       await settled(page)
-      // D2: each row says why; neither edits nor switches; Inspect and Remove stay.
-      seen.rows = []
-      for (const at of [0, 1]) {
-        const each = page.locator(css.mcpRowAt(at))
-        const shown = {
-          name: await each.getAttribute("data-mcp-server"),
-          shared: await each
-            .locator(css.mcpShared)
-            .textContent()
-            .catch(() => null),
-          edit: await button(each, names.mcp.edit).isEnabled(),
-          toggle: await each.locator(css.mcpSwitch).isEnabled(),
-          inspect: await button(each, names.mcp.inspect).isEnabled(),
-          remove: await button(each, names.mcp.remove).isEnabled(),
-        }
-        seen.rows.push(shown)
-        if (shown.name !== DUPLICATE) failures.push(`row ${at} is ${shown.name}`)
-        if (shown.shared !== names.mcp.nameShared)
-          failures.push(`row ${at} says "${shown.shared}"`)
-        if (shown.edit) failures.push(`row ${at}'s Edit is enabled`)
-        if (shown.toggle) failures.push(`row ${at}'s switch is enabled`)
-        if (!shown.inspect) failures.push(`row ${at}'s Inspect is disabled`)
-        if (!shown.remove) failures.push(`row ${at}'s Remove is disabled`)
+      const action = button(group, names.mcp.removeFirst(DUPLICATE))
+      // G3: one read-only group, its count said, one action.
+      seen.group = {
+        rowsNamed: await page.locator(css.mcpRowNamed(DUPLICATE)).count(),
+        shared: await group.locator(css.mcpShared).textContent(),
+        rows: await group
+          .locator(css.mcpSharedRow)
+          .evaluateAll((rows) => rows.map((each) => each.textContent)),
+        buttons: await group.locator("button").count(),
+        switches: await group.locator(css.mcpSwitch).count(),
+        actionEnabled: await action.isEnabled(),
       }
-      // D4, D5: asked from the second row only; Cancel puts focus back there.
-      const second = page.locator(css.mcpRowAt(1))
-      const before = context.opened.sent.length
-      await button(second, names.mcp.remove).click()
-      seen.asked = await second.locator(css.mcpConfirm).textContent()
-      seen.firstAsked = await page
-        .locator(css.mcpRowAt(0))
-        .locator(css.mcpConfirm)
-        .count()
-      seen.onAsk = await focused(page)
-      await button(second, names.mcp.cancel).click()
-      seen.onCancel = await focused(page)
-      if (seen.asked !== names.mcp.removeFirstAsk(DUPLICATE))
-        failures.push(`row 1 asked "${seen.asked}"`)
-      if (seen.firstAsked !== 0) failures.push("row 0 shows the confirm too")
-      if (seen.onAsk.on !== "cancel" || seen.onAsk.at !== "1")
-        failures.push(`asked, focus is on ${JSON.stringify(seen.onAsk)}`)
-      if (seen.onCancel.on !== "remove" || seen.onCancel.at !== "1")
-        failures.push(`cancelled, focus is on ${JSON.stringify(seen.onCancel)}`)
-      // D6, D7: confirmed from the second row; the gateway removes the first stored.
-      await button(second, names.mcp.remove).click()
-      await second.locator(css.mcpAction("confirm")).click()
-      seen.relisted = await waitFor(
-        async () =>
-          (await stored(page).count()) === 1 &&
-          (await page.locator(css.mcpShared).count()) === 0 &&
-          (await focused(page)).on === "remove",
-        20_000,
-      )
-      await settled(page)
-      seen.requests = context.opened.sent.slice(before)
-      seen.onRemoved = await focused(page)
-      const after = await stack.client.mcpServers.list()
-      seen.left = after.servers
-        .filter((each) => !each.managed)
-        .map((each) => [each.name, each.args.at(-1), each.enabled])
-      const only = page.locator(css.mcpRowAt(0))
-      seen.editAfter = await button(only, names.mcp.edit).isEnabled()
-      seen.toggleAfter = await only.locator(css.mcpSwitch).isEnabled()
-      if (!seen.relisted) failures.push("the list did not come back with one row")
+      if (seen.group.rowsNamed !== 0)
+        failures.push(`${seen.group.rowsNamed} editable rows named ${DUPLICATE}`)
+      if (seen.group.shared !== names.mcp.nameShared(3))
+        failures.push(`the group says "${seen.group.shared}"`)
       if (
-        JSON.stringify(seen.requests) !==
-        JSON.stringify(["mcpServers.remove", "mcpServers.list"])
+        seen.group.rows.length !== 3 ||
+        !OCCURRENCES.every((which, at) => seen.group.rows[at]?.includes(which)) ||
+        !seen.group.rows[1]?.includes("Not offered")
       )
+        failures.push(`the group's rows are ${JSON.stringify(seen.group.rows)}`)
+      if (seen.group.buttons !== 1 || seen.group.switches !== 0)
         failures.push(
-          `requests ${JSON.stringify(seen.requests)}, expected one remove then one list`,
+          `the group has ${seen.group.buttons} buttons and ${seen.group.switches} switches`,
         )
-      if (JSON.stringify(seen.left) !== JSON.stringify([[DUPLICATE, "second", false]]))
-        failures.push(`the gateway kept ${JSON.stringify(seen.left)}`)
-      if (seen.onRemoved.on !== "remove" || seen.onRemoved.at !== "0")
-        failures.push(`removed, focus is on ${JSON.stringify(seen.onRemoved)}`)
-      if (!seen.editAfter) failures.push("the server left is not editable")
-      if (!seen.toggleAfter) failures.push("the server left cannot be switched")
+      if (!seen.group.actionEnabled) failures.push("the group's action is disabled")
+      // G5: asked, it says exactly what goes; Cancel puts focus back.
+      const before = context.opened.sent.length
+      await action.click()
+      seen.asked = await group.locator(css.mcpConfirm).textContent()
+      seen.onAsk = await focused(page)
+      await button(group, names.mcp.cancel).click()
+      seen.onCancel = await focused(page)
+      seen.sentOnAsk = context.opened.sent.length - before
+      if (seen.asked !== names.mcp.removeFirstAsk(DUPLICATE))
+        failures.push(`the group asked "${seen.asked}"`)
+      if (seen.onAsk.on !== "cancel" || seen.onAsk.group !== DUPLICATE)
+        failures.push(`asked, focus is on ${JSON.stringify(seen.onAsk)}`)
+      if (seen.onCancel.on !== "removeFirst" || seen.onCancel.group !== DUPLICATE)
+        failures.push(`cancelled, focus is on ${JSON.stringify(seen.onCancel)}`)
+      if (seen.sentOnAsk !== 0) failures.push(`${seen.sentOnAsk} requests sent on asking`)
+      // G6: confirmed twice; the gateway removes the first stored each time.
+      seen.removals = []
+      for (const left of [2, 1]) {
+        const from = context.opened.sent.length
+        await action.click()
+        await group.locator(css.mcpAction("confirm")).click()
+        const landed = await waitFor(async () => {
+          const on = await focused(page)
+          return left > 1
+            ? (await group
+                .locator(css.mcpShared)
+                .textContent()
+                .catch(() => null)) === names.mcp.nameShared(left) &&
+                on.on === "removeFirst" &&
+                on.group === DUPLICATE
+            : (await group.count()) === 0 && on.on === "remove" && on.row === DUPLICATE
+        }, 20_000)
+        await settled(page)
+        const listed = await stack.client.mcpServers.list()
+        seen.removals.push({
+          landed,
+          focus: await focused(page),
+          requests: context.opened.sent.slice(from),
+          kept: listed.servers
+            .filter((each) => !each.managed)
+            .map((each) => each.args.at(-1)),
+        })
+      }
+      const [two, one] = seen.removals
+      for (const [at, each] of seen.removals.entries()) {
+        if (!each.landed)
+          failures.push(
+            `removal ${at + 1} did not land: focus ${JSON.stringify(each.focus)}`,
+          )
+        if (
+          JSON.stringify(each.requests) !==
+          JSON.stringify(["mcpServers.remove", "mcpServers.list"])
+        )
+          failures.push(`removal ${at + 1} sent ${JSON.stringify(each.requests)}`)
+      }
+      if (JSON.stringify(two.kept) !== JSON.stringify(["second", "third"]))
+        failures.push(`after one removal the gateway keeps ${JSON.stringify(two.kept)}`)
+      if (JSON.stringify(one.kept) !== JSON.stringify(["third"]))
+        failures.push(`after two the gateway keeps ${JSON.stringify(one.kept)}`)
+      const only = row(page, DUPLICATE)
+      seen.editAfter = await button(only, names.mcp.edit).isEnabled()
+      seen.inspectAfter = await button(only, names.mcp.inspect).isEnabled()
+      seen.toggleAfter = await only.locator(css.mcpSwitch).isEnabled()
+      if (!seen.editAfter || !seen.inspectAfter || !seen.toggleAfter)
+        failures.push(
+          `the server left: Edit ${seen.editAfter}, Inspect ${seen.inspectAfter}, switch ${seen.toggleAfter}`,
+        )
     } finally {
       writeFileSync(stack.config, original)
     }
