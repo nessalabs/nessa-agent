@@ -1,8 +1,9 @@
 /**
  * Reading a real gateway's conversation view for `mcp-apps-gateway.mjs` and
  * `gateway-window.mjs`: which harness permission its setup answers, which of
- * the app's reviews a step's own action opened, and what a text-only turn
- * said. Pure, so each is tested without a gateway.
+ * the app's reviews a step's own action opened, how long that step waits for
+ * the review (#474), and what a text-only turn said. Pure — the wait takes
+ * its clock and its reads — so each is tested without a gateway.
  */
 import { permissionKey } from "../../../../scripts/mcp-test-server/evidence.mjs"
 import { CannotRun } from "./cli.mjs"
@@ -92,6 +93,128 @@ export const newReview = (reviews, baseline) =>
 /** Whether `review` is still among the pending `reviews`. */
 export const stillPending = (reviews, review) =>
   reviews.some((each) => permissionKey(each) === permissionKey(review))
+
+/** The app's pending reviews in a conversation view. */
+export const appPermissions = (view) =>
+  view.permissions.filter((each) => each.origin.kind === "app")
+
+/**
+ * How long `mcp-apps-gateway.mjs` waits for the review an app's destructive
+ * call opens (#474): the client's `callDeadlineMs` (`mcpAppCallTiming`,
+ * from `x-mcpAppCallTiming`). `callTool` waits that long, and a review the
+ * gateway opens after the host has given up is withdrawn with the caller.
+ */
+export const appReviewWaitMs = (timing) => timing.callDeadlineMs
+
+/**
+ * What one read says about the review a step is waiting for (#474, R6–R8).
+ * `reviews` are the app's pending reviews; `output` is what the app shows
+ * for the call, when the step is watching it.
+ *
+ * | | `output` | a review not in `baseline` | |
+ * | --- | --- | --- | --- |
+ * | R6 | pending, empty, or unread | listed | `{ kind: "review" }` — that review, however long admission took |
+ * | R7 | anything else | not listed | `{ kind: "answered" }` — the call ended with no review to answer |
+ * | R8 | pending, empty, or unread | not listed | `{ kind: "wait" }` — admission may still be in front of the review |
+ *
+ * A review and an output that has left pending, in one read, is R6: the
+ * review is there to answer.
+ */
+export function decideReviewWait({ reviews, output }, baseline) {
+  const review = newReview(reviews, baseline)
+  if (review) return { kind: "review", review }
+  if (output !== undefined && output !== "" && output !== "pending")
+    return { kind: "answered", output }
+  return { kind: "wait" }
+}
+
+/** What one read of the view keeps, so a missed review can say what was there. */
+const reviewSample = (view, output, elapsed) => ({
+  ms: elapsed,
+  transcriptState: view.transcriptState,
+  output: output ?? null,
+  permissions: view.permissions.map((each) => ({
+    kind: each.origin.kind,
+    tool: each.origin.kind === "app" ? each.origin.tool : each.toolName,
+    permissionId: each.permissionId,
+  })),
+})
+
+/** Samples whose transcript, output or permissions differ, and always the last. */
+export function changedSamples(samples) {
+  if (samples.length === 0) return []
+  const signature = (sample) =>
+    JSON.stringify([sample.transcriptState, sample.output, sample.permissions])
+  const kept = [samples[0]]
+  for (const sample of samples.slice(1)) {
+    if (signature(sample) !== signature(kept.at(-1))) kept.push(sample)
+  }
+  const last = samples.at(-1)
+  if (kept.at(-1) !== last) kept.push(last)
+  return kept
+}
+
+/**
+ * What a step says when the wait ends with no review (R8). `reads` is how
+ * many were taken; `samples` is the distinct ones (`changedSamples`). A
+ * review absent from every read is said so: it did not arrive late inside
+ * this wait.
+ */
+export function reviewAbsentMessage(samples, reads) {
+  const last = samples.at(-1)
+  const states = [...new Set(samples.map((sample) => sample.transcriptState ?? "unknown"))]
+  const outputs = [...new Set(samples.map((sample) => sample.output).filter((output) => output))]
+  const kinds = [
+    ...new Set(samples.flatMap((sample) => sample.permissions.map((each) => each.kind))),
+  ]
+  const transcript =
+    states.length === 1 && states[0] !== "complete" && states[0] !== "complete_empty"
+      ? `transcript stayed ${states[0]}, so an open review is withheld from the view until it is confirmed`
+      : `transcript: ${states.join(", ") || "none"}`
+  return (
+    "no review of the app's destructive call reached the conversation's permissions " +
+    `in ${reads} ${reads === 1 ? "read" : "reads"} over ${last?.ms ?? 0} ms ` +
+    `(never listed in this wait, not a late one; ${transcript}; ` +
+    `call output: ${outputs.join(", ") || "unread"}; ` +
+    `permission origins seen: ${kinds.join(", ") || "none"})`
+  )
+}
+
+/**
+ * Polls `read` until the step's review is in the view (R6), the call's
+ * output leaves pending (R7), or `deadlineMs` has passed with neither (R8).
+ * `pending`, when given, reads that output. `sleep` and `now` are the
+ * clock, so a test can place a review after any number of milliseconds.
+ */
+export async function waitForAppReview({
+  read,
+  baseline,
+  deadlineMs,
+  pending,
+  sleep,
+  now = Date.now,
+  pollMs = 250,
+}) {
+  if (!Number.isFinite(deadlineMs) || deadlineMs < 0)
+    throw new Error("waitForAppReview needs a deadline")
+  const start = now()
+  const samples = []
+  for (;;) {
+    const view = await read()
+    const output = pending ? await pending() : undefined
+    const elapsed = now() - start
+    const decision = decideReviewWait(
+      { reviews: appPermissions(view), output },
+      baseline,
+    )
+    samples.push(reviewSample(view, output, elapsed))
+    if (decision.kind !== "wait")
+      return { ...decision, samples: changedSamples(samples), reads: samples.length }
+    if (elapsed >= deadlineMs)
+      return { kind: "absent", samples: changedSamples(samples), reads: samples.length }
+    await sleep(Math.min(pollMs, Math.max(deadlineMs - elapsed, 0)))
+  }
+}
 
 /**
  * Text the window draws as itself: letters, digits, whitespace and plain

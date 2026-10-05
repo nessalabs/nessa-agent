@@ -1,8 +1,9 @@
 /**
  * `mcp-apps-gateway.mjs`'s reading of the gateway's view, against the rows of
  * its design table (#384) that are decided here: which permission setup
- * answers and what it makes of the ended turn (A1–A6), and which review is a
- * step's and when it has gone (R1–R5). When each step takes its baseline is
+ * answers and what it makes of the ended turn (A1–A6), which review is a
+ * step's and when it has gone (R1–R5), and how long a step waits for that
+ * review (R6–R8, #474). When each step takes its baseline is
  * the check's own, and is exercised only by running it.
  *
  * And `gateway-window.mjs`'s: what a text-only turn said, which its steps W2
@@ -16,12 +17,17 @@ import { CannotRun } from "./cli.mjs"
 
 import {
   admitOnce,
+  appReviewWaitMs,
   callsOf,
+  changedSamples,
+  decideReviewWait,
   lastTurn,
   newReview,
+  reviewAbsentMessage,
   reviewKeys,
   setupOutcome,
   stillPending,
+  waitForAppReview,
 } from "./gateway-view.mjs"
 
 const allow = { id: "allow_once", effect: "allow" }
@@ -188,6 +194,120 @@ describe("newReview", () => {
     const opened = review("new")
     assert.equal(stillPending([stale, opened], opened), true)
     assert.equal(stillPending([stale], opened), false)
+  })
+})
+
+describe("the app review a step waits for (#474)", () => {
+  const opened = {
+    executionId: "x",
+    permissionId: "new",
+    toolName: "app_delete_row",
+    origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+  }
+  const view = (permissions, transcriptState = "complete") => ({
+    transcriptState,
+    permissions,
+  })
+  /** A clock a test moves by `sleep`, so a review can be placed at a millisecond. */
+  const clock = () => {
+    let t = 0
+    return {
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms
+      },
+    }
+  }
+
+  it("the bound is the client's call deadline", () => {
+    assert.equal(appReviewWaitMs({ callDeadlineMs: 370_000 }), 370_000)
+  })
+
+  it("R6: a review listed while the call is still pending is the one to answer", () => {
+    assert.deepEqual(
+      decideReviewWait({ reviews: [opened], output: "pending" }, new Set()),
+      { kind: "review", review: opened },
+    )
+  })
+
+  it("R6: a review that arrives after 15s is taken when the deadline is the client's", async () => {
+    const time = clock()
+    const waited = await waitForAppReview({
+      ...time,
+      baseline: new Set(),
+      deadlineMs: appReviewWaitMs({ callDeadlineMs: 370_000 }),
+      pending: async () => "pending",
+      read: async () => view(time.now() >= 16_000 ? [opened] : []),
+    })
+    assert.equal(waited.kind, "review")
+    assert.equal(waited.review, opened)
+    assert.ok(waited.samples.at(-1).ms >= 16_000)
+    assert.ok(waited.samples.at(-1).ms < 370_000)
+  })
+
+  it("R6: the same review at 16s is missed when the deadline is 15s", async () => {
+    const time = clock()
+    const waited = await waitForAppReview({
+      ...time,
+      baseline: new Set(),
+      deadlineMs: 15_000,
+      pending: async () => "pending",
+      read: async () => view(time.now() >= 16_000 ? [opened] : []),
+    })
+    assert.equal(waited.kind, "absent")
+    assert.match(reviewAbsentMessage(waited.samples, waited.reads), /never listed/)
+  })
+
+  it("R7: the call leaving pending, with no new review, is answered", async () => {
+    const time = clock()
+    let reads = 0
+    const waited = await waitForAppReview({
+      ...time,
+      baseline: new Set(),
+      deadlineMs: 370_000,
+      pending: async () => (reads > 1 ? "error: refused" : "pending"),
+      read: async () => {
+        reads += 1
+        return view([])
+      },
+    })
+    assert.deepEqual(
+      { kind: waited.kind, output: waited.output },
+      { kind: "answered", output: "error: refused" },
+    )
+  })
+
+  it("R7: a review in the same read as an output that left pending is still the review", () => {
+    assert.equal(
+      decideReviewWait({ reviews: [opened], output: "error: refused" }, new Set()).kind,
+      "review",
+    )
+  })
+
+  it("R8: still pending at the deadline is absent, and the samples name the transcript", async () => {
+    const time = clock()
+    const waited = await waitForAppReview({
+      ...time,
+      baseline: new Set(),
+      deadlineMs: 1_000,
+      pending: async () => "pending",
+      read: async () => view([], "partial"),
+    })
+    assert.equal(waited.kind, "absent")
+    assert.ok(waited.samples.at(-1).ms >= 1_000)
+    assert.equal(waited.reads > 1, true)
+    const message = reviewAbsentMessage(waited.samples, waited.reads)
+    assert.match(message, /never listed/)
+    assert.match(message, /transcript stayed partial/)
+    assert.match(message, /call output: pending/)
+    assert.equal(changedSamples(waited.samples).length >= 1, true)
+  })
+
+  it("needs a deadline", async () => {
+    await assert.rejects(
+      () => waitForAppReview({ read: async () => view([]), baseline: new Set(), sleep: async () => {} }),
+      /needs a deadline/,
+    )
   })
 })
 

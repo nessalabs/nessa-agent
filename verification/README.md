@@ -70,7 +70,7 @@ verification/
         gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
         scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
-        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened, what a text-only turn said
+        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened and how long that step waits for it (#474), what a text-only turn said
         gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
         browser.test.mjs    browser.mjs's recording of a failed request, no browser: harmless or an error (#485's F1′, F2–F4), and the favicon
 ```
