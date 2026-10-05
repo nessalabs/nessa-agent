@@ -10,6 +10,7 @@ use crate::domain::{
     },
     common::value_objects::{ImageMediaType, Sha256Digest},
 };
+use crate::infrastructure::acp::sessions::AcpConfig;
 use crate::infrastructure::clock::{Clock, RuntimeClock};
 use crate::infrastructure::json_rpc;
 use std::{
@@ -602,4 +603,44 @@ fn the_largest_message_the_domain_allows_does_not_fit_the_largest_frame() {
         fits_one_frame(&message(Some(&long), Vec::new()), 1024 * 1024),
         Err(AgentError::MessageTooLarge { .. })
     ));
+}
+
+#[test]
+fn largest_message_syntax_is_what_the_frame_figure_adds_to_its_content() {
+    // Every part the domain allows, each as many times as it allows, with
+    // content that JSON copies as it is: what the figure adds to the content
+    // is the published syntax, to the byte.
+    let images = vec![sized(3); UserMessage::MAX_IMAGES];
+    let files: Vec<_> = (0..UserMessage::MAX_FILES)
+        .map(|index| LinkedFile::new(format!("/f{index}")).unwrap())
+        .collect();
+    let contexts: Vec<_> = (0..UserMessage::MAX_APP_MODEL_CONTEXTS)
+        .map(|index| {
+            AppModelContext::new(
+                app(&format!("s{index}"), "t", &format!("c{index}")),
+                "update-1",
+                Some("x".into()),
+                Some("{}".into()),
+            )
+            .unwrap()
+            .unwrap()
+        })
+        .collect();
+    let largest = UserMessage::new(Some(PromptText::new("hi").unwrap()), images, files)
+        .unwrap()
+        .with_app_model_context(contexts)
+        .unwrap();
+    let text = 2;
+    let images = UserMessage::MAX_IMAGES * 4;
+    // A path of three bytes, `/` copied into the URI, and a name of two.
+    let files = UserMessage::MAX_FILES * (3 + 2);
+    // A server of two bytes, a tool of one, a tool call of two, text of
+    // one, and structured content of two.
+    let contexts = UserMessage::MAX_APP_MODEL_CONTEXTS * (2 + 1 + 2 + 1 + 2);
+    let content = (text + images + files + contexts) as u64;
+    assert_eq!(figure(&largest), content + LARGEST_MESSAGE_SYNTAX_BYTES);
+    assert_eq!(
+        AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES as u64,
+        LARGEST_MESSAGE_SYNTAX_BYTES
+    );
 }

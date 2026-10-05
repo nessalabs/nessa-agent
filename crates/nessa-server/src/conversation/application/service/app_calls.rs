@@ -39,7 +39,6 @@ use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MA
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationTranscriptState, ConversationView,
 };
-use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -363,14 +362,7 @@ impl ConversationService {
         let arguments = match arguments_text.map(serde_json::from_str::<Value>) {
             None => None,
             Some(Ok(value @ Value::Object(_))) => Some(value),
-            Some(_) => {
-                return Err(step
-                    .refuse_as(
-                        ConversationErrorCode::InvalidRequest,
-                        ConversationError::InvalidInput,
-                    )
-                    .await)
-            }
+            Some(_) => return Err(step.refuse_as(ConversationError::InvalidInput).await),
         };
         match admission {
             AppCallAdmission::Send => step.record(McpAppAuditPhase::Admitted, None).await?,
@@ -569,23 +561,13 @@ impl ConversationService {
         // so that the app is told on record before anyone is asked: blank,
         // or past the input bound (rows M3, M4).
         if blank_text(&message.text) {
-            return Err(step
-                .refuse_as(
-                    ConversationErrorCode::InvalidRequest,
-                    ConversationError::InvalidInput,
-                )
-                .await);
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
         }
         if self.inner.limits.past_input_bound(&message.text) {
             return Err(step.refuse(McpAppError::RequestTooLarge).await);
         }
         let Ok(sender) = app_source(&message.app, tool) else {
-            return Err(step
-                .refuse_as(
-                    ConversationErrorCode::InvalidRequest,
-                    ConversationError::InvalidInput,
-                )
-                .await);
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
         };
         // The same request again is the same turn: one the agent has already
         // is the agent's to settle, and nobody is asked again to send it — a
@@ -600,11 +582,12 @@ impl ConversationService {
         // (`m6b_the_same_request_while_it_is_in_flight_is_refused`). Free again
         // however this call ends.
         let Some(_in_flight) = opening.apps.start_message(&execution_id) else {
+            let error = ConversationError::Unavailable;
             return Err(step
                 .ended(
-                    McpAppAuditPhase::Refused(ConversationErrorCode::TemporarilyUnavailable),
+                    McpAppAuditPhase::Refused(error_code(&error)),
                     Some(McpAppInitiator::System),
-                    ConversationError::Unavailable,
+                    error,
                 )
                 .await);
         };
@@ -669,12 +652,7 @@ impl ConversationService {
         };
         match failure {
             SubmitFailure::NotAsked(ConversationError::TurnRunning) => {
-                return Err(step
-                    .refuse_as(
-                        ConversationErrorCode::TurnRunning,
-                        ConversationError::TurnRunning,
-                    )
-                    .await)
+                return Err(step.refuse_as(ConversationError::TurnRunning).await)
             }
             // Released, ended, deleted, reopened, or the gateway retiring,
             // before the agent was asked to take it: by that other command,
@@ -743,12 +721,7 @@ impl ConversationService {
         // held — one JSON object, within its bound, something at all.
         let structured = update.structured_content_json;
         let Ok(source) = app_source(&update.app, tool) else {
-            return Err(step
-                .refuse_as(
-                    ConversationErrorCode::InvalidRequest,
-                    ConversationError::InvalidInput,
-                )
-                .await);
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
         };
         // `None`: neither part, so what the mount held is cleared.
         let context = match AppModelContext::new(source, step.call_id(), update.text, structured) {
@@ -756,14 +729,7 @@ impl ConversationService {
             Err(ExecutionError::ValueTooLong { .. }) => {
                 return Err(step.refuse(McpAppError::RequestTooLarge).await)
             }
-            Err(_) => {
-                return Err(step
-                    .refuse_as(
-                        ConversationErrorCode::InvalidRequest,
-                        ConversationError::InvalidInput,
-                    )
-                    .await)
-            }
+            Err(_) => return Err(step.refuse_as(ConversationError::InvalidInput).await),
         };
         // One update of the conversation at a time, from its room to its
         // hold: so the order they are recorded in is the order they are held
@@ -776,12 +742,7 @@ impl ConversationService {
         {
             Ok(()) => {}
             Err(ContextRefusal::Full) => {
-                return Err(step
-                    .refuse_as(
-                        ConversationErrorCode::TemporarilyUnavailable,
-                        ConversationError::Unavailable,
-                    )
-                    .await)
+                return Err(step.refuse_as(ConversationError::Unavailable).await)
             }
             Err(ContextRefusal::Gone(_)) => {
                 return Err(step.refuse_by_system(McpAppError::Cancelled).await)
@@ -838,12 +799,7 @@ impl ConversationService {
             return Err(step.refuse(refusal.into()).await);
         }
         let Ok(uri) = UiResourceUri::new(read.uri.as_str()) else {
-            return Err(step
-                .refuse_as(
-                    ConversationErrorCode::InvalidRequest,
-                    ConversationError::InvalidInput,
-                )
-                .await);
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
         };
         if opening.admit(&read.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
@@ -860,9 +816,7 @@ impl ConversationService {
             Err(McpAppFailure::Busy) => return Err(step.refuse(McpAppError::Busy).await),
             Err(failure) => {
                 let error = McpAppError::from(failure);
-                return Err(step
-                    .fail(error.code(), ConversationError::McpApp(error))
-                    .await);
+                return Err(step.fail(ConversationError::McpApp(error)).await);
             }
         };
         // What the answer carries of the resource besides its ticket — its
@@ -878,9 +832,7 @@ impl ConversationService {
         .map_or(usize::MAX, |carried| carried.len());
         if carried > MAX_RESOURCE_META_BYTES {
             let error = McpAppError::ResultTooLarge;
-            return Err(step
-                .fail(error.code(), ConversationError::McpApp(error))
-                .await);
+            return Err(step.fail(ConversationError::McpApp(error)).await);
         }
         let bytes: Arc<[u8]> = Arc::from(resource.html().as_bytes());
         let size = bytes.len();
@@ -898,12 +850,7 @@ impl ConversationService {
         {
             Ok(Ok(ticket)) => ticket,
             Ok(Err(TicketRefusal::Capacity | TicketRefusal::Unavailable)) => {
-                return Err(step
-                    .fail(
-                        ConversationErrorCode::TemporarilyUnavailable,
-                        ConversationError::Unavailable,
-                    )
-                    .await);
+                return Err(step.fail(ConversationError::Unavailable).await);
             }
             // The mount released or the opening ended while it was read: by
             // that other command, so the system's.
@@ -1193,38 +1140,34 @@ impl Step {
     /// Refuse the call as `error`, on record: the refusal, or the audit's own
     /// failure when the refusal could not be recorded.
     async fn refuse(&self, error: McpAppError) -> ConversationError {
-        let code = error.code();
-        self.refuse_as(code, ConversationError::McpApp(error)).await
+        self.refuse_as(ConversationError::McpApp(error)).await
     }
 
-    async fn refuse_as(
-        &self,
-        code: ConversationErrorCode,
-        error: ConversationError,
-    ) -> ConversationError {
-        self.ended(McpAppAuditPhase::Refused(code), None, error)
+    /// Refuse the call as `error`, on record under the code the wire answers
+    /// it with ([`error_code`], the one mapping), so the record and the answer
+    /// cannot name two codes.
+    async fn refuse_as(&self, error: ConversationError) -> ConversationError {
+        self.ended(McpAppAuditPhase::Refused(error_code(&error)), None, error)
             .await
     }
 
     /// Refuse the call as `error`, on record as the system's: the release or
     /// end that refuses it came first, from another command.
     async fn refuse_by_system(&self, error: McpAppError) -> ConversationError {
+        let error = ConversationError::McpApp(error);
         self.ended(
-            McpAppAuditPhase::Refused(error.code()),
+            McpAppAuditPhase::Refused(error_code(&error)),
             Some(McpAppInitiator::System),
-            ConversationError::McpApp(error),
+            error,
         )
         .await
     }
 
-    /// End the call after it reached the server, as `code`, on record.
-    async fn fail(
-        &self,
-        code: ConversationErrorCode,
-        error: ConversationError,
-    ) -> ConversationError {
+    /// End the call after it reached the server, as `error`, on record under
+    /// the code the wire answers it with ([`error_code`]).
+    async fn fail(&self, error: ConversationError) -> ConversationError {
         self.ended(
-            McpAppAuditPhase::Completed(McpAppOutcome::Failed(code)),
+            McpAppAuditPhase::Completed(McpAppOutcome::Failed(error_code(&error))),
             None,
             error,
         )

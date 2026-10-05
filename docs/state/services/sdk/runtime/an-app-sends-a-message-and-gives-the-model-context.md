@@ -2,7 +2,7 @@
 id: "sdk-runtime-an-app-sends-a-message-and-gives-the-model-context"
 title: "an app sends a message and gives the model context"
 kind: "operation"
-status: "implemented"
+status: "mixed"
 summary: "An app can send a message into its conversation as the person, after the person allows it, and can hold context for the model's next idle message."
 parent: "sdk-runtime"
 sources:
@@ -23,7 +23,9 @@ diagramLinks: {}
 
 An app can send a message into its conversation with `mcp.sendMessage`. The message is the person's turn, written by the app, and the saved invocation names the app. Every message waits for the person to allow it in its own app review. The one exception is a retry of a turn the agent already has. While a turn runs or input waits, the message is refused with `turn_running`. Its text is held to the same bound as the person's own message.
 
-An app can also give the model context with `mcp.updateModelContext`. The gateway holds one context per mount, and at most four mounts. Each context's text and structured content are each at most 8 KiB. One update per conversation runs at a time, and each is recorded before it is held. The next message admitted while nothing runs or waits takes every held context and carries them as one leading text block. A queued or steered message takes none.
+An app can also give the model context with `mcp.updateModelContext`. The gateway holds one context per mount, and at most four mounts. Each context's text and structured content are each at most 8 KiB, past which the update is `invalid_request`, and together at most `AppModelContext::MAX_BYTES` (8 KiB), past which it is `mcp_request_too_large`. One update per conversation runs at a time, and each is recorded before it is held. The next message admitted while nothing runs or waits takes every held context and carries them as one leading text block. A queued or steered message takes none.
+
+The gateway side is implemented: it answers both methods as described here. No client or desktop calls them yet; that wiring comes later in #390.
 
 ## Held context
 

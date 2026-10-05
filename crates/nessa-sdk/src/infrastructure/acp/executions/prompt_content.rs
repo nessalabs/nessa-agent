@@ -149,6 +149,9 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
     Ok(())
 }
 
+/// What every file link's URI begins with, ahead of its percent-encoded path.
+const FILE_URI_SCHEME: &str = "file://";
+
 /// What the model is told before the contexts apps gave it.
 const APP_CONTEXT_PREAMBLE: &str =
     "Context from MCP apps in this conversation, given by the apps and not written by the person:\n";
@@ -199,16 +202,51 @@ fn app_model_context_text(message: &UserMessage) -> Option<String> {
 /// Length of `text` as a JSON string, quotes included, as `serde_json` writes
 /// it: `"` and `\` and the five short escapes take two bytes, every other
 /// control character six, and everything else is copied.
-fn json_string_bytes(text: &str) -> u64 {
-    2 + text
-        .bytes()
-        .map(|byte| match byte {
+const fn json_string_bytes(text: &str) -> u64 {
+    let bytes = text.as_bytes();
+    let mut length = 2;
+    let mut index = 0;
+    while index < bytes.len() {
+        length += match bytes[index] {
             b'"' | b'\\' | 0x08 | 0x09 | 0x0a | 0x0c | 0x0d => 2,
             0x00..=0x1f => 6,
             _ => 1,
-        })
-        .sum::<u64>()
+        };
+        index += 1;
+    }
+    length
 }
+
+/// One app's entry in the context block with every string empty and both
+/// parts present: the keys, quotes, and braces [`app_model_context_text`]
+/// writes around what the app and its context say.
+const APP_CONTEXT_ENTRY_SYNTAX: &str =
+    r#"{"server":"","tool":"","toolCallId":"","text":"","structuredContent":}"#;
+
+/// The bytes of the largest message's frame that are not its content, as
+/// [`fits_one_frame`] measures them: [`REQUEST_ALLOWANCE_BYTES`]; the message
+/// text's block and the app-context block, each [`TEXT_BLOCK_BYTES`] and its
+/// string's quotes; that block's [`APP_CONTEXT_PREAMBLE`] and brackets, and
+/// [`UserMessage::MAX_APP_MODEL_CONTEXTS`] entries'
+/// [`APP_CONTEXT_ENTRY_SYNTAX`] and the commas between them, all escaped once
+/// into the block's string; [`UserMessage::MAX_IMAGES`] image blocks; and
+/// [`UserMessage::MAX_FILES`] resource links, each with its URI's quotes and
+/// [`FILE_URI_SCHEME`] and its label's quotes.
+///
+/// Content is everything a message's sender chooses: the text, each image's
+/// base64, each app's server, tool, tool call, text and structured content,
+/// and each file's path and name, with whatever escaping they take. A host
+/// adds its own bound on those to this to know the largest frame it can be
+/// asked to write (`largest_message_syntax_is_what_the_frame_figure_adds_to_its_content`).
+pub(in crate::infrastructure::acp) const LARGEST_MESSAGE_SYNTAX_BYTES: u64 = REQUEST_ALLOWANCE_BYTES
+    + 2 * (TEXT_BLOCK_BYTES + 2)
+    + (json_string_bytes(APP_CONTEXT_PREAMBLE) - 2)
+    + 2
+    + UserMessage::MAX_APP_MODEL_CONTEXTS as u64 * (json_string_bytes(APP_CONTEXT_ENTRY_SYNTAX) - 2)
+    + (UserMessage::MAX_APP_MODEL_CONTEXTS as u64 - 1)
+    + UserMessage::MAX_IMAGES as u64 * IMAGE_BLOCK_BYTES
+    + UserMessage::MAX_FILES as u64
+        * (RESOURCE_LINK_BLOCK_BYTES + json_string_bytes(FILE_URI_SCHEME) + 2);
 
 /// Read, verify, and encode every image `message` refers to.
 ///
@@ -330,8 +368,8 @@ pub(super) const URI_ALPHABET: &str =
 /// already refused an empty, `.` or `..` segment, which are the only ones that
 /// would not survive. Nothing else is left as itself.
 fn file_uri(path: &str) -> String {
-    let mut uri = String::with_capacity("file://".len() + path.len());
-    uri.push_str("file://");
+    let mut uri = String::with_capacity(FILE_URI_SCHEME.len() + path.len());
+    uri.push_str(FILE_URI_SCHEME);
     for byte in path.bytes() {
         match byte {
             b'/' | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {

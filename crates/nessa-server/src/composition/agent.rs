@@ -950,15 +950,6 @@ pub(super) mod build {
     /// of one text block. `\u00XX`'s backslash is then escaped again, `\\u00XX`;
     /// a quote or a backslash takes four.
     const ESCAPED_TWICE: usize = ESCAPED_ONCE + 1;
-    /// Room for every byte of the frame that is not content: the SDK's own
-    /// allowance for the request around the message (2 KiB), each block's
-    /// keys and quotes (24 bytes for each of the two text blocks, 64 for each
-    /// of the ten images, 48 and `file://` for each of the ten files), the
-    /// context block's preamble and brackets (under 200 bytes, escaped), and
-    /// each context's keys (under 100 bytes, escaped twice). Those add up to
-    /// under 4 KiB (`nessa-sdk`'s `acp/executions/prompt_content.rs`, which
-    /// sizes them); this keeps twice that.
-    const FRAME_SYNTAX_BYTES: usize = 8 * 1024;
     /// The most the SDK can measure the largest message at
     /// (`fits_one_frame`), so it never refuses as `MessageTooLarge` a message
     /// this gateway admitted, whatever an app's context adds to it.
@@ -980,9 +971,11 @@ pub(super) mod build {
     ///   (the path's last component, punctuation backslash-escaped and then
     ///   escaped once, 6 bytes at most for each byte), both from at most
     ///   `LinkedFile::MAX_PATH_BYTES` (4 096): 10 × 9 × 4 096 = 368 640.
-    /// - Everything else: [`FRAME_SYNTAX_BYTES`], 8 192.
+    /// - Everything else, which none of the message's senders writes: the
+    ///   request around it and every block's keys, quotes and braces, as the
+    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 3 781.
     ///
-    /// 14 650 736 in all, 2 126 480 under [`MAX_FRAME_BYTES`].
+    /// 14 646 325 in all, 2 130 891 under [`MAX_FRAME_BYTES`].
     const LARGEST_MESSAGE_FRAME_BYTES: usize =
         (UserMessage::MAX_IMAGE_BYTES as usize + 2 * UserMessage::MAX_IMAGES) / 3 * 4
             + ESCAPED_ONCE * MAX_MCP_MESSAGE_BYTES
@@ -992,7 +985,7 @@ pub(super) mod build {
                     + 2 * MAX_MCP_NAME_BYTES
                     + McpAppSource::MAX_TOOL_ID_BYTES)
             + UserMessage::MAX_FILES * (3 + ESCAPED_ONCE) * LinkedFile::MAX_PATH_BYTES
-            + FRAME_SYNTAX_BYTES;
+            + AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES;
     const _: () = assert!(
         LARGEST_MESSAGE_FRAME_BYTES <= MAX_FRAME_BYTES,
         "the largest message, with its images encoded and the most app context it may carry, must fit one ACP frame"

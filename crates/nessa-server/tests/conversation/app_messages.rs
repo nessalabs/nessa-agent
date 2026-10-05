@@ -1167,7 +1167,8 @@ async fn m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message() {
 }
 
 #[tokio::test]
-async fn m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothing_runs() {
+async fn m11_an_apps_message_is_refused_while_the_persons_admitted_input_has_not_reached_the_agent()
+{
     let fixture = Fixture::new().await;
     // The person's message waits as its turn is prepared: nothing has reached
     // the agent yet. The view shows it as the person's, and running, as a turn

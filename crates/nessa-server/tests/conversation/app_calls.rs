@@ -17,6 +17,7 @@ use nessa_protocol::conversation::projection::MAX_VIEW_BYTES;
 use nessa_protocol::conversation::view::{
     ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
