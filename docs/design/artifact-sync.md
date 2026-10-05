@@ -371,7 +371,10 @@ started still finishes, and the sink never held its permit.
 
 The count returned to the caller is how many records were not yet acknowledged
 when the caller stopped waiting. That snapshot is taken under the same lock
-that records an acknowledgement, before the phase reaps an older task. A sink
+that records an acknowledgement, before the phase reaps an older task.
+`a_late_accept_after_the_caller_stops_does_not_change_the_count` accepts a
+record while that reap is in progress; moving the snapshot to after the reap
+counts the accept. A sink
 that accepts a record after that is late. The caller's failure stays, and the
 stored record keeps the cause and caller it was built with. Nothing reconciles
 the two into exactly-once delivery. A refusal and a deadline are the same
@@ -430,7 +433,7 @@ sequenceDiagram
 | A second phase is waiting while the first still has records it has not admitted | When the permit is released, the next record handed to the sink is the second phase's. The rest of the first phase is not queued ahead of it | `a_second_phase_enters_when_the_permit_is_released` |
 | `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |
 | Durable write outlives its deadline | The service releases the admission permit at the deadline while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only one attempt has been handed over. The sink is not given the permit. The overlap is `max_in_flight`, not a clock | `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
-| A durable write is still running | The sink does not start a second blocking write until that one finishes | `a_durable_write_does_not_start_until_the_previous_one_finishes` |
+| A durable write is still running | The sink does not start a second blocking write until that one finishes. The write still holds its place; dropping that place before the blocking write starts lets the next one in | `a_durable_write_does_not_start_until_the_previous_one_finishes` |
 | Caller dropped, then the sink refuses | The delivery task logs the refusal. The caller is no longer there to return it | `a_lost_caller_still_logs_a_refusal` |
 | Caller dropped, then a record's deadline passes | The delivery task logs the deadline. The caller is no longer there to return it | `a_lost_caller_still_logs_a_deadline` |
 | One record in a phase panics | The rest of that phase is still handed to the sink. The panic is resumed after that | `a_panicked_record_does_not_skip_the_rest_of_its_phase` |
@@ -442,5 +445,5 @@ sequenceDiagram
 | An upload sweep panics while an older panic is parked | The upload is kept. Each later phase resumes one of those two panics | `a_sweep_panic_parked_beside_an_older_one_is_still_surfaced` |
 | Upload while an expiry sweep is not yet acknowledged | The upload completes. The sweep's count does not fail it. The upload's own record does not take the sweep's slot | `an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged` |
 | Accept while the caller is still waiting, then the caller stops | The acknowledgement is in the count | `an_accept_while_the_caller_is_waiting_is_counted` |
-| Accept after the caller has stopped | The frozen count does not gain that acknowledgement | `a_late_accept_after_the_caller_stops_does_not_change_the_count` |
+| Accept after the caller has stopped, including while the phase reaps | The frozen count does not gain that acknowledgement. The snapshot is taken before the reap | `a_late_accept_after_the_caller_stops_does_not_change_the_count` |
 | Bulk admission semaphore is closed | The record is not handed to the sink, and it counts as not acknowledged | `a_closed_admission_does_not_hand_the_record_to_the_sink` |

@@ -24,6 +24,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+#[cfg(test)]
+use tokio::sync::Notify;
 use tokio::{
     sync::{oneshot, Semaphore},
     task::JoinHandle,
@@ -184,6 +186,13 @@ struct Inner {
     /// Panic payloads already taken from a finished task and not yet resumed.
     /// Resuming one must not drop the rest.
     audit_panics: Mutex<Vec<Box<dyn Any + Send>>>,
+    /// The next reap waits here, so a test can accept a record during that
+    /// wait. The caller's count is already frozen. Production leaves this empty.
+    #[cfg(test)]
+    reap_hold: Mutex<Option<oneshot::Receiver<()>>>,
+    /// Signalled when a test's reap hold is entered.
+    #[cfg(test)]
+    reap_reached: Notify,
 }
 
 /// Whether this phase resumes a bulk delivery task that already panicked.
@@ -231,6 +240,10 @@ impl AttachmentService {
                 audit_slots: Arc::new(Semaphore::new(audit_admission)),
                 audit_tasks: Mutex::new(Vec::new()),
                 audit_panics: Mutex::new(Vec::new()),
+                #[cfg(test)]
+                reap_hold: Mutex::new(None),
+                #[cfg(test)]
+                reap_reached: Notify::new(),
                 limits,
             }),
         }
@@ -394,6 +407,25 @@ impl AttachmentService {
         self.inner.audit_slots.close();
     }
 
+    /// Test-only: the next reap waits until the sender fires. The count is
+    /// taken before that wait, so an accept during it must not move the count.
+    #[cfg(test)]
+    pub(crate) fn hold_the_next_reap_for_test(&self) -> oneshot::Sender<()> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .inner
+            .reap_hold
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(receiver);
+        sender
+    }
+
+    /// Test-only: fired once the reap hold above is entered.
+    #[cfg(test)]
+    pub(crate) fn reap_reached(&self) -> &Notify {
+        &self.inner.reap_reached
+    }
+
     fn park_audit_task(&self, task: JoinHandle<()>) {
         self.audit_tasks().push(task);
     }
@@ -417,6 +449,21 @@ impl AttachmentService {
     /// unwind never returns to the rest of this loop. A task still handing
     /// records over stays parked.
     async fn reap_audit_tasks(&self) {
+        // After the caller's count is frozen. A test holds this so an accept
+        // can land during the reap; that accept must not change the count.
+        #[cfg(test)]
+        {
+            let hold = self
+                .inner
+                .reap_hold
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(hold) = hold {
+                self.inner.reap_reached.notify_one();
+                let _ = hold.await;
+            }
+        }
         let finished = {
             let mut tasks = self.audit_tasks();
             let mut running = Vec::new();

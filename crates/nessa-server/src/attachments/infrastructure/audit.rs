@@ -36,6 +36,10 @@ pub struct DurableAttachmentAudit {
     /// How many blocking writes have entered. The cap test reads this.
     #[cfg(test)]
     writes_started: Arc<AtomicUsize>,
+    /// When set, a blocking write waits here after it has taken `write`.
+    /// The cap test reads the permit count while this is held.
+    #[cfg(test)]
+    pause_write: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
 }
 impl DurableAttachmentAudit {
     /// Use a private `directory`. An existing unsafe path fails here; it is
@@ -48,6 +52,8 @@ impl DurableAttachmentAudit {
             write: Arc::new(Semaphore::new(1)),
             #[cfg(test)]
             writes_started: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            pause_write: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())),
         })
     }
 
@@ -56,14 +62,33 @@ impl DurableAttachmentAudit {
         self.writes_started.load(Ordering::SeqCst)
     }
 
-    /// Take the only write place. A test holds this while another `record`
-    /// must not start a file.
+    /// How many write places are free. Zero while a blocking write holds the
+    /// only one.
     #[cfg(test)]
-    pub(crate) fn hold_write_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
-        self.write
-            .clone()
-            .try_acquire_owned()
-            .expect("a durable audit write is already held")
+    pub(crate) fn write_permits_available(&self) -> usize {
+        self.write.available_permits()
+    }
+
+    /// The next blocking writes wait inside the pool, still holding the place.
+    #[cfg(test)]
+    pub(crate) fn pause_writes_for_test(&self) {
+        *self
+            .pause_write
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+
+    /// Let paused blocking writes finish and release the place.
+    #[cfg(test)]
+    pub(crate) fn resume_writes_for_test(&self) {
+        let mut hold = self
+            .pause_write
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *hold = false;
+        self.pause_write.1.notify_all();
     }
 }
 impl AttachmentAudit for DurableAttachmentAudit {
@@ -76,6 +101,8 @@ impl AttachmentAudit for DurableAttachmentAudit {
         let write = Arc::clone(&self.write);
         #[cfg(test)]
         let writes_started = Arc::clone(&self.writes_started);
+        #[cfg(test)]
+        let pause_write = Arc::clone(&self.pause_write);
         Box::pin(async move {
             // Wait here, on the runtime, not on a blocking thread. The
             // service's deadline can drop this wait. A write that already
@@ -84,9 +111,20 @@ impl AttachmentAudit for DurableAttachmentAudit {
                 return Err(AuditUnavailable);
             };
             tokio::task::spawn_blocking(move || {
-                #[cfg(test)]
-                writes_started.fetch_add(1, Ordering::SeqCst);
+                // The place stays with this write. Dropping it before the
+                // pool runs lets the next record start another blocking write.
                 let _permit = permit;
+                #[cfg(test)]
+                {
+                    let (lock, wake) = &*pause_write;
+                    let mut paused = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    writes_started.fetch_add(1, Ordering::SeqCst);
+                    while *paused {
+                        paused = wake
+                            .wait(paused)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                }
                 let mut file = PrivateTempFile::new_in(&directory)?;
                 serde_json::to_writer(file.as_file_mut(), &value)?;
                 file.as_file_mut().write_all(b"\n")?;

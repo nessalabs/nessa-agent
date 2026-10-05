@@ -392,8 +392,33 @@ async fn a_durable_write_does_not_start_until_the_previous_one_finishes() {
     let audit = Arc::new(
         DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap(),
     );
-    let held = audit.hold_write_for_test();
-    let writing = {
+    audit.pause_writes_for_test();
+    // A failing assertion must still let the blocked write return, or the
+    // runtime waits on that thread and the failure never prints.
+    let release_writes = ReleaseWrites(Arc::clone(&audit));
+    let first = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..100 {
+        if audit.writes_started() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(audit.writes_started(), 1, "the first write did not start");
+    // The place is still held inside the blocking write. Dropping it before
+    // `spawn_blocking` leaves this at 1.
+    assert_eq!(
+        audit.write_permits_available(),
+        0,
+        "the write dropped its place before it finished"
+    );
+    let second = {
         let audit = Arc::clone(&audit);
         tokio::spawn(async move {
             audit
@@ -402,20 +427,25 @@ async fn a_durable_write_does_not_start_until_the_previous_one_finishes() {
         })
     };
     for _ in 0..40 {
-        if audit.writes_started() > 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        tokio::task::yield_now().await;
     }
     assert_eq!(
         audit.writes_started(),
-        0,
-        "a write started while one was still held"
+        1,
+        "a second write started while the first still held its place"
     );
-    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
-    drop(held);
-    writing.await.unwrap().unwrap();
-    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    drop(release_writes);
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(audit.writes_started(), 2);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+struct ReleaseWrites(Arc<DurableAttachmentAudit>);
+impl Drop for ReleaseWrites {
+    fn drop(&mut self) {
+        self.0.resume_writes_for_test();
+    }
 }
 
 #[cfg(unix)]

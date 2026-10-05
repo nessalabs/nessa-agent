@@ -1220,6 +1220,37 @@ async fn a_record_acknowledged_after_the_caller_gave_up_stays_a_failure() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_late_accept_after_the_caller_stops_does_not_change_the_count() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(10),
+        audit_budget: Duration::from_secs(1),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    let service = fixture.service.clone();
+    let release = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    // The pre-wait reap has returned. The next one is after the count freezes.
+    let resume_reap = fixture.service.hold_the_next_reap_for_test();
+    let reached = fixture.service.reap_reached().notified();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    reached.await;
+    gate.send(()).unwrap();
+    fixture.audit.recorded.notified().await;
+    resume_reap.send(()).unwrap();
+
+    assert_eq!(
+        release.await.unwrap(),
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 2
+        })
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn bulk_delivery_does_not_admit_more_than_its_limit() {
     let fixture = Fixture::new(AttachmentLimits {
         audit_deadline: Duration::from_secs(5),
