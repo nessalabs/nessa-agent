@@ -176,6 +176,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     shutdown_deadline: None,
                     configured: true,
                     closing: false,
+                    turn_cancel_requested: None,
                     deferred_outcome: None,
                     provider_result: None,
                     settlement_facts: SettlementFacts::new(),

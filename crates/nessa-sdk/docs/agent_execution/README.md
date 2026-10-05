@@ -8,6 +8,7 @@ separate proposed work. Local snapshots and submission retry recovery are implem
 
 | Guide | Responsibility |
 | --- | --- |
+| [Creation commands](commands.md) | Principal control receipts, original initialization attempts, recovery and host deletion authority |
 | [Agent](agent.md) | Entry point, identity, model/operation capabilities, automatic storage, and UI flow |
 | [Lifecycle](lifecycle.md) | Live sessions, execution boundaries, cleanup, and provider-context restoration |
 | [Scheduling](scheduling.md) | FIFO follow-ups, boundary/native steering, withdrawal, idempotent retries, and retained evidence |
@@ -32,7 +33,7 @@ host --> Agent --> SessionManager --> SessionStorageLease
 Arrows show calls. Agent owns invocation and controls. Composition injects the
 provider, manager/storage, and required permission audit sink.
 Application feature modules are `agents`, `providers`, `sessions`, `hooks`,
-`executions`, `permissions`, and `tools`. Domain features retain their existing
+`executions`, `permissions`, `commands`, and `tools`. Domain features retain their existing
 live session, execution, tool, permission, and prompt boundaries.
 
 `ExecutionEvent` and `ExecutionUpdate` are application projections saved in session

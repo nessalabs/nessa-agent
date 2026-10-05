@@ -127,6 +127,24 @@ export function conversationReceipt(
   oneOf(text(item, "disposition"), ["queued", "injected", "settled"])
   return item as unknown as ConversationReceipt
 }
+export function conversationCommandReceipt(
+  value: unknown,
+  requestId: string,
+): { requestId: string; stage: string; outcome?: string } {
+  const item = record(value)
+  exact(item, ["requestId", "stage", "outcome"])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  oneOf(text(item, "stage"), ["accepted", "attempted", "ready", "settled"])
+  if (item.outcome !== undefined)
+    oneOf(text(item, "outcome"), [
+      "dispatched",
+      "withdrawn",
+      "cancelled",
+      "already_final",
+    ])
+  return item as { requestId: string; stage: string; outcome?: string }
+}
 export function conversationMutation(
   value: unknown,
   requestId: string,

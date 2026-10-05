@@ -106,6 +106,8 @@ export interface ConversationEffects {
   ): Promise<void>
   cancel(conversationId: string, executionId: string, permissionId: string): Promise<void>
   close(conversationId: string): Promise<void>
+  /** Stop one captured turn. The attachment stays open and its uploads stay held. */
+  stop(conversationId: string, executionId: string): Promise<void>
 }
 
 /** No live transport accepted this operation; unlike a lost acknowledgement, no message was submitted. */

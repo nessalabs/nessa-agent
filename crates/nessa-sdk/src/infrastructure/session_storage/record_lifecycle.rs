@@ -1,7 +1,11 @@
 //! Admission and full storage shutdown share one owner.
 
+use super::creation::CONTROL_STREAM_PREFIX;
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
-use crate::application::agent_execution::sessions::{StorageError, StorageShutdownFailure};
+use crate::application::agent_execution::{
+    commands::MAX_CREATION_OWNERS,
+    sessions::{StorageError, StorageShutdownFailure},
+};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex, PoisonError},
@@ -37,9 +41,25 @@ pub(super) struct ShutdownWork {
 }
 impl StorageOwner {
     pub fn reserve(&self, id: &str) -> Result<(), StorageError> {
+        self.reserve_inner(id, false)
+    }
+    pub fn reserve_creation(&self, id: &str) -> Result<(), StorageError> {
+        self.reserve_inner(id, true)
+    }
+    fn reserve_inner(&self, id: &str, creation: bool) -> Result<(), StorageError> {
         let mut state = self.state.lock().map_err(poisoned)?;
         if state.shutdown.is_some() {
             return Err(StorageError::Closed);
+        }
+        if creation
+            && state
+                .leases
+                .iter()
+                .filter(|id| id.starts_with(CONTROL_STREAM_PREFIX))
+                .count()
+                >= MAX_CREATION_OWNERS
+        {
+            return Err(StorageError::Busy);
         }
         if !state.leases.insert(id.into()) {
             return Err(StorageError::Busy);

@@ -1,3 +1,5 @@
+mod creation;
+mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
@@ -44,6 +46,7 @@ use nessa_sdk::application::agent_execution::{
         AttachmentFailureCode, AttachmentPhase, AttachmentRequest, QueueAdmission, QueueRemoval,
         QueueReorder, SteeringDelivery, SteeringEvidence,
     },
+    commands::{CreationStorage, CreationTaskFault},
     executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
@@ -543,19 +546,34 @@ struct LiveConversation {
     reserved_output_tokens: u32,
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
-    attachment_owner: Mutex<Option<JoinHandle<()>>>,
+    attachment_owner: Mutex<AttachmentOwner>,
     /// Its MCP Apps' state — the conversation's, kept by the service — and
     /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
     app_epoch: u64,
 }
+enum AttachmentOwner {
+    Running(JoinHandle<()>),
+    Finished(Result<(), CreationTaskFault>),
+}
 impl LiveConversation {
-    async fn join_attachment_owner(&self) {
-        if let Some(owner) = self.attachment_owner.lock().await.take() {
-            if let Err(error) = owner.await {
-                tracing::error!(%error, "conversation attachment owner panicked");
+    // Holding this same owner through await makes a dropped join waiter safe:
+    // its original handle stays Running, and every completed waiter sees the
+    // retained result. Creation readiness consumes it; ordinary cleanup logs
+    // an unexpected host fault and still confirms release through SDK close.
+    async fn join_attachment_owner(&self) -> Result<(), CreationTaskFault> {
+        let mut owner = self.attachment_owner.lock().await;
+        let result = match &mut *owner {
+            AttachmentOwner::Running(handle) => {
+                handle.await.map_err(CreationTaskFault::from_join_error)
             }
+            AttachmentOwner::Finished(result) => return *result,
+        };
+        *owner = AttachmentOwner::Finished(result);
+        if let Err(fault) = result {
+            tracing::error!(?fault, "conversation attachment owner failed");
         }
+        result
     }
 }
 /// Preparation failure before a live conversation and attachment owner exist.
@@ -646,6 +664,9 @@ struct Inner {
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
     app_calls: Arc<Semaphore>,
+    /// Principal command receipts. Composition binds the shared record runtime.
+    /// Absent storage refuses command admission rather than skipping the receipt.
+    commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -893,6 +914,7 @@ impl ConversationService {
                 mcp_apps,
                 apps: std::sync::Mutex::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
+                commands: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -912,141 +934,62 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            // Asked of every creation, not only the ones that build a
-            // conversation, and before the record is loaded so neither branch
-            // can record a caller nobody validated. A reopen writes this
-            // caller's surface and action into its own audit record, so the
-            // same context has to be fit to record on both branches.
-            let actor = caller.actor()?;
-            if service.inner.retirement.get().is_some() {
-                return Err(ConversationError::Unavailable);
-            }
-            let requested_at_ms = service.inner.clock.unix_milliseconds();
-            // Serialize create/reopen decisions without holding the live-owner map
-            // across repository or audit I/O. Existing ownership is checked before
-            // this request can reserve capacity or open a provider.
-            let creation_guard = service.inner.creation.lock().await;
-            if let Some(record) = service.inner.metadata.load(&id).await? {
-                // A deleted conversation is not created again under its
-                // identity, whoever asks; only its owner is told why
-                // (`a_deleted_conversation_refuses_every_command_on_it`).
-                record.check_access(&caller.organization_id, &caller.principal_id)?;
-                drop(creation_guard);
-                // Acknowledge the original creation from its stored creator
-                // evidence before attributing this reopen to its caller, and
-                // before any provider opening. An unavailable audit sink
-                // therefore refuses the reopen instead of leaving an opened
-                // conversation with no record of who reopened it.
-                service.reconcile_creation_audit(&record).await?;
-                if caller.action_id != record.creation_action() {
-                    // Asked again, and the reopen written, under the creation
-                    // lock a delete writes its tombstone under: a delete that
-                    // finished since the check above leaves no reopen
-                    // recorded after its deletion
-                    // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
-                    let _creation = service.inner.creation.lock().await;
-                    service
-                        .inner
-                        .metadata
-                        .load(&id)
-                        .await?
-                        .ok_or(ConversationError::NotFound)?
-                        .check_access(&caller.organization_id, &caller.principal_id)?;
-                    service
-                        .inner
-                        .creation_audit
-                        .record(super::ConversationCreationAuditRecord {
-                            conversation_id: record.id().clone(),
-                            organization_id: record.organization().clone(),
-                            owner_id: record.owner().clone(),
-                            before: super::ConversationOwnershipState::Owned,
-                            after: super::ConversationOwnershipState::Owned,
-                            cause: super::ConversationCreationCause::IdempotentReopen,
-                            initiator_principal_id: caller.principal_id.clone(),
-                            initiator_surface_id: caller.surface_id.clone(),
-                            correlation_id: caller.action_id.clone(),
-                            requested_at_ms,
-                            observed_at_ms: service.inner.clock.unix_milliseconds(),
-                        })
-                        .await
-                        .map_err(|_| ConversationError::Audit)?;
-                }
-                service.resolve(&id, &caller).await?;
-                return Ok(());
-            }
-            // Only now does the agent this caller asked for matter. Checking it
-            // before the record above would have refused to reopen somebody's
-            // existing Claude conversation because the panel's remembered choice
-            // names an agent this server is no longer configured for — a
-            // conversation that does not need that agent at all. The same is
-            // true of a name no adapter exists for, which is why that one is
-            // carried this far instead of being refused where it was parsed.
-            let agent_request = match requested.agent {
-                Some(RequestedAgent::Known(agent)) => Some(agent),
-                Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
-                None => None,
-            };
-            let agent = service.inner.agents.select(agent_request)?;
-            let approval_mode = requested
-                .approval_mode
-                .unwrap_or(ConversationApprovalMode::Ask);
-            let configured = match requested.model.as_deref() {
-                Some(model) => {
-                    service
-                        .inner
-                        .agents
-                        .resolve_for(agent, model, approval_mode)
-                        .await?
-                }
-                None => {
-                    let default = service.inner.agents.resolve(agent).await?;
-                    if approval_mode == ConversationApprovalMode::Ask {
-                        default
-                    } else {
-                        service
-                            .inner
-                            .agents
-                            .resolve_for(
-                                agent,
-                                default.provider.identity().model_id(),
-                                approval_mode,
-                            )
-                            .await?
-                    }
-                }
-            };
-            let selected_model = configured.provider.identity();
-            let proposed = Conversation::new(
-                id.clone(),
-                caller.organization_id.clone(),
-                caller.principal_id.clone(),
-                caller.surface_id.clone(),
-                caller.action_id.clone(),
-                requested_at_ms,
-                agent,
-                ConversationModelId::new(selected_model.model_id())
-                    .map_err(|_| ConversationError::InvalidInput)?,
-                approval_mode,
-            )
-            .map_err(|_| ConversationError::InvalidInput)?;
-            {
-                let owners = service.inner.conversations.lock().await;
-                if service.inner.retirement.get().is_some() {
-                    return Err(ConversationError::Unavailable);
-                }
-                if !owners.contains_key(&id)
-                    && owners.len() >= service.inner.limits.max_conversations
-                {
-                    return Err(ConversationError::Capacity);
-                }
-            }
-            let outcome = service.inner.metadata.create(proposed).await?;
-            let record = &outcome.conversation;
+            service
+                .create_admitted(id, caller, requested)
+                .await
+                .map(|_| ())
+        })
+        .await
+    }
+    // The caller retains this service's original admission guard through the
+    // complete command, including receipt persistence after provider opening.
+    async fn create_admitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        requested: RequestedConversation,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
+        let service = self.clone();
+        // Asked of every creation, not only the ones that build a
+        // conversation, and before the record is loaded so neither branch
+        // can record a caller nobody validated. A reopen writes this
+        // caller's surface and action into its own audit record, so the
+        // same context has to be fit to record on both branches.
+        let actor = caller.actor()?;
+        if service.inner.retirement.get().is_some() {
+            return Err(ConversationError::Unavailable);
+        }
+        let requested_at_ms = service.inner.clock.unix_milliseconds();
+        // Serialize create/reopen decisions without holding the live-owner map
+        // across repository or audit I/O. Existing ownership is checked before
+        // this request can reserve capacity or open a provider.
+        let creation_guard = service.inner.creation.lock().await;
+        if let Some(record) = service.inner.metadata.load(&id).await? {
+            // A deleted conversation is not created again under its
+            // identity, whoever asks; only its owner is told why
+            // (`a_deleted_conversation_refuses_every_command_on_it`).
             record.check_access(&caller.organization_id, &caller.principal_id)?;
-            service.reconcile_creation_audit(record).await?;
-            if outcome.disposition == super::ConversationCreationDisposition::Existing
-                && caller.action_id != record.creation_action()
-            {
+            drop(creation_guard);
+            // Acknowledge the original creation from its stored creator
+            // evidence before attributing this reopen to its caller, and
+            // before any provider opening. An unavailable audit sink
+            // therefore refuses the reopen instead of leaving an opened
+            // conversation with no record of who reopened it.
+            service.reconcile_creation_audit(&record).await?;
+            if caller.action_id != record.creation_action() {
+                // Asked again, and the reopen written, under the creation
+                // lock a delete writes its tombstone under: a delete that
+                // finished since the check above leaves no reopen
+                // recorded after its deletion
+                // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
+                let _creation = service.inner.creation.lock().await;
+                service
+                    .inner
+                    .metadata
+                    .load(&id)
+                    .await?
+                    .ok_or(ConversationError::NotFound)?
+                    .check_access(&caller.organization_id, &caller.principal_id)?;
                 service
                     .inner
                     .creation_audit
@@ -1066,35 +1009,118 @@ impl ConversationService {
                     .await
                     .map_err(|_| ConversationError::Audit)?;
             }
-            let slot = {
-                let mut owners = service.inner.conversations.lock().await;
-                if service.inner.retirement.get().is_some() {
-                    return Err(ConversationError::Unavailable);
+            return service.resolve(&id, &caller).await;
+        }
+        // Only now does the agent this caller asked for matter. Checking it
+        // before the record above would have refused to reopen somebody's
+        // existing Claude conversation because the panel's remembered choice
+        // names an agent this server is no longer configured for — a
+        // conversation that does not need that agent at all. The same is
+        // true of a name no adapter exists for, which is why that one is
+        // carried this far instead of being refused where it was parsed.
+        let agent_request = match requested.agent {
+            Some(RequestedAgent::Known(agent)) => Some(agent),
+            Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
+            None => None,
+        };
+        let agent = service.inner.agents.select(agent_request)?;
+        let approval_mode = requested
+            .approval_mode
+            .unwrap_or(ConversationApprovalMode::Ask);
+        let configured = match requested.model.as_deref() {
+            Some(model) => {
+                service
+                    .inner
+                    .agents
+                    .resolve_for(agent, model, approval_mode)
+                    .await?
+            }
+            None => {
+                let default = service.inner.agents.resolve(agent).await?;
+                if approval_mode == ConversationApprovalMode::Ask {
+                    default
+                } else {
+                    service
+                        .inner
+                        .agents
+                        .resolve_for(agent, default.provider.identity().model_id(), approval_mode)
+                        .await?
                 }
-                if !owners.contains_key(&id)
-                    && owners.len() >= service.inner.limits.max_conversations
-                {
-                    return Err(ConversationError::Capacity);
+            }
+        };
+        let selected_model = configured.provider.identity();
+        let proposed = Conversation::new(
+            id.clone(),
+            caller.organization_id.clone(),
+            caller.principal_id.clone(),
+            caller.surface_id.clone(),
+            caller.action_id.clone(),
+            requested_at_ms,
+            agent,
+            ConversationModelId::new(selected_model.model_id())
+                .map_err(|_| ConversationError::InvalidInput)?,
+            approval_mode,
+        )
+        .map_err(|_| ConversationError::InvalidInput)?;
+        {
+            let owners = service.inner.conversations.lock().await;
+            if service.inner.retirement.get().is_some() {
+                return Err(ConversationError::Unavailable);
+            }
+            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
+                return Err(ConversationError::Capacity);
+            }
+        }
+        let outcome = service.inner.metadata.create(proposed).await?;
+        let record = &outcome.conversation;
+        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        service.reconcile_creation_audit(record).await?;
+        if outcome.disposition == super::ConversationCreationDisposition::Existing
+            && caller.action_id != record.creation_action()
+        {
+            service
+                .inner
+                .creation_audit
+                .record(super::ConversationCreationAuditRecord {
+                    conversation_id: record.id().clone(),
+                    organization_id: record.organization().clone(),
+                    owner_id: record.owner().clone(),
+                    before: super::ConversationOwnershipState::Owned,
+                    after: super::ConversationOwnershipState::Owned,
+                    cause: super::ConversationCreationCause::IdempotentReopen,
+                    initiator_principal_id: caller.principal_id.clone(),
+                    initiator_surface_id: caller.surface_id.clone(),
+                    correlation_id: caller.action_id.clone(),
+                    requested_at_ms,
+                    observed_at_ms: service.inner.clock.unix_milliseconds(),
+                })
+                .await
+                .map_err(|_| ConversationError::Audit)?;
+        }
+        let slot = {
+            let mut owners = service.inner.conversations.lock().await;
+            if service.inner.retirement.get().is_some() {
+                return Err(ConversationError::Unavailable);
+            }
+            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
+                return Err(ConversationError::Capacity);
+            }
+            match owners.entry(id.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let slot = Arc::new(Slot {
+                        value: OnceCell::new(),
+                        ready: Notify::new(),
+                        started: AtomicBool::new(false),
+                    });
+                    entry.insert(slot.clone());
+                    service.start_slot(id.clone(), slot.clone(), actor.clone());
+                    slot
                 }
-                match owners.entry(id.clone()) {
-                    std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        let slot = Arc::new(Slot {
-                            value: OnceCell::new(),
-                            ready: Notify::new(),
-                            started: AtomicBool::new(false),
-                        });
-                        entry.insert(slot.clone());
-                        service.start_slot(id.clone(), slot.clone(), actor.clone());
-                        slot
-                    }
-                }
-            };
-            drop(creation_guard);
-            service.wait_for_slot(&id, slot).await?;
-            Ok(())
-        })
-        .await
+            }
+        };
+        drop(creation_guard);
+        service.wait_for_slot(&id, slot).await
     }
     /// Acknowledge the original creation from stored creator evidence.
     ///
@@ -1328,16 +1354,7 @@ impl ConversationService {
                             // the system, and reported
                             // (`c14_c15_contexts_are_dropped_with_their_mount_the_openings_end_a_new_opening_and_a_delete`).
                             let app_epoch = app_reviews.begin();
-                            let live = Arc::new(LiveConversation {
-                                agent,
-                                reserved_output_tokens: configured.reserved_output_tokens,
-                                projection: Mutex::new(projection),
-                                watched: Mutex::new(HashSet::new()),
-                                attachment_owner: Mutex::new(None),
-                                app_reviews,
-                                app_epoch,
-                            });
-                            let attachment = live.clone();
+                            let attachment = agent.clone();
                             let attachment_id = id.clone();
                             let attachment_service = service.clone();
                             let readiness = configured.readiness.clone();
@@ -1353,7 +1370,7 @@ impl ConversationService {
                                 if attachment_service.inner.retirement.get().is_some() {
                                     return;
                                 }
-                                match attachment.agent.start_attachment(authorization) {
+                                match attachment.start_attachment(authorization) {
                                     Ok(wait) => {
                                         if let Err(error) = wait.wait().await {
                                             report_opening_failure(&attachment_id, &error);
@@ -1363,7 +1380,15 @@ impl ConversationService {
                                     Err(error) => report_opening_failure(&attachment_id, &error),
                                 }
                             });
-                            *live.attachment_owner.lock().await = Some(owner);
+                            let live = Arc::new(LiveConversation {
+                                agent,
+                                reserved_output_tokens: configured.reserved_output_tokens,
+                                projection: Mutex::new(projection),
+                                watched: Mutex::new(HashSet::new()),
+                                attachment_owner: Mutex::new(AttachmentOwner::Running(owner)),
+                                app_reviews,
+                                app_epoch,
+                            });
                             Ok(live)
                         };
                         match AssertUnwindSafe(preparation).catch_unwind().await {
@@ -1470,7 +1495,7 @@ impl ConversationService {
         // fresh Agent from that row re-applies it at session startup; no
         // requested-mode mutation is replayed.
         let live = self.resolve_unchecked(id, caller).await?;
-        live.join_attachment_owner().await;
+        let _ = live.join_attachment_owner().await;
         // The newly attached provider was constructed from the committed row.
         // Verify that choice rather than sending a second mutation: fixed-mode
         // providers such as OpenCode have no live set-mode operation.
@@ -1571,7 +1596,7 @@ impl ConversationService {
                     .await.map_err(|_| ConversationError::Audit)?;
                     return Err(ConversationError::TurnRunning);
                 }
-                live.join_attachment_owner().await;
+                let _ = live.join_attachment_owner().await;
                 if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
                     return Err(ConversationError::ApprovalModeUncertain);
                 }
@@ -1874,6 +1899,56 @@ impl ConversationService {
             }
         }
     }
+    /// The command bytes a receipt may name. Invalid input is refused here, before
+    /// any durable stage, because a request that was never sent must stay reusable
+    /// once its bytes are corrected.
+    fn canonical_user_message(
+        max_input_bytes: usize,
+        execution_id: &str,
+        message: SubmittedMessage,
+    ) -> Result<(ExecutionId, UserMessage), ConversationError> {
+        if message.text.len() > max_input_bytes {
+            return Err(ConversationError::InvalidInput);
+        }
+        let execution =
+            ExecutionId::new(execution_id).map_err(|_| ConversationError::InvalidInput)?;
+        // Blank text is no text. The message's own rules then decide whether
+        // what remains is a message: some text, some images, or both.
+        let prompt = (!message.text.trim().is_empty())
+            .then(|| PromptText::new(message.text))
+            .transpose()
+            .map_err(|_| ConversationError::InvalidInput)?;
+        let images = message
+            .images
+            .into_iter()
+            .map(|image| {
+                ImageReference::new(
+                    Sha256Digest::parse(&image.digest)
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                    ImageMediaType::parse(&image.media_type)
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                    image.size,
+                )
+                .map_err(|_| ConversationError::InvalidInput)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Nothing is opened, resolved, or followed here. Whether the file
+        // is there is only true or false when the agent opens it, which is
+        // later than this and behind a permission the reader answers, so a
+        // check now would prove nothing and would refuse a file the reader
+        // is about to create. What the gateway does check is the whole of
+        // what it can: that the path can be said faithfully, which is the
+        // domain's rule and which every path travels through.
+        let files = message
+            .files
+            .into_iter()
+            .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
+            .collect::<Result<Vec<_>, _>>()?;
+        let message =
+            UserMessage::new(prompt, images, files).map_err(|_| ConversationError::InvalidInput)?;
+        Ok((execution, message))
+    }
+
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
     pub async fn submit(
         &self,
@@ -1938,52 +2013,15 @@ impl ConversationService {
         let refused_for = writer.clone();
         let asked_when_refused = asked.clone();
         let submission = async move {
-            let SubmittedMessage {
-                text,
-                images,
-                files,
-            } = message;
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
-            if service.inner.limits.past_input_bound(&text) {
-                return Err(ConversationError::InvalidInput.into());
-            }
-            let execution =
-                ExecutionId::new(&execution_id).map_err(|_| ConversationError::InvalidInput)?;
-            // Blank text is no text. The message's own rules then decide whether
-            // what remains is a message: some text, some images, or both.
-            let prompt = (!blank_text(&text))
-                .then(|| PromptText::new(text))
-                .transpose()
-                .map_err(|_| ConversationError::InvalidInput)?;
-            let images = images
-                .into_iter()
-                .map(|image| {
-                    ImageReference::new(
-                        Sha256Digest::parse(&image.digest)
-                            .map_err(|_| ConversationError::InvalidInput)?,
-                        ImageMediaType::parse(&image.media_type)
-                            .map_err(|_| ConversationError::InvalidInput)?,
-                        image.size,
-                    )
-                    .map_err(|_| ConversationError::InvalidInput)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            // Nothing is opened, resolved, or followed here. Whether the file
-            // is there is only true or false when the agent opens it, which is
-            // later than this and behind a permission the reader answers, so a
-            // check now would prove nothing and would refuse a file the reader
-            // is about to create. What the gateway does check is the whole of
-            // what it can: that the path can be said faithfully, which is the
-            // domain's rule and which every path travels through.
-            let files = files
-                .into_iter()
-                .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
-                .collect::<Result<Vec<_>, _>>()?;
-            let message = UserMessage::new(prompt, images, files)
-                .map_err(|_| ConversationError::InvalidInput)?;
+            let (execution, message) = Self::canonical_user_message(
+                service.inner.limits.max_input_bytes,
+                &execution_id,
+                message,
+            )?;
             // An app's message is for a live opening, and opens none: one
             // ended without this lock — the desktop stopping the agent — is
             // refused below, not opened again for it.
@@ -2005,7 +2043,7 @@ impl ConversationService {
                     .requires_mode_verification(&id)
                     .await?
             {
-                live.join_attachment_owner().await;
+                let _ = live.join_attachment_owner().await;
                 if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
@@ -2730,7 +2768,7 @@ impl ConversationService {
                         service.end_apps(&id, &live, &initiator_of(&actor));
                         let result = live.agent.close(actor).await;
                         if result.is_ok() {
-                            live.join_attachment_owner().await;
+                            let _ = live.join_attachment_owner().await;
                             service.release_live_slot(&id, &live).await;
                         }
                         let snapshot = live.agent.session_manager().snapshot().await;
@@ -3781,7 +3819,7 @@ impl ConversationService {
                             self.end_apps(id, live, ended_by);
                             match live.agent.close(actor.clone()).await {
                                 Ok(_) => {
-                                    live.join_attachment_owner().await;
+                                    let _ = live.join_attachment_owner().await;
                                     self.release_slot(id, &slot).await;
                                     Ok(())
                                 }

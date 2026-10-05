@@ -230,6 +230,16 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       )
     },
     async cancel() {},
+    async stop(id, executionId) {
+      const view = get(id)
+      view.messages = view.messages.map((message) =>
+        message.executionId === executionId &&
+        (message.status === "running" || message.status === "queued")
+          ? { ...message, status: "cancelled" }
+          : message,
+      )
+      view.pending = view.pending.filter((item) => item.executionId !== executionId)
+    },
     async close(id) {
       const view = get(id)
       view.messages = view.messages.map((message) =>
