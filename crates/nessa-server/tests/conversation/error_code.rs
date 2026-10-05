@@ -2,9 +2,9 @@
 //! (`conversation/application/error_code.rs`): each error keeps its
 //! actionable meaning, the code the wire answers with and the code an app's
 //! audit records alike.
-use super::{error_code, wire_code};
+use super::error_code;
 use crate::conversation::application::{ConversationError, DeletionFailures};
-use crate::product_contract::generated::ConversationErrorCode;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::{
     providers::ImageInputRefusal, sessions::StorageError,
 };
@@ -375,20 +375,14 @@ fn each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with() {
         McpAppError::TimedOut,
         McpAppError::Remote(None),
         McpAppError::Remote(Some((-32602, "bad".into()))),
+        McpAppError::Busy,
     ] {
         let code = error.code();
         assert_eq!(
-            error_code(&ConversationError::McpApp(error)).as_str(),
-            code.as_str()
+            error_code(&ConversationError::McpApp(error.clone())),
+            code,
+            "{error:?}"
         );
-    }
-}
-
-#[test]
-fn every_code_audit_names_is_on_the_wire_as_itself() {
-    use crate::conversation::application::McpAppCode;
-    for code in McpAppCode::ALL {
-        assert_eq!(wire_code(code).as_str(), code.as_str());
     }
 }
 

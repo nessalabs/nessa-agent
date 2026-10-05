@@ -16,11 +16,12 @@ use nessa_auth::{
         CredentialId, ResourceId,
     },
 };
+use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
+use nessa_protocol::pairing::{socket::NativeWakeCause, wire::NativePairingStatus};
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
-        wire::NativePairingStatus, NativeClientError, NativeConnectionFailure,
-        NativeEnrollmentClient, NativeEnrollmentConnections, NativeWakeCause, PairingRuntimeError,
+        NativeConnectionFailure, NativeEnrollmentConnections, PairingRuntimeError,
         RegisteredInvitation, RegistrationError, RegistrationWorker,
     },
 };
@@ -394,7 +395,7 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     .await
     .unwrap()
     .unwrap();
-    let original = retried.original.clone();
+    let original = retried.original().clone();
     assert_eq!(original.public(), public);
     assert!(
         matches!(
@@ -403,8 +404,8 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
         ),
         "{original:?}"
     );
-    assert!(matches!(retried.retried, NativePairingStatus::Claimed(_)));
-    let renewed = retried.retried.public();
+    assert!(matches!(retried.retried(), NativePairingStatus::Claimed(_)));
+    let renewed = retried.retried().public();
     assert_ne!(renewed.attempt(), public.attempt());
     assert_eq!(public.with_attempt(renewed.attempt()), renewed);
     assert_eq!(state.load_pending().unwrap().unwrap().intent(), renewed);

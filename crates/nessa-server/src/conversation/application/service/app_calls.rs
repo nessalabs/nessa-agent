@@ -20,23 +20,26 @@ use super::super::app_reviews::{
 };
 use super::super::mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord,
-    McpAppCode, McpAppError, McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    McpAppError, McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
     McpAppWithdrawal, TicketRefusal,
 };
-use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
 use super::super::session_key::conversation_session;
-use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::super::SubmittedMessage;
 use super::{
     blank_text, ConversationCaller, ConversationError, ConversationService, LiveConversation,
     Reach, SubmissionMode, SubmitFailure, Writer,
 };
 use crate::conversation::application::error_code;
-use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
 };
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
+use nessa_protocol::conversation::view::{
+    ConversationPermission, ConversationTranscriptState, ConversationView,
+};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -281,16 +284,15 @@ impl ConversationService {
     }
 
     /// `by` deleted the conversation `id`, and its agent's stop was tried:
-    /// its apps take no more work, ever, and keep nothing; a context still
-    /// held is dropped, `by` the deleter. Kept as that — made so if it had
-    /// none in this run — not removed, so that a release or an opening
-    /// racing the delete finds them deleted, and cannot build them afresh.
+    /// its apps take no more work, ever, and keep nothing. Kept as that —
+    /// made so if it had none in this run — not removed, so that a release
+    /// or an opening racing the delete finds them deleted, and cannot build
+    /// them afresh. Reviews still open, tickets still held, and contexts
+    /// still held end as `by`.
     pub(super) fn close_apps_for_good(&self, id: &ConversationId, by: &McpAppInitiator) {
         self.apps_of(id).delete(by, || {
             if let Some(ports) = &self.inner.mcp_apps {
-                ports
-                    .tickets
-                    .release_conversation(id, &McpAppInitiator::System);
+                ports.tickets.release_conversation(id, by);
             }
         });
     }
@@ -363,7 +365,10 @@ impl ConversationService {
             Some(Ok(value @ Value::Object(_))) => Some(value),
             Some(_) => {
                 return Err(step
-                    .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                    .refuse_as(
+                        ConversationErrorCode::InvalidRequest,
+                        ConversationError::InvalidInput,
+                    )
                     .await)
             }
         };
@@ -565,7 +570,10 @@ impl ConversationService {
         // or past the input bound (rows M3, M4).
         if blank_text(&message.text) {
             return Err(step
-                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .refuse_as(
+                    ConversationErrorCode::InvalidRequest,
+                    ConversationError::InvalidInput,
+                )
                 .await);
         }
         if self.inner.limits.past_input_bound(&message.text) {
@@ -573,7 +581,10 @@ impl ConversationService {
         }
         let Ok(sender) = app_source(&message.app, tool) else {
             return Err(step
-                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .refuse_as(
+                    ConversationErrorCode::InvalidRequest,
+                    ConversationError::InvalidInput,
+                )
                 .await);
         };
         // The same request again is the same turn: one the agent has already
@@ -591,7 +602,7 @@ impl ConversationService {
         let Some(_in_flight) = opening.apps.start_message(&execution_id) else {
             return Err(step
                 .ended(
-                    McpAppAuditPhase::Refused(McpAppCode::TemporarilyUnavailable),
+                    McpAppAuditPhase::Refused(ConversationErrorCode::TemporarilyUnavailable),
                     Some(McpAppInitiator::System),
                     ConversationError::Unavailable,
                 )
@@ -659,7 +670,10 @@ impl ConversationService {
         match failure {
             SubmitFailure::NotAsked(ConversationError::TurnRunning) => {
                 return Err(step
-                    .refuse_as(McpAppCode::TurnRunning, ConversationError::TurnRunning)
+                    .refuse_as(
+                        ConversationErrorCode::TurnRunning,
+                        ConversationError::TurnRunning,
+                    )
                     .await)
             }
             // Released, ended, deleted, reopened, or the gateway retiring,
@@ -730,7 +744,10 @@ impl ConversationService {
         let structured = update.structured_content_json;
         let Ok(source) = app_source(&update.app, tool) else {
             return Err(step
-                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .refuse_as(
+                    ConversationErrorCode::InvalidRequest,
+                    ConversationError::InvalidInput,
+                )
                 .await);
         };
         // `None`: neither part, so what the mount held is cleared.
@@ -741,7 +758,10 @@ impl ConversationService {
             }
             Err(_) => {
                 return Err(step
-                    .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                    .refuse_as(
+                        ConversationErrorCode::InvalidRequest,
+                        ConversationError::InvalidInput,
+                    )
                     .await)
             }
         };
@@ -758,7 +778,7 @@ impl ConversationService {
             Err(ContextRefusal::Full) => {
                 return Err(step
                     .refuse_as(
-                        McpAppCode::TemporarilyUnavailable,
+                        ConversationErrorCode::TemporarilyUnavailable,
                         ConversationError::Unavailable,
                     )
                     .await)
@@ -819,7 +839,10 @@ impl ConversationService {
         }
         let Ok(uri) = UiResourceUri::new(read.uri.as_str()) else {
             return Err(step
-                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .refuse_as(
+                    ConversationErrorCode::InvalidRequest,
+                    ConversationError::InvalidInput,
+                )
                 .await);
         };
         if opening.admit(&read.app).is_err() {
@@ -877,7 +900,7 @@ impl ConversationService {
             Ok(Err(TicketRefusal::Capacity | TicketRefusal::Unavailable)) => {
                 return Err(step
                     .fail(
-                        McpAppCode::TemporarilyUnavailable,
+                        ConversationErrorCode::TemporarilyUnavailable,
                         ConversationError::Unavailable,
                     )
                     .await);
@@ -980,7 +1003,7 @@ impl ConversationService {
             .mcp_apps
             .clone()
             .ok_or(ConversationError::McpApp(McpAppError::AppUnknown))?;
-        let facts = self.app_facts(&live, app, &conversation_session(id)).await;
+        let facts = self.app_facts(&live, app, id).await;
         let opening = Opening {
             apps: live.app_reviews.clone(),
             epoch: live.app_epoch,
@@ -995,7 +1018,7 @@ impl ConversationService {
         &self,
         live: &LiveConversation,
         app: &McpAppRef,
-        session: &SessionId,
+        conversation: &ConversationId,
     ) -> Option<(AppFacts, McpTool)> {
         let projection = live.projection.lock().await;
         let tool =
@@ -1006,7 +1029,11 @@ impl ConversationService {
         let call = McpTool::new(mcp.server.as_str(), mcp.tool.as_str()).ok()?;
         let facts = AppFacts {
             server: mcp.server.clone(),
-            has_ui: self.inner.tool_uis.resource_uri(session, &call).is_some(),
+            has_ui: self
+                .inner
+                .tool_uis
+                .resource_uri(conversation, &call)
+                .is_some(),
         };
         Some((facts, call))
     }
@@ -1170,7 +1197,11 @@ impl Step {
         self.refuse_as(code, ConversationError::McpApp(error)).await
     }
 
-    async fn refuse_as(&self, code: McpAppCode, error: ConversationError) -> ConversationError {
+    async fn refuse_as(
+        &self,
+        code: ConversationErrorCode,
+        error: ConversationError,
+    ) -> ConversationError {
         self.ended(McpAppAuditPhase::Refused(code), None, error)
             .await
     }
@@ -1187,7 +1218,11 @@ impl Step {
     }
 
     /// End the call after it reached the server, as `code`, on record.
-    async fn fail(&self, code: McpAppCode, error: ConversationError) -> ConversationError {
+    async fn fail(
+        &self,
+        code: ConversationErrorCode,
+        error: ConversationError,
+    ) -> ConversationError {
         self.ended(
             McpAppAuditPhase::Completed(McpAppOutcome::Failed(code)),
             None,

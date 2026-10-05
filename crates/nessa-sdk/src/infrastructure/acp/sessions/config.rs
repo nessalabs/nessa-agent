@@ -25,7 +25,7 @@ pub struct StdioMcpServer {
     pub name: String,
     /// Absolute UTF-8 executable path, launched directly without shell interpolation.
     pub command: PathBuf,
-    /// Ordered UTF-8 arguments. Never put credentials here; these enter the context fingerprint.
+    /// Ordered UTF-8 arguments. Never put credentials here: any process list shows them.
     #[serde(default)]
     pub args: Vec<String>,
 }
@@ -67,15 +67,19 @@ pub struct AcpConfig {
     /// Trusted provider executable and the authority required before each launch.
     /// The adapter admits a distinct use generation immediately before spawning it.
     pub executable: ExecutableUseSnapshot,
-    /// Noncredential arguments passed verbatim in order. These select restoration context;
-    /// never place secrets in arguments. Only trusted composition may supply them.
+    /// Noncredential arguments passed verbatim in order. These select restoration context, so
+    /// they are part of the restoration identity, whose inputs are listed on `fingerprint` in
+    /// `acp/sessions/identity.rs`. Never place secrets in arguments. Only trusted composition
+    /// may supply them.
     pub arguments: Vec<OsString>,
     /// Noncredential context-selecting environment, including HOME, configuration directories,
-    /// endpoints, and executable search paths. These values enter the restoration fingerprint.
+    /// endpoints, and executable search paths. These values enter the restoration fingerprint,
+    /// whose inputs are listed on `fingerprint` in `acp/sessions/identity.rs`.
     /// Parent variables are cleared; this map and credential_environment supply the child.
     pub environment: BTreeMap<OsString, OsString>,
     /// Host-supplied credentials forwarded verbatim, without discovery or extraction.
-    /// Excluded from restoration identity so credentials may rotate. Do not put context
+    /// Excluded from restoration identity so credentials may rotate; the fingerprint's inputs
+    /// are listed on `fingerprint` in `acp/sessions/identity.rs`. Do not put context
     /// selectors here. Rotation assumes the same intended provider account/context;
     /// keep account/profile namespaces in environment when switching accounts.
     /// Keys must not overlap environment. Never persisted by the SDK.
@@ -90,11 +94,14 @@ pub struct AcpConfig {
     pub tools_enabled: bool,
     /// Trusted MCP servers exposed by profiles that support MCP. Empty disables custom tools.
     /// Servers require tools_enabled and share the provider session lifetime.
+    /// Not part of the restoration identity, so changing them keeps a saved session restorable;
+    /// the fingerprint's inputs are listed on `fingerprint` in `acp/sessions/identity.rs`.
     pub mcp_servers: Vec<StdioMcpServer>,
     /// Where each provider open's MCP server processes get their per-open environment, and the
     /// results its stand-ins forward are taken from: a host's grant for the SDK session being
     /// opened, held for that provider session's life.
-    /// Excluded from restoration identity, like credentials. Held in memory only: no session
+    /// Excluded from restoration identity, like credentials; the fingerprint's inputs are listed
+    /// on `fingerprint` in `acp/sessions/identity.rs`. Held in memory only: no session
     /// snapshot records it, since a snapshot records the provider context, not the launch.
     pub stand_ins: StandInSessions,
     /// Allowed permission decisions offered for provider requests. Provider choices are

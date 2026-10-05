@@ -14,21 +14,23 @@ use crate::app_call_test_support::{
 use crate::conversation::application::app_reviews::{
     ALLOW, APP_REVIEW_DEADLINE, DENY, MAX_HELD_CONTEXTS, MAX_OPEN_APP_REVIEWS,
 };
-use crate::conversation::application::view::{
-    ConversationMessageApp, ConversationMessageStatus, ConversationPermissionOrigin,
-};
 use crate::conversation::application::{
     ContextDrop, ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
     McpAppAsk,
 };
 use crate::conversation::application::{
-    ConversationDeletionBudgets, ConversationLimits, SubmissionMode, SubmissionReceipt,
-    SubmittedImage, SubmittedMessage, MAX_APP_CALLS,
+    ConversationDeletionBudgets, ConversationLimits, SubmissionMode, SubmittedImage,
+    SubmittedMessage, MAX_APP_CALLS,
 };
-use crate::conversation::domain::{ConversationApprovalMode, ConversationDeletion};
+use crate::conversation::domain::ConversationDeletion;
 use crate::conversation_test_support::DELETION_BUDGETS;
-use crate::product_contract::generated::ConversationErrorCode;
 use nessa_auth::domain::PrincipalId;
+use nessa_protocol::conversation::domain::ConversationApprovalMode;
+use nessa_protocol::conversation::view::{
+    ConversationMessageApp, ConversationMessageStatus, ConversationPermissionOrigin,
+    SubmissionReceipt,
+};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, MessageSender, UserMessage};
 use std::sync::atomic::Ordering;
@@ -387,8 +389,8 @@ async fn m2_a_message_from_no_app_or_for_another_server_is_refused_on_record() {
     assert_eq!(
         fixture.audit.phases(),
         [
-            McpAppAuditPhase::Refused(McpAppCode::AppUnknown),
-            McpAppAuditPhase::Refused(McpAppCode::ServerMismatch),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpAppUnknown),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpServerMismatch),
         ]
     );
     assert!(fixture.app_reviews().await.is_empty());
@@ -416,8 +418,8 @@ async fn m3_m4_a_blank_message_or_one_past_the_input_bound_is_refused() {
     assert_eq!(
         fixture.audit.phases(),
         [
-            McpAppAuditPhase::Refused(McpAppCode::InvalidRequest),
-            McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge),
+            McpAppAuditPhase::Refused(ConversationErrorCode::InvalidRequest),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpRequestTooLarge),
         ]
     );
     assert!(fixture.app_reviews().await.is_empty());
@@ -442,7 +444,7 @@ async fn m5_a_released_mount_sends_nothing_and_asks_nobody() {
     assert_eq!(records.len(), 1);
     assert_eq!(
         records[0].phase,
-        McpAppAuditPhase::Refused(McpAppCode::Cancelled)
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
     );
     assert_eq!(records[0].initiator, McpAppInitiator::System);
     assert!(fixture.app_reviews().await.is_empty());
@@ -563,7 +565,7 @@ async fn m6b_the_same_request_while_it_is_in_flight_is_refused() {
     assert_eq!(records.len(), from + 1);
     assert_eq!(
         records[from].phase,
-        McpAppAuditPhase::Refused(McpAppCode::TemporarilyUnavailable)
+        McpAppAuditPhase::Refused(ConversationErrorCode::TemporarilyUnavailable)
     );
     assert_eq!(records[from].initiator, McpAppInitiator::System);
     assert_eq!(fixture.app_reviews().await.len(), 1);
@@ -749,8 +751,8 @@ async fn m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_ope
     assert_eq!(
         fixture.audit.phases(),
         [
-            McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge),
-            McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpRequestTooLarge),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpRequestTooLarge),
         ]
     );
     assert_eq!(fixture.provider.executions.lock().unwrap().len(), 1);
@@ -905,7 +907,10 @@ async fn m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_i
     assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
     let records = fixture.audit.records.lock().unwrap().clone();
     let last = records.last().unwrap();
-    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
     assert_eq!(last.initiator, McpAppInitiator::System);
     assert_eq!(fixture.provider.executions.lock().unwrap().len(), 1);
 }
@@ -938,7 +943,10 @@ async fn m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_ope
     assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
     let records = fixture.audit.records.lock().unwrap().clone();
     let last = records.last().unwrap();
-    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
     assert_eq!(last.initiator, McpAppInitiator::System);
     // Not sent, and the closed conversation not opened again to refuse it.
     assert_eq!(
@@ -999,7 +1007,10 @@ async fn m10_a_release_before_the_submission_lock_refuses_the_message() {
     assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
     let records = fixture.audit.records.lock().unwrap().clone();
     let last = records.last().unwrap();
-    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
     assert_eq!(last.initiator, McpAppInitiator::System);
     assert_eq!(
         fixture.provider.executions.lock().unwrap().len(),
@@ -1084,7 +1095,10 @@ async fn m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not
     assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
     let records = fixture.audit.records.lock().unwrap().clone();
     let last = records.last().unwrap();
-    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
     assert_eq!(last.initiator, McpAppInitiator::System);
     assert!(!records
         .iter()
@@ -1141,7 +1155,10 @@ async fn m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message() {
                 }
         })
         .unwrap();
-    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
     assert_eq!(last.initiator, McpAppInitiator::System);
     assert_eq!(
         fixture.provider.executions.lock().unwrap().len(),
@@ -1152,8 +1169,10 @@ async fn m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message() {
 #[tokio::test]
 async fn m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothing_runs() {
     let fixture = Fixture::new().await;
-    // The person's message waits as its turn is prepared: the view shows it
-    // waiting, and nothing running.
+    // The person's message waits as its turn is prepared: nothing has reached
+    // the agent yet. The view shows it as the person's, and running, as a turn
+    // this process admitted reads until its result (#507,
+    // `a_turn_admitted_after_open_stays_running_until_its_result`).
     let began = Arc::new(Notify::new());
     let (go, gate) = oneshot::channel();
     *fixture.provider.prepare_gate.lock().unwrap() = Some((began.clone(), gate));
@@ -1164,28 +1183,13 @@ async fn m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothin
         .read(fixture.id.clone(), caller("read"))
         .await
         .unwrap();
-    // Shown, as the person's, neither running nor settled: waiting.
     assert!(
         view.messages
             .iter()
             .any(|message| message.execution_id == "waiting"
                 && message.user_text == "after you"
                 && message.app.is_none()
-                && !matches!(
-                    message.status,
-                    ConversationMessageStatus::Running
-                        | ConversationMessageStatus::Completed
-                        | ConversationMessageStatus::Failed
-                        | ConversationMessageStatus::Cancelled
-                )),
-        "{:?}",
-        view.messages
-    );
-    assert!(
-        !view
-            .messages
-            .iter()
-            .any(|message| message.status == ConversationMessageStatus::Running),
+                && message.status == ConversationMessageStatus::Running),
         "{:?}",
         view.messages
     );
@@ -1203,7 +1207,9 @@ async fn m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothin
     );
     assert_eq!(
         fixture.audit.phases().last(),
-        Some(&McpAppAuditPhase::Refused(McpAppCode::TurnRunning))
+        Some(&McpAppAuditPhase::Refused(
+            ConversationErrorCode::TurnRunning
+        ))
     );
     assert!(fixture.audit.phases().len() > from);
     let _ = go.send(());
@@ -1241,7 +1247,7 @@ async fn m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs() 
         [
             McpAppAuditPhase::ApprovalRequested { .. },
             McpAppAuditPhase::Approved { .. },
-            McpAppAuditPhase::Refused(McpAppCode::TurnRunning),
+            McpAppAuditPhase::Refused(ConversationErrorCode::TurnRunning),
         ]
     ));
     // Nothing was queued behind the person's turn, and nothing let go of.
@@ -1421,7 +1427,10 @@ async fn m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by
     assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
     let records = fixture.audit.records.lock().unwrap().clone();
     let last = records.last().unwrap();
-    assert_eq!(last.phase, McpAppAuditPhase::Refused(McpAppCode::Cancelled));
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
     assert_eq!(last.initiator, McpAppInitiator::System);
     assert!(!records
         .iter()
@@ -1809,9 +1818,9 @@ async fn c2_a_context_from_no_app_another_server_or_a_released_mount_is_refused(
             .map(|record| record.phase.clone())
             .collect::<Vec<_>>(),
         [
-            McpAppAuditPhase::Refused(McpAppCode::AppUnknown),
-            McpAppAuditPhase::Refused(McpAppCode::ServerMismatch),
-            McpAppAuditPhase::Refused(McpAppCode::Cancelled),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpAppUnknown),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpServerMismatch),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled),
         ]
     );
     assert_eq!(records[2].initiator, McpAppInitiator::System);
@@ -1864,11 +1873,11 @@ async fn c3_c4_a_context_past_its_bound_or_with_structure_that_is_no_object_is_r
     );
     assert_eq!(
         phases[1],
-        McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge)
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpRequestTooLarge)
     );
     assert!(phases[2..]
         .iter()
-        .all(|phase| phase == &McpAppAuditPhase::Refused(McpAppCode::InvalidRequest)));
+        .all(|phase| phase == &McpAppAuditPhase::Refused(ConversationErrorCode::InvalidRequest)));
     assert_eq!(phases.len(), 6);
     // What a refusal could not replace is still what is held.
     fixture.person_turn("next").await;
@@ -2085,7 +2094,7 @@ async fn c6_at_most_four_mounts_hold_a_context_and_a_message_frees_their_places(
     assert_eq!(
         fixture.audit.phases().last(),
         Some(&McpAppAuditPhase::Refused(
-            McpAppCode::TemporarilyUnavailable
+            ConversationErrorCode::TemporarilyUnavailable
         ))
     );
     assert_eq!(fixture.held_now().len(), MAX_HELD_CONTEXTS);

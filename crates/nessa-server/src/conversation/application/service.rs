@@ -3,9 +3,30 @@ use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
-    projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
+    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+};
+use crate::conversation::domain::{
+    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
+};
+use futures_util::{future::join_all, FutureExt};
+use nessa_auth::application::ports::Clock;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+};
+use nessa_protocol::conversation::{
+    projection::{bound_view, clipped, Projection, MAX_TEXT},
+    tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
@@ -15,24 +36,8 @@ use super::{
         ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
         SubmissionReceipt,
     },
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
-    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    McpToolUis, NoMcpToolUis, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-    ConversationModelId, ConversationSummary, ProviderSessionErasure, ProviderSessionLink,
-};
-use crate::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
-use futures_util::{future::join_all, FutureExt};
-use nessa_auth::application::ports::Clock;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
     agents::{
         AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,
@@ -3216,12 +3221,7 @@ impl ConversationService {
         if deletion.erased() {
             return Ok(());
         }
-        let actor = ActionContext::new(
-            deletion.initiator().as_str(),
-            deletion.surface(),
-            deletion.request(),
-        )
-        .map_err(|_| ConversationError::Metadata)?;
+        let actor = deletion_actor(&deletion)?;
         let slot = self.inner.conversations.lock().await.get(&id).cloned();
         if let Some(slot) = slot {
             // Retirement stops this agent itself, and must not wait here for
@@ -3858,20 +3858,24 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
 }
 
 /// Who deleted `record`, by its tombstone: the one source for whom its
-/// deletion ends its apps and drops what they held, whoever finishes it.
-/// The system when it has none that names a command.
+/// deletion ends its apps, withdraws their reviews, lets go of their tickets
+/// and drops what they held, whoever finishes it. The system when it has
+/// none that names a command.
 fn deleter(record: &Conversation) -> McpAppInitiator {
     record
         .deletion()
-        .and_then(|deletion| {
-            ActionContext::new(
-                deletion.initiator().as_str(),
-                deletion.surface(),
-                deletion.request(),
-            )
-            .ok()
-        })
+        .and_then(|deletion| deletion_actor(deletion).ok())
         .map_or(McpAppInitiator::System, |actor| initiator_of(&actor))
+}
+
+/// The caller recorded on a deletion, as the command that decided it.
+fn deletion_actor(deletion: &ConversationDeletion) -> Result<ActionContext, ConversationError> {
+    ActionContext::new(
+        deletion.initiator().as_str(),
+        deletion.surface(),
+        deletion.request(),
+    )
+    .map_err(|_| ConversationError::Metadata)
 }
 
 /// Who ended a conversation's apps, by the command `actor` took: the

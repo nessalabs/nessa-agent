@@ -1,6 +1,6 @@
 //! Translate an admitted receiver into the exact SDK record source scope.
 
-use crate::conversation::application::{
+use nessa_protocol::conversation::read_scope::{
     passive_read_selector, validate_record_selector, ReadRefusal, ReceiverReadScope,
 };
 use nessa_sdk::infrastructure::session_storage::{NessaRecordSource, RecordStreamIdentity};
@@ -55,8 +55,8 @@ fn compare_record_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::domain::ConversationId;
     use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use nessa_protocol::conversation::domain::ConversationId;
 
     #[test]
     fn exact_record_tuple_is_compared_before_source_read() {

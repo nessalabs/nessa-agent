@@ -2,10 +2,7 @@
 //! ownership, tombstones and summaries that cannot stand without their record,
 //! rows refused rather than repaired, and a list that reads only its owner's.
 use super::store::{list_query, LocalConversationStore, UNFINISHED};
-use crate::agents::domain::AgentId;
-use crate::conversation::infrastructure::{
-    conversation_catalogue_schema, MAX_CATALOGUE_CHANGE_WATCHES,
-};
+use crate::conversation::infrastructure::MAX_CATALOGUE_CHANGE_WATCHES;
 use crate::conversation::{
     application::{
         CatalogueChangeWatch, CatalogueKey, CataloguePageRequest, CatalogueWatchError,
@@ -14,14 +11,16 @@ use crate::conversation::{
         ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
         ConversationSummaries, WatchCatalogue,
     },
-    domain::{
-        conversation_catalogue_stream, Conversation, ConversationApprovalMode,
-        ConversationDeletion, ConversationId, ConversationModelId, ConversationPreview,
-        ConversationSummary, ConversationTitle, ProviderSessionErasure, ProviderSessionLink,
-    },
+    domain::{Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, Connection, StatementStatus};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::conversation_catalogue_schema;
+use nessa_protocol::conversation::domain::{
+    conversation_catalogue_stream, ConversationApprovalMode, ConversationId, ConversationModelId,
+    ConversationPreview, ConversationSummary, ConversationTitle,
+};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::{
     catalogue::{CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES},
@@ -69,8 +68,8 @@ fn owned_by(id: &ConversationId, organization: &str, owner: &str, at: u64) -> Co
         "create".into(),
         at,
         AgentId::Claude,
-        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        crate::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap()
 }
@@ -89,8 +88,8 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
         request_id: "mode-1".into(),
         initiator_principal_id: PrincipalId::new("alice").unwrap(),
         initiator_surface_id: "panel".into(),
-        prior: crate::conversation::domain::ConversationApprovalMode::Ask,
-        requested: crate::conversation::domain::ConversationApprovalMode::Auto,
+        prior: ConversationApprovalMode::Ask,
+        requested: ConversationApprovalMode::Auto,
         state: ConversationModeRequestState::Pending,
         application: None,
         requested_at_ms: 2,
@@ -141,7 +140,7 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
             .unwrap()
             .unwrap()
             .approval_mode(),
-        crate::conversation::domain::ConversationApprovalMode::Auto
+        ConversationApprovalMode::Auto
     );
     assert_eq!(
         reopened
@@ -336,8 +335,8 @@ async fn ownership_is_create_once_and_survives_reopening() {
         "overwrite".into(),
         456,
         AgentId::Codex,
-        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        crate::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     let existing = store.create(impostor).await.unwrap();
@@ -423,8 +422,8 @@ async fn a_conversation_with_no_agent_is_never_created() {
         "create".into(),
         1,
         None,
-        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
-        crate::conversation::domain::ConversationApprovalMode::Ask,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
     )
     .unwrap();
     assert!(matches!(

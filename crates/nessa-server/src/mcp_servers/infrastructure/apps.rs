@@ -1,7 +1,9 @@
 //! An MCP App's calls, answered by the SDK's `McpServers` on the
 //! conversation's own session of each server.
 use crate::conversation::application::{McpAppFailure, McpAppFuture, McpApps};
-use crate::product_contract::generated::{MCP_APP_CALL_TIMEOUT_MS, MCP_APP_READ_TIMEOUT_MS};
+use nessa_protocol::product_contract::generated::{
+    MCP_APP_CALL_TIMEOUT_MS, MCP_APP_READ_TIMEOUT_MS,
+};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
 use nessa_sdk::infrastructure::mcp::{McpError, McpServers};

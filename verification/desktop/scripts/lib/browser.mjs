@@ -119,11 +119,9 @@ export async function openPage(browser, o) {
       harmless.push(entry)
     else errors.push(entry)
   })
-  page.on("requestfailed", (request) => {
-    const url = request.url()
-    if (!/favicon\.ico/.test(url))
-      errors.push(`requestfailed: ${url} ${request.failure()?.errorText ?? ""}`)
-  })
+  page.on("requestfailed", (request) =>
+    recordFailedRequest(request, page.url(), { errors, harmless }),
+  )
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
     await page.waitForSelector(o.readySelector ?? css.anyReady, {
@@ -160,6 +158,52 @@ export async function openPage(browser, o) {
   }
   return { context, page, errors, harmless, close: () => context.close() }
 }
+
+/**
+ * Records a request the page reports failed (#485, rows F1′ and F2–F4;
+ * tested in `browser.test.mjs`): a line pushed to `harmless` or to
+ * `errors`, or nothing for the fresh browser's `/favicon.ico`.
+ *
+ * Harmless only when Chromium reports `net::ERR_ABORTED` for a request on the
+ * page's own origin after a 2xx response arrived (F1′). Chromium reports a
+ * request aborted when the page stops reading its body, through a bounded
+ * reader (`/mcp-resources`) or by never reading it (`/browser/check`'s 204),
+ * though the response arrived. This function knows only that it arrived:
+ * whether its bytes were right is for each check's own assertions. With no
+ * response (F2), a status outside 2xx (F3), or another origin, another error
+ * text, or a page with no origin (F4), it is an error.
+ *
+ * `existingResponse()` answers synchronously, so the line is recorded within
+ * the event, before a step reads `errors`. Playwright creates a failed
+ * request's received response before it reports the failure
+ * (`RequestDispatcher`'s constructor in playwright-core).
+ *
+ * @param {{ url(): string, failure(): { errorText: string } | null,
+ *   existingResponse(): { status(): number } | null }} request
+ * @param {string} pageUrl the page's URL when the request failed
+ * @param {{ errors: string[], harmless: string[] }} into
+ */
+export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
+  const url = request.url()
+  if (/favicon\.ico/.test(url)) return
+  const errorText = request.failure()?.errorText ?? ""
+  const line = `requestfailed: ${url} ${errorText}`
+  // An opaque origin (`about:blank`, `data:`) serialises as "null": no page's own.
+  const own = originOf(pageUrl)
+  const status = request.existingResponse()?.status()
+  if (
+    errorText === "net::ERR_ABORTED" &&
+    own !== "null" &&
+    originOf(url) === own &&
+    status >= 200 &&
+    status <= 299
+  )
+    harmless.push(`${line} (aborted after a ${status} response, #485)`)
+  else errors.push(line)
+}
+
+/** `url`'s origin, or "null" when it has none to compare. */
+const originOf = (url) => (URL.canParse(url) ? new URL(url).origin : "null")
 
 /** Fails with a clear "could not run" when the page lacks what a script needs. */
 export async function need(page, selector, what, timeout = 5000) {

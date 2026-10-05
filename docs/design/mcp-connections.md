@@ -46,8 +46,8 @@ provider session's life, through every restart of its process.
 The gateway's grant (`ConversationGrants`) is a fresh token: 32 random bytes,
 of which it keeps only the SHA-256. The SDK puts it in every stand-in's ACP
 `env` as `NESSA_MCP_SESSION`, the same for `session/new` and
-`session/resume` and for all three profiles. It is never in the arguments,
-so it stays out of the context fingerprint, like credentials. The relay
+`session/resume` and for all three profiles, and never in the arguments
+([why](#mcp-servers-and-the-restoration-identity)). The relay
 reads it from its environment and says it in its hello. The session it
 opens is owned by that open (`McpOwner`: the SDK session and the grant).
 When the provider session ends — closed, deleted, stopped, retired, shut
@@ -75,10 +75,9 @@ end of input (Nessa's own shell server) still does.
   initialized once. `resources/subscribe` and `resources/unsubscribe` are
   refused (`-32601`): their updates are not routed back. Every other request
   is forwarded with a fresh upstream id and answered with the harness's own
-  id, verbatim — except that a `tools/list` answer leaves out a tool whose
-  `_meta.ui.visibility` does not include `model` (a `visibility` that is not
-  an array of strings counts as leaving it out), and a `tools/call` naming a
-  tool hidden so is refused (`-32602`) — hidden by the session's own latest
+  id, verbatim — except that a `tools/list` answer leaves out a tool
+  that [who a tool is for](#who-a-tool-is-for) hides from the model, and a
+  `tools/call` naming a tool hidden so is refused (`-32602`) — hidden by the session's own latest
   list, or by the latest list this stand-in forwarded, by the order they were
   asked in: having declared MCP Apps, the host keeps an app's own tools from
   the model. The harness's `initialize` is answered with the protocol version
@@ -94,12 +93,11 @@ end of input (Nessa's own shell server) still does.
   answered ([forwarded results](#forwarded-results), #435).
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
   `_meta.ui`: an optional `resourceUri` (a `ui://` URI) and `visibility`
-  (`model`, `app`; both when absent, or when there is no `_meta.ui`), each
-  read on its own. A tool whose `resourceUri` is absent or cannot be read is
-  kept without a UI, and keeps its `visibility` (#412); one whose
-  `visibility` is not an array of strings (`null` included) is no one's —
-  hidden from the model, and an app's `tools/call` to it is refused
-  `tool_not_for_app` — and keeps a readable `resourceUri` as its UI. A tool
+  (`model`, `app`), each read on its own. Who may see and call the tool is
+  [who a tool is for](#who-a-tool-is-for). A tool whose `resourceUri` is
+  absent or cannot be read is kept without a UI, and keeps that visibility
+  (#412); one whose visibility cannot be read keeps a readable `resourceUri`
+  as its UI. A `_meta.ui` that is not an object has no URI to keep. A tool
   whose name cannot be one is left out. A session's list is read when it
   opens and again on `notifications/tools/list_changed`.
 - **UI resources.** `resources/read` of a `ui://` URI must answer one content
@@ -121,6 +119,47 @@ end of input (Nessa's own shell server) still does.
   takes the filled URIs into account, so a window holding the same revision
   holds the same URIs. The desktop maps a gateway tool to a `widget` part with
   `toolWidget`.
+
+## Who a tool is for
+
+One reading of a listed tool's `_meta.ui`, for the model and for an app.
+Absence of `_meta.ui`, or of `visibility` inside an object, is both: the
+server did not say. A `_meta.ui` or a `visibility` that is present and cannot
+be read is no one's — hidden from the model, and an app's `tools/call` is
+refused `tool_not_for_app` — because it cannot be read to include either.
+A `resourceUri` that cannot be read is no UI, and does not change who.
+
+| What `tools/list` gives | Who |
+| --- | --- |
+| no `_meta`, or no `_meta.ui` | both |
+| `_meta.ui` an object, `visibility` absent | both |
+| `_meta.ui` an object, `visibility` an array of strings | who it names (`model`, `app`) |
+| `_meta.ui` an object, `visibility` not an array of strings (`null` included) | no one's (#412) |
+| `_meta.ui` present and not an object: a string, an array, a number, a boolean, or `null` | no one's (#424) |
+
+## A name listed more than once
+
+One visibility for a name that appears more than once in one `tools/list`
+result, and more than once across the pages of the one read a session
+keeps. A side may see it only when every entry says so (#425). An entry
+whose `visibility` cannot be read, or whose `_meta.ui` is present and not
+an object, is no one's (#424), so it excludes both sides.
+Both orders are the same result.
+
+When any entry excludes the model, the name is left out of the forwarded
+list and a `tools/call` is refused `-32602`. When any entry excludes the
+app, an app's call is refused `tool_not_for_app`. `listed_tool` returns
+that one visibility, with the first entry's `resourceUri` and hints. The
+view still draws no UI when more than one listed tool matches the call. A
+later `tools/list` result still replaces the names it contains; it does not
+reopen an entry it does not contain.
+
+| What the entries say | Who |
+| --- | --- |
+| `model` on every entry | the model may see and call it |
+| any entry excludes `model`, or cannot be read | hidden from the model |
+| `app` on every entry | an app may call it |
+| any entry excludes `app`, or cannot be read | refused `tool_not_for_app` |
 
 ## Bounds
 
@@ -208,8 +247,8 @@ its own, and so a new stand-in.
 | Opening | opening fails | Closed | refused `unavailable` with the typed reason; the relay exits 1, so the harness sees its server fail to start |
 | Serving | harness `initialize` | Serving | answered from the upstream's `initialize` result, less `resources.subscribe` |
 | Serving | harness request | Serving | forwarded; the answer comes back with the harness's id |
-| Serving | `tools/list` answer | Serving | forwarded without the tools whose visibility excludes the model; of two lists answered out of order, the one asked later decides |
-| Serving | `tools/call` for a tool the session's latest list, or the stand-in's, hid — or any tool before a list has said anything — | Serving | refused `-32602`, nothing forwarded; a name a list gives twice is hidden if either says so |
+| Serving | `tools/list` answer | Serving | forwarded without the tools that [who a tool is for](#who-a-tool-is-for) hides from the model ([a name listed more than once](#a-name-listed-more-than-once) when the result names one twice); of two lists answered out of order, the one asked later decides |
+| Serving | `tools/call` for a tool the session's latest list, or the stand-in's, hid — or any tool before a list has said anything — | Serving | refused `-32602`, nothing forwarded ([a name listed more than once](#a-name-listed-more-than-once)) |
 | Serving | the stand-in falls behind the server's change notices | Serving | sent all three `*/list_changed` notices |
 | Serving | `resources/subscribe`, `resources/unsubscribe` | Serving | refused `-32601`, nothing forwarded |
 | Serving | a request reusing the id of one still waiting | Serving | refused `-32600`, nothing forwarded |
@@ -298,15 +337,8 @@ structured results already do.
 
 ## What one connection per harness session means
 
-- **Context fingerprint.** The SDK fingerprints what the harness is launched
-  with, and the harness is now launched with the stand-in. Its arguments carry
-  the server's name and a digest of the configured command and arguments, so
-  the fingerprint still changes exactly when a configured server does; it also
-  changes when the gateway's executable or the relay socket's path moves (the
-  socket is `/tmp/nessa-mcp-<uid>/<digest of the namespace's path>.sock`, so it
-  does not move between runs). The session token is in the stand-in's
-  environment, never its arguments, and the grants are outside the
-  fingerprint, so a fresh token on every open never changes it.
+- **Restoration identity.** The server list is not part of it; what follows
+  is in [MCP servers and the restoration identity](#mcp-servers-and-the-restoration-identity).
 - **Restarts.** A gateway restart ends every session with the agents. A
   restored conversation's harness opens new sessions through its stand-ins; a
   handle an old session gave out is unknown to the new one, and the server says
@@ -343,7 +375,10 @@ Each row above has at least one test, named after it:
 - SDK, in-process fixture servers over in-memory pipes and a manual clock
   (`crates/nessa-sdk/tests/infrastructure/mcp/`): the handshake and declared
   extension, version refusal, list with pages and `_meta.ui`, a tool without
-  UI, unreadable `_meta.ui`, list bounds and order, read of an app resource,
+  UI, unreadable `_meta.ui`, a `_meta.ui` that is not an object
+  (`a_meta_ui_that_is_not_an_object_is_no_ones`), a name listed twice
+  (`a_name_listed_twice_is_judged_the_same_for_the_model_and_the_app`,
+  `a_name_split_across_the_pages_of_one_read_is_judged_once`), list bounds and order, read of an app resource,
   wrong MIME, oversize HTML and frame, `Timeout` and the late answer,
   `Remote`, `Busy`, the stand-in's `initialize`, forwarding with id rewriting,
   cancellation both ways, id reuse, hidden tools, subscriptions, server
@@ -357,8 +392,10 @@ Each row above has at least one test, named after it:
   session closes leaving every close waiting for the stop, stop racing an
   opening; forwarded results kept by the stand-in, S1–S8 and S11 (`forwarded.rs`); a provider open holding its session's grant until it ends and
   through a relaunch of its process, the open naming the manager's session, every
-  `mcpServers` entry carrying the open's environment, and grants left out of
-  the fingerprint.
+  `mcpServers` entry carrying the open's environment, and grants and the MCP
+  server list left out of the fingerprint, with a restore resuming under the
+  current list (`adding_`, `editing_`, `moving_an_mcp_servers_command_` and
+  `removing_an_mcp_server_keeps_the_identity_and_restores`).
 - SDK, real processes (python fixture): launching as configured, separate
   processes per session, a long call in one not blocking another, killing one
   leaving another, closing stopping the process group, the session ending
@@ -386,3 +423,51 @@ Each row above has at least one test, named after it:
   (`contracts/tools.rs`).
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.
 - Live: `scripts/mcp-test-server/live-check.mjs` with Claude and Codex.
+
+## MCP servers and the restoration identity
+
+This section is the one statement of what the restoration identity means for
+MCP servers; other documents link here. The SDK's restoration fingerprint does
+not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
+[`acp/sessions/identity.rs`](../../crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs)
+(#391, [ADR 344](../adr/todo/344-mcp-ui.md)).
+
+- **A per-open attachment.** The server list — for the gateway, its stand-ins
+  — is given to each provider open, like the session token, and selects no
+  provider context. Adding, editing or removing a server, or a stand-in's
+  command (the gateway's executable) moving, keeps a saved conversation's
+  identity, and the conversation resumes with the current list.
+- **Read once per run.** The gateway reads the list when it starts, so at this
+  head the list changes only across a restart, which ends every provider
+  session. A stand-in from an earlier run is refused `unknown-session`, since
+  grants are held in memory.
+- **`configuration-changed` guards live changes.** A stand-in's arguments carry
+  the server's name and a digest of its configured command and arguments,
+  which the relay compares with the server it is configured with (the Hello
+  rows of [a stand-in](#a-stand-in)). Because the list does not change while
+  the gateway runs at this head, the stand-ins it builds carry the digest it
+  compares against. The refusal is there for settings that apply live (#480).
+- **The token stays out of the arguments** because a process list shows a
+  process's arguments to every user, and its environment only to its own
+  user; the token is in the stand-in's environment instead, where the
+  gateway's own user can still read it (what the token keeps apart, above).
+- **The one-time strand.** The earlier fingerprint hashed the number of
+  servers, even when it was zero, and each server's name, command and
+  arguments; for a stand-in the command is the gateway's executable. Dropping
+  them changes every saved identity, so the release that ships this answers
+  `conversation_configuration_changed` for conversations saved before it.
+  Nothing moves them, and no reader of the earlier fingerprint is kept (one
+  current contract). The same release re-runs the agent warm-up once, since
+  the configuration part of the warm-up's key is this fingerprint
+  ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
+  that costs one background launch and is harmless.
+- **What still strands a saved conversation.** A change to any hashed input,
+  and that includes every update that changes the staged runtime tree, which
+  in practice is every release. The desktop stages the runtime under a
+  directory named by the prepared tree's content fingerprint
+  ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
+  and launches the agent runtime's executable and entry from it (`configure`
+  in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
+  so the executable path and the first argument move with every such update.
+  What stops stranding a conversation after this release is only a change to
+  the MCP servers, and with it the gateway's own path.

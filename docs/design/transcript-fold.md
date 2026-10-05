@@ -45,12 +45,44 @@ validated snapshot.
 
 The gateway renders transcript, input, receipts, terminal status and interactions
 from committed state. Broadcasts and receipt callbacks have no transcript write
-path. Exact local active execution identity separately identifies which unfinished
-committed execution this process can answer for; it may select running versus
-unresolved display and actionable interactions, but supplies no terminal result,
-receipt, completeness or applied position. Runtime capability and lifecycle fields
-come from Agent. Deletion comes from the metadata tombstone. A different execution
-or incarnation grants no interaction authority.
+path. The active execution is the one this process can answer for. It selects
+which unfinished record may offer an interaction. It does not, by itself, decide
+that every other unfinished record was interrupted. A projection remembers the
+unfinished executions present when it first accepted a snapshot. Only those
+can read as unresolved, and only when the last stage is not injected or
+cancelled. An injected or cancelled stage is that status on a restart and on
+a later admission, and it offers nothing. While a restarted record is still
+in the pending order the read shows it queued, which is what a pending id has
+to be; once it leaves that order without becoming the active execution, and
+its last stage is not injected or cancelled, it is unresolved. A record admitted after that — saved but not yet active, or no
+longer active while its result is not yet committed — stays running, and
+offers nothing until it is the active execution. Running one restored turn
+does not take the others out of that set. A result on a restored turn is that
+result even when no read passed the id as active. The active id supplies no
+terminal result, receipt, completeness or applied position. Runtime capability
+and lifecycle fields come from Agent. Deletion comes from the metadata tombstone.
+A different execution or incarnation grants no interaction authority.
+
+| Projection | Record | Passed as active | Status | Interactions | Regression |
+| --- | --- | --- | --- | --- | --- |
+| Opened on a snapshot that already holds the record | no result, not in the pending order, last stage not injected or cancelled | no | unresolved | none | `a_restarted_turn_stays_unresolved_beside_one_admitted_later`, `an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart` |
+| Opened on a snapshot that already holds the record | no result, still in the pending order | no | queued | none | `a_restarted_turn_still_in_the_queue_is_queued_then_unresolved` |
+| That same record then leaves the pending order | no result, last stage not injected or cancelled | no | unresolved | none | `a_restarted_turn_still_in_the_queue_is_queued_then_unresolved` |
+| Opened on a snapshot that already holds the record | no result, last stage injected, not in the pending order | no | injected | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Opened on a snapshot that already holds the record | no result, last stage cancelled, not in the pending order | no | cancelled | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Empty projection; the first replacement is that snapshot | no result, last stage not injected or cancelled | no, or a different id | unresolved | none | `the_first_snapshot_folded_into_an_empty_projection_is_a_restart`, `only_the_exact_live_execution_can_offer_a_committed_interaction` |
+| Opened before the record existed | no result, not pending, last stage not injected or cancelled | no | running | none | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| Opened before the record existed | no result, in the pending order | no | queued | none | `a_queued_turn_admitted_after_open_is_queued_then_running` |
+| Opened before the record existed | no result, last stage not injected or cancelled | that id | running | offered while it is active | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| Opened before the record existed | no result, last stage injected | no | injected | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Opened before the record existed | no result, last stage cancelled | no | cancelled | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Was active; the replacement omits it; result still absent | no result, last stage not injected or cancelled | no | running | none | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| First accepted as a restart, then this process runs it, then active is omitted before the result | no result | was that id, then no | running | offered only while it was active | `a_turn_this_process_runs_stays_running_after_it_stops_being_active` |
+| Two unfinished at first acceptance; this process runs one, then active is omitted | the other has no result, last stage not injected or cancelled | was the first id, then no | the other stays unresolved; the one this process ran stays running | offered only on the one this process ran, and only while it was active | `running_one_restored_turn_leaves_the_other_unresolved` |
+| Result committed, admitted after open | completed, failed, or cancelled | no | that result | none | `a_committed_result_is_the_turn_status_while_nothing_is_active` |
+| Opened on the record; the result arrives without that id being passed as active | completed, failed, or cancelled | no | that result | none | `a_restored_turn_takes_its_result_without_being_passed_as_active` |
+| Tool saved, result absent, admitted after open | no result, last stage not injected or cancelled | no | running; the tool stays pending | none | `a_pending_tool_does_not_make_an_admitted_turn_unresolved` |
+| Restarted record beside a later admission | restarted record has no result, last stage not injected or cancelled | no | restarted stays unresolved; the later record runs | none while not active | `a_restarted_turn_stays_unresolved_beside_one_admitted_later` |
 
 | State | Input | Decision / regression |
 | --- | --- | --- |

@@ -9,8 +9,9 @@
 //! finite creation-key pages. It owns no second copy of metadata or progress.
 //! A bounded replacement projection reads independently committed SDK records;
 //! broadcast observations only prompt refresh and may supply local activity.
-//! `retained_view` consumes that same bounded projection for an offline validated
-//! fold, with injected revision identity and no action controls.
+//! The projection, the `ConversationView` it folds into, its `McpToolUis` port
+//! and the read scope checks are `nessa_protocol::conversation`, so a device's
+//! offline `retained_view` folds through the same projection a live read does.
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
 //! Passive read admission -> current auth, durable receiver binding, then
@@ -101,35 +102,30 @@ mod locks;
 mod mcp_apps;
 mod passive_read;
 mod ports;
-mod projection;
-pub(crate) use projection::retained_view;
 mod provider_sessions;
 mod record_read;
 mod retries;
 mod service;
 mod session_key;
-pub(crate) use session_key::conversation_session;
-mod view;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
-    CatalogueDescriptor, CatalogueHead, CatalogueKey, CatalogueMetadata, CatalogueMetadataError,
-    CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue,
+    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
+    CatalogueValue, ConversationCatalogue,
 };
 pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
-pub use error_code::{error_code, wire_code};
+pub use error_code::error_code;
 pub use mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppCode, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator,
-    McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd,
-    TicketRefusal, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+    McpAppAuditRecord, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome,
+    McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
+    MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
-pub use passive_read::{
-    AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,
-};
+pub(crate) use passive_read::access_refusal;
+pub use passive_read::{AdmitPassiveRead, ReceiverAuthority};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
@@ -139,8 +135,7 @@ pub use ports::{
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-    McpToolUis, NoMcpToolUis, RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage,
-    UnfinishedDeletions,
+    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -156,20 +151,7 @@ pub use service::{
     McpAppResource, QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
     MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
-pub use view::{
-    CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,
-    ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
-    ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
-    ConversationLifecyclePhase, ConversationLinkedFile, ConversationList, ConversationListEntry,
-    ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
-    ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
-    ConversationReorderOutcome, ConversationStartupFailure, ConversationStartupFailureCode,
-    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
-    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
-    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
-    SubmissionReceipt, MAX_STRUCTURED_CONTENT_BYTES,
-};
+pub(crate) use session_key::conversation_session;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/application.rs"]
@@ -178,10 +160,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/projection.rs"]
 mod projection_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/conversation/tool_parts.rs"]
-mod tool_part_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/reorder.rs"]
@@ -198,10 +176,3 @@ mod linked_file_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/listing.rs"]
 mod listing_tests;
-
-pub(crate) use passive_read::{passive_read_selector, validate_passive_read_selector};
-pub(crate) use record_read::validate_record_selector;
-
-pub(crate) use catalogue_read::validate_catalogue_selector;
-
-pub(crate) use view::ConversationTranscriptState;

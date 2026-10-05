@@ -1,15 +1,10 @@
 use super::ConversationError;
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-    ConversationSummary, ProviderSessionErasure,
-};
+use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::domain::agent_execution::{
-    prompts::ImageReference,
-    sessions::{ExecutionSessionId, SessionId},
-    tools::McpTool,
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationSummary,
 };
-use nessa_sdk::domain::mcp_apps::UiResourceUri;
+use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
 use std::{future::Future, pin::Pin};
 
 pub type ConversationFuture<'a, T> =
@@ -521,25 +516,4 @@ pub trait ConversationAttachments: Send + Sync {
     /// the release with its cause and initiator; an `Err` reports that some of
     /// it, or its evidence, could not be completed after every part was tried.
     fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()>;
-}
-
-/// The UI an MCP tool declared, as its server last listed it (ADR 344).
-///
-/// No harness passes a tool's `_meta.ui` through ACP, so the view asks the
-/// conversation's own connection to each server, which the gateway holds.
-/// Answered from what was last listed, never by asking a server while a view
-/// is read.
-pub trait McpToolUis: Send + Sync {
-    /// The `ui://` resource of the listed tool an observed `call` names
-    /// (`ListedTool::ui_for`), as `session`'s own session of the call's
-    /// server last listed it, or `None`.
-    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri>;
-}
-
-/// No MCP servers, so no tool has a UI.
-pub struct NoMcpToolUis;
-impl McpToolUis for NoMcpToolUis {
-    fn resource_uri(&self, _: &SessionId, _: &McpTool) -> Option<UiResourceUri> {
-        None
-    }
 }

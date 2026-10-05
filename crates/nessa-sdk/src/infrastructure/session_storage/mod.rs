@@ -10,6 +10,9 @@
 //! product reads reuse terminal-discovery metadata/hash in a sixteen-entry cache
 //! and return [`RecordReadStatus::Preparing`] until a captured tail is validated.
 //! That cache retains no worker or semantic body.
+//! `save_batch` arms one save's remaining physical events so their first append
+//! commits a bounded chunk in one SQLite transaction. A rolled-back chunk
+//! continues one event at a time.
 //! `record_changes` publishes payloadless interest only at durable save completion
 //! and Reset receipts. Closure preserves actual writer/read physical ownership.
 //! Public producer/source/discovery acceptance lives under the external storage
@@ -38,6 +41,7 @@ mod message_commit_clock;
 mod paths;
 mod record;
 mod record_changes;
+mod save_batch;
 pub use record_changes::MAX_RECORD_CHANGE_WATCHES;
 mod record_lifecycle;
 mod record_source;

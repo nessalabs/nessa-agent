@@ -8,8 +8,8 @@ use crate::conversation::application::{
     ContextDrop, ConversationError, ConversationFuture, McpAppAsk, McpAppAuditPhase,
     McpAppInitiator, McpAppRef,
 };
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::OrganizationId;
+use nessa_protocol::conversation::domain::ConversationId;
 use std::sync::{Mutex, PoisonError};
 
 /// An audit that keeps what it commits, and fails the record of every call

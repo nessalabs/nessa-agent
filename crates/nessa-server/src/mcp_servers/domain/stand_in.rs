@@ -40,10 +40,12 @@ pub fn configuration_digest(command: &Path, args: &[String]) -> String {
 }
 
 /// The arguments a stand-in for `server` runs with: [`RELAY_SUBCOMMAND`], the
-/// relay `socket`, the server's name, and its [`configuration_digest`]. Every
-/// one is stable across runs of one namespace, and the digest changes when the
-/// configured server does — which is what a harness's context fingerprint,
-/// reading these, has to see.
+/// relay `socket`, the server's name, and its [`configuration_digest`]. The
+/// digest changes when the configured server does — which is what the relay
+/// compares, refusing a stand-in whose server changed with
+/// `configuration-changed`, a guard for settings that apply live (#480). When
+/// that can happen is in `docs/design/mcp-connections.md`, "MCP servers and the
+/// restoration identity".
 pub fn relay_arguments(socket: &str, server: &str, configuration: &str) -> Vec<String> {
     vec![
         RELAY_SUBCOMMAND.into(),

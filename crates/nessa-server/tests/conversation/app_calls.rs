@@ -10,13 +10,13 @@ use crate::conversation::application::app_reviews::{
     ALLOW, DENY, MAX_APP_REVIEW_BYTES, MAX_OPEN_APP_REVIEWS,
 };
 use crate::conversation::application::mcp_apps::TicketEnd;
-use crate::conversation::application::projection::MAX_VIEW_BYTES;
-use crate::conversation::application::view::{
-    ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
-};
 use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
+use nessa_protocol::conversation::projection::MAX_VIEW_BYTES;
+use nessa_protocol::conversation::view::{
+    ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
+};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
@@ -172,7 +172,9 @@ async fn each_policy_refusal_is_its_code_on_record_and_nothing_is_sent() {
     ));
     assert_eq!(
         fixture.audit.phases().last(),
-        Some(&McpAppAuditPhase::Refused(McpAppCode::InvalidRequest))
+        Some(&McpAppAuditPhase::Refused(
+            ConversationErrorCode::InvalidRequest
+        ))
     );
     assert_eq!(fixture.apps.calls(), 0);
     // Exactly at the bound is taken.
@@ -588,7 +590,7 @@ async fn a_resource_is_read_once_and_held_behind_a_ticket_on_record() {
     assert_eq!(
         fixture.audit.phases().last(),
         Some(&McpAppAuditPhase::Completed(McpAppOutcome::Failed(
-            McpAppCode::TemporarilyUnavailable
+            ConversationErrorCode::TemporarilyUnavailable
         )))
     );
 }
@@ -763,7 +765,7 @@ async fn a_released_mount_is_admitted_nothing_and_nothing_reaches_its_server() {
         .map(|record| (record.phase.clone(), record.initiator.clone()))
         .collect();
     let refused_so = (
-        McpAppAuditPhase::Refused(McpAppCode::Cancelled),
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled),
         McpAppInitiator::System,
     );
     assert_eq!(refusals, vec![refused_so; 3]);
@@ -829,7 +831,7 @@ async fn a_resource_read_when_its_conversation_closes_is_never_held() {
     assert_eq!(
         (last.phase, last.initiator),
         (
-            McpAppAuditPhase::Completed(McpAppOutcome::Failed(McpAppCode::Cancelled)),
+            McpAppAuditPhase::Completed(McpAppOutcome::Failed(ConversationErrorCode::McpCancelled)),
             McpAppInitiator::System
         )
     );
@@ -934,7 +936,7 @@ async fn a_tool_changed_during_its_review_is_not_called_once_allowed() {
         phases[phases.len() - 2..],
         [
             McpAppAuditPhase::Approved { .. },
-            McpAppAuditPhase::Refused(McpAppCode::ToolNotForApp)
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpToolNotForApp)
         ]
     ));
 }
@@ -974,7 +976,9 @@ async fn a_review_past_its_share_of_the_view_is_refused_before_it_is_asked_for()
     // Not asked for: no request on record, no review shown, nothing sent.
     assert_eq!(
         fixture.audit.phases(),
-        [McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge)]
+        [McpAppAuditPhase::Refused(
+            ConversationErrorCode::McpRequestTooLarge
+        )]
     );
     assert!(fixture.app_reviews().await.is_empty());
     // And so a view never loses the app's own tool call to its reviews.
@@ -1011,12 +1015,12 @@ async fn a_session_with_nothing_open_or_too_busy_refuses_before_sending() {
         (
             McpAppFailure::NoSession,
             McpAppError::SessionUnavailable,
-            McpAppCode::SessionUnavailable,
+            ConversationErrorCode::McpSessionUnavailable,
         ),
         (
             McpAppFailure::Busy,
             McpAppError::Busy,
-            McpAppCode::TemporarilyUnavailable,
+            ConversationErrorCode::TemporarilyUnavailable,
         ),
     ] {
         *fixture.apps.listing_fails.lock().unwrap() = Some(failure);
@@ -1102,6 +1106,70 @@ async fn deleting_the_conversation_withdraws_its_waiting_calls_as_the_deleter() 
 }
 
 #[tokio::test]
+async fn a_persons_delete_names_that_person_on_the_records_it_still_causes() {
+    // The agent is not in this run's slots, so the delete itself — not the
+    // stop — ends the open review and lets the ticket go. Both name the
+    // person on the deletion record.
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    fixture
+        .service
+        .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+        .await
+        .unwrap();
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    fixture
+        .service
+        .inner
+        .conversations
+        .lock()
+        .await
+        .remove(&fixture.id);
+    let deleted = fixture
+        .service
+        .delete(fixture.id.clone(), caller("delete"))
+        .await;
+    let stopped = match &deleted {
+        Ok(_) => true,
+        Err(ConversationError::DeletionIncomplete(failures)) => failures.stop.is_none(),
+        Err(_) => false,
+    };
+    assert!(stopped, "{deleted:?}");
+    assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
+    let deleter = person_by("delete");
+    let withdrawals: Vec<_> = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.phase,
+                McpAppAuditPhase::Withdrawn {
+                    cause: McpAppWithdrawal::ConversationEnded,
+                    ..
+                }
+            )
+        })
+        .map(|record| record.initiator.clone())
+        .collect();
+    assert_eq!(withdrawals.as_slice(), std::slice::from_ref(&deleter));
+    assert!(fixture.audit.records.lock().unwrap().iter().any(|record| {
+        record.initiator == deleter
+            && record.phase
+                == McpAppAuditPhase::Withdrawn {
+                    permission_id: review.permission_id.clone(),
+                    cause: McpAppWithdrawal::ConversationEnded,
+                }
+    }));
+    assert_eq!(
+        *fixture.tickets.released_conversations.lock().unwrap(),
+        std::slice::from_ref(&deleter)
+    );
+}
+
+#[tokio::test]
 async fn a_release_is_kept_across_a_close_and_before_the_conversation_is_open() {
     let fixture = Fixture::new().await;
     // Closed, then released while nothing of it is open: kept all the same.
@@ -1151,7 +1219,7 @@ async fn a_busy_session_is_refused_and_on_record_as_nothing_sent() {
         fixture.audit.phases(),
         [
             McpAppAuditPhase::Admitted,
-            McpAppAuditPhase::Refused(McpAppCode::TemporarilyUnavailable)
+            McpAppAuditPhase::Refused(ConversationErrorCode::TemporarilyUnavailable)
         ]
     );
     *fixture.apps.resource.lock().unwrap() = Some(Err(McpAppFailure::Busy));
@@ -1167,7 +1235,7 @@ async fn a_busy_session_is_refused_and_on_record_as_nothing_sent() {
     assert_eq!(
         fixture.audit.phases().last(),
         Some(&McpAppAuditPhase::Refused(
-            McpAppCode::TemporarilyUnavailable
+            ConversationErrorCode::TemporarilyUnavailable
         ))
     );
 }
@@ -1203,7 +1271,7 @@ async fn a_resource_no_answer_could_carry_is_refused_and_never_held() {
     assert_eq!(
         fixture.audit.phases().last(),
         Some(&McpAppAuditPhase::Completed(McpAppOutcome::Failed(
-            McpAppCode::ResultTooLarge
+            ConversationErrorCode::McpResultTooLarge
         )))
     );
 }
@@ -1356,7 +1424,9 @@ async fn a_mount_released_after_its_call_was_allowed_is_not_sent() {
     assert_eq!(fixture.apps.calls(), 0);
     assert_eq!(
         fixture.audit.phases().last(),
-        Some(&McpAppAuditPhase::Refused(McpAppCode::Cancelled))
+        Some(&McpAppAuditPhase::Refused(
+            ConversationErrorCode::McpCancelled
+        ))
     );
 }
 

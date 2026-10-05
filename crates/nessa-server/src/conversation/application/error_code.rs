@@ -2,8 +2,8 @@
 //! mapping, read by the wire when it answers and by the audit when it records
 //! what an app's message was answered with (#390). The codes are the product
 //! contract's, generated from the schema.
-use super::{ConversationError, DeletionFailures, McpAppCode, McpAppError};
-use crate::product_contract::generated::ConversationErrorCode;
+use super::{ConversationError, DeletionFailures};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
     providers::ImageInputRefusal,
@@ -124,33 +124,8 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::PermissionAnswer { error, .. } => {
             error_code(&ConversationError::Agent(error.clone()))
         }
-        ConversationError::McpApp(error) => mcp_app_code(error),
-    }
-}
-
-/// The protocol code of an MCP App's refusal: the code audit names it with
-/// (`McpAppCode`), as the wire's own enum; `tests/conversation/agreement.rs`
-/// holds the two sets together.
-fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
-    wire_code(error.code())
-}
-
-pub fn wire_code(code: McpAppCode) -> ConversationErrorCode {
-    match code {
-        McpAppCode::AppUnknown => ConversationErrorCode::McpAppUnknown,
-        McpAppCode::ServerMismatch => ConversationErrorCode::McpServerMismatch,
-        McpAppCode::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
-        McpAppCode::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
-        McpAppCode::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
-        McpAppCode::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
-        McpAppCode::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
-        McpAppCode::Cancelled => ConversationErrorCode::McpCancelled,
-        McpAppCode::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
-        McpAppCode::TimedOut => ConversationErrorCode::McpTimedOut,
-        McpAppCode::RemoteError => ConversationErrorCode::McpRemoteError,
-        McpAppCode::InvalidRequest => ConversationErrorCode::InvalidRequest,
-        McpAppCode::TemporarilyUnavailable => ConversationErrorCode::TemporarilyUnavailable,
-        McpAppCode::TurnRunning => ConversationErrorCode::TurnRunning,
+        // Audit already named this with the protocol's code.
+        ConversationError::McpApp(error) => error.code(),
     }
 }
 

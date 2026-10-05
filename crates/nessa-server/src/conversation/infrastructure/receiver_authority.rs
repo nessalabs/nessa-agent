@@ -1,6 +1,6 @@
 //! Durable local authority for paired receiver identity and access epochs.
 
-use crate::conversation::application::{ReadRefusal, ReceiverAuthority, ReceiverBinding};
+use crate::conversation::application::{ReceiverAuthority, ReceiverBinding};
 use crate::conversation::domain::{
     PairedReceiver, ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
 };
@@ -10,6 +10,7 @@ use nessa_local_database::{
     rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior},
     OpenError, Schema,
 };
+use nessa_protocol::conversation::read_scope::ReadRefusal;
 use std::{
     collections::HashMap,
     future::Future,

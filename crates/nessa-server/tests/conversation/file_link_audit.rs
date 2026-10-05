@@ -1,7 +1,7 @@
 //! What the durable file-link record holds, and what it refuses to overwrite.
 use super::*;
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::Value;
 
 fn linked(paths: &[&str], observed_at_ms: u64) -> ConversationFileLinkAuditRecord {

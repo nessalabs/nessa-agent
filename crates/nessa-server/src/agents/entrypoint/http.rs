@@ -7,8 +7,9 @@ use axum::Json;
 use serde::Serialize;
 
 use crate::agents::application::{ReadingFailure, SharedAgentReadiness};
-use crate::agents::domain::{AgentId, Readiness};
+use crate::agents::domain::Readiness;
 use crate::server::entrypoint::origin;
+use nessa_protocol::agents::AgentId;
 
 /// One agent, and what stands between it and running.
 #[derive(Debug, Serialize)]

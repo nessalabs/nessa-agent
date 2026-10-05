@@ -6,12 +6,6 @@
 //! lane.
 use super::{
     conversation::{caller, conversation_id},
-    generated::{
-        ConversationMutationResult, McpAppReference, McpCallToolParams, McpCallToolResult,
-        McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams, McpRemoteErrorDetails,
-        McpSendMessageParams, McpSendMessageResult, McpUiCsp, McpUiPermissions,
-        McpUpdateModelContextParams, MAX_MCP_CONTEXT_BYTES, MIN_MCP_MESSAGE_CHARACTERS,
-    },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
@@ -20,9 +14,15 @@ use crate::conversation::application::{
     McpAppRead, McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
-use crate::product_contract::generated::{ConversationErrorCode, MAX_MCP_MESSAGE_BYTES};
-use crate::protocol::{OutgoingMessage, RequestFrame};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    ConversationMutationResult, McpAppReference, McpCallToolParams, McpCallToolResult,
+    McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams, McpRemoteErrorDetails,
+    McpSendMessageParams, McpSendMessageResult, McpUiCsp, McpUiPermissions,
+    McpUpdateModelContextParams, MAX_MCP_CONTEXT_BYTES, MIN_MCP_MESSAGE_CHARACTERS,
+};
+use nessa_protocol::product_contract::generated::{ConversationErrorCode, MAX_MCP_MESSAGE_BYTES};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 

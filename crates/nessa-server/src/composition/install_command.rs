@@ -20,9 +20,9 @@ use crate::agent_install::infrastructure::{
     host_platform, releases_for, DurableInstallAudit, DurableInstallationDelivery,
     DurableReclamationAudit, HttpsArchives, ManagedRuntimes, UuidReclamationOperationIds,
 };
-use crate::agents::domain::AgentId;
 use crate::core::RunError;
 use crate::env::Environment;
+use nessa_protocol::agents::AgentId;
 
 /// Where installed agent runtimes live, beside the data this stage already owns.
 ///

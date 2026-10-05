@@ -770,13 +770,14 @@ Each row has at least one test, named after it.
   (`each_context_drop_keeps_its_cause_and_each_message_outcome_its_code`),
   and asks
   (`an_apps_message_and_its_context_record_what_they_asked_and_turn_running`).
-- `crates/nessa-server/tests/conversation/agreement.rs`: `McpAppCode::ALL`
-  against the protocol, and the bounds the schema states
+- `crates/nessa-server/tests/conversation/agreement.rs`: the bounds the
+  schema states
   (`an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps`).
 - `crates/nessa-server/tests/conversation/error_code.rs`, beside
   `application/error_code.rs`: R1-8
   (`a_message_naming_an_app_the_session_never_saw_is_an_invalid_request`),
-  and each app refusal and audit code on the wire as itself.
+  and each app refusal on the wire by the `ConversationErrorCode` audit names
+  it with (`each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with`).
 - `crates/nessa-server/tests/mcp_servers/gateway.rs`: M3 at the wire, an
   empty message refused with nothing recorded and a blank one on record
   (`m3_an_empty_message_is_refused_at_the_wire_and_a_blank_one_on_record`);
@@ -847,5 +848,4 @@ Each row above has a test, named after it:
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
   B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`,
   and at every entry, as a text message is refused, in `agents/messages.rs`
-  (`an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry`;
-  `steer` saves before the check, #477).
+  (`an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry`).

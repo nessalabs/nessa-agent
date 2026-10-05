@@ -21,6 +21,32 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update(bytes);
 }
 
+/// The restoration fingerprint: what a saved conversation's context must
+/// match to be restored. This function is the complete list of its inputs;
+/// the `AcpConfig` field docs that state their membership link here.
+///
+/// Hashed: the executable's path, the ordered arguments, the context
+/// environment, the workspace, whether tools are enabled, the token limits,
+/// the permission decisions, and the composed system prompt. Changing any of
+/// them changes the identity, and a saved conversation is refused before launch
+/// (`context_changes_reject_restore_before_launch_but_credentials_rotate_without_persistence`,
+/// `fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments`).
+///
+/// Not hashed:
+/// - the credential environment, so credentials rotate without stranding a
+///   conversation;
+/// - the stand-in grants (`AcpConfig::stand_ins`), fresh on every open;
+/// - the MCP servers (`AcpConfig::mcp_servers`): their names, commands and
+///   arguments. They are attached to each provider open, like the grants, and
+///   select no provider context, so adding, editing, removing or moving a
+///   server keeps the identity and the conversation resumes with the current
+///   list (`adding_an_mcp_server_keeps_the_identity_and_restores`,
+///   `editing_...`, `moving_an_mcp_servers_command_...`, `removing_...`).
+///
+/// What follows from this for the gateway — the one-time change of every
+/// saved identity, and what still strands a saved conversation — is in
+/// `docs/design/mcp-connections.md`, "MCP servers and the restoration
+/// identity".
 pub(crate) fn fingerprint(
     config: &AcpConfig,
     limits: TokenLimits,
@@ -46,15 +72,6 @@ pub(crate) fn fingerprint(
     }
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
     hash.update([u8::from(config.tools_enabled)]);
-    hash.update((config.mcp_servers.len() as u64).to_be_bytes());
-    for server in &config.mcp_servers {
-        field(&mut hash, server.name.as_bytes());
-        field(&mut hash, server.command.as_os_str().as_encoded_bytes());
-        hash.update((server.args.len() as u64).to_be_bytes());
-        for arg in &server.args {
-            field(&mut hash, arg.as_bytes());
-        }
-    }
     hash.update(limits.max_context_window().to_be_bytes());
     hash.update(limits.max_output().to_be_bytes());
     hash.update((config.permissions.decisions().len() as u64).to_be_bytes());

@@ -1,6 +1,6 @@
-use crate::product_contract::generated::ChangeWatchErrorCode;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::product_contract::generated::ChangeWatchErrorCode;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};

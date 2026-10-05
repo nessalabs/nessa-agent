@@ -79,6 +79,10 @@ pub(super) fn reason(error: &RunError) -> &'static str {
         RunError::Agent(_) => "agent",
         RunError::Runtime(_) => "runtime",
         RunError::Serve(_) => "serve",
+        // Both facts survive the process boundary. Folding this into "serve"
+        // or "shutdown" would drop the other one, which is the failure this
+        // reason exists to avoid.
+        RunError::ServeAndShutdown(_) => "serveAndShutdown",
         RunError::Shutdown(_) => "shutdown",
         // Native pairing's own failures, said with the reasons the host
         // already knows: its listener failing is a serve failure, its socket a
@@ -118,6 +122,7 @@ pub(super) fn code(reason: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ServeAndShutdown;
     use std::io::{Error, ErrorKind};
 
     /// Every reason the table names is a distinct, non-zero code, and every
@@ -162,6 +167,10 @@ mod tests {
                 source: Error::from(ErrorKind::PermissionDenied),
             },
             RunError::Serve(Error::from(ErrorKind::BrokenPipe)),
+            RunError::ServeAndShutdown(Box::new(ServeAndShutdown::new(
+                Error::from(ErrorKind::BrokenPipe),
+                None,
+            ))),
             RunError::Shutdown(None),
             RunError::Native(NativeFailure::Directory(Error::from(
                 ErrorKind::PermissionDenied,

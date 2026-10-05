@@ -60,11 +60,8 @@ pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::NessaRecordReadSource;
 pub use store::LocalConversationStore;
 
-pub(crate) mod catalogue_payload;
 mod catalogue_source;
-pub use catalogue_source::{
-    conversation_catalogue_schema, CatalogueWorkerError, NessaCatalogueSource,
-};
+pub use catalogue_source::{CatalogueWorkerError, NessaCatalogueSource};
 
 mod provider_sessions;
 pub use provider_sessions::BindingSessionEraser;

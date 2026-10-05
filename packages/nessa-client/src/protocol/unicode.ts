@@ -2,9 +2,13 @@
 const unpairedSurrogate = /\p{Surrogate}/u
 
 /**
- * Whether `text` is Unicode: no surrogate without its partner. The gateway's
- * JSON decoder cannot read one, so a frame holding one is never answered
- * (#403). The one statement of it, for every string this client checks.
+ * Whether `text` is Unicode: no surrogate without its partner. A frame the
+ * gateway cannot decode is answered `invalid_request` when the envelope parser
+ * reads one JSON object, no decoded envelope name appears twice, `type` is
+ * `req`, and `id` is one Unicode string of 1 to 256 bytes. An envelope name
+ * that is not Unicode is not a second name, a repeated name inside a nested
+ * value still leaves that id, and a frame deeper than 127 containers is not
+ * read (#403).
  */
 export function wellFormedText(text: string): boolean {
   return !unpairedSurrogate.test(text)

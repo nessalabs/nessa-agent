@@ -190,16 +190,23 @@ app widgets alike.
 - The gateway gains the connection to each server for each harness session —
   the harness's MCP traffic now passes through it — and two app methods, with
   policy and audit; what that connection means is designed in
-  [mcp-connections](../../design/mcp-connections.md) (#346): a harness's
-  context fingerprint covers its stand-in, whose arguments carry a digest of
-  the configured server, so it still changes exactly when the server does; a
-  gateway restart ends every session, so a restored conversation's handles
-  are gone and the server says so; a server that exits ends its stand-in, as
-  when the harness owned it; and which conversation a stand-in belongs to is
-  carried to the gateway by a token issued for each open, in the stand-in's
-  environment (#348), before any app method exists. The SDK and
-  protocol carry tool identity and `_meta`, which also helps any tool view in
-  the transcript.
+  [mcp-connections](../../design/mcp-connections.md) (#346): a stand-in's
+  arguments carry a digest of the configured server, which the relay compares;
+  a gateway restart ends every session, so a restored
+  conversation's handles are gone and the server says so; a server that exits
+  ends its stand-in, as when the harness owned it; and which conversation a
+  stand-in belongs to is carried to the gateway by a token issued for each
+  open, in the stand-in's environment (#348), before any app method exists.
+  The SDK and protocol carry tool identity and `_meta`, which also helps any
+  tool view in the transcript.
+- **Amended (#391): the MCP server list is not part of a conversation's
+  restoration identity.** It is attached to each open, like the stand-in
+  token, and selects no provider context, so the SDK's fingerprint no longer
+  hashes it. This replaces "the fingerprint still changes exactly when the
+  server does", which the record first chose. The consequences — the one-time
+  strand of conversations saved before the release, what still strands one,
+  and what `configuration-changed` is for — are in
+  [MCP servers and the restoration identity](../../design/mcp-connections.md#mcp-servers-and-the-restoration-identity).
 - A view like experiments becomes a package with its own release, testable in a
   fake host, and portable.
 - An extension cannot reach into the core: whatever it needs from the
@@ -248,9 +255,15 @@ app widgets alike.
 - **Limits, each its own issue**: a release ends the reviews already open, but
   a call admitted before it can still open one after (#397); the app lane's
   4 slots per socket are shared by every app in the window (#398); an app is
-  told `{}` for arguments the view does not carry (#394); the gateway drops,
-  unanswered, a frame it cannot decode (#403), so the client refuses a lone
-  surrogate in what it sends; and it closes the socket on a frame past its
+  told `{}` for arguments the view does not carry (#394); a frame the gateway
+  cannot decode is answered `invalid_request` when the envelope parser reads
+  one JSON object, no decoded envelope name appears twice, `type` is `req`,
+  and `id` is one Unicode string of 1 to 256 bytes. An envelope name that is
+  not Unicode is not a second name, a repeated name inside a nested value
+  still leaves that id, and a frame deeper than 127 containers is not read
+  (#403),
+  so the client refuses a lone surrogate in what it sends; and it closes the
+  socket on a frame past its
   message limit, so the client refuses one before sending
   (`NessaRequestTooLargeError`).
 - **The calls from the transcript** (`app-calls.ts`), each named by its

@@ -4,6 +4,10 @@ The repository rules live in [AGENTS.md](../AGENTS.md) and the
 [coding standards](../CODING_STANDARDS.md). This guide maps those dependency and
 ownership rules to Nessa's current modules and changes as the codebase grows.
 
+The [system state atlas](state/README.md) organizes lifecycle reading models by
+system, service, feature, and flow. Its Markdown lives in this repository;
+the local website that renders it is a separate service.
+
 ## Organization applies to every change
 
 The [organization standards](../CODING_STANDARDS.md#organization-across-the-repository)
@@ -376,18 +380,23 @@ The auth pairing producer keeps invitation/consent values in `domain/pairing/`, 
 The native server consumer is `nessa-server/src/device_pairing/`. `application/`
 holds the owner use cases (`owner.rs`), approval through to an issued credential
 (`activation.rs`), cleanup of ended stages (`cleanup.rs`), the receiver port
-(`receivers.rs`) and the device status query and its projection
-(`read_status.rs`, `status.rs`). `infrastructure/` holds the pure JSON
-codec (`wire/`), the length-prefixed frame reader both phases use
-(`frames.rs`), enrollment framing (`enrollment_channel.rs`), the protected
+(`receivers.rs`) and the device status query (`read_status.rs`), whose
+projection is `nessa_protocol::pairing::DevicePairingStatus`. What both ends of
+a native connection run on is `crates/nessa-protocol/src/pairing/`: the pure
+JSON codec (`wire/`), the length-prefixed frame reader both phases use
+(`frames.rs`), enrollment framing (`enrollment_channel.rs`), the protected frame
+bounds (`limits.rs`), and the deadline-and-wake socket with its shutdown
+wake-ups and worker-fault mapping (`socket/`), which reads the monotonic
+`nessa_protocol::clock::Clock`. `infrastructure/` holds the protected
 product phase after an `openProduct` envelope (`protected.rs`), the gateway runtime
 (`runtime.rs`, with the single code-registration worker in `registration.rs`),
-connection workers and their shutdown wake-ups (`connection.rs`,
-`connection/wake.rs`), the listener, the device client, gateway identity
+connection workers (`connection.rs`), the listener, gateway identity
 restore, `receivers.rs` (the receiver port over the conversation context's
 `LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
 product socket holds, and `owner_admission.rs`, the lease every owner command
-holds until shutdown drains it.
+holds until shutdown drains it. The native device client is
+`crates/nessa-client-core/src/pairing/client.rs`; gateway tests consume it as a
+dev-dependency.
 The owner product methods are `nessa-server/src/product/pairing.rs`, and the
 product session over a protected native connection is
 `nessa-server/src/product/native.rs`; mounting is
@@ -400,9 +409,9 @@ native listen address. Public tests are under
 `tests/native_enrollment.rs`, which also registers the protected sessions in
 `tests/device_pairing/infrastructure/protected.rs`; the protected connection's
 write-wakeup unit test is `tests/device_pairing/infrastructure/protected_waker.rs`;
-codec tests are `tests/device_pairing/wire.rs`, the
-frame reader's unit tests are `tests/device_pairing/infrastructure/frames.rs`, the
-socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`
+codec tests are `crates/nessa-protocol/tests/pairing/wire.rs`, the
+frame reader's unit tests are `crates/nessa-protocol/tests/pairing/frames.rs`, the
+socket stream's unit tests are `crates/nessa-protocol/tests/pairing/socket/deadline_stream.rs`
 and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
 composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
 Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
@@ -483,6 +492,17 @@ a schema change ships its own move. See the
 [local-database crate](../crates/nessa-local-database/README.md) and
 [ADR 196](adr/done/196-conversation-metadata-database.md).
 
+`crates/nessa-protocol` is the contract between the gateway and its clients:
+what both ends of a gateway connection agree on and nothing only one end does.
+It holds the wire frames and generated payloads (`protocol/`), the product
+contract's outcome values (`product_contract/`), the product DTOs, handshake
+rules and read codecs (`product/`), native pairing framing, codec, channel and
+socket (`pairing/`), the monotonic `Clock` port (`clock.rs`), and the
+conversation read model with the agent names it uses (`conversation/`,
+`agents/`). `nessa-server` depends on it; it depends on neither the gateway nor
+any client. See the [protocol crate](../crates/nessa-protocol/README.md) and
+[ADR 483](adr/done/483-protocol-and-client-core-crates.md).
+
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
 Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
@@ -522,9 +542,13 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
-`crates/nessa-server/src/conversation/` groups durable conversation identity/access
-(domain), shared Agent orchestration and bounded views (application), and private
-metadata/audit adapters (infrastructure). A conversation records the agent it was
+`crates/nessa-server/src/conversation/` groups durable conversation ownership and
+access (domain), shared Agent orchestration (application), and private
+metadata/audit adapters (infrastructure). The conversation's identity and summary,
+the bounded view and its projection, catalogue metadata and the read-scope checks
+are the read model in `crates/nessa-protocol/src/conversation/`, which a device
+reads with too; the projection's tests drive the service and stay in
+`tests/conversation/projection.rs`. A conversation records the agent it was
 created on and is reopened on that same agent for the rest of its life, so
 `composition/agent.rs` builds fixed providers for configured bundled agents.
 `composition/opencode_profile.rs` owns one static OpenCode decision shared by
@@ -550,8 +574,10 @@ joins its worker on a tracked thread before storage shutdown. Composition
 `root.rs` owns the ordered cleanup report; `core/shutdown.rs` carries typed
 reader deadline/drain and conversation cleanup failures back to the process. The product
 `record_read/` codec validates pages through sync-engine and caps encoded
-replies; `product/socket.rs` reserves independent record capacity and retains
-it until both physical source work and delivery/drop have finished. The existing
+replies; `product/socket.rs` reserves independent record capacity. Physical
+source work retains its ownership until joined. Delivery ownership ends after
+encoding and size checks, before the first sink call, or when the response drops
+([R61 and R64](design/authorized-record-reads.md)). The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
 `core/read_workers/` owns tracked blocking source threads, sticky faults and the
@@ -714,7 +740,8 @@ deadline clock, and how one request ends), and an app's calls are
 entry; its worker attaches the grant's forwarded results to the completed
 calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
-transcript's `widget` part.
+transcript's `widget` part. The MCP server list is not part of the
+restoration fingerprint (`acp/sessions/identity.rs`, ADR 344).
 
 `scripts/mcp-test-server/` is developer tooling, not a Nessa tool: a
 dependency-free stdio MCP server whose tools return structured results, resource
@@ -1010,9 +1037,10 @@ the auth registry resolves current identity and access state on every admission.
 
 `crates/nessa-server/src/agents/` answers which coding agents could actually
 start here, before there is a session to authenticate with.
-`domain/value_objects/` owns `AgentId` — which carries the one name an agent is
-known by outside the server, because configuration, this route, the socket and
-the conversation records on disk must all spell it the same way — the host's
+`AgentId` — which carries the one name an agent is known by outside the
+server, because configuration, this route, the socket and the conversation
+records on disk must all spell it the same way — is `nessa_protocol::agents`,
+since a device reads that name too. `domain/value_objects/` owns the host's
 three-way `HostAnswer`, and the `Readiness` rule that turns two answers into one
 thing to tell the person;
 `application/` owns the `AgentProbe` port, whose typed `ProbeFailure` keeps "not
@@ -1485,13 +1513,15 @@ the export builds in its `wire-contract` subdirectory.
 
 ### Shared product contract values
 
-`crates/nessa-server/src/product_contract/generated.rs` publishes the pure typed
+`crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed
 product error/close values and their schema-derived policy. The product schema
 remains their owner. Generated product DTOs, the product socket, read-only
-sync application ports and the conversation service consume this publication —
-the conversation's error codes are mapped once, in
-`conversation/application/error_code.rs`, which the wire answers by and an app
-message's audit records; it contains no routing, IO or runtime state. Generic frame protocol types remain under `protocol/`.
+sync application ports and the gateway's conversation service consume this
+publication — the conversation's error codes are mapped once, in
+`crates/nessa-server/src/conversation/application/error_code.rs`, which the
+wire answers by and MCP app audit records; it contains no routing, IO or
+runtime state. Generic frame protocol types are `crates/nessa-protocol/src/protocol/`,
+and the generated product DTOs `crates/nessa-protocol/src/product/generated.rs`.
 
 ### Record read benchmark
 
@@ -1501,10 +1531,20 @@ one JSON report. It is a measurement tool, not run in CI; the
 [steps per admitted read](design/bounded-terminal-discovery.md#steps-per-admitted-read)
 cite its numbers.
 
+### Device client core
+
+`crates/nessa-client-core` owns native device enrollment and retained sync.
+Its [module map](../crates/nessa-client-core/README.md) connects the pairing
+client, `read_only_sync` layers, executable composition, and matching tests.
+The gateway consumes this crate only as a dev-dependency. The portable package
+gate refuses any client dependency path to `nessa-server`, including renamed
+and transitive edges. It also refuses gateway normal/build paths to the client;
+dev-only edges break production paths. Both ends depend on `nessa-protocol` for shared rules.
+
 ### Retained read-only example
 
-`crates/nessa-server/examples/read_only_sync.rs` starts the standalone example
-through `composition/read_only_example.rs`. Its `profile.rs` child admits the
+`crates/nessa-client-core/examples/read_only_sync.rs` starts the standalone example
+through `crates/nessa-client-core/src/composition/mod.rs`. Its `profile.rs` child admits the
 bounded private profile and opens the device's private enrollment state; its
 `device.rs` child pairs and reads the pinned enrollment status. Its `online.rs`
 child admits each run by that status, composes the protected native session's
@@ -1514,7 +1554,8 @@ driver and cache to the session port of `application/watch.rs`, the bounded
 loop of one record watch, whose hints the session keeps in its inbox
 (`infrastructure/gateway/session.rs`) and whose lines `entrypoint/watch.rs`
 writes.
-The `read_only_sync/entrypoint/`
+Paths in this module map are relative to `crates/nessa-client-core/src/` unless
+a crate is named. The `read_only_sync/entrypoint/`
 owns argument parsing and JSON output; its `online.rs` presents separate captured
 checks, confirmed durable progress, transport and core/cache refusal evidence; `online/causes.rs` owns their sanitized
 typed JSON presentation. `application/driver.rs` schedules finite
@@ -1524,19 +1565,23 @@ core passes, `application/offline.rs` owns the saved-read port, and
 record store it gives the enrollment client, a purge before the record goes. The private
 SQLite adapter under `infrastructure/cache/` retains catalogue values, SDK
 checkpoints, pending physical records and their atomic progress. Offline
-transcript views use the conversation feature's shared bounded passive
-projection; `infrastructure/cache/purge.rs` deletes a receiver's rows with the
+transcript views use the shared bounded passive projection,
+`nessa_protocol::conversation::projection`; `infrastructure/cache/purge.rs` deletes a receiver's rows with the
 receipt that fences it. Cache/command evidence lives under
-`tests/read_only_sync/infrastructure/`; the [example design](design/read-only-sync-example.md)
+`crates/nessa-client-core/tests/read_only_sync/infrastructure/`; the [example design](design/read-only-sync-example.md)
 names ordering and resource evidence. Real paired-credential client/gateway
 process, restart, output loss and authority-order evidence lives under
-`tests/composition/read_only_online.rs`, with canonical gateway provisioning and
+`crates/nessa-server/tests/composition/read_only_online.rs`, with canonical gateway provisioning and
 client/encoder support in its `read_only_online/fixtures/` children. Pure parser
-and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`,
-the status decision's and the watch loop's under `tests/read_only_sync/application/`,
-the session's watch evidence in `tests/read_only_sync/gateway/session/watch.rs`, and the
-code-line reader's in `tests/composition/read_only_device.rs`.
-`examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
+and JSON presentation evidence lives under `crates/nessa-client-core/tests/read_only_sync/entrypoint/`,
+the status decision's and the watch loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
+the session's watch evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/watch.rs`, and the
+code-line reader's in `crates/nessa-client-core/tests/composition/read_only_device.rs`.
+The five-mode saved-output race is in the client's
+`tests/read_only_sync/infrastructure/saved_output.rs`, beside the private cache
+hook and production formatter; the gateway retains a real public-API saved-output
+check.
+`crates/nessa-server/examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
 against a real `nessa server` and real client processes and reports timings and
 bytes on the wire as JSON.
 

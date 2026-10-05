@@ -77,7 +77,8 @@ impl fmt::Debug for StandInGrant {
 /// Where a binding's MCP stand-ins get their per-open environment, and where
 /// the results they forward are taken from: a host's [`StandInGrants`], or
 /// nowhere. Outside the context fingerprint, like credentials, so a fresh
-/// grant on each open never changes it.
+/// grant on each open never changes it; the fingerprint's inputs are listed on
+/// `fingerprint` in `acp/sessions/identity.rs`.
 #[derive(Clone, Default)]
 pub struct StandInSessions {
     grants: Option<Arc<dyn StandInGrants>>,

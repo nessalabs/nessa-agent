@@ -1,6 +1,7 @@
 use super::{Attachment, Caller};
-use crate::{attachments::domain::AttachmentError, conversation::domain::ConversationId};
+use crate::attachments::domain::AttachmentError;
 use nessa_auth::domain::OrganizationId;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::fmt;
 use subtle::ConstantTimeEq;

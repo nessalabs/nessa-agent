@@ -7,16 +7,12 @@
 //! `generation` is what a claim on the record is compared with. Retired records
 //! retain the exact lifetime and actual release or upload-reversal evidence.
 //! Prior state excludes Absent by construction through RetiredFrom.
-use crate::{
-    attachments::{
-        application::{
-            ReleaseCause, ReleaseEvidence, RetiredHold, RetirementEvidence, RevertCause,
-        },
-        domain::{Attachment, Caller, Hold, MediaType, RetiredFrom},
-    },
-    conversation::domain::ConversationId,
+use crate::attachments::{
+    application::{ReleaseCause, ReleaseEvidence, RetiredHold, RetirementEvidence, RevertCause},
+    domain::{Attachment, Caller, Hold, MediaType, RetiredFrom},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

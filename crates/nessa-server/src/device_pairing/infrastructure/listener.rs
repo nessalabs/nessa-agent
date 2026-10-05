@@ -6,11 +6,11 @@
 //! invalid ends the run; a failure of one connection is skipped; anything else,
 //! including an error the listener does not recognise, pauses with a bounded
 //! backoff and then accepts again.
-use super::worker::worker_fault;
 use super::{
     connection::NativeConnectionCompletion, NativeConnectionFailure, NativeEnrollmentConnections,
 };
 use nessa_auth::adapters::pairing::{CryptoRng, RngCore};
+use nessa_protocol::pairing::socket::worker_fault;
 use std::{
     future::Future,
     io::{Error as IoError, ErrorKind, Result as IoResult},

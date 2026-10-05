@@ -1,6 +1,6 @@
 //! Durable receiver cache shared by catalogue adapter and product-process tests.
-use crate::conversation::domain::ConversationId;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::catalogue::{
     catalogue_progress_after_begin, catalogue_progress_after_page, catalogue_progress_after_reset,
     validate_catalogue_progress, validate_catalogue_revision_transition, CataloguePagePlan,

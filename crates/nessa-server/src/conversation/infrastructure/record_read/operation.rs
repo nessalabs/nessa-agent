@@ -1,10 +1,9 @@
 //! One SDK physical operation executes outside Tokio enter and joins its source on drop.
 use crate::conversation::{
-    application::{
-        ReceiverReadScope, RecordHead, RecordReadError, RecordReadOperation, RecordReadValue,
-    },
+    application::{RecordHead, RecordReadError, RecordReadOperation, RecordReadValue},
     infrastructure::exact_record_scope,
 };
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_sdk::{
     application::agent_execution::sessions::StorageError,
     domain::agent_execution::sessions::SessionId,

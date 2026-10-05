@@ -423,8 +423,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
-  announcement and then updates under its id (Codex three frames, Claude
-  four), and the window draws it as one transcript step and one inline app
+  announcement and then updates under its id (Codex three frames, or two
+  in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app
   frame, so the app mounts once. _#418 design._ _Check:_
   `mcp-apps-gateway.mjs --agent codex --scripted` and `--agent claude
   --scripted`, `renders`: its step and frame counts (no model, no sign-in: the
@@ -670,6 +670,8 @@ says why where the conversations would be.
   `hostGateway`, `connectDevSession`, the gateway source — against a fake host
   whose endpoint and credential commands answer with a real gateway's, started
   by `lib/gateway-stack.mjs` with a real agent; needs the agent signed in).
+  With `--scripted` the same steps run signed out against
+  `scenarios/text-reply.json`, including `--mode prod`.
   _Not in a browser:_ the native host's side — readiness, endpoint discovery,
   the credential file read and its refusals — is the Rust host tests'
   (`src-tauri/src/surface_credential.rs`,
@@ -680,6 +682,17 @@ says why where the conversations would be.
   window.** _By hand:_ `pnpm app` against a gateway with
   `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
   #436 lands.
+- [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
+  window shows it.** _Check:_ `scripted-scenarios.mjs` (and
+  `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and
+  `gateway-window --scripted` in Chromium and WebKit). The agent runs
+  `scenarios/window.json`: streamed text, an agent approval answered Allow
+  Once, a tool step, a turn that fails after speaking, and a turn that stays
+  cancelled after the conversation is closed. The strings come from that file.
+  `--mode prod` runs this check and `gateway-window --scripted` against a
+  production preview; MCP Apps stay on the dev server. One evidence directory
+  per run, and one verdict line.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
 
 ## Console errors
 
@@ -687,10 +700,26 @@ says why where the conversations would be.
   runs. _Check:_ every script adds them to its failures; `smoke.mjs` reports them
   per layout as `console`.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
-  gets a 404 (matched by source URL in `lib/selectors.mjs`, `harmlessConsole`;
-  kept in the JSON as `harmless`). Vite's `[vite] connecting…` / HMR
-  messages are logs, not errors. A reload caused by another edit landing on
-  the dev server mid-run is not a finding — re-run.
+  gets a 404 (matched by source URL in `lib/selectors.mjs`,
+  `harmlessConsole`). Chromium reports a request as failed with
+  `net::ERR_ABORTED` when the page stops reading a body that did arrive: the
+  client's bounded read of `/mcp-resources`, or the 204 of the window's
+  sign-in check `/browser/check`, whose body is never read (#485). One rule,
+  not a list of URLs: `net::ERR_ABORTED` exactly, on the page's own origin,
+  after a 2xx response, is labelled harmless, "aborted after a <status>
+  response" (`lib/browser.mjs`, `recordFailedRequest`, rows F1′ and F2–F4).
+  With no response, a status outside 2xx, another origin, another error, or
+  a page with no origin, it stays a failure. The rule knows only that a
+  response arrived: whether its bytes were right is each check's own
+  assertions' to judge (`renders` in `mcp-apps-gateway.mjs` for
+  `/mcp-resources`; the conversation loading at all for `/browser/check`).
+  Harmless lines of either kind are kept in the JSON as `harmless` by
+  `smoke.mjs`, `mcp-apps-gateway.mjs`, `gateway-window.mjs` and
+  `scripted-scenarios.mjs`; the other scripts that open a page do not keep
+  them yet (#494). Vite's
+  `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
+  by another edit landing on the dev server mid-run is not a finding —
+  re-run.
 
 ## Committed transcript controls
 
@@ -718,8 +747,9 @@ measures release at the ten-second request deadline (9.9–12 seconds including
 browser scheduling), verifies the aborted first request, an enabled and painted
 Check again control, and exactly one healthy retry that makes Claude ready.
 Both cases require zero page errors. The rule is owned by
-`src/onboarding/adapters/agents.ts`; ordering and unit regressions are linked in
-`docs/mapping/features/startup.md#startup-recovery-ordering-design`.
+`src/onboarding/adapters/agents.ts`; ordering and unit regressions are in the
+[adapter tests](../../src/onboarding/adapters/agents.test.ts) and
+[setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
 
 ### Attachment admission races
 

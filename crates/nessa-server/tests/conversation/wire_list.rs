@@ -1,6 +1,6 @@
 //! A conversation list keeps, on the wire, whether its bound left any out.
 use super::{list_result, ConversationList};
-use crate::conversation::application::ConversationListEntry;
+use nessa_protocol::conversation::view::ConversationListEntry;
 
 #[test]
 fn a_cut_list_says_so_on_the_wire() {

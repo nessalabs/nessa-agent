@@ -117,8 +117,8 @@ mod mcp_app_lane {
     use super::*;
     use crate::app_call_test_support::{Fixture, INSTANCE, SERVER};
     use crate::conversation::application::{ConversationCaller, MAX_APP_CALLS};
-    use crate::product::generated::MAX_MCP_CONTEXT_BYTES;
-    use crate::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
+    use nessa_protocol::product::generated::MAX_MCP_CONTEXT_BYTES;
+    use nessa_protocol::product_contract::generated::{ConversationErrorCode, MAX_MCP_MESSAGE_BYTES};
     use nessa_auth::domain::{OrganizationId, PrincipalId};
     use std::collections::HashMap;
 
@@ -503,7 +503,7 @@ mod mcp_app_lane {
         assert_eq!(
             fixture.audit.phases()[records..],
             [crate::conversation::application::McpAppAuditPhase::Refused(
-                crate::conversation::application::McpAppCode::RequestTooLarge
+                ConversationErrorCode::McpRequestTooLarge
             )]
         );
 
@@ -612,7 +612,7 @@ mod mcp_app_lane {
         assert_eq!(
             fixture.audit.phases()[records..],
             [crate::conversation::application::McpAppAuditPhase::Refused(
-                crate::conversation::application::McpAppCode::InvalidRequest
+                ConversationErrorCode::InvalidRequest
             )]
         );
         assert!(fixture.app_reviews().await.is_empty());

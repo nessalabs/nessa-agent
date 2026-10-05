@@ -1,27 +1,17 @@
 use super::change_watch::{
     ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
-#[cfg(test)]
-use super::generated::wire_shape_product_session_ready;
-use super::generated::{
-    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
-    PRODUCT_VERSION,
-};
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::record_read::refusal_code;
 use super::state::ProductRouteState;
-use super::wire::*;
+use super::wire::ready_frame;
 use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
-use crate::conversation::application::{ReadRefusal, RecordReadLease};
+use crate::conversation::application::{access_refusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
-use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
-use crate::protocol::{
-    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
-    ResponseFrame, MAX_PAYLOAD_BYTES,
-};
 use axum::extract::ws::{CloseFrame, Message};
 use axum::Error;
 use futures_util::stream::{FuturesUnordered, SplitSink};
@@ -42,6 +32,20 @@ use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
 use nessa_auth::domain::{Action, AudienceId, CredentialId};
+#[cfg(test)]
+use nessa_protocol::product::generated::wire_shape_product_session_ready;
+use nessa_protocol::product::generated::{
+    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
+    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination, MAX_RECORD_RESPONSE_BYTES,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
+};
+use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
+use nessa_protocol::product_contract::generated::SessionCloseReason;
+use nessa_protocol::protocol::{
+    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
+    ResponseFrame, MAX_PAYLOAD_BYTES,
+};
 use serde_json::json;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -216,7 +220,7 @@ where
     }
     let params: SessionAuthenticateParams =
         serde_json::from_value(frame.params).map_err(|_| (frame.id.clone(), "unauthorized"))?;
-    if !params.supports_v1() {
+    if !supports_product_version(params.min_version, params.max_version) {
         return Err((frame.id, "protocol_incompatible"));
     }
     if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
@@ -363,7 +367,8 @@ impl ResponseClass {
 struct QueuedResponse {
     message: WireResponse,
     _slot: Arc<OwnedSemaphorePermit>,
-    // For record replies, this remains owned through the final physical send.
+    // Record replies transfer this to QueuedRecordResponse, whose writer
+    // releases delivery ownership before sending (R64).
     // The read adapter must not return it until its non-entered source thread
     // has finished and joined the SDK worker, including after caller timeout.
     _record_work: Option<RecordReadLease>,
@@ -636,8 +641,9 @@ where
         }
     };
     tokio::pin!(expiry);
-    // Admission retains a response slot through the physical write, so a stalled
-    // sink does not stop this owner from receiving or dispatching controls.
+    // Admission retains a response slot through the physical write (a record's
+    // until the writer takes it to send, row R64), so a stalled sink
+    // does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
     let mut refresh: Option<RefreshCheck<'_>> = None;
@@ -940,7 +946,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = RecordReadErrorCode::from(ReadRefusal::from(error));
+    let code = refusal_code(access_refusal(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -1238,11 +1244,14 @@ fn action_for_method(method: &str) -> Option<&'static str> {
     }
 }
 
-// Which request to blame for a frame that did not decode. A nested duplicate
-// still leaves one unambiguous `id`, so that frame is answered; a frame that
-// named `id` twice has no single request to answer, and the server does not pick
-// one. That frame gets no reply, as any other uncorrelatable text does, and the
-// client's own request timeout settles it.
+// Which request to blame for a frame that did not decode. Answer
+// `invalid_request` when the envelope parser reads one JSON object, no decoded
+// envelope name appears twice, `type` is `req`, and `id` is one Unicode string
+// of 1 to 256 bytes. An envelope name that is not Unicode is skipped, so two
+// of them are not a duplicate. A repeated name inside a nested value, or a
+// nested string that is not Unicode, still leaves that id. Deeper than 127
+// containers, the envelope is not read. Anything else gets no reply, and the
+// caller's own timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
     let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
@@ -1260,7 +1269,7 @@ fn session_ready(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     snapshot: &AccessSnapshot,
-) -> SessionReady {
+) -> ProductSessionReady {
     let grants = snapshot
         .credential
         .grants()
@@ -1273,7 +1282,7 @@ fn session_ready(
             },
         })
         .collect();
-    SessionReady::from_session(
+    ready_frame(
         state.gateway_id().as_str(),
         session,
         grants,
@@ -1468,14 +1477,19 @@ async fn send<S: Sink<Message> + Unpin>(
     socket: &mut S,
     message: OutgoingMessage,
 ) -> Result<(), ()> {
+    let text = ordinary_text(message)?;
+    timeout(write_timeout, send_text(socket, text))
+        .await
+        .map_err(|_| ())?
+}
+
+/// An ordinary message's wire text, refused past the ordinary encoded ceiling.
+fn ordinary_text(message: OutgoingMessage) -> Result<String, ()> {
     let text = message.to_wire_text().map_err(|_| ())?;
     if text.len() > MAX_PAYLOAD_BYTES as usize {
         return Err(());
     }
-    timeout(write_timeout, socket.send(Message::Text(text.into())))
-        .await
-        .map_err(|_| ())?
-        .map_err(|_| ())
+    Ok(text)
 }
 
 async fn send_queued<S: Sink<Message> + Unpin>(
@@ -1532,13 +1546,52 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
 ) -> Result<(), ()> {
     let QueuedRecordResponse {
         message,
-        _slot,
-        _record_work,
+        _slot: slot,
+        _record_work: record_work,
         deadline,
     } = response;
-    within_deadline(deadline, send_queued(write_timeout, socket, message))
+    // The response's slot and read lease are given back as soon as its frame
+    // is encoded and checked, before any call that can write a byte: a
+    // WebSocket can write inside `start_send` (a pong due after the peer's
+    // ping), so no flush order is relied on. After physical source completion,
+    // a client waiting for the answer finds capacity free for its next read
+    // (row R64). An encoding refusal gives delivery ownership back at once.
+    let text = match message {
+        WireResponse::Ordinary(message) => {
+            let text = ordinary_text(*message)?;
+            drop((slot, record_work));
+            return within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
+                .await
+                .ok_or(())?
+                .map_err(|_| ())?;
+        }
+        WireResponse::Record { text } => text,
+        // The record lane carries the five passive methods' answers only:
+        // watch replies go through `ConnectionWatches` on the ordinary lane, so
+        // this arm is never reached. It is still delivered as `send_queued`
+        // would, under this response's deadline, rather than dropped.
+        message @ WireResponse::Watch(_) => {
+            drop((slot, record_work));
+            return within_deadline(deadline, send_queued(write_timeout, socket, message))
+                .await
+                .ok_or(())?;
+        }
+    };
+    if text.len() > MAX_RECORD_RESPONSE_BYTES {
+        return Err(());
+    }
+    drop((slot, record_work));
+    within_deadline(deadline, send_text(socket, text))
         .await
         .ok_or(())?
+}
+
+/// Send one text frame and flush it.
+async fn send_text<S: Sink<Message> + Unpin>(socket: &mut S, text: String) -> Result<(), ()> {
+    socket
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|_| ())
 }
 
 /// The one mapping from an access error to how a live connection closes.
@@ -1580,28 +1633,18 @@ pub(crate) use tests::watches::HostWatchFixture;
 
 #[cfg(test)]
 mod tests {
-    use super::super::generated::{
-        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
-        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-    };
-    use super::super::passive_read::wire::encode_response;
     use super::super::state::SessionSettings;
     use super::*;
-    use crate::agents::domain::AgentId;
     use crate::agents_test_support::StubAgentProbe;
-    use crate::app::ports::Clock as UptimeClock;
     use crate::browser_session::application::SessionStore;
     use crate::browser_session::domain::value_objects::{
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope,
-        RecordReadError, RecordReadFuture, RecordReadOperation, RecordReadResponse,
-        RecordReadSource,
+        ConversationRepository, ReceiverAuthority, ReceiverBinding, RecordReadError,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
     };
-    use crate::conversation::domain::{
-        Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-    };
+    use crate::conversation::domain::Conversation;
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -1618,6 +1661,17 @@ mod tests {
         AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
         MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
     };
+    use nessa_protocol::agents::AgentId;
+    use nessa_protocol::clock::Clock as UptimeClock;
+    use nessa_protocol::conversation::domain::{
+        ConversationApprovalMode, ConversationId, ConversationModelId,
+    };
+    use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
+    use nessa_protocol::product::generated::{
+        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_protocol::product::passive_read::encode_response;
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
         ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -1632,7 +1686,10 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use tokio::io::DuplexStream;
     use tokio::runtime::Handle;
+    use tokio_tungstenite::tungstenite::{protocol::Role, Message as Frame};
+    use tokio_tungstenite::WebSocketStream;
     use uuid::Uuid;
 
     struct RecordBinding;
@@ -2719,6 +2776,113 @@ mod tests {
         assert!(correlatable_invalid_request("not json").is_none());
     }
 
+    #[test]
+    fn a_nested_lone_surrogate_is_answered_invalid_request() {
+        for (method, id_first) in [
+            ("mcp.callTool", true),
+            ("mcp.callTool", false),
+            ("server.health", true),
+            ("server.health", false),
+        ] {
+            let params = r#"{"nested":"\ud800"}"#;
+            let text = if id_first {
+                format!(
+                    r#"{{"type":"req","id":"request-9","method":"{method}","params":{params}}}"#
+                )
+            } else {
+                format!(
+                    r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+                )
+            };
+            assert!(
+                RequestFrame::decode(&text).is_err(),
+                "{method} decoded; the refusal path was not reached"
+            );
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} id_first={id_first} got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        for (method, params) in [
+            ("mcp.callTool", r#"{"a":"\ud800\x"}"#),
+            ("server.health", r#"{"a":"\udfff\x"}"#),
+        ] {
+            let text = format!(
+                r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+            );
+            assert!(RequestFrame::decode(&text).is_err());
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} with a byte after the surrogate got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"\ud800","method":"server.health","params":{}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"a","id":"b","method":"mcp.callTool","params":{"nested":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"a","method":"b","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"","method":"m","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let long_id = "x".repeat(257);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{long_id}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
+        // 128 é is 256 bytes and is answered. 200 é is 200 code points and 400
+        // bytes, so it is not: the table counts UTF-8 bytes.
+        let exact = "é".repeat(128);
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{exact}","method":"m","params":{{"a":"\ud800"}}}}"#
+        )) else {
+            panic!("256-byte id got no answer");
+        };
+        assert_eq!(response.id, exact);
+        let wide = "é".repeat(200);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{wide}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"event","id":"request-9","payload":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{},"\ud800":1,"\ud800":2}"#,
+        ) else {
+            panic!("two non-Unicode names hid the id");
+        };
+        assert_eq!(response.id, "request-9");
+        assert_eq!(response.error.unwrap().code, "invalid_request");
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{"p":1,"p":2}}"#,
+        ) else {
+            panic!("a repeated nested name hid the id");
+        };
+        assert_eq!(response.id, "request-9");
+        let mut nested = "0".to_string();
+        for _ in 0..127 {
+            nested = format!("[{nested}]");
+        }
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"request-9","method":"m","params":{nested}}}"#
+        ))
+        .is_none());
+    }
+
     #[tokio::test]
     async fn session_ready_reports_current_restrictions_and_registered_methods() {
         let (state, _) = fixture(MembershipRole::Member);
@@ -2937,7 +3101,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.len() > MAX_PAYLOAD_BYTES as usize);
-        assert!(record.len() <= super::super::generated::MAX_RECORD_RESPONSE_BYTES);
+        assert!(record.len() <= MAX_RECORD_RESPONSE_BYTES);
 
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));
@@ -2946,7 +3110,8 @@ mod tests {
         let (refusal_send, refusals) = mpsc::channel(1);
         let (ordinary_send, ordinary) = mpsc::channel(16);
         let (record_send, records) = mpsc::channel(1);
-        let slots = Arc::new(Semaphore::new(2));
+        let slots = Arc::new(Semaphore::new(1));
+        let control_slots = Arc::new(Semaphore::new(1));
         let record_capacity = Arc::new(Semaphore::new(1));
         let deliveries = Arc::new(WatchDeliveries::new());
         let writer = tokio::spawn(write_authenticated(
@@ -2975,13 +3140,30 @@ mod tests {
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
-                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _slot: control_slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
             })))
             .await
             .unwrap();
+        // The record's send is stalled: its capacity came back when the writer
+        // took it (row R64); the control still holds its own.
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(record_capacity.available_permits(), 1);
+        // One extra answer can be retained while the first send is active.
+        // It owns the only record slot, so a third read cannot be admitted.
+        record_send
+            .send(QueuedRecordResponse::new(QueuedResponse {
+                message: WireResponse::record("{}".into()),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: Some(RecordReadLease::new(
+                    record_capacity.clone().try_acquire_owned().unwrap(),
+                )),
+            }))
+            .await
+            .unwrap();
         assert_eq!(slots.available_permits(), 0);
         assert_eq!(record_capacity.available_permits(), 0);
+        assert!(slots.clone().try_acquire_owned().is_err());
         release.send(()).unwrap();
         let Message::Text(first) = peer.message().await else {
             panic!("record response expected")
@@ -2992,6 +3174,10 @@ mod tests {
         };
         let value: Value = serde_json::from_str(&second).unwrap();
         assert_eq!(value["id"], "control");
+        let Message::Text(third) = peer.message().await else {
+            panic!("second record response expected")
+        };
+        assert_eq!(third.as_str(), "{}");
         // Close the same delivery interest as the production connection owner.
         deliveries.close();
         drop(control_send);
@@ -2999,7 +3185,8 @@ mod tests {
         drop(ordinary_send);
         drop(record_send);
         writer.await.unwrap();
-        assert_eq!(slots.available_permits(), 2);
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(control_slots.available_permits(), 1);
         assert_eq!(record_capacity.available_permits(), 1);
 
         let (mut socket, _peer) = test_socket(None);
@@ -3009,6 +3196,127 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// Row R64: a real server WebSocket over an in-memory duplex, as the
+    /// product's sink, noting the socket's free record slot and global read
+    /// permits at the first call that can write a byte.
+    struct ObservedWebSocket {
+        inner: WebSocketStream<DuplexStream>,
+        slots: Arc<Semaphore>,
+        reads: Arc<Semaphore>,
+        free_at_first_write: Option<(usize, usize)>,
+    }
+    impl ObservedWebSocket {
+        fn observe(&mut self) {
+            let free = (
+                self.slots.available_permits(),
+                self.reads.available_permits(),
+            );
+            self.free_at_first_write.get_or_insert(free);
+        }
+    }
+    impl Sink<Message> for ObservedWebSocket {
+        type Error = Error;
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            let this = self.get_mut();
+            this.observe();
+            Pin::new(&mut this.inner)
+                .poll_ready(context)
+                .map_err(Error::new)
+        }
+        fn start_send(self: Pin<&mut Self>, message: Message) -> Result<(), Error> {
+            let this = self.get_mut();
+            this.observe();
+            let Message::Text(text) = message else {
+                panic!("the record lane sends text")
+            };
+            let text = Frame::text(text.as_str());
+            Pin::new(&mut this.inner)
+                .start_send(text)
+                .map_err(Error::new)
+        }
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            let this = self.get_mut();
+            this.observe();
+            Pin::new(&mut this.inner)
+                .poll_flush(context)
+                .map_err(Error::new)
+        }
+        fn poll_close(
+            self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            Pin::new(&mut self.get_mut().inner)
+                .poll_close(context)
+                .map_err(Error::new)
+        }
+    }
+
+    /// The client pings before each read, so tungstenite has a pong due and
+    /// writes it with the answer inside `start_send`. The record slot and read
+    /// permit are free before any byte of either answer can reach the client,
+    /// for a record and for a refusal on the record lane.
+    #[tokio::test]
+    async fn record_capacity_is_free_before_any_byte_reaches_a_pinging_client() {
+        let (server, client) = tokio::io::duplex(4 * MAX_RECORD_RESPONSE_BYTES);
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let slots = Arc::new(Semaphore::new(1));
+        let reads = Arc::new(Semaphore::new(4));
+        let mut socket = ObservedWebSocket {
+            inner: WebSocketStream::from_raw_socket(server, Role::Server, None).await,
+            slots: slots.clone(),
+            reads: reads.clone(),
+            free_at_first_write: None,
+        };
+        for message in [
+            WireResponse::record("{}".into()),
+            WireResponse::record("x".repeat(MAX_RECORD_RESPONSE_BYTES)),
+            WireResponse::ordinary(failure("read", "source_preparing")),
+        ] {
+            client.send(Frame::Ping(vec![1].into())).await.unwrap();
+            // The server reads the ping, which queues its pong.
+            let ping = socket.inner.next().await.unwrap().unwrap();
+            assert!(matches!(ping, Frame::Ping(_)), "{ping:?}");
+            let slot = Arc::new(slots.clone().try_acquire_owned().unwrap());
+            let permit = reads.clone().try_acquire_owned().unwrap();
+            let response = QueuedRecordResponse::owned(
+                message,
+                Some(slot.clone()),
+                Some(RecordReadLease::new((permit, slot))),
+            );
+            socket.free_at_first_write = None;
+            assert!(
+                send_record_queued(Duration::from_secs(1), &mut socket, response)
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(socket.free_at_first_write, Some((1, 4)));
+            // The pong and the answer both arrive, in tungstenite's order.
+            let mut kinds = Vec::new();
+            for _ in 0..2 {
+                kinds.push(
+                    match timeout(Duration::from_secs(1), client.next())
+                        .await
+                        .expect("pong and answer arrive")
+                        .unwrap()
+                        .unwrap()
+                    {
+                        Frame::Pong(_) => "pong",
+                        Frame::Text(_) => "text",
+                        other => panic!("unexpected frame {}", other.len()),
+                    },
+                );
+            }
+            kinds.sort_unstable();
+            assert_eq!(kinds, ["pong", "text"]);
+        }
     }
 
     #[tokio::test]
@@ -3116,7 +3424,9 @@ mod tests {
             })))
             .await
             .unwrap();
-        assert_eq!(slots.available_permits(), 0);
+        // Only the queued control's slot is held while the record's send is
+        // stalled (row R64).
+        assert_eq!(slots.available_permits(), 1);
         tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
         timeout(Duration::from_secs(1), writer)
             .await
@@ -3208,11 +3518,14 @@ mod tests {
                 .into(),
             )))
             .unwrap();
-        let mut message = peer.message().await;
-        if matches!(message, Message::Text(_)) {
-            message = peer.message().await;
-        }
-        let Message::Close(Some(close)) = message else {
+        let Message::Text(text) = peer.message().await else {
+            panic!("unauthorized expected")
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "unauthorized");
+        let Message::Close(Some(close)) = peer.message().await else {
             panic!("close expected")
         };
         assert_eq!(close.code, 4001);

@@ -9,9 +9,9 @@ use crate::conversation::application::mcp_apps::{
     ContextDrop, DroppedContexts, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator,
     McpAppRef, McpAppWithdrawal,
 };
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::OrganizationId;
 use nessa_auth::domain::PrincipalId;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -514,13 +514,13 @@ async fn a_deleted_conversations_apps_take_nothing_and_keep_nothing() {
     let mut released = 0;
     reviews.delete(&releaser(), || released += 1);
     assert_eq!(released, 1);
-    assert!(matches!(
+    assert_eq!(
         waiting.ended(APP_REVIEW_DEADLINE).await,
         ReviewEnd::Withdrawn {
             cause: McpAppWithdrawal::ConversationEnded,
-            ..
+            by: Some(releaser()),
         }
-    ));
+    );
     // No opening begins again, and a release racing it keeps nothing.
     let after = reviews.begin();
     assert_eq!(reviews.admit(after, &app("i2")), Err(ReviewRefusal::Ended));

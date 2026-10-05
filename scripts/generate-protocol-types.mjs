@@ -9,8 +9,8 @@
  * Outputs (do not edit by hand):
  *   packages/nessa-client/src/generated/protocol.ts
  *   packages/nessa-client/src/generated/catalog.ts
- *   crates/nessa-server/src/protocol/generated_catalog.rs
- *   crates/nessa-server/src/protocol/generated_types.rs
+ *   crates/nessa-protocol/src/protocol/generated_catalog.rs
+ *   crates/nessa-protocol/src/protocol/generated_types.rs
  */
 import Ajv2020 from "ajv/dist/2020.js"
 import ts from "typescript"
@@ -74,10 +74,10 @@ const catalogTsOut =
   process.env.NESSA_PROTOCOL_CATALOG_TS_OUT ?? join(outDir, "catalog.ts")
 const catalogRsOut =
   process.env.NESSA_PROTOCOL_CATALOG_RS_OUT ??
-  join(root, "crates/nessa-server/src/protocol/generated_catalog.rs")
+  join(root, "crates/nessa-protocol/src/protocol/generated_catalog.rs")
 const typesRsOut =
   process.env.NESSA_PROTOCOL_TYPES_RS_OUT ??
-  join(root, "crates/nessa-server/src/protocol/generated_types.rs")
+  join(root, "crates/nessa-protocol/src/protocol/generated_types.rs")
 
 const SCHEMA_FILES = ["common.json", "server.json", "shortcuts.json"]
 

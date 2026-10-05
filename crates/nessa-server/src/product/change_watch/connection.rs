@@ -3,23 +3,23 @@ use super::{
     WatchSelector, WatchToken,
 };
 use crate::product::{
-    generated::{
-        product_method, ConversationUnwatchParams, ConversationWatchResult,
-        MAX_CONNECTION_CHANGE_WATCHES,
-    },
     socket::{failure, success, valid_product_request},
     state::ProductRouteState,
 };
-use crate::product_contract::generated::{
-    ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
-};
-use crate::protocol::{OutgoingMessage, RequestFrame};
 use futures_util::{
     future::{AbortHandle, Abortable},
     stream::FuturesUnordered,
     StreamExt,
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    product_method, ConversationUnwatchParams, ConversationWatchResult,
+    MAX_CONNECTION_CHANGE_WATCHES,
+};
+use nessa_protocol::product_contract::generated::{
+    ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use std::{
     future::Future,
     pin::Pin,

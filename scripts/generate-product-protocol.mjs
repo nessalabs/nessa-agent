@@ -114,7 +114,7 @@ const sdkSource = readFileSync(
   "utf8",
 )
 const ordinaryWire = readFileSync(
-  resolve(root, "crates/nessa-server/src/protocol/encode.rs"),
+  resolve(root, "crates/nessa-protocol/src/protocol/encode.rs"),
   "utf8",
 )
 const maxOrdinaryResponseBytes = Number(
@@ -182,14 +182,16 @@ let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
   "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+// ConversationErrorCode is named by MCP app audit — a refused call, an app's
+// message answered and not sent — and by the product wire.
+// It has no payload field, so it is published here with the other outcome
+// codes an application module may import.
 const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
   "ChangeWatchErrorCode",
   "ChangeWatchEndReason",
-  // The gateway's own layers record the code a conversation's command was
-  // answered with (an app's message not sent, say), so it is the contract's.
   "ConversationErrorCode",
 ])
 // Outcome enums referenced by typed payload fields serialize through Serde.
@@ -618,8 +620,8 @@ const outputs = [
   ],
   ...(schemaOutput === undefined ? [] : [["protocol/product/v1.json", schemaOutput]]),
   ["packages/nessa-client/src/generated/product.ts", ts],
-  ["crates/nessa-server/src/product/generated.rs", formatted.stdout],
-  ["crates/nessa-server/src/product_contract/generated.rs", formattedContract.stdout],
+  ["crates/nessa-protocol/src/product/generated.rs", formatted.stdout],
+  ["crates/nessa-protocol/src/product_contract/generated.rs", formattedContract.stdout],
 ]
 for (const [path, contents] of outputs) {
   const target = resolve(root, path)

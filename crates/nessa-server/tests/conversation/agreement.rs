@@ -1,10 +1,11 @@
 //! Numbers this context enforces and the published protocol schema states
 //! again. Each is valid on its own; these check that they describe the same
 //! gateway, so changing one without the other fails here.
-use crate::conversation::{
-    application::{MAX_LISTED_CONVERSATIONS, MAX_STRUCTURED_CONTENT_BYTES},
-    domain::{ConversationPreview, ConversationTitle, LATEST_TIME_MS},
+use crate::conversation::application::MAX_LISTED_CONVERSATIONS;
+use nessa_protocol::conversation::domain::{
+    ConversationPreview, ConversationTitle, LATEST_TIME_MS,
 };
+use nessa_protocol::conversation::view::MAX_STRUCTURED_CONTENT_BYTES;
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 use serde_json::Value;
@@ -90,7 +91,7 @@ fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
 
 #[test]
 fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
-    use crate::conversation::application::{McpAppCode, RESOURCE_TICKET_LIFETIME_MS};
+    use crate::conversation::application::RESOURCE_TICKET_LIFETIME_MS;
     use crate::mcp_servers::domain::{MAX_APP_ARGUMENTS_BYTES, MAX_APP_RESULT_BYTES};
     use nessa_sdk::domain::mcp_apps::MAX_UI_HTML_BYTES;
     let schema = schema();
@@ -118,15 +119,6 @@ fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
         read["expiresInMs"]["const"].as_u64(),
         Some(RESOURCE_TICKET_LIFETIME_MS)
     );
-    // Every code audit names a step with is one the protocol carries.
-    let codes = defs["ConversationErrorCode"]["enum"].as_array().unwrap();
-    for code in McpAppCode::ALL {
-        assert!(
-            codes.iter().any(|known| known == code.as_str()),
-            "{}",
-            code.as_str()
-        );
-    }
 }
 
 #[test]

@@ -36,11 +36,11 @@ use super::mcp_apps::{
     ContextDrop, DroppedContexts, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
     McpAppWithdrawal,
 };
-use super::view::{
+use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin,
 };
-use crate::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
+use nessa_protocol::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, UserMessage};
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
@@ -293,8 +293,9 @@ impl AppReviews {
 
     /// `by` deleted the conversation: end the current opening, and begin no
     /// other; what was held of it — its released mounts — is let go, as
-    /// nothing will name it again, and the contexts still held are dropped,
-    /// `by` the deleter. `release` runs under the lock.
+    /// nothing will name it again. Reviews still open are withdrawn, and the
+    /// contexts still held are dropped, as that same `by`. `release` runs
+    /// under the lock.
     pub fn delete(&self, by: &McpAppInitiator, release: impl FnOnce()) {
         let (ended, dropped) = {
             let mut state = self.state.lock().expect("app reviews");
@@ -312,7 +313,7 @@ impl AppReviews {
             )
         };
         self.report_dropped(dropped, ContextDrop::ConversationEnded, by);
-        withdraw_ended(ended, &McpAppInitiator::System);
+        withdraw_ended(ended, by);
     }
 
     /// One context update of the conversation at a time: held across its
