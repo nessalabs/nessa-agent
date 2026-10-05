@@ -69,6 +69,73 @@ source.transcripts.set(
   ),
 )
 
+let retryId: string | undefined
+function publishRetry(phase: "queued" | "running" | "completed") {
+  if (!retryId) throw new Error("missing retry input")
+  source.emit({
+    kind: "transcript",
+    transcript: transcriptFrom(
+      view("b", {
+        messages: [
+          {
+            executionId: "refused",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            authenticationRequired: true,
+            parts: [
+              {
+                kind: "local_notice",
+                offset: 0,
+                text: "Nessa declined a tool review.",
+                noticeId: "review-1",
+                toolId: "",
+              },
+            ],
+          },
+          ...(phase === "queued"
+            ? []
+            : [
+                {
+                  executionId: retryId,
+                  userText: "Try again",
+                  attachments: [],
+                  files: [],
+                  status: phase,
+                  parts:
+                    phase === "completed"
+                      ? [
+                          {
+                            kind: "text" as const,
+                            offset: 0,
+                            text: "Ready",
+                            toolId: "",
+                            noticeId: "",
+                          },
+                        ]
+                      : [],
+                },
+              ]),
+        ],
+        pending:
+          phase === "queued"
+            ? [
+                {
+                  executionId: retryId,
+                  text: "Try again",
+                  attachments: [],
+                  files: [],
+                  mode: "queued",
+                },
+              ]
+            : [],
+      }),
+      phase === "queued" ? 2 : phase === "running" ? 3 : 4,
+      () => 1000,
+    ),
+  })
+}
 let resolve: (() => void) | undefined
 const fixture = {
   calls: [] as string[],
@@ -87,10 +154,23 @@ const fixture = {
     source.refuse("send", "unavailable")
     void source.release("send")
   },
+  acceptRetry() {
+    retryId = store.getState().workspace.outbox.b?.at(-1)?.id
+    publishRetry("queued")
+  },
+  runRetry() {
+    publishRetry("running")
+  },
+  finishRetry() {
+    publishRetry("completed")
+  },
+  outboxCount() {
+    return store.getState().workspace.outbox.b?.length ?? 0
+  },
   recover() {
     source.emit({
       kind: "transcript",
-      transcript: { ...emptyTranscript("b"), revision: 2 },
+      transcript: { ...emptyTranscript("b"), revision: 5 },
     })
   },
 }

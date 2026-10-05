@@ -267,6 +267,13 @@ export function transcriptFrom(
       parts: [{ kind: "text", text: waiting.text }],
     })
   }
+  const latestTurn = view.messages.at(-1)
+  // Inputs appended from pending are newer displayed turns too. Compare the
+  // mapped input identity, including duplicate pending entries skipped above.
+  const latestInput = messages.reduce<string | undefined>(
+    (latest, message) => (message.role === "user" ? message.id : latest),
+    undefined,
+  )
   // What runs is the tool and its exact input, which the gateway offers a
   // review only when it can show whole; why is the provider's title for it.
   const asked = view.permissions[0]
@@ -284,6 +291,8 @@ export function transcriptFrom(
     activity,
     approval,
     revision,
-    authenticationRequired: view.messages.at(-1)?.authenticationRequired === true,
+    authenticationRequired:
+      latestTurn?.authenticationRequired === true &&
+      latestInput === inputId(latestTurn.executionId),
   }
 }

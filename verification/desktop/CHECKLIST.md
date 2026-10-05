@@ -755,6 +755,8 @@ production panel; it does not exercise an operating-system file picker.
 ## Provider authentication recovery (#501)
 
 `node verification/desktop/scripts/provider-sign-in.mjs --engine chromium,webkit`
+also verifies optimistic sending/failed delivery, accepted pending inputs,
+user-only running and output without reviving recovery or duplicating the retry. It
 checks both workspace and floating panel against [ADR 501](../../docs/adr/todo/501-provider-authentication-recovery.md): at
 360px and 1000px the card fits its pane, height is at most 130px, its button stays
 within the card, keyboard activation opens the selected provider once, an

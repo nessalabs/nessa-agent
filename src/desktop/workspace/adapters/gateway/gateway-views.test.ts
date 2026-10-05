@@ -399,3 +399,29 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
     { kind: "text", text: "Nessa declined a tool review." },
   ])
 })
+
+it("recovery follows the latest mapped input across pending and dispatched turns", () => {
+  const refusal = turn({ status: "failed", authenticationRequired: true })
+  const pending = {
+    executionId: "retry",
+    text: "Try again",
+    attachments: [],
+    files: [],
+    mode: "queued" as const,
+  }
+  const source = view("auth", { messages: [refusal] })
+  expect(transcriptFrom(source, 1, at).authenticationRequired).toBe(true)
+  source.pending = [{ ...pending, executionId: refusal.executionId }]
+  expect(transcriptFrom(source, 2, at).authenticationRequired).toBe(true)
+  source.pending.push(pending)
+  expect(transcriptFrom(source, 3, at).authenticationRequired).toBe(false)
+  source.messages.push(turn({ executionId: pending.executionId, status: "running" }))
+  expect(transcriptFrom(source, 4, at).authenticationRequired).toBe(false)
+  source.pending = []
+  source.messages[1] = turn({
+    executionId: pending.executionId,
+    status: "completed",
+    parts: [textPart("Ready", 0)],
+  })
+  expect(transcriptFrom(source, 5, at).authenticationRequired).toBe(false)
+})

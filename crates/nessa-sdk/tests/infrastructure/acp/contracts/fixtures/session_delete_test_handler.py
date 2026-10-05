@@ -127,7 +127,9 @@ for line in sys.stdin:
             # `list-unlisted`: the workspace's list does not name it.
             send({"id": message["id"], "result": {"sessions": [other]}})
     elif method == "session/delete":
-        if mode == "refused" or refuse:
+        if refuse == "auth":
+            send({"id": message["id"], "error": {"code": -32000, "message": "Authentication required"}})
+        elif mode == "refused" or refuse:
             send({"id": message["id"], "error": {"code": -32603, "message": "session not found"}})
         elif mode == "stall":
             never_answer()

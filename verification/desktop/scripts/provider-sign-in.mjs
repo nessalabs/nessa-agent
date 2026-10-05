@@ -109,6 +109,19 @@ await main(
                 await page.locator(".workspace-message-failed").waitFor()
                 if ((await card.count()) !== 0)
                   throw new Error("failed newer outbox turn retained old recovery")
+                for (const phase of ["acceptRetry", "runRetry", "finishRetry"]) {
+                  await page.evaluate(
+                    (action) => window.__providerSignIn[action](),
+                    phase,
+                  )
+                  await page.waitForFunction(
+                    () => window.__providerSignIn.outboxCount() === 0,
+                  )
+                  if ((await card.count()) !== 0)
+                    throw new Error(`${phase} revived old authentication recovery`)
+                  if ((await page.getByText("Try again", { exact: true }).count()) !== 1)
+                    throw new Error(`${phase} duplicated the accepted retry input`)
+                }
               }
               await page.evaluate(() => {
                 window.__providerSignIn.recover()

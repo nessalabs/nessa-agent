@@ -50,7 +50,7 @@ test("release verification reads the app signature and effective bundled purpose
     "--xml",
     "/built/Nessa.app",
   ])
-  assert.equal(calls[2][1].at(-1), "/built/Nessa.app/Contents/Info.plist")
+  assert.equal(calls[2][1].at(-1), resolve("/built/Nessa.app", "Contents/Info.plist"))
 })
 
 test("missing signed permission or effective purpose refuses bundle verification", () => {

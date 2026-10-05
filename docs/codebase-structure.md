@@ -1612,12 +1612,14 @@ variant. Generic provider errors keep their numeric code and diagnostic.
 `crates/nessa-protocol/src/conversation/projection.rs` publishes it from retained
 provider reports, with restoration regressions in that crate’s
 `tests/conversation/projection.rs`. The desktop
-maps the latest wire turn's fact to `Transcript.authenticationRequired` and draws
+maps typed recovery only while its input ID remains latest across dispatched
+and pending inputs, then draws
 the shared `src/provider-authentication/ui/provider-sign-in.tsx`, with its
 workspace Redux controller in `workspace/ui/transcript/provider-sign-in.tsx`.
 A newer unconfirmed outbox message retires that older wire refusal even when the
 new delivery fails before acceptance; `ui/transcript/transcript.test.tsx` and the
-provider-sign-in browser fixture exercise both states.
+provider-sign-in browser fixture exercise both states and the accepted queued,
+running and output transitions.
 The floating panel carries the same typed fact through `applyView` and replaces
 that turn's error divider with the shared card; its App receives the login action
 from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)

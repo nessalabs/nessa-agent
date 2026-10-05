@@ -52,7 +52,12 @@ outside Nessa's launcher.
 | Launch pending | Additional activation | No second launch | Disabled button and component in-flight guard |
 | Launch pending | Launch acknowledged | Button available; card remains | Browser script |
 | Launch pending | Launch refused / unsupported | Button available; small launch failure shown | Browser script |
-| Card shown | Later user-only queued or running turn replaces latest refusal | Card removed | Gateway mapping test, browser script |
+| Card shown | Optimistic newer user input sending or failed before acceptance | Old refusal hidden while outbox owns the newer input | Public send and browser regressions |
+| Optimistic retry | Gateway accepts its ID into pending; outbox retires | Latest mapped input owns recovery; old refusal stays hidden | Mapping, store reconciliation and browser regressions |
+| Accepted retry | Pending becomes running user-only, then emits output | Old recovery stays retired throughout | Mapping and browser regressions |
+| Failed turn | Duplicate pending entry names the same dispatched execution | No new input supersedes the refusal; card remains | Mapping regression |
+| ACP delete refused authentication | Full listing omits the named session | Deletion settles NotListed | Public deletion contract |
+| ACP delete refused authentication | Listing names session or fails | Original typed authentication refusal retained | Public deletion contract |
 | Failed turn restored | Provider report retained | Same typed recovery fact | Projection restoration test |
 
 ## Remaining limitation

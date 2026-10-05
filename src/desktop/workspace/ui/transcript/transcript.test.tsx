@@ -8,6 +8,8 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { loadWorkspace, openSession, sendMessage } from "../../adapters/store/commands"
+import { transcriptFrom } from "../../adapters/gateway/gateway-views"
+import { view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
 import {
@@ -358,5 +360,65 @@ describe("provider recovery ownership", () => {
     })
     expect(host.querySelector(".workspace-message-failed")).not.toBeNull()
     expect(host.querySelector(".provider-sign-in")).toBeNull()
+    const [retry] = store.getState().workspace.outbox.b ?? []
+    const accepted = view("b", {
+      messages: [
+        {
+          executionId: "m1",
+          userText: "Why cargo fails?",
+          attachments: [],
+          files: [],
+          status: "failed",
+          authenticationRequired: true,
+          parts: [],
+        },
+      ],
+      pending: [
+        {
+          executionId: retry.id,
+          text: "Try again",
+          attachments: [],
+          files: [],
+          mode: "queued",
+        },
+      ],
+    })
+    for (const phase of ["queued", "running", "completed"] as const) {
+      if (phase !== "queued") {
+        accepted.pending = []
+        accepted.messages[1] = {
+          executionId: retry.id,
+          userText: "Try again",
+          attachments: [],
+          files: [],
+          status: phase,
+          parts:
+            phase === "completed"
+              ? [{ kind: "text", offset: 0, text: "Ready", toolId: "", noticeId: "" }]
+              : [],
+        }
+      }
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.updateReceived({
+            update: {
+              kind: "transcript",
+              transcript: transcriptFrom(
+                accepted,
+                phase === "queued" ? 2 : phase === "running" ? 3 : 4,
+                () => 1000,
+              ),
+            },
+          }),
+        )
+      })
+      expect(store.getState().workspace.outbox.b).toBeUndefined()
+      expect(host.querySelector(".provider-sign-in")).toBeNull()
+      expect(
+        [...host.querySelectorAll(".workspace-message")].filter(
+          (message) => message.textContent === "Try again",
+        ),
+      ).toHaveLength(1)
+    }
   })
 })
