@@ -215,9 +215,9 @@ export async function startPreview(options, env = {}) {
     )
     if (!(await waitFor(url, 30_000, preview)))
       throw new CannotRun(`vite preview did not answer at ${url}\n${preview.tail()}`)
+    log(`previewing production at ${url}`)
     const running = preview
     preview = undefined
-    log(`previewing production at ${url}`)
     return {
       url,
       mode: "prod",
