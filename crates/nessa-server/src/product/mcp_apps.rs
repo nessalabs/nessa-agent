@@ -20,7 +20,7 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
-use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
+use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, MAX_UI_URI_BYTES};
 
 /// The most characters of a server's error message the wire carries.
 const MAX_REMOTE_MESSAGE_CHARS: usize = 512;
@@ -86,8 +86,6 @@ pub(super) async fn dispatch(
                         },
                     )
                     .await?;
-                let list =
-                    |values: &[Box<str>]| values.iter().map(|value| value.to_string()).collect();
                 Ok(success(
                     &frame.id,
                     &McpReadResourceResult {
@@ -97,18 +95,8 @@ pub(super) async fn dispatch(
                         sha256: resource.sha256,
                         ticket: resource.ticket,
                         expires_in_ms: RESOURCE_TICKET_LIFETIME_MS,
-                        csp: McpUiCsp {
-                            connect_domains: list(resource.csp.connect_domains()),
-                            resource_domains: list(resource.csp.resource_domains()),
-                            frame_domains: list(resource.csp.frame_domains()),
-                            base_uri_domains: list(resource.csp.base_uri_domains()),
-                        },
-                        permissions: McpUiPermissions {
-                            camera: resource.permissions.camera,
-                            microphone: resource.permissions.microphone,
-                            geolocation: resource.permissions.geolocation,
-                            clipboard_write: resource.permissions.clipboard_write,
-                        },
+                        csp: ui_csp(&resource.csp),
+                        permissions: ui_permissions(resource.permissions),
                         domain: resource.domain,
                         prefers_border: resource.prefers_border,
                     },
@@ -141,12 +129,9 @@ pub(super) async fn dispatch(
     match result {
         Ok(response) => response,
         Err(ConversationError::McpApp(McpAppError::Remote(Some((code, message)))))
-            if (-MAX_REMOTE_CODE..=MAX_REMOTE_CODE).contains(&code) =>
+            if remote_details(code, &message).is_some() =>
         {
-            let details = McpRemoteErrorDetails {
-                code,
-                message: remote_message(&message),
-            };
+            let details = remote_details(code, &message).expect("checked above");
             failure_with_details(
                 &frame.id,
                 ConversationErrorCode::McpRemoteError.as_str(),
@@ -180,6 +165,40 @@ fn name(value: &str) -> Result<(), ConversationError> {
     } else {
         Err(ConversationError::InvalidInput)
     }
+}
+
+/// The CSP an app asked for, as the wire carries it: what
+/// `mcp.readResource` answers and `mcpServers.inspect` reports.
+pub(super) fn ui_csp(csp: &UiCsp) -> McpUiCsp {
+    let list = |values: &[Box<str>]| values.iter().map(|value| value.to_string()).collect();
+    McpUiCsp {
+        connect_domains: list(csp.connect_domains()),
+        resource_domains: list(csp.resource_domains()),
+        frame_domains: list(csp.frame_domains()),
+        base_uri_domains: list(csp.base_uri_domains()),
+    }
+}
+
+/// What an app asked of the host, as the wire carries it.
+pub(super) fn ui_permissions(permissions: UiPermissions) -> McpUiPermissions {
+    McpUiPermissions {
+        camera: permissions.camera,
+        microphone: permissions.microphone,
+        geolocation: permissions.geolocation,
+        clipboard_write: permissions.clipboard_write,
+    }
+}
+
+/// A server's JSON-RPC error as the wire carries it, or `None` for a code
+/// past what a JSON number keeps exactly: `mcp_remote_error`'s details and
+/// `mcp_server_remote_error`'s.
+pub(super) fn remote_details(code: i64, message: &str) -> Option<McpRemoteErrorDetails> {
+    (-MAX_REMOTE_CODE..=MAX_REMOTE_CODE)
+        .contains(&code)
+        .then(|| McpRemoteErrorDetails {
+            code,
+            message: remote_message(message),
+        })
 }
 
 /// A server's error message as the wire carries it: at most 512

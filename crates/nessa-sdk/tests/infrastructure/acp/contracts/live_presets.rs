@@ -1,7 +1,7 @@
 //! Opt-in behavioral evidence for candidate model presets. This probe does not
 //! confer catalog availability: its recorded tool effects require review.
 use super::{live::live_config, support::*};
-use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::acp::sessions::{McpServerList, StdioMcpServer};
 use serde_json::{json, Value};
 use std::{fs, io::Write};
 
@@ -129,7 +129,7 @@ async fn probe_presets(downgrade_boundaries: bool) {
         },
     );
     config.execution_timeout = Some(Duration::from_secs(180));
-    config.mcp_servers = vec![
+    config.mcp_servers = McpServerList::fixed(vec![
         StdioMcpServer {
             name: "nessa".into(),
             command: PathBuf::from(std::env::var_os("NESSA_LIVE_MCP").expect("set MCP executable")),
@@ -154,7 +154,7 @@ async fn probe_presets(downgrade_boundaries: bool) {
                 workspace.path().join("mcp.jsonl").display().to_string(),
             ],
         },
-    ];
+    ]);
     let mut metadata = ModelMetadataDto::from(&fixture_model);
     metadata.model_id = model_id.clone();
     metadata.max_context_window_tokens = 1_000_000;

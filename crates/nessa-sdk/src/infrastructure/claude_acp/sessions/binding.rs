@@ -247,6 +247,5 @@ impl ClaudeAcpProvider {
             self.approval_mode,
             self.effort_level.clone(),
         )
-        .with_mcp_servers(&self.config)
     }
 }

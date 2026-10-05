@@ -712,18 +712,42 @@ SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
 bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
 cancellation, `stand_in` for what a harness sees, and for keeping a
 forwarded `tools/call` result's `structuredContent` for the ACP worker to
-attach, `servers` for the open sessions and their tool lists, `process` for a
+attach, `servers` for the live configured set (replaced whole, read at each
+opening), the open sessions and their tool lists, and a session opened once
+for no conversation (`open_once`, a host's look at a server), `process` for a
 server's process group, `wire` for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
-the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
+the resource ticket, and a user's server as stored with the edits made to
+the stored list (`domain/configured_server.rs`), the relay socket, the
+`mcp-relay` command, the
 grants that tie each stand-in to its conversation (each the owner's own
 grant, carrying what its stand-ins forward), the store an MCP App's
 resources wait in behind their tickets, and the view's tool UI lookup
 (`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
-(`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
-with its stand-in, gives the agents the grants, and builds the ticket store,
-before any agent is built. The policy an MCP App's calls are held to is
+(`entrypoint`); managing the stored servers — `mcpServers.list`, `.save`,
+`.remove` and `.inspect`, their wire in `product/mcp_servers.rs` (which fits
+an inspection to the frame's bound) — is `application/settings.rs` over its
+ports (`application/ports.rs`), with the adapters
+`infrastructure/stored_servers.rs` (the one reader and writer of
+`agents.mcpServers`), `infrastructure/config_store.rs` (`config.json`, its
+lock and the lock's bounded wait), `infrastructure/live_set.rs` (the live set
+over `McpServers`, and `LaunchSettings`, the one place a stored server becomes
+a launch), `infrastructure/inspector.rs` (one server started once with
+`McpServers::open_once`, read within its bounds, then stopped; tested against
+real processes in `tests/mcp_servers/inspect.rs`) and
+`infrastructure/settings_audit.rs`
+([design](design/mcp-connections.md#managing-the-stored-servers));
+`composition/mcp_servers.rs` takes the configured servers
+into `McpServers`, the one owner of the live set, gives every provider open
+the stand-ins for that set as it is then (`StandIns`, an
+`McpServerSource`), gives the agents the grants, and builds the relay —
+on Unix even with no server configured — and the ticket store, before any
+agent is built, and builds the settings over the live set. The relay admits
+each stand-in against the set's digests at its hello, then opens only what it
+admitted (`McpServers::open_as`). The digest it compares is keyed per gateway
+process (`domain::ConfigurationKey`) over a server's command, arguments and
+environment, its fields chosen once by `infrastructure::launch_digest`. The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
 `mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
 service's (`conversation/application/service/app_calls.rs`, with the reviews
@@ -734,8 +758,10 @@ one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
 `@nessa/client` they share `application/gateway-http.ts` (the origin, the
 deadline clock, and how one request ends), and an app's calls are
 `presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
-`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
-(`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
+`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding reads a provider open's MCP servers
+once (`McpServerList` in `acp/sessions/config.rs`, beside the one owner of
+the server rules, `StdioMcpServer::problem_in`), holds the open's grant
+(`acp/sessions/stand_ins.rs`), and puts its environment in every MCP server
 entry; its worker attaches the grant's forwarded results to the completed
 calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
@@ -1599,7 +1625,9 @@ then carries their outcomes through conversation/storage, MCP and the native joi
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
 `tests/composition/watch_shutdown.rs`, using the watch fixture in
-`tests/product/socket/watches.rs`. The separate-process replay-to-live tests, with
+`tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
+`composition/mcp_servers.rs::stop` draining stored-server changes before the
+servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with
 the probe client and with the example's own `watch` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.

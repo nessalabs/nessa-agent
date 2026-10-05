@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! nessa mcp-relay ──hello {server, configuration}──▶ Relay::serve
-//!                 ◀─{accepted} or {refused, message}─┘   │ admit, then McpServers::stand_in
+//!                 ◀─{accepted} or {refused, message}─┘   │ admit against McpServers::configured, then open_as what was admitted
 //!                 ◀═══ MCP frames, both ways ═══════════▶ StandIn::serve
 //! ```
 //!
@@ -11,8 +11,10 @@
 //! JSON line of at most [`MAX_HELLO_BYTES`] within [`HELLO_TIMEOUT`] is closed
 //! without an answer.
 use super::grants::ConversationGrants;
-use crate::mcp_servers::domain::{admit, StandInRefusal};
-use nessa_sdk::infrastructure::mcp::{McpError, McpServers, INITIALIZE_TIMEOUT};
+use crate::mcp_servers::domain::{admit, configuration_digest, ConfigurationKey, StandInRefusal};
+use nessa_sdk::infrastructure::mcp::{
+    McpError, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, time::Duration};
 use tokio::io::{
@@ -28,6 +30,25 @@ pub const ANSWER_TIMEOUT: Duration = INITIALIZE_TIMEOUT.saturating_add(HELLO_TIM
 /// What a stand-in whose token no live grant holds is told.
 const NO_CONVERSATION: &str =
     "this MCP stand-in belongs to no open conversation; start a new session";
+/// What a stand-in of a server since removed is told.
+const UNKNOWN: &str = "no MCP server is configured under that name";
+/// What a stand-in of a server since edited is told.
+const CHANGED: &str = "the MCP server is configured differently now; start a new session";
+
+/// The digest a stand-in for `launch` carries, keyed with this process's
+/// `key`: its command, arguments and whole environment
+/// ([`configuration_digest`]). The one place a launch's fields are chosen
+/// for it, read by the stand-ins handed to each open and by the relay that
+/// admits them. The working directory is the gateway's, one for every server
+/// in a run, and not in it.
+pub fn launch_digest(key: &ConfigurationKey, launch: &McpServerLaunch) -> String {
+    configuration_digest(
+        key,
+        &launch.server.command,
+        &launch.server.args,
+        &launch.environment,
+    )
+}
 
 /// What a stand-in says first.
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
@@ -109,34 +130,72 @@ pub async fn write_line(
 /// Why, and with what message, a stand-in whose session could not open is
 /// refused. An opening refused [`McpError::Closed`] had its grant revoked
 /// while it opened — the only reason `open` gives it — so it is as stale as a
-/// token refused at the door; anything else, its server could not be made
-/// ready.
+/// token refused at the door; one refused
+/// [`McpError::ConfigurationChanged`] or [`McpError::NotConfigured`] met a
+/// set replaced since its admission, and is refused as the admission would
+/// refuse it now; anything else, its server could not be made ready.
 pub(crate) fn opening_refused(error: McpError) -> (StandInRefusal, String) {
     match error {
         McpError::Closed => (StandInRefusal::UnknownSession, NO_CONVERSATION.into()),
+        // Replaced between the admission and the opening: refused as it
+        // would have been had the replacement landed first.
+        McpError::ConfigurationChanged => (StandInRefusal::ConfigurationChanged, CHANGED.into()),
+        McpError::NotConfigured => (StandInRefusal::UnknownServer, UNKNOWN.into()),
         error => (StandInRefusal::Unavailable, said(&error.to_string())),
     }
 }
 
 /// The gateway's side of the relay socket.
 pub struct Relay {
+    /// The live set, whose digests each hello is admitted against as they
+    /// are then, and where its session is opened.
     servers: McpServers,
-    /// Each configured server's configuration digest, by name.
-    configured: BTreeMap<String, String>,
     /// The tokens issued to open conversations' harnesses.
     grants: ConversationGrants,
+    /// This process's key for each configuration's digest.
+    key: ConfigurationKey,
 }
 impl Relay {
-    pub fn new(
-        servers: McpServers,
-        configured: BTreeMap<String, String>,
-        grants: ConversationGrants,
-    ) -> Self {
+    pub fn new(servers: McpServers, grants: ConversationGrants, key: ConfigurationKey) -> Self {
         Self {
             servers,
-            configured,
             grants,
+            key,
         }
+    }
+
+    /// The server `hello` names as it is configured now, when the hello's
+    /// digest is that configuration's ([`launch_digest`]): against the set
+    /// as it is now, a stand-in of a server since edited — its environment
+    /// alone included — is refused `configuration-changed`, of one since
+    /// removed `unknown-server`.
+    pub(crate) fn admitted(&self, hello: &Hello) -> Result<McpServerLaunch, StandInRefusal> {
+        let configured = self.servers.configured();
+        let digests = configured
+            .iter()
+            .map(|launch| (launch.server.name.clone(), launch_digest(&self.key, launch)))
+            .collect::<BTreeMap<_, _>>();
+        admit(&hello.server, &hello.configuration, &digests)?;
+        configured
+            .into_iter()
+            .find(|launch| launch.server.name == hello.server)
+            .ok_or(StandInRefusal::UnknownServer)
+    }
+
+    /// One session, and one server process, on `admitted` for `owner`'s
+    /// stand-in alone: its harness session's, ended with it or with its
+    /// grant. Opened only on the configuration the stand-in was admitted
+    /// against: a set replaced since is refused as the admission would refuse
+    /// it now ([`McpServers::open_as`]).
+    pub(crate) async fn open_admitted(
+        &self,
+        admitted: &McpServerLaunch,
+        owner: McpOwner,
+    ) -> Result<McpSession, (StandInRefusal, String)> {
+        self.servers
+            .open_as(admitted, owner)
+            .await
+            .map_err(opening_refused)
     }
 
     /// Serve one stand-in's connection until it, or its server, ends. Its end —
@@ -161,20 +220,20 @@ impl Relay {
             let _ = write_line(&mut output, &answer).await;
             return;
         };
-        if let Err(reason) = admit(&hello.server, &hello.configuration, &self.configured) {
-            let message = match reason {
-                StandInRefusal::UnknownServer => "no MCP server is configured under that name",
-                _ => "the MCP server is configured differently now; start a new session",
-            };
-            let _ = write_line(&mut output, &refused(reason, message.into())).await;
-            return;
-        }
-        // One session, and one server process, for this stand-in alone: its
-        // harness session's, ended with it or with its grant.
-        let session = match self.servers.open(&hello.server, owner).await {
+        let admitted = match self.admitted(&hello) {
+            Ok(admitted) => admitted,
+            Err(reason) => {
+                let message = match reason {
+                    StandInRefusal::UnknownServer => UNKNOWN,
+                    _ => CHANGED,
+                };
+                let _ = write_line(&mut output, &refused(reason, message.into())).await;
+                return;
+            }
+        };
+        let session = match self.open_admitted(&admitted, owner).await {
             Ok(session) => session,
-            Err(error) => {
-                let (reason, message) = opening_refused(error);
+            Err((reason, message)) => {
                 let _ = write_line(&mut output, &refused(reason, message)).await;
                 return;
             }
