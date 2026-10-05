@@ -330,8 +330,10 @@ authority.
 
 ### A desktop stop and a submission
 
-A desktop stop (`ConversationService::stop_active_agents`) stops every agent
-live when its pass begins, and leaves admission open. A submission holds its
+A desktop stop (`ConversationService::stop_active_agents`) takes a snapshot of
+the conversations when its pass begins. For each one it takes the
+conversation's submission lock, then marks and stops the current owner if one
+is still registered. Admission stays open throughout. A submission holds its
 conversation's submission lock (`mode_changes`) from before its checks through
 the enqueue.
 
