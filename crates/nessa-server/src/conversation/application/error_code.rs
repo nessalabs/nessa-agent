@@ -197,3 +197,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         ConversationErrorCode::ConversationErasureIncomplete
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/error_code.rs"]
+mod tests;

@@ -451,6 +451,27 @@ async fn conversations(
     ))
 }
 
+/// What an app's calls take, as this gateway wires them: the conversation's
+/// own sessions of its MCP servers, `audit` for every step, the ticket
+/// store, and the drop recorder's sink — started here with the ticket
+/// recorder, both writing to `audit` — for every held context's drop
+/// (`a_composed_gateways_dropped_context_is_written_by_its_recorder`).
+#[cfg(unix)]
+pub(super) fn mcp_app_ports(
+    mcp: &mut super::mcp_servers::McpComposition,
+    audit: Arc<dyn McpAppAudit>,
+) -> McpAppPorts {
+    let dropped = mcp.start_recorders(audit.clone());
+    McpAppPorts {
+        apps: Arc::new(crate::mcp_servers::infrastructure::SessionApps(
+            mcp.servers.clone(),
+        )),
+        audit,
+        tickets: mcp.resource_tickets.clone(),
+        dropped,
+    }
+}
+
 /// Open the namespace's receiver-access store, creating its directory.
 fn receiver_access(
     namespace: &Path,
@@ -755,20 +776,12 @@ async fn conversations(
     // the conversations' apps report.
     let (service, resource_route) = match mcp.as_mut() {
         Some(mcp) => {
-            let dropped = mcp.start_recorders(mcp_app_audit.clone());
             let service = ConversationService::with_mcp_apps(
                 dependencies,
                 ConversationLimits::default(),
                 workspace,
                 tool_uis,
-                McpAppPorts {
-                    apps: Arc::new(crate::mcp_servers::infrastructure::SessionApps(
-                        mcp.servers.clone(),
-                    )),
-                    audit: mcp_app_audit.clone(),
-                    tickets: mcp.resource_tickets.clone(),
-                    dropped,
-                },
+                mcp_app_ports(mcp, mcp_app_audit.clone()),
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }

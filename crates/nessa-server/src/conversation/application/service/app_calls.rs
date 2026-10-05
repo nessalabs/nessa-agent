@@ -28,8 +28,8 @@ use super::super::session_key::conversation_session;
 use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::super::SubmittedMessage;
 use super::{
-    ConversationCaller, ConversationError, ConversationService, LiveConversation, Reach,
-    SubmissionMode, SubmitFailure, Writer,
+    blank_text, ConversationCaller, ConversationError, ConversationService, LiveConversation,
+    Reach, SubmissionMode, SubmitFailure, Writer,
 };
 use crate::conversation::application::error_code;
 use crate::conversation::domain::ConversationId;
@@ -560,12 +560,15 @@ impl ConversationService {
         let Some((_, tool)) = seen else {
             return Err(step.refuse(McpAppError::AppUnknown).await);
         };
-        if message.text.trim().is_empty() {
+        // The conversation's own rules for what a message says, asked here
+        // so that the app is told on record before anyone is asked: blank,
+        // or past the input bound (rows M3, M4).
+        if blank_text(&message.text) {
             return Err(step
                 .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
                 .await);
         }
-        if message.text.len() > self.inner.limits.max_input_bytes {
+        if self.inner.limits.past_input_bound(&message.text) {
             return Err(step.refuse(McpAppError::RequestTooLarge).await);
         }
         let Ok(sender) = app_source(&message.app, tool) else {
@@ -576,7 +579,7 @@ impl ConversationService {
         // The same request again is the same turn: one the agent has already
         // is the agent's to settle, and nobody is asked again to send it — a
         // denial now could not take it back
-        // (`m6_a_retry_of_a_turn_the_agent_has_is_not_asked_again`).
+        // (`m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_again`).
         let execution_id = message_execution(&id, &message.app, &caller.action_id);
         if opening.admit(&message.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
@@ -597,7 +600,10 @@ impl ConversationService {
         if self.holds_turn(&id, &execution_id).await {
             step.record(McpAppAuditPhase::Admitted, None).await?;
         } else {
-            // Every message asks. What the person is shown is what is sent.
+            // Every message asks
+            // (`m7_every_message_asks_and_allowing_one_allows_no_other`).
+            // What the person is shown is what is sent
+            // (`m7_m8_m12_a_message_asks_and_allowed_lands_as_the_persons_turn_written_by_the_app`).
             let shown = serde_json::json!({ "text": message.text }).to_string();
             let asked = Asked {
                 ask: ReviewAsk::SendMessage,

@@ -20,7 +20,14 @@
 //! who dropped it, and reported to [`DroppedContexts`] at the moment of
 //! removal, after the lock — or, for what a message took, as the `Taken`
 //! that holds it is dropped — never handed to the caller to record, so no
-//! caller's cancellation, budget or panic can lose it. The
+//! caller's cancellation, budget or panic can lose it: a close whose stop
+//! runs past its budget
+//! (`c15_a_close_whose_stop_runs_past_its_budget_drops_once_as_the_closers`),
+//! a delete cut short by retirement mid-close
+//! (`c15_a_delete_cut_short_by_retirement_records_each_drop_once`), and a
+//! submission's task unwinding through what it took
+//! (`c11_what_a_message_took_is_reported_dropped_as_it_goes_unless_the_agent_was_asked`)
+//! each record every drop once. The
 //! conversation's one update lock orders the updates themselves. And the app
 //! messages in flight, by the turn each becomes, so one request is asked
 //! about once at a time (`docs/design/mcp-app-calls.md`, "An app in its
@@ -616,14 +623,25 @@ impl AppReviews {
 /// could not say, or the task failed mid-ask — the message's own record
 /// covers them, and dropping this reports nothing (row C11b). Only the
 /// agent's refusal hands them back ([`Self::refused`]).
+///
+/// Its fields are private, so a caller outside this module has no way to
+/// empty its records and silence a drop: what it reports is what it took. The message takes the contexts out with
+/// [`Self::take_contexts`]; the records stay.
 pub struct Taken {
-    pub contexts: Vec<AppModelContext>,
-    pub updates: Vec<McpAppAuditRecord>,
+    contexts: Vec<AppModelContext>,
+    updates: Vec<McpAppAuditRecord>,
     dropped: Arc<dyn DroppedContexts>,
     /// Whether dropping this reports each as dropped unsent.
     armed: bool,
 }
 impl Taken {
+    /// The contexts taken, in the order given, for the message to carry.
+    /// The records of the updates that gave them stay here: what a drop is
+    /// reported against.
+    pub fn take_contexts(&mut self) -> Vec<AppModelContext> {
+        std::mem::take(&mut self.contexts)
+    }
+
     /// The agent is being asked to take the message that carries these:
     /// from here they follow it, and dropping this reports nothing.
     pub fn asking(&mut self) {

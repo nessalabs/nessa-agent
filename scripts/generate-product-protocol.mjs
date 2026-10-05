@@ -442,6 +442,8 @@ const bounds = {
     mcpMessage.text["x-utf8MaxBytes"],
     schema.$defs.ConversationSendParams.properties.text["x-utf8MaxBytes"],
   ]),
+  // An empty message is refused at the wire, before anything is recorded.
+  minMcpMessageCharacters: mcpMessage.text.minLength,
   // The turn an app's message became is a turn like any other.
   maxExecutionIdBytes: agreeing("execution identity bytes", [
     schema.$defs.McpSendMessageResult.properties.executionId["x-utf8MaxBytes"],
@@ -488,6 +490,9 @@ for (const name of [
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",
+  // An app's message shorter than it is refused at the wire, before anything
+  // is recorded; a blank one is the conversation's to refuse, on record.
+  "minMcpMessageCharacters",
 ]) {
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }

@@ -576,4 +576,47 @@ mod mcp_app_lane {
         drop(peer.input);
         task.await.unwrap();
     }
+
+    /// Row M3: an empty message is outside the schema's own bound
+    /// (`minLength`), refused at the wire with nothing recorded and nobody
+    /// asked; a blank one — whitespace only — is within it, and is the
+    /// conversation's to refuse, on record.
+    #[tokio::test]
+    async fn m3_an_empty_message_is_refused_at_the_wire_and_a_blank_one_on_record() {
+        let fixture = owners_fixture().await;
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        let message = |request: &str, text: &str| {
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": request,
+                "app": app(&fixture, INSTANCE),
+                "server": SERVER,
+                "text": text,
+            })
+        };
+        let records = fixture.audit.phases().len();
+        send_command(&peer, "empty", "mcp.sendMessage", message("empty", ""));
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "empty");
+        assert_eq!(refused["error"]["code"], "invalid_request");
+        assert_eq!(fixture.audit.phases().len(), records);
+        assert!(fixture.app_reviews().await.is_empty());
+
+        send_command(&peer, "blank", "mcp.sendMessage", message("blank", " \n\t"));
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "blank");
+        assert_eq!(refused["error"]["code"], "invalid_request");
+        assert_eq!(
+            fixture.audit.phases()[records..],
+            [crate::conversation::application::McpAppAuditPhase::Refused(
+                crate::conversation::application::McpAppCode::InvalidRequest
+            )]
+        );
+        assert!(fixture.app_reviews().await.is_empty());
+        drop(peer.input);
+        task.await.unwrap();
+    }
 }

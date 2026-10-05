@@ -439,15 +439,25 @@ impl Fixture {
 
     /// As [`Self::new`], in `owner`'s conversation.
     pub(crate) async fn for_owner(owner: ConversationCaller) -> Self {
-        Self::built(owner, DELETION_BUDGETS).await
+        Self::built(owner, DELETION_BUDGETS, None).await
     }
 
     /// As [`Self::new`], its agent's stops bounded by `budgets`.
     pub(crate) async fn with_deletion_budgets(budgets: ConversationDeletionBudgets) -> Self {
-        Self::built(caller("fixture"), budgets).await
+        Self::built(caller("fixture"), budgets, None).await
     }
 
-    async fn built(owner: ConversationCaller, budgets: ConversationDeletionBudgets) -> Self {
+    /// As [`Self::new`], its apps reporting each context they drop to
+    /// `dropped` — a sink composition wired — rather than to `drops`.
+    pub(crate) async fn dropping_to(dropped: Arc<dyn DroppedContexts>) -> Self {
+        Self::built(caller("fixture"), DELETION_BUDGETS, Some(dropped)).await
+    }
+
+    async fn built(
+        owner: ConversationCaller,
+        budgets: ConversationDeletionBudgets,
+        dropped: Option<Arc<dyn DroppedContexts>>,
+    ) -> Self {
         let as_owner = |action: &str| ConversationCaller {
             action_id: action.into(),
             ..owner.clone()
@@ -520,7 +530,7 @@ impl Fixture {
                 apps: apps.clone(),
                 audit: audit.clone(),
                 tickets: tickets.clone(),
-                dropped: drops.clone(),
+                dropped: dropped.unwrap_or_else(|| drops.clone()),
             },
         )
         .unwrap();

@@ -206,6 +206,14 @@ pub struct ConversationLimits {
     pub max_conversations: usize,
     pub max_input_bytes: usize,
 }
+impl ConversationLimits {
+    /// Whether `text` is past what one message may say: the one bound a
+    /// person's message (in `submit_as`) and an app's (refused early, on
+    /// record, in `app_message`) are both held to.
+    pub(super) fn past_input_bound(&self, text: &str) -> bool {
+        text.len() > self.max_input_bytes
+    }
+}
 impl Default for ConversationLimits {
     fn default() -> Self {
         Self {
@@ -213,6 +221,13 @@ impl Default for ConversationLimits {
             max_input_bytes: 8192,
         }
     }
+}
+
+/// Whether a message's text says nothing: blank text is no text. The one
+/// reading `submit_as` takes of a person's message, and `app_message` of an
+/// app's, which is text only and so refused early when it says nothing.
+pub(super) fn blank_text(text: &str) -> bool {
+    text.trim().is_empty()
 }
 
 /// One agent this server can run conversations on.
@@ -1301,8 +1316,12 @@ impl ConversationService {
                             }
                             let app_reviews = service.apps_of(&id);
                             // Every opening is ended before the next begins,
-                            // so this drops nothing; should one not be, what
-                            // it held is dropped by the system, and reported.
+                            // so this drops nothing (a close then a reopening
+                            // records the close's drop alone:
+                            // `c15_the_openings_end_drops_every_context_unsent`);
+                            // should one not be, what it held is dropped by
+                            // the system, and reported
+                            // (`c14_c15_contexts_are_dropped_with_their_mount_the_openings_end_a_new_opening_and_a_delete`).
                             let app_epoch = app_reviews.begin();
                             let live = Arc::new(LiveConversation {
                                 agent,
@@ -1923,14 +1942,14 @@ impl ConversationService {
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
-            if text.len() > service.inner.limits.max_input_bytes {
+            if service.inner.limits.past_input_bound(&text) {
                 return Err(ConversationError::InvalidInput.into());
             }
             let execution =
                 ExecutionId::new(&execution_id).map_err(|_| ConversationError::InvalidInput)?;
             // Blank text is no text. The message's own rules then decide whether
             // what remains is a message: some text, some images, or both.
-            let prompt = (!text.trim().is_empty())
+            let prompt = (!blank_text(&text))
                 .then(|| PromptText::new(text))
                 .transpose()
                 .map_err(|_| ConversationError::InvalidInput)?;
@@ -2006,7 +2025,8 @@ impl ConversationService {
             // retry of a delivered turn into "not found" once its upload was
             // let go, where the same retry of a text turn succeeds.
             // A retry carries what its saved record holds, never what is held
-            // now: the agent compares it with the message it has.
+            // now: the agent compares it with the message it has
+            // (`c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`).
             let original = live
                 .agent
                 .session_manager()
@@ -2117,7 +2137,7 @@ impl ConversationService {
                 Some(original) => original,
                 None if idle => {
                     let mut took = live.app_reviews.take_held();
-                    let contexts = std::mem::take(&mut took.contexts);
+                    let contexts = took.take_contexts();
                     taken = Some(took);
                     contexts
                 }

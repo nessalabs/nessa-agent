@@ -391,3 +391,69 @@ async fn recorders_finish_together_under_one_bound() {
     // Together, not one after the other: the exit waits the one bound.
     assert_eq!(started.elapsed(), super::RECORDERS_FINISH);
 }
+
+/// The drop sink `local_auth` wires into the conversation service's
+/// `McpAppPorts` is the composed recorder's: a context dropped by the
+/// service's own close is written to the audit that recorder was started
+/// with, by the closer, before the exit's finish returns. Any other sink
+/// wired there writes nothing to it.
+#[tokio::test]
+async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
+    use crate::app_call_test_support::{caller, Fixture, INSTANCE, SERVER};
+    use crate::conversation::application::{
+        ContextDrop, McpAppAsk, McpAppAuditPhase, McpAppInitiator,
+    };
+    use std::sync::Arc;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let mut config = agents(vec![server(SERVER, &["/s.mjs"])]);
+    let mut composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap()
+        .expect("composed");
+    let audit = Arc::new(KeptAudit::default());
+    let ports = super::super::local_auth::mcp_app_ports(&mut composed, audit.clone());
+    let fixture = Fixture::dropping_to(ports.dropped).await;
+    fixture
+        .update_context(INSTANCE, Some("Showing April"), None)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    super::finish_recorders(
+        [
+            composed.ticket_recorder.take(),
+            composed.context_drop_recorder.take(),
+        ]
+        .into_iter()
+        .flatten(),
+        super::RECORDERS_FINISH,
+    )
+    .await;
+    let written = audit.0.lock().unwrap().clone();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let drop = &written[0];
+    assert_eq!(drop.conversation_id, fixture.id);
+    assert_eq!(drop.request_id, "app-context");
+    assert_eq!(drop.app, fixture.app(INSTANCE));
+    assert_eq!(
+        drop.ask,
+        McpAppAsk::UpdateModelContext {
+            server: SERVER.into()
+        }
+    );
+    assert_eq!(
+        drop.phase,
+        McpAppAuditPhase::ContextDropped {
+            cause: ContextDrop::ConversationEnded
+        }
+    );
+    assert!(
+        matches!(&drop.initiator, McpAppInitiator::Person { request_id, .. } if request_id == "close"),
+        "{:?}",
+        drop.initiator
+    );
+}

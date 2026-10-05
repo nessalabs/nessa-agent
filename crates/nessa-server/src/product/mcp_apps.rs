@@ -10,7 +10,7 @@ use super::{
         ConversationMutationResult, McpAppReference, McpCallToolParams, McpCallToolResult,
         McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams, McpRemoteErrorDetails,
         McpSendMessageParams, McpSendMessageResult, McpUiCsp, McpUiPermissions,
-        McpUpdateModelContextParams, MAX_MCP_CONTEXT_BYTES,
+        McpUpdateModelContextParams, MAX_MCP_CONTEXT_BYTES, MIN_MCP_MESSAGE_CHARACTERS,
     },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -121,11 +121,16 @@ pub(super) async fn dispatch(
             "mcp.sendMessage" => {
                 let params = params!(McpSendMessageParams);
                 name(&params.server)?;
-                // Past the schema's own bound: a request no gateway takes,
-                // refused here with nothing recorded, as every schema bound
-                // of both methods is. Within it, the service's input bound is
-                // the app's to be told of, on record (`mcp_request_too_large`).
-                if params.text.len() > MAX_MCP_MESSAGE_BYTES {
+                // Outside the schema's own bounds — empty, or past its bytes:
+                // a request no gateway takes, refused here with nothing
+                // recorded, as every schema bound of both methods is (rows M3,
+                // M4). Within them, the conversation's own rules — blank
+                // text, its input bound — are the app's to be told of, on
+                // record.
+                if params.text.chars().take(MIN_MCP_MESSAGE_CHARACTERS).count()
+                    < MIN_MCP_MESSAGE_CHARACTERS
+                    || params.text.len() > MAX_MCP_MESSAGE_BYTES
+                {
                     return Err(ConversationError::InvalidInput);
                 }
                 let execution_id = service

@@ -395,6 +395,10 @@ async fn m2_a_message_from_no_app_or_for_another_server_is_refused_on_record() {
     assert_eq!(fixture.provider.executions.lock().unwrap().len(), 1);
 }
 
+/// The conversation's own rules, on record: blank text (whitespace only),
+/// and text past its input bound. An empty text never reaches the service:
+/// it is outside the schema's bound, and the wire refuses it with nothing
+/// recorded (`m3_an_empty_message_is_refused_at_the_wire_and_a_blank_one_on_record`).
 #[tokio::test]
 async fn m3_m4_a_blank_message_or_one_past_the_input_bound_is_refused() {
     let fixture = Fixture::new().await;
