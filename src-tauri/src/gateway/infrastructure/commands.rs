@@ -4,6 +4,8 @@ use super::super::application::{
     Gateway, GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase,
     StartupStep,
 };
+use crate::gateway::domain::value_objects::claude_config_directory_is_durable;
+use crate::settings::SettingsStore;
 use crate::{
     composition::HostDependencies,
     desktop_window::DESKTOP_WINDOW,
@@ -11,6 +13,8 @@ use crate::{
     host::{self, GatewayStartup, GATEWAY_STARTUP},
     panel,
 };
+use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
@@ -152,6 +156,92 @@ pub async fn retry_gateway_startup(
     Ok(())
 }
 
+/// Why a Claude configuration-directory change was not applied.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClaudeConfigurationError {
+    /// The window is not a bundled Nessa surface.
+    UntrustedCaller,
+    /// The directory is not an absolute, normalized path.
+    Directory,
+    /// The settings file could not be updated.
+    Settings { message: String },
+    /// The packaged gateway did not accept the new directory.
+    Gateway { message: String },
+}
+
+/// Write the Claude configuration directory and re-register when it changed.
+///
+/// A development build has no packaged gateway
+/// (`a_development_build_saves_the_directory_without_a_gateway`). The settings
+/// file still changes, and the next packaged launch reads it. An unchanged
+/// directory does not reconcile
+/// (`a_settings_change_registers_once_and_a_repeat_does_not`).
+pub(crate) async fn apply_claude_configuration_directory(
+    settings: &dyn SettingsStore,
+    gateway: Option<&Gateway>,
+    surface: BundledSurface,
+    directory: Option<String>,
+) -> Result<(), ClaudeConfigurationError> {
+    let directory = durable_directory(directory)?;
+    settings
+        .update(&mut |chosen| {
+            chosen.service.claude.configuration_directory = directory.clone();
+        })
+        .map_err(|error| ClaudeConfigurationError::Settings {
+            message: error.to_string(),
+        })?;
+    if let Some(gateway) = gateway {
+        gateway
+            .change_claude_configuration(surface, directory)
+            .await
+            .map_err(|error| ClaudeConfigurationError::Gateway {
+                message: error.to_string(),
+            })?;
+    }
+    Ok(())
+}
+
+fn durable_directory(
+    directory: Option<String>,
+) -> Result<Option<PathBuf>, ClaudeConfigurationError> {
+    let directory = directory.and_then(|value| {
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(value))
+        }
+    });
+    claude_config_directory_is_durable(directory.as_deref())
+        .map_err(|_| ClaudeConfigurationError::Directory)?;
+    Ok(directory)
+}
+
+fn configuration_surface(label: &str) -> Result<BundledSurface, ClaudeConfigurationError> {
+    bundled_window(label).map_err(|_| ClaudeConfigurationError::UntrustedCaller)
+}
+
+/// Change Claude's configuration directory from a bundled surface.
+///
+/// The desktop window is refused: it reads a gateway that is already up and
+/// does not retire agents (#419). Setup and the panel are the surfaces that
+/// may re-register, and the audit records that surface.
+#[tauri::command]
+pub async fn set_claude_configuration_directory(
+    window: WebviewWindow,
+    deps: State<'_, HostDependencies>,
+    directory: Option<String>,
+) -> Result<(), ClaudeConfigurationError> {
+    let surface = configuration_surface(window.label())?;
+    apply_claude_configuration_directory(
+        deps.settings.as_ref(),
+        deps.gateway.as_deref(),
+        surface,
+        directory,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{bundled_window, payload, GatewayReader};
@@ -198,5 +288,240 @@ mod tests {
                 step: host::StartupStep::Preparing,
             }
         );
+    }
+
+    #[test]
+    fn only_bundled_surfaces_may_change_the_claude_configuration_directory() {
+        assert_eq!(
+            super::configuration_surface(panel::MAIN_WINDOW),
+            Ok(BundledSurface::Main)
+        );
+        assert_eq!(
+            super::configuration_surface(panel::SETUP_WINDOW),
+            Ok(BundledSurface::Setup)
+        );
+        assert_eq!(
+            super::configuration_surface(DESKTOP_WINDOW),
+            Err(super::ClaudeConfigurationError::UntrustedCaller)
+        );
+        assert_eq!(
+            super::configuration_surface("untrusted"),
+            Err(super::ClaudeConfigurationError::UntrustedCaller)
+        );
+    }
+}
+
+#[cfg(test)]
+mod configuration_directory {
+    use super::{apply_claude_configuration_directory, ClaudeConfigurationError};
+    use crate::gateway::{
+        application::{
+            testing::{self, FixedLoginShell},
+            ClaudeDirectoryReplacement, Gateway, GatewayError, GatewayHost,
+            GatewayReconciliationAttempt, GatewayReconciliationIntent,
+            GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
+            ReconciledGateway,
+        },
+        domain::value_objects::{
+            AuditDeliveryReceipt, BundledSurface, LifecycleObservation, ReconciliationCause,
+            ReconciliationTarget, SearchPath,
+        },
+    };
+    use crate::settings::testing::in_memory;
+    use crate::settings::SettingsStore;
+    use std::{
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    };
+
+    struct DirectoryHost {
+        directory: Mutex<Option<PathBuf>>,
+        causes: Mutex<Vec<ReconciliationCause>>,
+    }
+
+    impl GatewayHost for DirectoryHost {
+        fn replace_claude_config_directory(
+            &self,
+            directory: Option<PathBuf>,
+        ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+            let mut current = self.directory.lock().unwrap();
+            if *current == directory {
+                return Ok(ClaudeDirectoryReplacement::Unchanged);
+            }
+            let previous = current.clone();
+            *current = directory;
+            Ok(ClaudeDirectoryReplacement::Changed { previous })
+        }
+
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            self.causes
+                .lock()
+                .unwrap()
+                .push(attempt.origin().evidence().cause());
+            let service = "claude-directory";
+            let gateway = ReconciledGateway::new(
+                service.into(),
+                "a".repeat(64),
+                "550e8400-e29b-41d4-a716-446655440000".into(),
+                "b".repeat(64),
+                42,
+                7420,
+            );
+            let target =
+                ReconciliationTarget::new(service.into(), "a".repeat(64), "b".repeat(64)).unwrap();
+            progress
+                .intent_admitted(
+                    GatewayReconciliationIntent::new(
+                        attempt.clone(),
+                        target,
+                        Some(gateway.audit_identity().unwrap()),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(gateway)
+        }
+
+        fn stop_agents(
+            &self,
+            _: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            _: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            Err(GatewayError::Stop("not used".into()))
+        }
+    }
+
+    fn gateway(host: Arc<DirectoryHost>) -> Gateway {
+        Gateway::bootstrap(
+            host,
+            Arc::new(FixedLoginShell(Ok(SearchPath::parse("/usr/bin").unwrap()))),
+            testing::discard_startup_events(),
+            testing::sequential_reconciliation_ids(),
+            testing::discard_reconciliation_audit(),
+            "/runtime".into(),
+            "ci".into(),
+        )
+    }
+
+    #[test]
+    fn a_settings_change_registers_once_and_a_repeat_does_not() {
+        let saved = in_memory();
+        let host = Arc::new(DirectoryHost {
+            directory: Mutex::new(None),
+            causes: Mutex::new(Vec::new()),
+        });
+        let gateway = gateway(host.clone());
+        let directory = "/Users/me/.claude-work";
+
+        tauri::async_runtime::block_on(apply_claude_configuration_directory(
+            &saved.store,
+            Some(&gateway),
+            BundledSurface::Main,
+            Some(directory.into()),
+        ))
+        .unwrap();
+        tauri::async_runtime::block_on(apply_claude_configuration_directory(
+            &saved.store,
+            Some(&gateway),
+            BundledSurface::Main,
+            Some(directory.into()),
+        ))
+        .unwrap();
+
+        let file = String::from_utf8(saved.storage.get(&saved.path).unwrap()).unwrap();
+        assert!(file.contains(directory));
+        assert!(!file.contains("ANTHROPIC_API_KEY"));
+        assert!(!file.contains("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert_eq!(
+            host.causes.lock().unwrap().as_slice(),
+            [ReconciliationCause::ClaudeConfigurationChanged]
+        );
+        assert_eq!(
+            saved
+                .store
+                .load()
+                .service
+                .claude
+                .configuration_directory
+                .as_deref(),
+            Some(Path::new(directory))
+        );
+    }
+
+    #[test]
+    fn a_development_build_saves_the_directory_without_a_gateway() {
+        let saved = in_memory();
+
+        tauri::async_runtime::block_on(apply_claude_configuration_directory(
+            &saved.store,
+            None,
+            BundledSurface::Setup,
+            Some("/Users/me/.claude-work".into()),
+        ))
+        .unwrap();
+
+        assert_eq!(
+            saved
+                .store
+                .load()
+                .service
+                .claude
+                .configuration_directory
+                .as_deref(),
+            Some(Path::new("/Users/me/.claude-work"))
+        );
+    }
+
+    #[test]
+    fn a_relative_directory_is_refused_without_writing_or_registering() {
+        let saved = in_memory();
+        let host = Arc::new(DirectoryHost {
+            directory: Mutex::new(None),
+            causes: Mutex::new(Vec::new()),
+        });
+        let gateway = gateway(host.clone());
+
+        assert_eq!(
+            tauri::async_runtime::block_on(apply_claude_configuration_directory(
+                &saved.store,
+                Some(&gateway),
+                BundledSurface::Setup,
+                Some("relative/claude".into()),
+            )),
+            Err(ClaudeConfigurationError::Directory)
+        );
+        assert!(saved.storage.get(&saved.path).is_none());
+        assert!(host.causes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unusable_settings_file_does_not_register() {
+        let saved = in_memory();
+        saved.storage.put(&saved.path, b"{");
+        let host = Arc::new(DirectoryHost {
+            directory: Mutex::new(None),
+            causes: Mutex::new(Vec::new()),
+        });
+        let gateway = gateway(host.clone());
+
+        assert!(matches!(
+            tauri::async_runtime::block_on(apply_claude_configuration_directory(
+                &saved.store,
+                Some(&gateway),
+                BundledSurface::Main,
+                Some("/Users/me/.claude-work".into()),
+            )),
+            Err(ClaudeConfigurationError::Settings { .. })
+        ));
+        assert_eq!(saved.storage.get(&saved.path).unwrap(), b"{");
+        assert!(host.causes.lock().unwrap().is_empty());
     }
 }

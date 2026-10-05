@@ -9,13 +9,13 @@
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
-    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
-    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
-    GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
-    GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
-    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
-    GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
+    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
+    GatewayReconciliationEffectTiming, GatewayReconciliationIds, GatewayReconciliationIntent,
+    GatewayReconciliationIntentDelivery, GatewayReconciliationJournalSession,
+    GatewayReconciliationOutcome, GatewayReconciliationOutcomeError, GatewayReconciliationProgress,
+    GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
+    GatewayStopRequest, GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
     ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
@@ -975,13 +975,41 @@ impl Gateway {
         .await
     }
 
-    #[cfg(test)]
+    /// Reconcile because a bundled surface changed Claude's configuration directory.
+    ///
+    /// The host must already be publishing that directory. [`Self::change_claude_configuration`]
+    /// is the entry that updates the host and then reconciles; this remains the
+    /// reconciliation itself so a queued successor keeps the same cause.
     pub async fn configuration_changed(&self, surface: BundledSurface) -> Result<(), GatewayError> {
         self.reconcile(evidence(
             ReconciliationCause::ClaudeConfigurationChanged,
             ReconciliationInitiator::BundledSurface(surface),
         )?)
         .await
+    }
+
+    /// Publish `directory` on the host and reconcile once when it changed.
+    ///
+    /// An equal directory returns without a registration
+    /// (`settings_change_reregisters_once_and_records_the_reason`). A
+    /// reconciliation that fails restores the previous directory, so repeating
+    /// the save tries again
+    /// (`a_failed_registration_restores_the_directory_and_can_be_repeated`).
+    pub async fn change_claude_configuration(
+        &self,
+        surface: BundledSurface,
+        directory: Option<PathBuf>,
+    ) -> Result<(), GatewayError> {
+        let ClaudeDirectoryReplacement::Changed { previous } =
+            self.host.replace_claude_config_directory(directory)?
+        else {
+            return Ok(());
+        };
+        if let Err(error) = self.configuration_changed(surface).await {
+            let _ = self.host.replace_claude_config_directory(previous);
+            return Err(error);
+        }
+        Ok(())
     }
 
     async fn reconcile(&self, evidence: ReconciliationEvidence) -> Result<(), GatewayError> {

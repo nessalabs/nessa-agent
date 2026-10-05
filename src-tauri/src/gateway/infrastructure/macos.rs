@@ -1,9 +1,9 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
-    GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-    GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-    ReconciliationHistoryFact, StartupStep,
+    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayLifecycleRecovery,
+    GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
+    GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
+    ReconciledGateway, ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -23,7 +23,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -182,7 +182,7 @@ pub(super) struct Launchd {
     launchctl: Arc<dyn Launchctl>,
     validated_runtimes: ValidatedRuntimes,
     disabled_services: Arc<dyn DisabledServiceStatus>,
-    configuration: ServiceConfiguration,
+    configuration: Mutex<ServiceConfiguration>,
     home: PathBuf,
 }
 
@@ -258,17 +258,48 @@ impl Launchd {
             launchctl,
             validated_runtimes: ValidatedRuntimes::default(),
             disabled_services,
-            configuration,
+            configuration: Mutex::new(configuration),
             home,
         }
+    }
+
+    fn service_configuration(&self) -> ServiceConfiguration {
+        self.configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 impl GatewayHost for Launchd {
     fn startup_cause(&self) -> ReconciliationCause {
-        if provider_configuration_changed(&self.configuration, &self.home) {
+        let configuration = self.service_configuration();
+        if provider_configuration_changed(&configuration, &self.home) {
             ReconciliationCause::ClaudeConfigurationChanged
         } else {
             ReconciliationCause::Startup
+        }
+    }
+
+    fn replace_claude_config_directory(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+        let mut configuration = self
+            .configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match configuration
+            .replacing_claude_config_directory(directory)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?
+        {
+            Some(updated) => {
+                let previous = configuration
+                    .claude_config_directory()
+                    .map(Path::to_path_buf);
+                *configuration = updated;
+                Ok(ClaudeDirectoryReplacement::Changed { previous })
+            }
+            None => Ok(ClaudeDirectoryReplacement::Unchanged),
         }
     }
 
@@ -314,7 +345,7 @@ impl GatewayHost for Launchd {
             recovery.latest_observation(),
             definition.as_ref(),
             recovery.before(),
-            self.configuration.port(),
+            self.service_configuration().port(),
         );
         let status = self
             .launchctl
@@ -1326,7 +1357,8 @@ fn register(
     attempt: &GatewayReconciliationAttempt,
     progress: &dyn GatewayReconciliationProgress,
 ) -> Result<ReconciledGateway, RegisterFailure> {
-    let configuration = &host.configuration;
+    let configuration = host.service_configuration();
+    let configuration = &configuration;
     let launchctl = host.launchctl.as_ref();
     let home = host.home.as_path();
     let location = runtime.to_string_lossy();
@@ -3240,6 +3272,51 @@ mod tests {
             .map(|(key, _)| key.as_str())
             .collect::<Vec<_>>();
         assert_eq!(differences, ["CLAUDE_CONFIG_DIR"]);
+    }
+
+    /// Dock versus a terminal exports different process variables. Those variables
+    /// are not service input, so two renders of one configuration stay equal and
+    /// cannot retire the running gateway. Secrets are not service input either.
+    #[test]
+    fn launch_environment_drift_does_not_change_a_healthy_definition() {
+        let configuration = ServiceConfiguration::new(
+            "prod".into(),
+            PathBuf::from("/Users/me/.nessa"),
+            None,
+            7420,
+            None,
+        )
+        .unwrap();
+        let path = SearchPath::parse("/usr/bin:/bin").unwrap();
+        let home = Path::new("/Users/me");
+        let first = service_environment(&configuration, home, &path, "fingerprint");
+        let again = service_environment(&configuration, home, &path, "fingerprint");
+        assert_eq!(first, again);
+        let mut keys = first.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "HOME",
+                "NESSA_AGENT_PATH",
+                "NESSA_DATA_DIR",
+                "NESSA_HOST",
+                "NESSA_PORT",
+                "NESSA_RUNTIME_FINGERPRINT",
+                "NESSA_STAGE",
+                "PATH",
+            ]
+        );
+        for inherited in [
+            "USER",
+            "LOGNAME",
+            "TMPDIR",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CONFIG_DIR",
+        ] {
+            assert!(!first.contains_key(inherited), "{inherited}");
+        }
     }
 
     /// The two ends of one variable, which no type connects: this host writes

@@ -12,7 +12,7 @@ use crate::gateway::{
     },
 };
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Condvar, Mutex, Weak,
@@ -2043,6 +2043,176 @@ fn desktop_start_audits_a_durable_provider_configuration_change() {
         ReconciliationInitiator::DesktopHost
     );
     assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn settings_change_reregisters_once_and_records_the_reason() {
+    struct DirectoryHost {
+        directory: Mutex<Option<PathBuf>>,
+        causes: Mutex<Vec<ReconciliationCause>>,
+    }
+
+    impl GatewayHost for DirectoryHost {
+        fn replace_claude_config_directory(
+            &self,
+            directory: Option<PathBuf>,
+        ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+            let mut current = self.directory.lock().unwrap();
+            if *current == directory {
+                return Ok(ClaudeDirectoryReplacement::Unchanged);
+            }
+            let previous = current.clone();
+            *current = directory;
+            Ok(ClaudeDirectoryReplacement::Changed { previous })
+        }
+
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            self.causes
+                .lock()
+                .unwrap()
+                .push(attempt.origin().evidence().cause());
+            admit(attempt, progress, "claude-directory");
+            Ok(reconciled("claude-directory"))
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            complete_stop(session, journal, plan, || Ok(()))
+        }
+    }
+
+    let host = Arc::new(DirectoryHost {
+        directory: Mutex::new(None),
+        causes: Mutex::new(Vec::new()),
+    });
+    let audit = Arc::new(RecordingAudit::default());
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    let directory = PathBuf::from("/Users/me/.claude-work");
+
+    tauri::async_runtime::block_on(
+        gateway.change_claude_configuration(BundledSurface::Main, Some(directory.clone())),
+    )
+    .unwrap();
+    tauri::async_runtime::block_on(
+        gateway.change_claude_configuration(BundledSurface::Main, Some(directory.clone())),
+    )
+    .unwrap();
+
+    assert_eq!(
+        host.directory.lock().unwrap().as_deref(),
+        Some(directory.as_path())
+    );
+    assert_eq!(
+        host.causes.lock().unwrap().as_slice(),
+        [ReconciliationCause::ClaudeConfigurationChanged]
+    );
+    let intents = audit.intents.lock().unwrap();
+    assert_eq!(intents.len(), 1);
+    assert_eq!(
+        intents[0].attempt().origin().evidence().cause(),
+        ReconciliationCause::ClaudeConfigurationChanged
+    );
+    assert_eq!(
+        intents[0].attempt().origin().evidence().initiator(),
+        ReconciliationInitiator::BundledSurface(BundledSurface::Main)
+    );
+    assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
+    struct OnceFailingHost {
+        directory: Mutex<Option<PathBuf>>,
+        attempts: AtomicUsize,
+    }
+
+    impl GatewayHost for OnceFailingHost {
+        fn replace_claude_config_directory(
+            &self,
+            directory: Option<PathBuf>,
+        ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+            let mut current = self.directory.lock().unwrap();
+            if *current == directory {
+                return Ok(ClaudeDirectoryReplacement::Unchanged);
+            }
+            let previous = current.clone();
+            *current = directory;
+            Ok(ClaudeDirectoryReplacement::Changed { previous })
+        }
+
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(GatewayError::Registration("unit was not published".into()));
+            }
+            admit(attempt, progress, "claude-directory");
+            Ok(reconciled("claude-directory"))
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            complete_stop(session, journal, plan, || Ok(()))
+        }
+    }
+
+    let host = Arc::new(OnceFailingHost {
+        directory: Mutex::new(None),
+        attempts: AtomicUsize::new(0),
+    });
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    let directory = PathBuf::from("/Users/me/.claude-work");
+
+    assert!(tauri::async_runtime::block_on(
+        gateway.change_claude_configuration(BundledSurface::Setup, Some(directory.clone())),
+    )
+    .is_err());
+    assert_eq!(host.directory.lock().unwrap().as_deref(), None);
+    tauri::async_runtime::block_on(
+        gateway.change_claude_configuration(BundledSurface::Setup, Some(directory.clone())),
+    )
+    .unwrap();
+    assert_eq!(
+        host.directory.lock().unwrap().as_deref(),
+        Some(directory.as_path())
+    );
+    assert_eq!(host.attempts.load(Ordering::SeqCst), 2);
 }
 
 #[test]
