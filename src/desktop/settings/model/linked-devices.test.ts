@@ -481,6 +481,23 @@ describe("linked devices", () => {
     expect(stale).toBe(pairing)
   })
 
+  it("a failed first read is asked again, and a settled off is not", () => {
+    const failed = connected({ ok: false, failure: { kind: "unavailable" } })
+    expect(failed.linking).toBe("unknown")
+    expect(failed.notice?.kind).toBe("unavailable")
+    const retry = reduce(failed, { type: "poll" })
+    expect(retry.pending).toEqual({ kind: "read", seq: failed.seq + 1 })
+    const back = reduce(retry, {
+      type: "answered",
+      seq: retry.seq,
+      outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+    })
+    expect(back.linking).toBe("on")
+    expect(back.notice).toBeNull()
+    const off = connected({ ok: true, value: { kind: "off" } })
+    expect(reduce(off, { type: "poll" })).toBe(off)
+  })
+
   it("L21: unreachable is said, and an action's notice is kept", () => {
     const quiet = reduce(on(), { type: "unreachable" })
     expect(quiet.connection).toBe("unreachable")

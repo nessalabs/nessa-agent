@@ -2156,6 +2156,9 @@ how a phone finds the gateway, are not this screen: an orb carries only the
 hyphen between the groups (`ABCD-2345`). PairingCode groups the eight
 itself, so the hyphen is not passed through as a ninth character. A first
 read that is not answered says so; it does not keep saying it is checking.
+The quiet poll asks that read again. Linking off or refused is an answer,
+so it is not asked again. When the gateway cannot be reached, approve,
+deny and revoke are disabled: the reducer would ignore the click.
 
 Native linking is on only when `pairing.pending` succeeds. `pairing_not_configured`
 is off: the switch is shown off and disabled, because nothing here writes
@@ -2202,4 +2205,5 @@ already saved either way.
 | L18 | Every refusal this window knows | A sentence, and the wire code is not in it | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` |
 | L19 | An answer whose `seq` is not the request in flight | Nothing changes | `linked-devices.test.ts` |
 | L20 | The session credential, a revoked credential, or any other grant | Not listed as a device | `linked-devices-gateway.test.ts`; `linked-devices.mjs` `revoke` |
-| L21 | The gateway cannot be reached | Said; pairing is not offered | `linked-devices.test.ts` |
+| L21 | The gateway cannot be reached | Said; pairing is not offered; approve, deny and revoke are disabled | `linked-devices.test.ts`; `linked-devices-tab.test.tsx` |
+| L22 | A first read fails, then the quiet poll | The read is asked again; success leaves the failure sentence | `linked-devices.test.ts` |

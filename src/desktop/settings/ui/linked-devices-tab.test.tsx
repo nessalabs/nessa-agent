@@ -6,7 +6,10 @@
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
+import type {
+  LinkedDevicesConnection,
+  LinkedDevicesGateway,
+} from "../adapters/linked-devices-gateway"
 import type { Outcome, ReadValue } from "../model/linked-devices"
 import { LinkedDevicesProvider, LinkedDevicesTab } from "./linked-devices-tab"
 
@@ -178,6 +181,46 @@ describe("Linked devices", () => {
     expect(host.querySelector("[data-slot='signal-orb']")).not.toBeNull()
     expect(host.querySelector("[data-slot='qr-orb']")).not.toBeNull()
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("cancel")
+  })
+
+  it("L21: approve, deny and revoke rest while the gateway cannot be reached", async () => {
+    let tell: ((connection: LinkedDevicesConnection) => void) | undefined
+    const gate = gateway(async () => ({
+      ok: true,
+      value: {
+        kind: "on",
+        enrollments: [
+          {
+            invitationId: "00112233445566778899aabbccddeeff",
+            phase: "claimed",
+            expiresAtMs: Date.now() + 60_000,
+            deviceKey: "11".repeat(32),
+            fingerprint:
+              "182ff9da701fd144e2fd2cd41da8ddba979eb01b2bf7fcc3376f4b1b2ecee4e7",
+          },
+        ],
+        devices: [{ credentialId: "device-1", issuedAt: 1_700_000_000 }],
+      },
+    }))
+    gate.follow = (handler) => {
+      tell = handler
+      handler({ type: "connected" })
+      return () => {}
+    }
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    const enabled = (action: string) =>
+      host.querySelector<HTMLButtonElement>(`[data-linked-action='${action}']`)?.disabled
+    expect(enabled("approve")).toBe(false)
+    expect(enabled("revoke")).toBe(false)
+    await act(async () => tell?.({ type: "unreachable" }))
+    expect(enabled("approve")).toBe(true)
+    expect(enabled("deny")).toBe(true)
+    expect(enabled("revoke")).toBe(true)
+    expect(host.textContent).toContain("Cannot reach the gateway")
   })
 
   it("L11: Approve stays after a retryable stop, and the sentence is not a wire code", async () => {

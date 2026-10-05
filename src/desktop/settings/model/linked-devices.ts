@@ -764,8 +764,19 @@ export function linkedDevicesReducer(
       return begin(state, { kind: "revoke", credentialId: state.confirmRevoke }, null)
     }
     case "poll":
-      if (!canAct(state) || state.linking !== "on" || state.confirmRevoke !== null)
+      if (
+        state.connection !== "connected" ||
+        state.pending !== null ||
+        state.confirmRevoke !== null
+      )
         return state
-      return begin(state, { kind: "read", poll: true }, state.notice)
+      // A quiet tab reads again. A poll must not clear what an action said.
+      // A first read that failed left linking unknown: this one is an ordinary
+      // read, so a success replaces that failure.
+      if (state.linking === "on")
+        return begin(state, { kind: "read", poll: true }, state.notice)
+      if (state.linking === "unknown" && state.notice !== null)
+        return begin(state, { kind: "read" }, state.notice)
+      return state
   }
 }

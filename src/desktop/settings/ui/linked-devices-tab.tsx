@@ -25,6 +25,7 @@ import { Switch } from "@nessa-ui/react/switch"
 import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
 import {
   approvable,
+  canAct,
   canPair,
   canReplace,
   initialLinkedDevicesState,
@@ -131,7 +132,11 @@ function requestOf(
   }
 }
 
-/** While linking is on and nothing is in flight, read again. */
+/**
+ * While nothing is in flight, read again: linking is on, or the first read
+ * failed and linking is still unknown. Off and refused are answers, not
+ * pauses.
+ */
 function usePoll(
   gateway: LinkedDevicesGateway,
   state: LinkedDevicesState,
@@ -140,9 +145,9 @@ function usePoll(
   const quiet =
     gateway.pollMs > 0 &&
     state.connection === "connected" &&
-    state.linking === "on" &&
     state.pending === null &&
-    state.confirmRevoke === null
+    state.confirmRevoke === null &&
+    (state.linking === "on" || (state.linking === "unknown" && state.notice !== null))
   useEffect(() => {
     if (!quiet) return
     const timer = window.setTimeout(() => dispatch({ type: "poll" }), gateway.pollMs)
@@ -402,8 +407,8 @@ function WaitingRow({
   state: LinkedDevicesState
   dispatch: Dispatch
 }) {
-  const busy = state.pending !== null
-  const mayApprove = approvable(device) && !busy
+  const ready = canAct(state)
+  const mayApprove = approvable(device) && ready
   return (
     <SettingsRow
       label="Waiting device"
@@ -436,7 +441,7 @@ function WaitingRow({
             type="button"
             className="settings-button"
             data-linked-action="deny"
-            disabled={busy}
+            disabled={!ready}
             onClick={() => dispatch({ type: "deny", invitationId: device.invitationId })}
           >
             {sentences.deny}
@@ -484,7 +489,7 @@ function DeviceRow({
   dispatch: Dispatch
 }) {
   const confirming = state.confirmRevoke === device.credentialId
-  const busy = state.pending !== null
+  const ready = canAct(state)
   const issued = new Date(device.issuedAt * 1000).toISOString().slice(0, 10)
   return (
     <SettingsRow
@@ -498,7 +503,7 @@ function DeviceRow({
               type="button"
               className="settings-button settings-button-danger"
               data-linked-action="confirm-revoke"
-              disabled={busy}
+              disabled={!ready}
               onClick={() => dispatch({ type: "confirmRevoke" })}
             >
               {sentences.revoke}
@@ -507,7 +512,7 @@ function DeviceRow({
               type="button"
               className="settings-button"
               data-linked-action="cancel-revoke"
-              disabled={busy}
+              disabled={state.pending !== null}
               onClick={() => dispatch({ type: "cancelRevoke" })}
             >
               {sentences.keep}
@@ -518,7 +523,7 @@ function DeviceRow({
             type="button"
             className="settings-button"
             data-linked-action="revoke"
-            disabled={busy || state.confirmRevoke !== null}
+            disabled={!ready || state.confirmRevoke !== null}
             onClick={() =>
               dispatch({ type: "askRevoke", credentialId: device.credentialId })
             }
