@@ -338,8 +338,10 @@ bash scripts/check-sdk-domain-coverage.sh
 The script runs every SDK test, then requires **100% lines, functions, and
 regions for all SDK domain source**, including common values, model metadata,
 and effective capabilities. Application, infrastructure, test, and example files
-are excluded from this domain threshold. It uses a fresh temporary target and
-removes only that directory; the normal/shared build target is untouched.
+are excluded from this domain threshold. By default it uses a fresh temporary
+target and removes only that directory. `NESSA_SDK_COVERAGE_TARGET` names a
+different directory and leaves it in place; that path must not be the workspace
+`target/` directory. Either way the normal build target is not instrumented.
 This stable-toolchain measurement does not report branch coverage.
 
 Measured after the metadata/capability slice: **36 SDK tests passed**, and domain coverage is
