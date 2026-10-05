@@ -640,16 +640,20 @@ fn adopt_legacy_journal(
             &root.join(format!("{file_name}{suffix}")),
         )?;
     }
-    // The rename is not finished until both directories that held the names
-    // are durable. A power loss before that can drop the new link, the old
-    // unlink, or both (`a_legacy_move_syncs_its_directories_before_it_finishes`).
+    // The new directory is an entry in the namespace. That parent is synced
+    // before the old directory, so a power loss cannot drop the new directory
+    // after the old name is already durable
+    // (`a_legacy_move_syncs_its_directories_before_it_finishes`,
+    // `a_legacy_move_syncs_the_namespace_when_the_old_directory_stays`).
     // A start that moved nothing has no directory entry to make durable.
     if moved {
         sync_journal_directory(files, root)?;
+        sync_journal_directory(files, namespace)?;
         sync_journal_directory(files, &legacy_dir)?;
     }
     // Empty only. A directory that still holds conversation records stays,
-    // and that is not a failure to move the journal.
+    // and that is not a failure to move the journal. Removing it is its own
+    // directory entry, so the namespace is synced again after it is gone.
     match files.remove_dir(&legacy_dir) {
         Ok(()) => sync_journal_directory(files, namespace)?,
         Err(error)

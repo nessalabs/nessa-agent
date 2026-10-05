@@ -552,9 +552,10 @@ fn legacy_names(namespace: &std::path::Path) -> (std::path::PathBuf, std::path::
     (legacy_dir, legacy)
 }
 
-/// The move is not finished when the rename returns. Both directories, and
-/// the namespace after the empty old directory is removed, are synced first.
-/// Nothing here is a real directory.
+/// The move is not finished when the rename returns. The new directory, the
+/// namespace, and the old directory are synced before the empty old directory
+/// is removed, and the namespace is synced again once it is gone. Nothing
+/// here is a real directory.
 #[test]
 fn a_legacy_move_syncs_its_directories_before_it_finishes() {
     let namespace = std::path::PathBuf::from("/namespace");
@@ -581,8 +582,34 @@ fn a_legacy_move_syncs_its_directories_before_it_finishes() {
         files.synced(),
         vec![
             journal.parent().unwrap().to_path_buf(),
+            namespace.clone(),
             legacy_dir,
             namespace,
+        ]
+    );
+}
+
+/// A file that is not a journal stays, so the old directory stays. The
+/// namespace is still synced after the new directory and before the old one.
+#[test]
+fn a_legacy_move_syncs_the_namespace_when_the_old_directory_stays() {
+    let namespace = std::path::PathBuf::from("/namespace");
+    let files = MemoryJournalFiles::new(false);
+    files.insert(namespace.clone(), MemoryKind::Dir);
+    let (legacy_dir, legacy) = legacy_names(&namespace);
+    files.insert(legacy_dir.clone(), MemoryKind::Dir);
+    files.insert(legacy, MemoryKind::File);
+    files.insert(legacy_dir.join("notes.txt"), MemoryKind::File);
+    let journal = receiver_journal(&namespace);
+    adopt_legacy_journal(&namespace, &journal, &files).unwrap();
+    assert_eq!(files.kind(&journal), Some(MemoryKind::File));
+    assert_eq!(files.kind(&legacy_dir), Some(MemoryKind::Dir));
+    assert_eq!(
+        files.synced(),
+        vec![
+            journal.parent().unwrap().to_path_buf(),
+            namespace,
+            legacy_dir,
         ]
     );
 }
