@@ -284,6 +284,18 @@ const checks = {
             if (!bounded.inside)
               failures.push("a 2048-character label overflows the card")
           }
+          if (options.shots) {
+            mkdirSync(options.shots, { recursive: true })
+            await page
+              .locator(css.approvalCard)
+              .first()
+              .screenshot({
+                path: join(
+                  options.shots,
+                  `app-review-${engine}-${layout}-long-label.png`,
+                ),
+              })
+          }
         }
       } finally {
         failures.push(...opened.errors)
