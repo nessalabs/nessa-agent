@@ -514,6 +514,7 @@ impl Projection {
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
+            retained_text: 0,
             execution_id: id.into(),
             user_text: String::new(),
             attachments: Vec::new(),
@@ -755,11 +756,7 @@ impl Projection {
             .retain(|pending| pending.execution_id != id);
         let offset = self.view.messages[index].event_count;
         self.view.messages[index].event_count += 1;
-        let retained_text = self.view.messages[index]
-            .parts
-            .iter()
-            .map(|part| part.text.len())
-            .sum::<usize>();
+        let retained_text = self.view.messages[index].retained_text;
         let available = (MAX_TEXT * 2).saturating_sub(retained_text);
         if matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().len() > available)
         {
@@ -811,7 +808,9 @@ impl Projection {
                     if bounded.len() != text.len() {
                         self.view.truncated = true;
                     }
+                    let next = bounded.len();
                     self.view.messages[index].parts[position].text = bounded;
+                    self.view.messages[index].retained_text = retained_text - previous + next;
                     None
                 } else {
                     let bounded = clipped(&text, available);
@@ -832,15 +831,9 @@ impl Projection {
         };
         if let Some(part) = part {
             let message = &mut self.view.messages[index];
-            if message.parts.len() < 512
-                && message
-                    .parts
-                    .iter()
-                    .map(|part| part.text.len())
-                    .sum::<usize>()
-                    + part.text.len()
-                    <= MAX_TEXT * 2
+            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
             {
+                message.retained_text += part.text.len();
                 if part.kind == "tool" {
                     self.tool_parts
                         .entry(id.to_owned())
@@ -998,6 +991,7 @@ impl Projection {
             .map(Into::into)
             .collect();
         self.view.messages[index].parts.clear();
+        self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);
         self.view.messages[index].event_count = 0;
         self.view.messages[index].steering_offset = record.target_event_offset;
