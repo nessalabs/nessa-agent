@@ -134,17 +134,26 @@ mod mcp_app_lane {
     }
 
     fn call(fixture: &Fixture, request: &str, tool: &str) -> serde_json::Value {
+        call_on(fixture, request, tool, INSTANCE)
+    }
+
+    fn call_on(fixture: &Fixture, request: &str, tool: &str, instance: &str) -> serde_json::Value {
         json!({
             "conversationId": fixture.id.to_string(),
             "requestId": request,
             "app": {
                 "executionId": fixture.execution_id,
                 "toolId": fixture.tool_id,
-                "instanceId": INSTANCE,
+                "instanceId": instance,
             },
             "server": SERVER,
             "tool": tool,
         })
+    }
+
+    /// One mount's lowercase instance id, distinct for `n`.
+    fn mount_id(n: usize) -> String {
+        format!("{n:08x}-0000-4000-8000-{n:012x}")
     }
 
     /// The next `count` responses, by request id.
@@ -209,12 +218,36 @@ mod mcp_app_lane {
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(run_authenticated(socket, state, session));
 
-        // Four destructive calls, each held on its review: the lane is full.
-        for request in ["c1", "c2", "c3", "c4"] {
-            send_command(&peer, request, "mcp.callTool", call(&fixture, request, "delete_rows"));
+        // Four destructive calls, each from its own mount: the lane is full.
+        // One mount may hold only three (`one_mount_cannot_fill_the_app_lane`).
+        let mut opened = Vec::<nessa_protocol::conversation::view::ConversationPermission>::new();
+        for (n, request) in ["c1", "c2", "c3", "c4"].into_iter().enumerate() {
+            send_command(
+                &peer,
+                request,
+                "mcp.callTool",
+                call_on(&fixture, request, "delete_rows", &mount_id(n + 1)),
+            );
+            let count = n + 1;
+            until(async || fixture.app_reviews().await.len() == count).await;
+            let review = fixture
+                .app_reviews()
+                .await
+                .into_iter()
+                .find(|review| {
+                    !opened
+                        .iter()
+                        .any(|opened| opened.permission_id == review.permission_id)
+                })
+                .expect("the call opened its review");
+            opened.push(review);
         }
-        until(async || fixture.app_reviews().await.len() == 4).await;
-        send_command(&peer, "c5", "mcp.callTool", call(&fixture, "c5", "delete_rows"));
+        send_command(
+            &peer,
+            "c5",
+            "mcp.callTool",
+            call_on(&fixture, "c5", "delete_rows", &mount_id(5)),
+        );
         let refused = response(&mut peer).await;
         assert_eq!(refused["id"], "c5");
         assert_eq!(refused["error"]["code"], "temporarily_unavailable");
@@ -229,8 +262,8 @@ mod mcp_app_lane {
             .iter()
             .all(|review| review["origin"]["kind"] == "app" && review["origin"]["server"] == SERVER));
 
-        // The answer still reaches it, and lets its call go.
-        let review = &permissions[0];
+        // The answer still reaches the first mount's review, and lets its call go.
+        let review = &opened[0];
         send_command(
             &peer,
             "answer",
@@ -238,8 +271,8 @@ mod mcp_app_lane {
             json!({
                 "conversationId": fixture.id.to_string(),
                 "requestId": "answer",
-                "executionId": review["executionId"],
-                "permissionId": review["permissionId"],
+                "executionId": review.execution_id,
+                "permissionId": review.permission_id,
                 "optionId": "allow",
             }),
         );
@@ -250,12 +283,17 @@ mod mcp_app_lane {
         assert_eq!(answered[sent[0]]["ok"], true);
         assert_eq!(fixture.apps.calls(), 1);
 
-        // Its slot is free again.
-        send_command(&peer, "c6", "mcp.callTool", call(&fixture, "c6", "delete_rows"));
+        // Its slot is free again, for a mount that is not already at its cap.
+        send_command(
+            &peer,
+            "c6",
+            "mcp.callTool",
+            call_on(&fixture, "c6", "delete_rows", &mount_id(6)),
+        );
         until(async || fixture.app_reviews().await.len() == 4).await;
 
-        // Releasing the mount, on the control lane, ends all four as
-        // cancelled and frees the lane.
+        // Releasing one mount still waiting, on the control lane, ends that
+        // call. The other three stay, and the lane has a slot again.
         send_command(
             &peer,
             "release",
@@ -263,29 +301,29 @@ mod mcp_app_lane {
             json!({
                 "conversationId": fixture.id.to_string(),
                 "requestId": "release",
-                "app": {
-                    "executionId": fixture.execution_id,
-                    "toolId": fixture.tool_id,
-                    "instanceId": INSTANCE,
-                },
+                "app": app(&fixture, &mount_id(2)),
             }),
         );
-        let released = responses(&mut peer, 5).await;
+        let released = responses(&mut peer, 2).await;
         assert_eq!(released["release"]["payload"]["applied"], true);
-        for (id, reply) in &released {
-            if id != "release" {
-                assert_eq!(reply["error"]["code"], "mcp_cancelled", "{id}");
-            }
-        }
-        assert!(fixture.app_reviews().await.is_empty());
-        // The released mount opens nothing again; a new mount of the same
-        // tool call does.
-        send_command(&peer, "c7", "mcp.callTool", call(&fixture, "c7", "delete_rows"));
+        assert_eq!(released["c2"]["error"]["code"], "mcp_cancelled");
+        assert_eq!(fixture.app_reviews().await.len(), 3);
+        // The released mount opens nothing again, while a slot is free for
+        // the service to say so. A full lane would refuse it first.
+        send_command(
+            &peer,
+            "c7",
+            "mcp.callTool",
+            call_on(&fixture, "c7", "delete_rows", &mount_id(2)),
+        );
         assert_eq!(response(&mut peer).await["error"]["code"], "mcp_cancelled");
-        let mut fresh = call(&fixture, "c8", "delete_rows");
-        fresh["app"]["instanceId"] = json!(crate::app_call_test_support::OTHER_INSTANCE);
-        send_command(&peer, "c8", "mcp.callTool", fresh);
-        until(async || fixture.app_reviews().await.len() == 1).await;
+        send_command(
+            &peer,
+            "c8",
+            "mcp.callTool",
+            call_on(&fixture, "c8", "delete_rows", &mount_id(8)),
+        );
+        until(async || fixture.app_reviews().await.len() == 4).await;
 
         // The socket goes: its held call is withdrawn, on record.
         drop(peer.input);
@@ -320,7 +358,13 @@ mod mcp_app_lane {
             let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
             for slot in 0..4 {
                 let request = format!("s{socket_number}-{slot}");
-                send_command(&peer, &request, "mcp.callTool", call(&fixture, &request, "read_rows"));
+                let instance = mount_id(socket_number * 4 + slot + 1);
+                send_command(
+                    &peer,
+                    &request,
+                    "mcp.callTool",
+                    call_on(&fixture, &request, "read_rows", &instance),
+                );
             }
             sockets.push((peer, task));
         }
@@ -388,11 +432,11 @@ mod mcp_app_lane {
         let session = chat_session(&state, "owner-phone").await;
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(run_authenticated(socket, state, session));
-        let message = |request: &str, text: &str| {
+        let message = |request: &str, text: &str, instance: &str| {
             json!({
                 "conversationId": fixture.id.to_string(),
                 "requestId": request,
-                "app": app(&fixture, INSTANCE),
+                "app": app(&fixture, instance),
                 "server": SERVER,
                 "text": text,
             })
@@ -408,10 +452,15 @@ mod mcp_app_lane {
             })
         };
 
-        // Four messages, each waiting on the person: the lane is full, for a
-        // context as much as a call (rows M1, C1).
-        for request in ["m1", "m2", "m3", "m4"] {
-            send_command(&peer, request, "mcp.sendMessage", message(request, request));
+        // Four messages, each from its own mount, waiting on the person: the
+        // lane is full, for a context as much as a call (rows M1, C1).
+        for (n, request) in ["m1", "m2", "m3", "m4"].into_iter().enumerate() {
+            send_command(
+                &peer,
+                request,
+                "mcp.sendMessage",
+                message(request, request, &mount_id(n + 1)),
+            );
         }
         until(async || fixture.app_reviews().await.len() == 4).await;
         send_command(&peer, "ctx", "mcp.updateModelContext", context("ctx"));
@@ -470,7 +519,11 @@ mod mcp_app_lane {
             &peer,
             "long-message",
             "mcp.sendMessage",
-            message("long-message", &"x".repeat(MAX_MCP_MESSAGE_BYTES + 1)),
+            message(
+                "long-message",
+                &"x".repeat(MAX_MCP_MESSAGE_BYTES + 1),
+                INSTANCE,
+            ),
         );
         let refused = response(&mut peer).await;
         assert_eq!(refused["id"], "long-message");
@@ -616,6 +669,286 @@ mod mcp_app_lane {
             )]
         );
         assert!(fixture.app_reviews().await.is_empty());
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    /// Four destructive calls from one mount: three may wait, and the fourth
+    /// is refused, leaving a slot another mount can take. A message from that
+    /// mount is the same cap.
+    #[tokio::test(flavor = "current_thread")]
+    async fn one_mount_cannot_fill_the_app_lane() {
+        let (captured, _log) = super::limit_log();
+        let fixture = owners_fixture().await;
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+
+        for request in ["a1", "a2", "a3", "a4"] {
+            send_command(
+                &peer,
+                request,
+                "mcp.callTool",
+                call(&fixture, request, "delete_rows"),
+            );
+        }
+        let mut refusals = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if fixture.app_reviews().await.len() + refusals.len() == 4 {
+                    break;
+                }
+                tokio::select! {
+                    reply = response(&mut peer) => {
+                        assert_eq!(reply["error"]["code"], "temporarily_unavailable", "{reply}");
+                        refusals.push(reply);
+                    }
+                    _ = tokio::task::yield_now() => {}
+                }
+            }
+        })
+        .await
+        .expect("four calls from one mount settle as reviews or refusals");
+        assert_eq!(
+            fixture.app_reviews().await.len(),
+            3,
+            "one mount holds the lane's last slot"
+        );
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["id"], "a4");
+        // The cap is the mount's, across every app method, and it took no slot.
+        send_command(
+            &peer,
+            "msg",
+            "mcp.sendMessage",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "msg",
+                "app": app(&fixture, INSTANCE),
+                "server": SERVER,
+                "text": "still this mount",
+            }),
+        );
+        let message = response(&mut peer).await;
+        assert_eq!(message["id"], "msg");
+        assert_eq!(message["error"]["code"], "temporarily_unavailable");
+        assert_eq!(fixture.app_reviews().await.len(), 3);
+        super::named(&captured, "socket.app_mount");
+
+        let mut other = call(&fixture, "b1", "delete_rows");
+        other["app"]["instanceId"] = json!(crate::app_call_test_support::OTHER_INSTANCE);
+        send_command(&peer, "b1", "mcp.callTool", other);
+        until(async || fixture.app_reviews().await.len() == 4).await;
+
+        let mut third = call(&fixture, "c1", "delete_rows");
+        third["app"]["instanceId"] = json!(mount_id(3));
+        send_command(&peer, "c1", "mcp.callTool", third);
+        let lane = response(&mut peer).await;
+        assert_eq!(lane["id"], "c1");
+        assert_eq!(lane["error"]["code"], "temporarily_unavailable");
+        super::named(&captured, "socket.app_calls");
+
+        // Denying the four waiting calls ends them and gives their slots
+        // back. Releasing the mount would fence it, which is a different rule.
+        let waiting = fixture.app_reviews().await;
+        assert_eq!(waiting.len(), 4);
+        for (n, review) in waiting.iter().enumerate() {
+            let request = format!("deny-{n}");
+            send_command(
+                &peer,
+                &request,
+                "conversation.answer",
+                json!({
+                    "conversationId": fixture.id.to_string(),
+                    "requestId": request,
+                    "executionId": review.execution_id,
+                    "permissionId": review.permission_id,
+                    "optionId": "deny",
+                }),
+            );
+        }
+        let denied = responses(&mut peer, 8).await;
+        for (id, reply) in &denied {
+            if id.starts_with("deny-") {
+                assert_eq!(reply["ok"], true, "{id}");
+            } else {
+                assert_eq!(reply["error"]["code"], "mcp_approval_denied", "{id}");
+            }
+        }
+        assert!(fixture.app_reviews().await.is_empty());
+
+        for request in ["a5", "a6", "a7"] {
+            send_command(
+                &peer,
+                request,
+                "mcp.callTool",
+                call(&fixture, request, "delete_rows"),
+            );
+        }
+        until(async || fixture.app_reviews().await.len() == 3).await;
+        send_command(
+            &peer,
+            "a8",
+            "mcp.callTool",
+            call(&fixture, "a8", "delete_rows"),
+        );
+        let again = response(&mut peer).await;
+        assert_eq!(again["id"], "a8");
+        assert_eq!(again["error"]["code"], "temporarily_unavailable");
+        send_command(
+            &peer,
+            "b2",
+            "mcp.callTool",
+            call_on(
+                &fixture,
+                "b2",
+                "delete_rows",
+                crate::app_call_test_support::OTHER_INSTANCE,
+            ),
+        );
+        until(async || fixture.app_reviews().await.len() == 4).await;
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    /// A mount turned away because the lane is full is not left at its own
+    /// cap: the reservation ends with the slot it did not get.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_lane_refusal_does_not_stick_to_the_mount() {
+        let fixture = owners_fixture().await;
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        for (n, request) in ["h1", "h2", "h3", "h4"].into_iter().enumerate() {
+            send_command(
+                &peer,
+                request,
+                "mcp.callTool",
+                call_on(&fixture, request, "delete_rows", &mount_id(n + 1)),
+            );
+        }
+        until(async || fixture.app_reviews().await.len() == 4).await;
+        let stuck = mount_id(9);
+        for request in ["s1", "s2", "s3"] {
+            send_command(
+                &peer,
+                request,
+                "mcp.callTool",
+                call_on(&fixture, request, "delete_rows", &stuck),
+            );
+            let refused = response(&mut peer).await;
+            assert_eq!(refused["id"], request);
+            assert_eq!(refused["error"]["code"], "temporarily_unavailable");
+        }
+        for (n, request) in ["h1", "h2", "h3", "h4"].into_iter().enumerate() {
+            let release = format!("release-{request}");
+            send_command(
+                &peer,
+                &release,
+                "mcp.releaseApp",
+                json!({
+                    "conversationId": fixture.id.to_string(),
+                    "requestId": release,
+                    "app": app(&fixture, &mount_id(n + 1)),
+                }),
+            );
+        }
+        let released = responses(&mut peer, 8).await;
+        for request in ["h1", "h2", "h3", "h4"] {
+            assert_eq!(
+                released[&format!("release-{request}")]["payload"]["applied"],
+                true
+            );
+            assert_eq!(released[request]["error"]["code"], "mcp_cancelled");
+        }
+        assert!(fixture.app_reviews().await.is_empty());
+        for request in ["s4", "s5", "s6"] {
+            send_command(
+                &peer,
+                request,
+                "mcp.callTool",
+                call_on(&fixture, request, "delete_rows", &stuck),
+            );
+        }
+        until(async || fixture.app_reviews().await.len() == 3).await;
+        send_command(
+            &peer,
+            "s7",
+            "mcp.callTool",
+            call_on(&fixture, "s7", "delete_rows", &stuck),
+        );
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["id"], "s7");
+        assert_eq!(refused["error"]["code"], "temporarily_unavailable");
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    /// `mcp.releaseApp` is a control, so it fences a call still in admission
+    /// and that call opens no review. A later call of the mount is cancelled
+    /// too; another mount is not.
+    #[tokio::test]
+    async fn a_release_on_the_control_lane_fences_a_call_still_in_admission() {
+        let fixture = owners_fixture().await;
+        let hold = crate::app_call_test_support::Hold::default();
+        *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        send_command(
+            &peer,
+            "c1",
+            "mcp.callTool",
+            call(&fixture, "c1", "delete_rows"),
+        );
+        timeout(Duration::from_secs(5), hold.waiting.notified())
+            .await
+            .expect("the call waits in its first record");
+        assert!(fixture.app_reviews().await.is_empty());
+        send_command(
+            &peer,
+            "release",
+            "mcp.releaseApp",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "release",
+                "app": app(&fixture, INSTANCE),
+            }),
+        );
+        let released = response(&mut peer).await;
+        assert_eq!(released["id"], "release");
+        assert_eq!(released["payload"]["applied"], true);
+        assert!(fixture.app_reviews().await.is_empty());
+        hold.go.add_permits(1);
+        let cancelled = response(&mut peer).await;
+        assert_eq!(cancelled["id"], "c1");
+        assert_eq!(cancelled["error"]["code"], "mcp_cancelled");
+        assert!(fixture.app_reviews().await.is_empty());
+        send_command(
+            &peer,
+            "c2",
+            "mcp.callTool",
+            call(&fixture, "c2", "delete_rows"),
+        );
+        let again = response(&mut peer).await;
+        assert_eq!(again["id"], "c2");
+        assert_eq!(again["error"]["code"], "mcp_cancelled");
+        assert!(fixture.app_reviews().await.is_empty());
+        send_command(
+            &peer,
+            "c3",
+            "mcp.callTool",
+            call_on(
+                &fixture,
+                "c3",
+                "delete_rows",
+                crate::app_call_test_support::OTHER_INSTANCE,
+            ),
+        );
+        until(async || fixture.app_reviews().await.len() == 1).await;
         drop(peer.input);
         task.await.unwrap();
     }

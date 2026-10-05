@@ -125,10 +125,11 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   gives a `ticket`. The bytes never travel on the socket. A resource whose
   URI, `csp` and `domain` take more than 48 KiB encoded is refused
   `mcp_result_too_large`: no answer could carry them.
-- **App calls have a lane of their own**, 4 at once per socket, and 32
-  running at once on the gateway, each counted until it ends rather than
-  until its socket goes. Past either they are refused
-  `temporarily_unavailable`, so held calls never stop `conversation.read` or
+- **App calls have a lane of their own**, 4 at once per socket, at most 3 of
+  those from one mount, and 32 running at once on the gateway, each counted
+  until it ends rather than until its socket goes. Past any of those they
+  are refused `temporarily_unavailable`, so one app's waiting reviews cannot
+  take the lane, and held calls never stop `conversation.read` or
   `conversation.answer`.
 - **`mcp.sendMessage`** (MCP Apps `ui/message`, #390) puts the app's text
   into its conversation as the person's turn, written by the app: the
