@@ -838,4 +838,100 @@ mod mcp_app_lane {
         drop(peer.input);
         timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
     }
+
+    #[tokio::test]
+    async fn a_release_is_admitted_while_an_app_refusal_waits() {
+        // The writer is inside a control frame, so the refusal lane's one
+        // place stays full. A release that arrives behind further reads must
+        // be admitted before that refusal is sent, and those reads must not run.
+        let (release_stall, gate) = tokio::sync::oneshot::channel();
+        let (fixture, mut peer, task) = fill_the_lane(Some(gate)).await;
+        send_command(
+            &peer,
+            "release-0",
+            "mcp.releaseApp",
+            release_of(&fixture, "release-0", &mount_id(0)),
+        );
+        timeout(Duration::from_secs(5), peer.writing.recv())
+            .await
+            .expect("the release answer reached the writer");
+        tokio::task::yield_now().await;
+        for n in [4, 5, 6] {
+            send_command(
+                &peer,
+                &format!("extra-{n}"),
+                "mcp.readResource",
+                read_of(&fixture, &format!("extra-{n}"), &mount_id(n)),
+            );
+        }
+        send_command(
+            &peer,
+            "release-1",
+            "mcp.releaseApp",
+            release_of(&fixture, "release-1", &mount_id(1)),
+        );
+        send_command(
+            &peer,
+            "extra-7",
+            "mcp.readResource",
+            read_of(&fixture, "extra-7", &mount_id(7)),
+        );
+        send_command(
+            &peer,
+            "release-2",
+            "mcp.releaseApp",
+            release_of(&fixture, "release-2", &mount_id(2)),
+        );
+        until(async || {
+            let released = fixture.tickets.released_apps.lock().unwrap();
+            [0, 1, 2].into_iter().all(|n| {
+                released
+                    .iter()
+                    .any(|(app, _)| app.instance_id == mount_id(n))
+            })
+        })
+        .await;
+        assert_eq!(
+            fixture.apps.reads.load(Ordering::SeqCst),
+            4,
+            "a read held behind the refusal ran"
+        );
+        assert!(
+            peer.output.try_recv().is_err(),
+            "the writer left the stalled release before the later release was admitted"
+        );
+
+        release_stall.send(()).unwrap();
+        let ids = [
+            "release-0",
+            "release-1",
+            "release-2",
+            "extra-4",
+            "extra-5",
+            "extra-6",
+            "extra-7",
+        ];
+        let answered = answers_for(&mut peer, &ids).await;
+        assert_eq!(
+            answered.len(),
+            ids.len(),
+            "socket dropped or withheld an answer: {answered:?}"
+        );
+        for n in 0..3 {
+            assert_eq!(
+                answered[&format!("release-{n}")]["payload"]["applied"],
+                true
+            );
+        }
+        for n in [4, 5, 6, 7] {
+            assert_eq!(
+                answered[&format!("extra-{n}")]["error"]["code"],
+                "temporarily_unavailable"
+            );
+        }
+        send_command(&peer, "still-up", "server.health", json!({}));
+        assert_eq!(response(&mut peer).await["ok"], true);
+        drop(peer.input);
+        timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+    }
 }

@@ -47,6 +47,7 @@ use nessa_protocol::protocol::{
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
 use serde_json::json;
+use std::collections::VecDeque;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -321,6 +322,11 @@ fn credential_admin_code(error: CredentialAdminError) -> &'static str {
 /// How many MCP App calls one socket has running at once; past that each is
 /// refused `temporarily_unavailable` (`protocol/README.md`).
 const APP_CALLS_PER_SOCKET: usize = 4;
+/// App calls read while one app refusal waits for the refusal lane. A control
+/// frame behind them is still admitted. Past this, reading pauses so the hold
+/// cannot grow without bound.
+/// `a_release_is_admitted_while_an_app_refusal_waits`.
+const HELD_INPUT_WHILE_APP_REFUSAL: usize = 16;
 
 #[derive(Clone, Copy)]
 enum ResponseClass {
@@ -670,6 +676,10 @@ where
     // and close the socket.
     // `a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket`.
     let mut app_refusal: Option<OutgoingMessage> = None;
+    // App calls read while that refusal waits. A control frame is admitted
+    // ahead of them, so a stalled refusal cannot hold a release unread.
+    // `a_release_is_admitted_while_an_app_refusal_waits`.
+    let mut held_input: VecDeque<RequestFrame> = VecDeque::new();
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -697,9 +707,32 @@ where
     let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
         watches.collect_retired();
+        // A held app call is admitted only once the waiting refusal has a
+        // place. Until then the socket still reads, and a control frame is
+        // admitted ahead of what is held.
+        let staged_record =
+            if app_refusal.is_none() && pending_input.is_none() && input_check.is_none() {
+                held_input.pop_front().and_then(|frame| {
+                    if matches!(
+                        ResponseClass::for_method(&frame.method),
+                        ResponseClass::Record
+                    ) {
+                        Some(frame)
+                    } else {
+                        pending_input = Some(AuthenticatedInput::Request(frame));
+                        input_check = Some(Box::pin(current_session_error(&state, &session)));
+                        None
+                    }
+                })
+            } else {
+                None
+            };
         // Authority checks suspend only their own admission. Request completion,
         // delivery teardown and expiry retain independently polled owners (R60).
-        let admitted = tokio::select! {
+        let admitted = if let Some(frame) = staged_record {
+            Some((frame, Instant::now()))
+        } else {
+            tokio::select! {
             _ = &mut writer => {
                 writer_finished = true;
                 break;
@@ -816,7 +849,9 @@ where
                     }
                 }
             }
-            message = incoming.next(), if pending_input.is_none() && app_refusal.is_none() => {
+            message = incoming.next(), if pending_input.is_none()
+                && held_input.len() < HELD_INPUT_WHILE_APP_REFUSAL
+                && (app_refusal.is_some() || held_input.is_empty()) => {
                 let Some(Ok(message)) = message else { break };
                 let Message::Text(text) = message else {
                     if matches!(message, Message::Close(_)) { break; }
@@ -835,6 +870,14 @@ where
                         continue;
                     },
                 };
+                // A further app call would need another refusal place. Hold it
+                // and keep reading so a release behind it is still admitted.
+                if app_refusal.is_some()
+                    && matches!(ResponseClass::for_method(&frame.method), ResponseClass::App)
+                {
+                    held_input.push_back(frame);
+                    continue;
+                }
                 let record = matches!(ResponseClass::for_method(&frame.method), ResponseClass::Record);
                 if record {
                     Some((frame, Instant::now()))
@@ -846,6 +889,7 @@ where
                     input_check = Some(Box::pin(current_session_error(&state, &session)));
                     None
                 }
+            }
             }
         };
         let Some((frame, received_at)) = admitted else {
