@@ -5,7 +5,7 @@
 use super::ConversationFuture;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::product_contract::generated::MCP_RESOURCE_TICKET_MS;
+use nessa_protocol::product_contract::generated::{ConversationErrorCode, MCP_RESOURCE_TICKET_MS};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
 use serde_json::Value;
@@ -109,68 +109,13 @@ pub enum McpAppWithdrawal {
     ConversationEnded,
 }
 
-/// The protocol code a step ended an app's call with, as audit names it.
-/// The wire answers with the same code (`tests/conversation/agreement.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum McpAppCode {
-    AppUnknown,
-    ServerMismatch,
-    ToolNotForApp,
-    RequestTooLarge,
-    SessionUnavailable,
-    ApprovalDenied,
-    ApprovalExpired,
-    Cancelled,
-    ResultTooLarge,
-    TimedOut,
-    RemoteError,
-    InvalidRequest,
-    TemporarilyUnavailable,
-}
-impl McpAppCode {
-    /// Every code, for the tests that hold them to the protocol's.
-    pub const ALL: [Self; 13] = [
-        Self::AppUnknown,
-        Self::ServerMismatch,
-        Self::ToolNotForApp,
-        Self::RequestTooLarge,
-        Self::SessionUnavailable,
-        Self::ApprovalDenied,
-        Self::ApprovalExpired,
-        Self::Cancelled,
-        Self::ResultTooLarge,
-        Self::TimedOut,
-        Self::RemoteError,
-        Self::InvalidRequest,
-        Self::TemporarilyUnavailable,
-    ];
-    /// The protocol's name for it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::AppUnknown => "mcp_app_unknown",
-            Self::ServerMismatch => "mcp_server_mismatch",
-            Self::ToolNotForApp => "mcp_tool_not_for_app",
-            Self::RequestTooLarge => "mcp_request_too_large",
-            Self::SessionUnavailable => "mcp_session_unavailable",
-            Self::ApprovalDenied => "mcp_approval_denied",
-            Self::ApprovalExpired => "mcp_approval_expired",
-            Self::Cancelled => "mcp_cancelled",
-            Self::ResultTooLarge => "mcp_result_too_large",
-            Self::TimedOut => "mcp_timed_out",
-            Self::RemoteError => "mcp_remote_error",
-            Self::InvalidRequest => "invalid_request",
-            Self::TemporarilyUnavailable => "temporarily_unavailable",
-        }
-    }
-}
-
 /// How a call that reached the server ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppOutcome {
     /// Answered within bounds; `is_error` as the server set it.
     Answered { is_error: bool, bytes: usize },
     /// Failed after it was sent, by the code it is refused with.
-    Failed(McpAppCode),
+    Failed(ConversationErrorCode),
 }
 
 /// How a ticket ended unredeemed.
@@ -190,7 +135,7 @@ pub enum TicketEnd {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppAuditPhase {
     /// Refused before anything reached the server, by protocol code.
-    Refused(McpAppCode),
+    Refused(ConversationErrorCode),
     /// Admitted with nothing to wait for; sent next.
     Admitted,
     /// A destructive tool: the person is asked first.
@@ -321,8 +266,9 @@ pub const MAX_HELD_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
 /// The most tickets a conversation may hold at once, whatever their size.
 pub const MAX_HELD_TICKETS: usize = 64;
 
-/// Why an app's call was refused, or failed once sent: one protocol code
-/// each. [`Self::code`] is how audit names it.
+/// Why an app's call was refused, or failed once sent. [`Self::code`] is the
+/// protocol's [`ConversationErrorCode`], which audit records and the wire
+/// answers with (`tests/conversation/wire_errors.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppError {
     AppUnknown,
@@ -342,21 +288,21 @@ pub enum McpAppError {
     Busy,
 }
 impl McpAppError {
-    /// The protocol code.
-    pub fn code(&self) -> McpAppCode {
+    /// The protocol code audit records and the wire answers with.
+    pub fn code(&self) -> ConversationErrorCode {
         match self {
-            Self::AppUnknown => McpAppCode::AppUnknown,
-            Self::ServerMismatch => McpAppCode::ServerMismatch,
-            Self::ToolNotForApp => McpAppCode::ToolNotForApp,
-            Self::RequestTooLarge => McpAppCode::RequestTooLarge,
-            Self::SessionUnavailable => McpAppCode::SessionUnavailable,
-            Self::ApprovalDenied => McpAppCode::ApprovalDenied,
-            Self::ApprovalExpired => McpAppCode::ApprovalExpired,
-            Self::Cancelled => McpAppCode::Cancelled,
-            Self::ResultTooLarge => McpAppCode::ResultTooLarge,
-            Self::TimedOut => McpAppCode::TimedOut,
-            Self::Remote(_) => McpAppCode::RemoteError,
-            Self::Busy => McpAppCode::TemporarilyUnavailable,
+            Self::AppUnknown => ConversationErrorCode::McpAppUnknown,
+            Self::ServerMismatch => ConversationErrorCode::McpServerMismatch,
+            Self::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
+            Self::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
+            Self::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
+            Self::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
+            Self::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
+            Self::Cancelled => ConversationErrorCode::McpCancelled,
+            Self::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
+            Self::TimedOut => ConversationErrorCode::McpTimedOut,
+            Self::Remote(_) => ConversationErrorCode::McpRemoteError,
+            Self::Busy => ConversationErrorCode::TemporarilyUnavailable,
         }
     }
 }
