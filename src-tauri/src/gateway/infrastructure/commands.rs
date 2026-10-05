@@ -412,6 +412,14 @@ mod configuration_directory {
         }
     }
 
+    fn absolute_claude_directory(name: &str) -> String {
+        if cfg!(windows) {
+            format!(r"C:\Users\me\{name}")
+        } else {
+            format!("/Users/me/{name}")
+        }
+    }
+
     fn gateway(host: Arc<DirectoryHost>) -> Gateway {
         Gateway::bootstrap(
             host,
@@ -432,25 +440,25 @@ mod configuration_directory {
             causes: Mutex::new(Vec::new()),
         });
         let gateway = gateway(host.clone());
-        let directory = "/Users/me/.claude-work";
+        let directory = absolute_claude_directory(".claude-work");
 
         tauri::async_runtime::block_on(apply_claude_configuration_directory(
             &saved.store,
             Some(&gateway),
             BundledSurface::Main,
-            Some(directory.into()),
+            Some(directory.clone()),
         ))
         .unwrap();
         tauri::async_runtime::block_on(apply_claude_configuration_directory(
             &saved.store,
             Some(&gateway),
             BundledSurface::Main,
-            Some(directory.into()),
+            Some(directory.clone()),
         ))
         .unwrap();
 
         let file = String::from_utf8(saved.storage.get(&saved.path).unwrap()).unwrap();
-        assert!(file.contains(directory));
+        assert!(file.contains(".claude-work"));
         assert!(!file.contains("ANTHROPIC_API_KEY"));
         assert!(!file.contains("CLAUDE_CODE_OAUTH_TOKEN"));
         assert_eq!(
@@ -465,7 +473,7 @@ mod configuration_directory {
                 .claude
                 .configuration_directory
                 .as_deref(),
-            Some(Path::new(directory))
+            Some(Path::new(&directory))
         );
     }
 
@@ -477,7 +485,7 @@ mod configuration_directory {
             &saved.store,
             None,
             BundledSurface::Setup,
-            Some("/Users/me/.claude-work".into()),
+            Some(absolute_claude_directory(".claude-work")),
         ))
         .unwrap();
 
@@ -489,7 +497,7 @@ mod configuration_directory {
                 .claude
                 .configuration_directory
                 .as_deref(),
-            Some(Path::new("/Users/me/.claude-work"))
+            Some(Path::new(&absolute_claude_directory(".claude-work")))
         );
     }
 
@@ -530,7 +538,7 @@ mod configuration_directory {
                 &saved.store,
                 Some(&gateway),
                 BundledSurface::Main,
-                Some("/Users/me/.claude-work".into()),
+                Some(absolute_claude_directory(".claude-work")),
             )),
             Err(ClaudeConfigurationError::Settings { .. })
         ));

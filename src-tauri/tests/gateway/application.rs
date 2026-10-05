@@ -21,6 +21,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn absolute_claude_directory(name: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!(r"C:\Users\me\{name}"))
+    } else {
+        PathBuf::from(format!("/Users/me/{name}"))
+    }
+}
+
 fn login_shell(path: &str) -> Arc<FixedLoginShell> {
     Arc::new(FixedLoginShell(Ok(SearchPath::parse(path).unwrap())))
 }
@@ -2114,7 +2122,7 @@ fn settings_change_reregisters_once_and_records_the_reason() {
         "/runtime".into(),
         "ci".into(),
     );
-    let directory = PathBuf::from("/Users/me/.claude-work");
+    let directory = absolute_claude_directory(".claude-work");
 
     tauri::async_runtime::block_on(
         gateway.change_claude_configuration(BundledSurface::Main, Some(directory.clone())),
@@ -2235,7 +2243,7 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
         "/runtime".into(),
         "ci".into(),
     );
-    let directory = PathBuf::from("/Users/me/.claude-work");
+    let directory = absolute_claude_directory(".claude-work");
 
     assert!(tauri::async_runtime::block_on(
         gateway.change_claude_configuration(BundledSurface::Setup, Some(directory.clone())),
@@ -2406,7 +2414,7 @@ fn gated_gateway(host: Arc<GatedDirectoryHost>) -> Arc<Gateway> {
 fn an_identical_in_flight_directory_change_waits_for_that_attempt() {
     let host = GatedDirectoryHost::new(true);
     let gateway = gated_gateway(host.clone());
-    let directory = PathBuf::from("/Users/me/.claude-work");
+    let directory = absolute_claude_directory(".claude-work");
     let first_gateway = Arc::clone(&gateway);
     let first_directory = directory.clone();
     let first = thread::spawn(move || {
@@ -2443,8 +2451,8 @@ fn an_identical_in_flight_directory_change_waits_for_that_attempt() {
 fn a_failed_registration_does_not_restore_a_newer_directory() {
     let host = GatedDirectoryHost::new(true);
     let gateway = gated_gateway(host.clone());
-    let first = PathBuf::from("/Users/me/.claude-a");
-    let newer = PathBuf::from("/Users/me/.claude-b");
+    let first = absolute_claude_directory(".claude-a");
+    let newer = absolute_claude_directory(".claude-b");
     let attempt_gateway = Arc::clone(&gateway);
     let attempt_directory = first.clone();
     let attempt = thread::spawn(move || {
@@ -2470,8 +2478,8 @@ fn a_failed_registration_does_not_restore_a_newer_directory() {
 fn a_different_directory_waits_until_the_in_flight_attempt_finishes() {
     let host = GatedDirectoryHost::new(true);
     let gateway = gated_gateway(host.clone());
-    let first = PathBuf::from("/Users/me/.claude-a");
-    let second = PathBuf::from("/Users/me/.claude-b");
+    let first = absolute_claude_directory(".claude-a");
+    let second = absolute_claude_directory(".claude-b");
     let first_gateway = Arc::clone(&gateway);
     let first_directory = first.clone();
     let attempt = thread::spawn(move || {
