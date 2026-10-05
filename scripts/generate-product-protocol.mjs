@@ -247,12 +247,16 @@ let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
   "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+// ConversationErrorCode is named by MCP app audit and by the product wire.
+// It has no payload field, so it is published here with the other outcome
+// codes an application module may import.
 const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
   "ChangeWatchErrorCode",
   "ChangeWatchEndReason",
+  "ConversationErrorCode",
 ])
 // Outcome enums referenced by typed payload fields serialize through Serde.
 // Unreferenced code vocabularies and close-policy enums also expose string codes.

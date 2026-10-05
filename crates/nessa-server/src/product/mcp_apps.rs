@@ -13,10 +13,11 @@ use crate::conversation::application::{
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    ConversationErrorCode, ConversationMutationResult, McpAppReference, McpCallToolParams,
-    McpCallToolResult, McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams,
-    McpRemoteErrorDetails, McpUiCsp, McpUiPermissions,
+    ConversationMutationResult, McpAppReference, McpCallToolParams, McpCallToolResult,
+    McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams, McpRemoteErrorDetails,
+    McpUiCsp, McpUiPermissions,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, MAX_UI_URI_BYTES};

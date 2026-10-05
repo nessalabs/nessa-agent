@@ -60,6 +60,7 @@
     "client:docs:check": "pnpm client:docs:json && node scripts/check-client-docs.mjs",
     "auth:measure": "cargo build -p nessa-server && tsx scripts/measure-auth.mjs",
     "desktop:dev": "vite --host 127.0.0.1 --port 1438 --strictPort",
+    "test:e2e:scripted": "node verification/desktop/scripts/scripted-e2e.mjs",
     "verify:desktop": "node verification/desktop/scripts/run-all.mjs",
     "verify:desktop:test": "node --test verification/desktop/scripts/lib/*.test.mjs",
     "verify:desktop:smoke": "node verification/desktop/scripts/smoke.mjs",

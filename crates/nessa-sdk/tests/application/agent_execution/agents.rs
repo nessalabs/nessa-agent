@@ -1,3 +1,4 @@
+mod approval;
 mod conformance;
 mod effort;
 mod initialization;
@@ -28,6 +29,7 @@ struct SavedState {
     leased: bool,
     save: SnapshotSaveState,
     pause_save: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    pause_invocation: Option<(String, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     pause_queue: Option<(QueueMutation, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     snapshot: Option<SessionSnapshot>,
     writes: usize,
@@ -181,6 +183,24 @@ impl SessionStorageLease for MemoryStore {
             let digest = hash.finalize().into();
             let pause = self.0.lock().unwrap().pause_save.take();
             if let Some((started, release)) = pause {
+                let _ = started.send(());
+                let _ = release.await;
+            }
+            let invocation_pause = {
+                let mut state = self.0.lock().unwrap();
+                let matches = state.pause_invocation.as_ref().is_some_and(|(id, _, _)| {
+                    snapshot
+                        .invocations
+                        .iter()
+                        .any(|invocation| invocation.request.execution_id.as_str() == id)
+                });
+                if matches {
+                    state.pause_invocation.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, started, release)) = invocation_pause {
                 let _ = started.send(());
                 let _ = release.await;
             }
@@ -376,6 +396,18 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
 }
 
 impl MemoryStorage {
+    /// Pause the next save whose snapshot contains `execution_id`.
+    /// Earlier saves are left alone, so the waiter is the admission of that input.
+    pub(super) fn pause_invocation_save(
+        &self,
+        execution_id: &str,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (started, observing) = oneshot::channel();
+        let (release, waiting) = oneshot::channel();
+        self.0.lock().unwrap().pause_invocation = Some((execution_id.to_owned(), started, waiting));
+        (observing, release)
+    }
+
     pub(super) fn pause_next_save(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (started, observing) = oneshot::channel();
         let (release, waiting) = oneshot::channel();
