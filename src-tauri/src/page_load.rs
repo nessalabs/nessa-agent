@@ -64,12 +64,16 @@ fn is_app_page(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };
-    match (parsed.scheme(), parsed.host_str(), parsed.port()) {
-        ("tauri", Some("localhost"), None) => true,
-        ("http", Some("tauri.localhost"), None) => true,
-        ("http", Some("localhost" | "127.0.0.1" | "[::1]"), Some(1420)) => true,
-        _ => false,
-    }
+    matches!(
+        (parsed.scheme(), parsed.host_str(), parsed.port()),
+        ("tauri", Some("localhost"), None)
+            | ("http", Some("tauri.localhost"), None)
+            | (
+                "http",
+                Some("localhost" | "127.0.0.1" | "[::1]"),
+                Some(1420)
+            )
+    )
 }
 
 /// The explanation page. `dev_server` is the build: a packaged window is
@@ -78,11 +82,8 @@ pub fn is_load_failure_page(url: &Url, dev_server: bool) -> bool {
     if !dev_server || url.path() != FAILURE_PATH || url.port().is_some() {
         return false;
     }
-    match (url.scheme(), url.host_str()) {
-        (SCHEME, Some("localhost")) => true,
-        ("http", Some(host)) if host == HTTP_HOST => true,
-        _ => false,
-    }
+    (url.scheme() == SCHEME && url.host_str() == Some("localhost"))
+        || (url.scheme() == "http" && url.host_str() == Some(HTTP_HOST))
 }
 
 pub fn load_failure_url(page: &str) -> Url {
