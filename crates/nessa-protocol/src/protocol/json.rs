@@ -592,8 +592,12 @@ mod tests {
             "{\"type\":\"req\",\"id\":\"request-9\",\"method\":\"m\",\"params\":{\"a\":\"\\ud800\n\"}}",
             r#"{"type":"req","id":"right","method":"m","params":{"a":"\ud800\",\"id\":\"wrong"}}"#,
             r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800\é"}}"#,
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800\€"}}"#,
             r#"{"type":"req","params":{"a":"\ud800\😀"},"id":"request-9","method":"m"}"#,
             r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800x\u12"}}"#,
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800x\uGGGG"}}"#,
+            r#"{"type":"req","params":{"a":"\ud800x\u\""},"id":"request-9","method":"m"}"#,
+            r#"{"type":"req","method":"m","params":{"a":"\ud800\u"},"id":"request-9"}"#,
         ] {
             let value = unique_envelope(text).unwrap_or_else(|error| panic!("{text}: {error}"));
             let id = value["id"].as_str().unwrap_or_else(|| panic!("no id in {text}"));
