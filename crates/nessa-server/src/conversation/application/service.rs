@@ -2007,6 +2007,37 @@ impl ConversationService {
             let (owner, live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
+            // A submission the agent already has is the agent's to answer: the
+            // same message recovers its original delivery and any other is a
+            // conflict, whatever this conversation holds today. Its images were
+            // checked when it was first accepted. Asking again would turn a
+            // retry of a delivered turn into "not found" once its upload was
+            // let go, where the same retry of a text turn succeeds.
+            // A retry carries what its saved record holds, never what is held
+            // now: the agent compares it with the message it has
+            // (`c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`).
+            let original = live
+                .agent
+                .session_manager()
+                .snapshot()
+                .await
+                .and_then(|snapshot| {
+                    snapshot
+                        .invocations
+                        .iter()
+                        .find(|record| record.request.execution_id == execution)
+                        .map(|record| record.request.user_message.app_model_context().to_vec())
+                });
+            let known = original.is_some();
+            // Asked under the submission lock, which a desktop stop takes to
+            // mark the owner: an owner being stopped is handed no new message
+            // (`an_owner_marked_as_stopping_is_handed_no_message`, #528),
+            // before anything about it is recorded. A message it already has
+            // is still answered with its own delivery
+            // (`a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`).
+            if owner.stopping.load(Ordering::SeqCst) && !known {
+                return Err(ConversationError::Agent(AgentError::Closed).into());
+            }
             let non_default_mode = live
                 .projection
                 .lock()
@@ -2039,37 +2070,6 @@ impl ConversationService {
                 if live.agent.approval_mode() != Some(expected) {
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
-            }
-            // A submission the agent already has is the agent's to answer: the
-            // same message recovers its original delivery and any other is a
-            // conflict, whatever this conversation holds today. Its images were
-            // checked when it was first accepted. Asking again would turn a
-            // retry of a delivered turn into "not found" once its upload was
-            // let go, where the same retry of a text turn succeeds.
-            // A retry carries what its saved record holds, never what is held
-            // now: the agent compares it with the message it has
-            // (`c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`).
-            let original = live
-                .agent
-                .session_manager()
-                .snapshot()
-                .await
-                .and_then(|snapshot| {
-                    snapshot
-                        .invocations
-                        .iter()
-                        .find(|record| record.request.execution_id == execution)
-                        .map(|record| record.request.user_message.app_model_context().to_vec())
-                });
-            let known = original.is_some();
-            // Asked under the submission lock, which a desktop stop takes to
-            // mark the owner: an owner being stopped is handed no new message
-            // (`an_owner_marked_as_stopping_is_handed_no_message`, #528),
-            // before anything about it is recorded. A message it already has
-            // is still answered with its own delivery
-            // (`a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`).
-            if owner.stopping.load(Ordering::SeqCst) && !known {
-                return Err(ConversationError::Agent(AgentError::Closed).into());
             }
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
@@ -3885,9 +3885,10 @@ impl ConversationService {
     /// once the close is confirmed.
     ///
     /// `submissions` is the conversation's submission lock when the caller
-    /// took it to order this stop with them. It is let go of once the owner
-    /// is marked, and not held while the agent closes, so nothing else on
-    /// the conversation waits for the close
+    /// took it to order this stop with them. It is held while the owner is
+    /// marked, through an opening it waits for, and until its apps are
+    /// ended; never while the agent closes, so nothing else on the
+    /// conversation waits for the close
     /// (`a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`).
     async fn stopping(
         &self,
@@ -3898,7 +3899,7 @@ impl ConversationService {
         ended_by: &McpAppInitiator,
     ) -> Result<(), AgentError> {
         slot.stopping.store(true, Ordering::SeqCst);
-        drop(submissions);
+        let mut submissions = submissions;
         loop {
             let ready = slot.ready.notified();
             tokio::pin!(ready);
@@ -3907,6 +3908,11 @@ impl ConversationService {
                 return match value {
                     Ok(live) => {
                         self.end_apps(id, live, ended_by);
+                        // Its apps ended before the lock is let go of: an
+                        // app's message refused by the mark finds its opening
+                        // ended, and is M10
+                        // (`m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`).
+                        drop(submissions.take());
                         match live.agent.close(actor.clone()).await {
                             Ok(_) => {
                                 live.join_attachment_owner().await;

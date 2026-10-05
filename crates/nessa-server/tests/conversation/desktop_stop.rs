@@ -6,8 +6,8 @@
 use super::*;
 use crate::conversation::application::{ConversationFuture, SubmittedFile, SubmittedMessage};
 use crate::conversation_test_support::{
-    only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryListing, MemoryRepository,
-    MemorySummaries, Provider, ProviderFactory, TestClock, DELETION_BUDGETS,
+    mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryListing, MemoryRepository,
+    MemorySummaries, ProviderFactory, RecordingModeExecutionAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
@@ -60,7 +60,12 @@ impl Fixture {
         let audit = Arc::new(HeldFileLinkAudit::default());
         let service = ConversationService::new(
             ConversationDependencies {
-                agents: only(Arc::new(Provider::new(provider.clone()))),
+                // Each approval mode resolves, so a conversation can be in
+                // one other than Ask.
+                agents: mode_agents(
+                    provider.clone(),
+                    Arc::new(RecordingModeExecutionAudit::default()),
+                ),
                 storage: Arc::new(InMemoryStorage::new()),
                 metadata: repository.clone(),
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
@@ -775,5 +780,45 @@ async fn a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery() {
         matches!(settled.as_slice(), [(id, _)] if id == "same"),
         "{settled:?}"
     );
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Row 1, in an approval mode other than Ask: the mark is asked before the
+/// mode is verified, so a send while the stop closes the agent is refused as
+/// closed — the refusal a client may send again after — and not as a mode
+/// not applied, which the agent detaching would otherwise answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed() {
+    let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
+    let live = fixture.live().await;
+    fixture
+        .service
+        .set_approval_mode(
+            fixture.id.clone(),
+            caller("mode-auto"),
+            ConversationApprovalMode::Auto,
+        )
+        .await
+        .unwrap();
+    let (release_close, close_gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
+    let stopping = fixture.stop();
+    tokio::time::timeout(BOUND, async {
+        while live.agent.attachment_status().phase() == AttachmentPhase::Attached {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the stop detaches the agent");
+    drop(live);
+    assert!(matches!(
+        fixture
+            .send("during-stop", "During the stop", false)
+            .await
+            .unwrap(),
+        Err(ConversationError::Agent(AgentError::Closed))
+    ));
+    release_close.send(()).unwrap();
+    stopping.await.unwrap().unwrap();
     fixture.service.shutdown().await.unwrap();
 }
