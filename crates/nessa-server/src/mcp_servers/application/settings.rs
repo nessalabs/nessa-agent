@@ -561,7 +561,10 @@ impl Operations {
     }
 
     /// `servers` at `revision` as `mcpServers.list` shows them: the stored
-    /// ones, then the managed one.
+    /// ones, then the managed one. A stored entry under the managed name is
+    /// not shown: on a headless gateway it is the managed one, shown as the
+    /// gateway started with it; on the desktop it is never used, and the
+    /// next change drops it from the file ([`Self::publish`]).
     fn listing(&self, revision: String, servers: &[ConfiguredMcpServer]) -> ServerList {
         let mut listed: Vec<ListedServer> = servers
             .iter()
@@ -818,24 +821,33 @@ impl Operations {
                 revision: stored.revision,
             });
         }
-        let edited = edit
-            .apply(&stored.servers)
-            .map_err(|refusal| match refusal {
-                EditRefusal::ReservedName => McpServerSettingsError::ReservedName,
-                EditRefusal::NotFound => McpServerSettingsError::NotFound,
-                EditRefusal::EnvironmentValueMissing { name } => {
-                    McpServerSettingsError::Invalid(EditProblem::EnvironmentValueMissing {
-                        server: edit.target().to_owned(),
-                        name,
-                    })
-                }
-                EditRefusal::EnvironmentNameRepeated { name } => {
-                    McpServerSettingsError::Invalid(EditProblem::EnvironmentNameRepeated {
-                        server: edit.target().to_owned(),
-                        name,
-                    })
-                }
-            })?;
+        // On the desktop the managed server is bundled: a stored entry under
+        // its name is never launched, inspected or listed, and no edit can
+        // name it, so the change drops it, its variables with it. The
+        // outcome's `before` names it and its `after` does not
+        // (`a_desktop_change_drops_a_stored_nessa_and_its_audit_says_so`).
+        // On a headless gateway it is the managed server, and is kept
+        // (`a_headless_change_keeps_the_stored_nessa`).
+        let mut kept = stored.servers;
+        if self.live.bundled() {
+            kept.retain(|server| !server.managed());
+        }
+        let edited = edit.apply(&kept).map_err(|refusal| match refusal {
+            EditRefusal::ReservedName => McpServerSettingsError::ReservedName,
+            EditRefusal::NotFound => McpServerSettingsError::NotFound,
+            EditRefusal::EnvironmentValueMissing { name } => {
+                McpServerSettingsError::Invalid(EditProblem::EnvironmentValueMissing {
+                    server: edit.target().to_owned(),
+                    name,
+                })
+            }
+            EditRefusal::EnvironmentNameRepeated { name } => {
+                McpServerSettingsError::Invalid(EditProblem::EnvironmentNameRepeated {
+                    server: edit.target().to_owned(),
+                    name,
+                })
+            }
+        })?;
         // A remove only shortens the list, so it adds no problem: it is how a
         // hand-edited list past a bound (more servers than allowed, one
         // that will not parse) is brought back. Its file is written; the

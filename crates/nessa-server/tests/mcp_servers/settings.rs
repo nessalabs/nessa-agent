@@ -483,6 +483,9 @@ impl super::LiveServerSet for HeldLive {
     fn managed(&self) -> Option<ConfiguredMcpServer> {
         self.live.managed()
     }
+    fn bundled(&self) -> bool {
+        self.live.bundled()
+    }
     fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {
         self.live.problem(stored)
     }
@@ -1313,6 +1316,9 @@ impl super::LiveServerSet for PanickingLive {
     fn managed(&self) -> Option<ConfiguredMcpServer> {
         self.live.managed()
     }
+    fn bundled(&self) -> bool {
+        self.live.bundled()
+    }
     fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {
         assert!(!self.before_publish, "a fault before the publish");
         self.live.problem(stored)
@@ -1565,8 +1571,12 @@ async fn a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off() 
         stored.extend((0..MAX_MCP_SERVERS - 1).map(|index| entry(&format!("s{index}"))));
         let files = MemoryFiles::holding(config(stored));
         let startup = configured(server("nessa"), enabled, &[("TOKEN", "secret")]);
-        let (settings, servers) =
-            settings_started_with(files, Arc::new(RecordingAudit::default()), &[startup]);
+        let (settings, servers) = settings_started_with(
+            files,
+            Arc::new(RecordingAudit::default()),
+            &[startup],
+            false,
+        );
         let list = settings.list().await.unwrap();
         assert_eq!(list.servers.len(), MAX_MCP_SERVERS, "{enabled}");
         let nessa: Vec<_> = list
@@ -1592,13 +1602,123 @@ async fn a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off() 
     }
 }
 
+/// The before and after names of the one applied change `audit` holds.
+fn applied_names(audit: &RecordingAudit) -> (Vec<String>, Vec<String>) {
+    match outcome(audit) {
+        McpServerOutcome::Applied { before, after, .. } => (before.names, after.names),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A stored `nessa` entry with a variable, beside `a`.
+fn with_stored_nessa() -> Arc<MemoryFiles> {
+    let mut stored_nessa = entry("nessa");
+    stored_nessa["env"] = json!({"TOKEN": "secret"});
+    MemoryFiles::holding(config(vec![entry("a"), stored_nessa]))
+}
+
+/// On the desktop the managed server is bundled, so a stored `nessa` — a
+/// stale executable and its variables — is never used: `list` shows only
+/// the bundled one, and the next applied change, a save or a remove, drops
+/// the stored entry from the file. The outcome's `before` names it; its
+/// `after` does not.
+#[tokio::test]
+async fn a_desktop_change_drops_a_stored_nessa_and_its_audit_says_so() {
+    for (edit, left) in [(save("b"), vec!["a", "b"]), (remove("a"), vec![])] {
+        let files = with_stored_nessa();
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, servers) =
+            settings_started_with(files.clone(), audit.clone(), &[managed()], true);
+        let list = settings.list().await.unwrap();
+        let rows: Vec<_> = list
+            .servers
+            .iter()
+            .map(|row| (row.server.clone(), row.managed))
+            .collect();
+        assert_eq!(
+            rows,
+            [(server("a"), false), (managed().server().clone(), true)]
+        );
+        settings
+            .edit(initiator(), list.revision, edit.clone())
+            .await
+            .unwrap();
+        assert_eq!(stored(&files), left, "{edit:?}");
+        assert!(!files.document().to_string().contains("secret"), "{edit:?}");
+        let (before, after) = applied_names(&audit);
+        assert_eq!(before, ["a", "nessa"], "{edit:?}");
+        assert_eq!(after, left, "{edit:?}");
+        // The bundled one is still the one launched.
+        assert!(live(&servers).contains(&"nessa".to_owned()), "{edit:?}");
+    }
+}
+
+/// On a headless gateway a stored `nessa` is the managed server: a change to
+/// another server carries it forward, its variables with it, and the
+/// outcome names it before and after.
+#[tokio::test]
+async fn a_headless_change_keeps_the_stored_nessa() {
+    for (edit, left) in [
+        (save("b"), vec!["a", "nessa", "b"]),
+        (remove("a"), vec!["nessa"]),
+    ] {
+        let files = with_stored_nessa();
+        let audit = Arc::new(RecordingAudit::default());
+        let startup = configured(server("nessa"), true, &[("TOKEN", "secret")]);
+        let (settings, _servers) =
+            settings_started_with(files.clone(), audit.clone(), &[startup], false);
+        let list = settings.list().await.unwrap();
+        settings
+            .edit(initiator(), list.revision, edit.clone())
+            .await
+            .unwrap();
+        assert_eq!(stored(&files), left, "{edit:?}");
+        let document = files.document();
+        let nessa = document["agents"]["mcpServers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "nessa")
+            .cloned()
+            .unwrap();
+        assert_eq!(nessa["env"], json!({"TOKEN": "secret"}), "{edit:?}");
+        let (before, after) = applied_names(&audit);
+        assert_eq!(before, ["a", "nessa"], "{edit:?}");
+        assert_eq!(after, left, "{edit:?}");
+    }
+}
+
+/// On the desktop with no stored `nessa`, a change writes exactly what it
+/// was given: nothing else is dropped.
+#[tokio::test]
+async fn a_desktop_change_with_no_stored_nessa_drops_nothing_else() {
+    for (edit, left) in [(save("b"), vec!["a", "b"]), (remove("a"), vec![])] {
+        let files = MemoryFiles::holding(config(vec![entry("a")]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _servers) =
+            settings_started_with(files.clone(), audit.clone(), &[managed()], true);
+        let list = settings.list().await.unwrap();
+        settings
+            .edit(initiator(), list.revision, edit.clone())
+            .await
+            .unwrap();
+        assert_eq!(stored(&files), left, "{edit:?}");
+        let (before, after) = applied_names(&audit);
+        assert_eq!(before, ["a"], "{edit:?}");
+        assert_eq!(after, left, "{edit:?}");
+    }
+}
+
 /// `LaunchSettings` names the managed server and the base environment's
 /// variables, never a value.
 #[test]
 fn launch_settings_print_names_never_values() {
     let nessa = configured(managed().server().clone(), true, &[("M", "managed-secret")]);
     let base = BTreeMap::from([(OsString::from("HOME"), OsString::from("/home/secret-home"))]);
-    let printed = format!("{:?}", LaunchSettings::new(&[nessa], "/w".into(), base));
+    let printed = format!(
+        "{:?}",
+        LaunchSettings::new(&[nessa], true, "/w".into(), base)
+    );
     assert!(
         printed.contains("HOME") && printed.contains("nessa"),
         "{printed}"
@@ -1615,7 +1735,7 @@ fn a_servers_own_variables_win_over_the_gateways() {
         (OsString::from("PATH"), OsString::from("/usr/bin")),
         (OsString::from("HOME"), OsString::from("/home/me")),
     ]);
-    let launches = LaunchSettings::new(&[managed()], "/w".into(), base);
+    let launches = LaunchSettings::new(&[managed()], true, "/w".into(), base);
     let own = configured(server("a"), true, &[("PATH", "/mine")]);
     let managed_server = managed().server().clone();
     let stored_managed = configured(

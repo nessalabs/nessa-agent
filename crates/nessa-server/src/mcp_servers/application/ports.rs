@@ -114,6 +114,10 @@ pub trait LiveServerSet: Send + Sync {
     /// The managed server as this gateway started with it — turned on or
     /// off, with its own variables — when it has one.
     fn managed(&self) -> Option<ConfiguredMcpServer>;
+    /// Whether the managed server is the desktop's bundled one, not the one
+    /// stored under its name: then a stored entry under that name is never
+    /// used.
+    fn bundled(&self) -> bool;
     /// Why `stored` — every server, on or off, with the managed one — cannot
     /// be launched as one set, or `None` when it can.
     fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem>;

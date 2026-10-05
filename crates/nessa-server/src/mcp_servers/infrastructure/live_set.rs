@@ -15,6 +15,10 @@
 //! and launched only when on; no edit names it, and a stored entry under its
 //! name is never launched in its place
 //! (`a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off`).
+//! On the desktop the managed server is bundled ([`LiveServerSet::bundled`]),
+//! so a stored entry under its name is never used, and the next change drops
+//! it from the file
+//! (`a_desktop_change_drops_a_stored_nessa_and_its_audit_says_so`).
 use crate::mcp_servers::application::{LiveServerSet, LiveSetKept, ServerProblem};
 use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
 use nessa_sdk::infrastructure::{
@@ -43,6 +47,9 @@ pub struct LaunchSettings {
     /// with it, on or off, when it has one. It is not stored by any edit,
     /// and a stored entry under its name is left out in its favour.
     managed: Option<ConfiguredMcpServer>,
+    /// Whether the managed server is the desktop's bundled one rather than
+    /// the one stored under its name.
+    bundled: bool,
     working_directory: PathBuf,
     /// The gateway's base environment for every server (`server_environment`).
     environment: BTreeMap<OsString, OsString>,
@@ -55,6 +62,7 @@ impl std::fmt::Debug for LaunchSettings {
                 "managed",
                 &self.managed.as_ref().map(|managed| managed.server().name()),
             )
+            .field("bundled", &self.bundled)
             .field("working_directory", &self.working_directory)
             .field("environment", &self.environment.keys().collect::<Vec<_>>())
             .finish()
@@ -64,14 +72,18 @@ impl std::fmt::Debug for LaunchSettings {
 impl LaunchSettings {
     /// Settings that start each server in `working_directory` with
     /// `environment` beneath its own variables, and take the managed server
-    /// from `configured` (the servers configured at startup).
+    /// from `configured` (the servers configured at startup) — the desktop's
+    /// bundled one when `bundled`, which composition put there in place of
+    /// any stored under its name (`composition::desktop::configure`).
     pub fn new(
         configured: &[ConfiguredMcpServer],
+        bundled: bool,
         working_directory: PathBuf,
         environment: BTreeMap<OsString, OsString>,
     ) -> Self {
         Self {
             managed: configured.iter().find(|server| server.managed()).cloned(),
+            bundled,
             working_directory,
             environment,
         }
@@ -144,6 +156,10 @@ impl LiveMcpServers {
 impl LiveServerSet for LiveMcpServers {
     fn managed(&self) -> Option<ConfiguredMcpServer> {
         self.launches.managed.clone()
+    }
+
+    fn bundled(&self) -> bool {
+        self.launches.bundled
     }
 
     fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {

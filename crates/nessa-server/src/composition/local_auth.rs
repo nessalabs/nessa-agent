@@ -510,6 +510,7 @@ async fn conversations(
                 &super::mcp_servers::relay_socket(namespace, unsafe { libc::geteuid() }),
                 &gateway,
                 super::mcp_servers::server_environment(|key| std::env::var_os(key)),
+                packaged_agents,
             )
             .await?
         }

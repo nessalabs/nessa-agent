@@ -211,7 +211,9 @@ pub(super) fn configuration_key(tokens: &dyn TokenSource) -> Option<Configuratio
 /// set replaced later ([`McpServers::replace`]) reaches the next open.
 /// `None` when the socket cannot be bound, a path is not UTF-8, or no key
 /// for the digests could be drawn — then `agents` is left with no MCP
-/// servers, and why is logged.
+/// servers, and why is logged. `bundled` is whether this is the desktop
+/// gateway, whose managed server `desktop::configure` put in `agents` in
+/// place of any stored under its name ([`LaunchSettings::new`]).
 ///
 /// # Errors
 ///
@@ -222,9 +224,10 @@ pub(super) async fn compose(
     socket: &Path,
     gateway: &Path,
     environment: BTreeMap<OsString, OsString>,
+    bundled: bool,
 ) -> Result<Option<McpComposition>, RunError> {
     let configured = std::mem::take(&mut agents.mcp_servers);
-    let launches = LaunchSettings::new(&configured, agents.workspace.clone(), environment);
+    let launches = LaunchSettings::new(&configured, bundled, agents.workspace.clone(), environment);
     let launch_set = launches
         .launch_set(&configured)
         .map_err(|problem| RunError::Agent(problem.to_string()))?;
