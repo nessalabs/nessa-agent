@@ -349,8 +349,7 @@ person's answer to a review with `origin: {kind: "app", server, tool}`, and
 `callTool` waits `mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds how long
 this client waits on each call, as the protocol publishes it, for a host that
 bounds an app's requests; what those deadlines cover, and what they do not, is
-the description of `x-mcpAppCallTiming`, in
-[the protocol](../../protocol/README.md). `argumentsJson` is at most
+the description of `mcpAppCallTiming`, exported beside it. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
 bound throw `TypeError` before anything is sent. What an app sends — a tool's
 name, a resource's URI, the arguments' text — is held to its bounds, and to

@@ -39,7 +39,7 @@ import type { ConversationActionOptions } from "./conversation-api.js"
  * How long this client waits on each of {@link McpAppsApi}'s calls, in
  * milliseconds, as the protocol publishes it; nothing else spells them. What
  * the call deadlines cover, and what they do not, is the description of
- * `x-mcpAppCallTiming` (generated as `mcpAppCallTiming`), its one statement.
+ * {@link mcpAppCallTiming}, its one statement.
  */
 export const mcpAppDeadlines = Object.freeze({
   /**

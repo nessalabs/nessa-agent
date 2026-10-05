@@ -1394,8 +1394,9 @@ describe("an app speaking in its conversation (#390)", () => {
     expect(error).toMatchObject({ code, uncertain: true })
   })
 
-  // The gateway held nothing for either, yet neither code is one a command
-  // can be sure of, so a context's is uncertain as every method's is.
+  // Neither code tells a client whether its context was held: a record that
+  // failed holds nothing (C16), but a task that failed to join may have
+  // held it. So a context's is uncertain, as every method's is.
   it.each(["temporarily_unavailable", "audit_unavailable"] as const)(
     "K9: reports %s as uncertain for a context too",
     async (code) => {

@@ -101,7 +101,7 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   does not fit beside those open is refused `temporarily_unavailable`.
   Allowed, the call is made only if the tool is still listed as it was.
 - **A waiting call stays pending** until the person answers, or the review
-  expires (`reviewDeadlineMs`, below; `mcp_approval_expired`), or it is
+  expires (`reviewDeadlineMs` in `x-mcpAppCallTiming`; `mcp_approval_expired`), or it is
   withdrawn (`mcp_cancelled`). It is withdrawn when the request is cancelled —
   its socket closes — the app is torn down (`mcp.releaseApp`), or the
   conversation ends. A client that stops waiting withdraws nothing: the
