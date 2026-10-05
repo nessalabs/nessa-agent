@@ -228,9 +228,10 @@ impl AttachmentAudit for RecordingAudit {
             }
             // After a held gate, so a test can drop the caller while this
             // attempt is still inside the sink and only then let it panic.
+            #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
             let counted_panic = self
                 .panic_next
-                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                     left.checked_sub(1)
                 })
                 .is_ok();
