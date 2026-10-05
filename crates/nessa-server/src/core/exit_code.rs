@@ -174,7 +174,7 @@ mod tests {
                 source: Error::from(ErrorKind::AddrInUse),
             }),
             RunError::Native(NativeFailure::Listener(ErrorKind::InvalidInput)),
-            RunError::ReceiverJournal(crate::core::MissingReceiverJournal::new(
+            RunError::ReceiverJournal(super::super::MissingReceiverJournal::new(
                 std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
             )),
         ] {
@@ -190,6 +190,14 @@ mod tests {
         // A reason the table has never heard of is the unclassified failure,
         // which is still a failure.
         assert_eq!(code("somethingTheTableDoesNotName"), 1);
+        // Absent while cleanup is owed. Not damaged data: the host's
+        // datasetRefused sentence would say another version or a damaged file.
+        let missing = RunError::ReceiverJournal(crate::core::MissingReceiverJournal::new(
+            std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
+        ));
+        assert_eq!(reason(&missing), "receiverJournalMissing");
+        assert_eq!(exit_code(&missing), 34);
+        assert_ne!(reason(&missing), "datasetRefused");
     }
 
     /// The registry a build cannot read is the case the desktop reports as a

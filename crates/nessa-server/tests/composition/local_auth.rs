@@ -253,12 +253,48 @@ fn a_journal_left_under_conversations_is_moved() {
         Ok(authority) => drop(authority),
         Err(error) => panic!("legacy journal did not open: {error}"),
     }
+    // A killed write leaves the rollback journal, and a file left in
+    // write-ahead mode leaves its log, beside the database.
+    for suffix in ["-journal", "-wal", "-shm"] {
+        std::fs::write(
+            legacy_dir.join(format!("receiver-access.sqlite3{suffix}")),
+            b"x",
+        )
+        .unwrap();
+    }
     // Cleanup owed would refuse a missing journal. The move has to happen
     // first, or this start would refuse and leave the file where it was.
     opened(open_receiver_journal(&namespace, "policy", true));
-    assert!(receiver_journal(&namespace).is_file());
+    let journal = receiver_journal(&namespace);
+    assert!(journal.is_file());
     assert!(!legacy.exists());
+    for suffix in ["-journal", "-wal", "-shm"] {
+        assert!(
+            !legacy_dir
+                .join(format!("receiver-access.sqlite3{suffix}"))
+                .exists(),
+            "{suffix} stayed under conversations/"
+        );
+    }
     assert!(!legacy_dir.exists());
+
+    // An earlier start moved the database and was killed before the rollback
+    // file. The next start still takes that file, and the directory goes.
+    let (_partial, partial, _store) = namespace_with_registry();
+    let partial_dir = conversation_root(&partial);
+    nessa_local_storage::create_directory(&partial_dir).unwrap();
+    let partial_legacy = partial_dir.join("receiver-access.sqlite3");
+    match LocalReceiverAuthority::open(&partial_legacy, "policy", Arc::new(SystemClock)) {
+        Ok(authority) => drop(authority),
+        Err(error) => panic!("legacy journal did not open: {error}"),
+    }
+    let partial_journal = receiver_journal(&partial);
+    nessa_local_storage::create_directory(partial_journal.parent().unwrap()).unwrap();
+    std::fs::rename(&partial_legacy, &partial_journal).unwrap();
+    std::fs::write(partial_dir.join("receiver-access.sqlite3-journal"), b"x").unwrap();
+    opened(open_receiver_journal(&partial, "policy", true));
+    assert!(!partial_dir.join("receiver-access.sqlite3-journal").exists());
+    assert!(!partial_dir.exists());
 
     let (_kept, kept, _store) = namespace_with_registry();
     let kept_dir = conversation_root(&kept);
