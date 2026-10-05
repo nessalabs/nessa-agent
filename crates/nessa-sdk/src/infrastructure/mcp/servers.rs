@@ -2,6 +2,7 @@ use super::connection::Connection;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
 use super::stand_in::{self, Visibility};
 use super::{wire, McpError};
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
@@ -299,6 +300,14 @@ impl McpServers {
     /// grant is revoked — before it launches anything, or while it opens. The
     /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
+        contain_caller_wake(
+            format!("MCP open of {server}"),
+            self.open_session(server, owner),
+        )
+        .await
+    }
+
+    async fn open_session(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
         let inner = &self.inner;
         let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;
         if *inner.stopping.borrow() {
@@ -458,6 +467,21 @@ impl McpServers {
         arguments: Option<Value>,
         timeout: Duration,
     ) -> Result<Value, McpError> {
+        contain_caller_wake(
+            format!("MCP tool call on {server}"),
+            self.call_tool_on_session(session, server, name, arguments, timeout),
+        )
+        .await
+    }
+
+    async fn call_tool_on_session(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+        arguments: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value, McpError> {
         let own = self.newest(session, server).ok_or(McpError::NoSession)?;
         let mut params = json!({ "name": name });
         if let Some(arguments) = arguments {
@@ -484,6 +508,20 @@ impl McpServers {
     /// [`McpError::NoSession`], [`McpError::Timeout`] past `timeout`, and what
     /// [`McpSession::read_ui_resource`] fails with.
     pub async fn read_app_resource(
+        &self,
+        session: &SessionId,
+        server: &str,
+        uri: &UiResourceUri,
+        timeout: Duration,
+    ) -> Result<UiResource, McpError> {
+        contain_caller_wake(
+            format!("MCP app resource read on {server}"),
+            self.read_app_resource_on_session(session, server, uri, timeout),
+        )
+        .await
+    }
+
+    async fn read_app_resource_on_session(
         &self,
         session: &SessionId,
         server: &str,
@@ -553,6 +591,10 @@ impl McpServers {
     /// killed with its process group — and refuse every later open with
     /// [`McpError::Stopped`].
     pub async fn stop(&self) {
+        contain_caller_wake("MCP stop", self.stop_sessions()).await
+    }
+
+    async fn stop_sessions(&self) {
         let sessions: Vec<Arc<Session>> = {
             let live = self.inner.live.lock().expect("live sessions");
             self.inner.stopping.send_replace(true);
@@ -603,7 +645,11 @@ impl McpSession {
     /// [`MAX_TOOLS`], [`McpError::Malformed`] for a page of the wrong shape,
     /// and the session's end cause once it has ended.
     pub async fn list_tools(&self) -> Result<Vec<ListedTool>, McpError> {
-        list(&self.owner.0).await
+        contain_caller_wake(
+            format!("MCP tool list of {}", self.server()),
+            list(&self.owner.0),
+        )
+        .await
     }
 
     /// Read the MCP App at `uri` from this session's server.
@@ -617,6 +663,14 @@ impl McpSession {
     /// [`McpError::Timeout`] past [`REQUEST_TIMEOUT`], and the session's end
     /// cause once it has ended.
     pub async fn read_ui_resource(&self, uri: &UiResourceUri) -> Result<UiResource, McpError> {
+        contain_caller_wake(
+            format!("MCP UI resource read of {}", self.server()),
+            self.read_ui_resource_now(uri),
+        )
+        .await
+    }
+
+    async fn read_ui_resource_now(&self, uri: &UiResourceUri) -> Result<UiResource, McpError> {
         let params = json!({ "uri": uri.as_str() });
         let result = self
             .owner
@@ -638,17 +692,21 @@ impl McpSession {
     /// under the harness's id for the call, with this server's name, before
     /// the harness is answered.
     pub async fn serve(self, input: impl AsyncRead + Unpin, output: impl AsyncWrite + Unpin) {
-        stand_in::serve(
-            self.owner.0.connection.clone(),
-            self.owner.0.initialized.clone(),
-            self.owner.0.visibility.clone(),
-            self.owner.0.owned_by.forwarded(),
-            &self.owner.0.server,
-            input,
-            output,
-        )
+        let server = self.server().to_owned();
+        contain_caller_wake(format!("MCP serve of {server}"), async move {
+            stand_in::serve(
+                self.owner.0.connection.clone(),
+                self.owner.0.initialized.clone(),
+                self.owner.0.visibility.clone(),
+                self.owner.0.owned_by.forwarded(),
+                &self.owner.0.server,
+                input,
+                output,
+            )
+            .await;
+            close(self.owner.0.clone(), McpError::Closed).await;
+        })
         .await;
-        close(self.owner.0.clone(), McpError::Closed).await;
     }
 
     /// Close the session: calls waiting on it end with
@@ -657,7 +715,11 @@ impl McpSession {
     /// once the server is stopped, whichever close — this one, another
     /// clone's, or [`McpServers::stop`] — is stopping it.
     pub async fn close(&self) {
-        close(self.owner.0.clone(), McpError::Closed).await;
+        contain_caller_wake(
+            format!("MCP close of {}", self.server()),
+            close(self.owner.0.clone(), McpError::Closed),
+        )
+        .await;
     }
 }
 
