@@ -829,7 +829,15 @@ impl<P: AcpProfile> Worker<P> {
             json_rpc::request(id, method, params),
             self.config.max_frame_bytes,
         )?;
-        self.send_encoded(frame, Some(deadline)).await?;
+        let write_started = self.config.clock.now();
+        let sent = self.send_encoded(frame, Some(deadline)).await;
+        tracing::info!(target: "nessa_sdk::timing", phase = method, request_id = id,
+            elapsed_ms = self.config.clock.now().saturating_duration_since(write_started).as_secs_f64() * 1000.0,
+            outcome = if sent.is_ok() { "success" } else { "error" },
+            "agent startup request write finished");
+        sent?;
+        let response_started = self.config.clock.now();
+        let mut first_frame = true;
         loop {
             if let Some(request) = self.close_requested.borrow().clone() {
                 self.cancellation_cause =
@@ -846,6 +854,12 @@ impl<P: AcpProfile> Worker<P> {
                 _ = wait_for_deadline(&*self.config.clock, Some(deadline)) => { self.failure_cause = ObservationFailureCause::DeadlineExceeded; self.cancellation_cause = Some((PermissionCancellationReason::deadline_exceeded(), CancellationOrigin::Runtime)); return Err(AgentError::Deadline); },
                 message = self.reader.next() => message?,
             };
+            if first_frame {
+                tracing::info!(target: "nessa_sdk::timing", phase = method, request_id = id,
+                    elapsed_ms = self.config.clock.now().saturating_duration_since(response_started).as_secs_f64() * 1000.0,
+                    "agent startup first frame received");
+                first_frame = false;
+            }
             if let Some(method) = message.method {
                 if let Some(id) = message.id {
                     let response = if method == "session/request_permission" {

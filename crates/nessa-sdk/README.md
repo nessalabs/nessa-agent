@@ -405,3 +405,46 @@ Read `queued_ids` and use `reorder_queued` to change their complete order within
 each priority class while keeping their IDs, receipts and audit history.
 See [queueing and steering](docs/agent_execution/scheduling.md) for lifecycle,
 audit, and provider capability guarantees. Gateway wiring remains separate.
+
+## Startup metrics
+
+The `nessa_sdk::timing` tracing target reports process start, protocol startup,
+individual startup phases, prompt dispatch, and the first accepted text response.
+Startup exchanges additionally report:
+
+| Event | Fields | Meaning |
+| --- | --- | --- |
+| `agent startup request write finished` | `phase`, `request_id`, `elapsed_ms`, `outcome` | Time in the initial request's bounded pipe write, after encoding. An error remains the exchange's original typed failure. |
+| `agent startup first frame received` | `phase`, `request_id`, `elapsed_ms` | Time from successful request write to the first decoded frame. A notification or nested request counts; this event does not establish response acceptance or readiness. |
+| `agent startup phase finished` | `phase`, `elapsed_ms`, `outcome` | Existing duration of the complete exchange, including preparation, writes, waiting, nested-frame handling and response validation. |
+
+The existing `agent_launch` span correlates these events with a launch. Each
+exchange emits one write result if it reaches the write, and at most one first
+frame event. Preparation failure emits neither new event; failed write emits no
+first frame event. A deadline or close while awaiting a frame retains the
+successful write result and finishes the phase with an error. These orderings and
+payload exclusion are checked by
+`startup_timing_logs_success_error_and_deadline_without_request_payloads` in
+`tests/infrastructure/acp/executions/worker/timing.rs`. The same module checks
+nonzero write duration with a full pipe in
+`startup_write_duration_reports_blocked_pipe_until_deadline`, and separate
+first-frame and complete-exchange durations in
+`startup_first_frame_duration_excludes_later_frames_and_uses_injected_clock`.
+
+| Ordering | Write result | First frame | Phase result | Regression case |
+| --- | --- | --- | --- | --- |
+| Preparation refused before write | Absent | Absent | Error | `preparation_error` |
+| Initial write refused | Error | Absent | Error | `write_error` |
+| Initial write blocked until deadline | Error | Absent | Error | `startup_write_duration_reports_blocked_pipe_until_deadline` |
+| Write succeeds, close observed | Success | Absent | Error | `close` |
+| Write succeeds, response deadline expires | Success | Absent | Error | `deadline` |
+| Provider response refuses exchange | Success | Once | Error | `error` |
+| Notifications precede accepted response | Success | Once, for notification | Success | `notifications` |
+| Accepted response is first frame | Success | Once | Success | `success` |
+
+These metrics use the injected monotonic clock. They log durations and protocol
+correlation, without request parameters, response bodies, provider error text or
+credentials. They separate host pipe delay from exchange waiting; they do not
+identify work inside the external adapter or distinguish its CPU time from
+scheduling, filesystem or network waits. Enabling this target is instrumentation,
+not a startup performance change.
