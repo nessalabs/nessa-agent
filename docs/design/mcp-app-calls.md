@@ -460,8 +460,8 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   it as it was: a `turn_running` stays `turn_running`. Anything else is
   `MessageNotSent` (M13): a refusal while the message's own opening is still
   live. A desktop stop that lands after the recheck and before the enqueue
-  is not seen by the gateway at all (M13b): the stopped agent may still
-  admit the message, which is then stranded (#528). Only `submission_unresolved` (the
+  waits for the submission lock the message holds (M13b, #528): the
+  message is sent, and the stop then ends its opening. Only `submission_unresolved` (the
   agent's admission failing inside the enqueue), or the submission's own
   task failing once the agent was asked, is `MessageUnresolved` (M15):
   "unknown" is what the gateway knows of a task that failed after asking,
@@ -582,7 +582,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 | M11 | Sending, under the lock | a turn runs or input waits (not for M6) | — | `Refused(turn_running)`; nothing taken |
 | M12 | Sending, under the lock | idle; the enqueue returns (`InputAccepted` saved) | — | carries the contexts it took (C9); `MessageSent{execution_id}`; answered `{executionId}`; the transcript shows the person's turn with `app` set |
 | M13 | Sending | the submission is refused while its opening is live (deadline, storage, invalid, conflict, …), or its task failed before the agent was asked | — | `MessageNotSent{execution_id, code}`, by the app — by the system for a task that failed; that code; what it took is C11 |
-| M13b | Sending, past the recheck | a desktop stop (which takes no submission lock) ends the opening after the recheck and before the enqueue | — | the stop drops what is held first, `ContextDropped{conversation_ended}` by the stopper (the system, for a desktop stop), so the message takes nothing. The stopped agent may still admit it: `MessageSent{execution_id}`, by the app, answered `{executionId}`, carrying nothing. The message is stranded in the stopped agent and never runs, and the conversation answers `Busy` afterwards; a person's message does the same (#528, which predates this). Not M10: the recheck passed |
+| M13b | Sending, past the recheck | a desktop stop comes after the recheck and before the enqueue | — | the stop waits for the submission lock the message holds (#528): `MessageSent{execution_id}`, by the app, answered `{executionId}`. The stop then ends the opening, and the message settles on the stopped agent: it ran, or the close cancelled it or cut it short. Nothing is opened again for it. A message that takes the lock after the stop is M10 |
 | M14 | Sending | taken, admission evidence failed | — | `MessageSent{execution_id, code}`; the evidence failure's code |
 | M15 | Sending | `SubmissionUnresolved` (the agent's admission failed inside the enqueue), or the submission's own task failed once the agent was asked | — | `MessageUnresolved{execution_id, code}`, by the app — by the system for a task that failed; that code; what it took is C11b. Of a task that failed once the agent was asked, the gateway knows only that it asked: "unknown" is literally true, and the SDK's own record of the turn settles it |
 | M16 | before the send | a record cannot be written | — | `audit_unavailable`; the step not taken |
@@ -610,7 +610,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 | C12 | held | a retry of an execution the agent has | held | carries what its saved record holds |
 | C13 | carried | the turn fails, or never reaches the agent | — | lost: it went with the turn; the app may give it again (recorded limit) |
 | C14 | held | `mcp.releaseApp` for its mount | none | dropped unsent. The apps report `ContextDropped{released}`, by the releaser. The release answers its own result. A taken context belongs to its message (M18) |
-| C15 | held | the opening ends (close, delete, stop, gateway stop), or another begins | none | everything still held is dropped before the stop's first await. `ContextDropped{conversation_ended}` for each, by the person who closed it, the deleter (read once from the tombstone), or the system. Nothing can lose it. A taken one belongs to its message |
+| C15 | held | the opening ends (close, delete, stop, gateway stop), or another begins | none | everything still held is dropped before the stop's first await after it has the conversation (for a desktop stop, once it holds the submission lock, so after any message being admitted has taken what it took). `ContextDropped{conversation_ended}` for each, by the person who closed it, the deleter (read once from the tombstone), or the system. Nothing can lose it. A taken one belongs to its message |
 | C15b | — | a drop's record can't be written | done | the recorder logs it. Cleanup is already done, and no command answers for it (recorded limit, as for a ticket's end) |
 | C15c | held, the agent's opening not yet live | a delete's stop waits for it, and gives way to retirement before it reached the apps | none | the delete itself ends its apps for good: one `ContextDropped{conversation_ended}`, by the deleter its tombstone names; the gateway's own stop finds nothing more to drop |
 | C16 | any | the record cannot be written | unchanged | `audit_unavailable`; nothing held or cleared |
@@ -683,13 +683,12 @@ sequenceDiagram
   took beyond its own `MessageUnresolved` (C11b).
 - A stop that ends a message's opening before it is refused is M10 whatever
   then refused it, a failed reopening among them: the message's own apps
-  are asked, as it is refused. A desktop stop that ends it after the
-  recheck and before the enqueue (M13b) may leave the message admitted by
-  the stopped agent, recorded `MessageSent` by the app and carrying
-  nothing, since the stop dropped what was held as `conversation_ended` by
-  the stopper: the message is stranded there and never runs, and the
-  conversation answers `Busy` afterwards. That is #528's to fix, for a
-  person's message as much as an app's. A submission task that panicked before the agent was asked
+  are asked, as it is refused. A desktop stop takes the submission
+  lock to mark the opening's owner as stopping, so it never ends an opening
+  between the recheck and the enqueue: one that comes then waits for the
+  enqueue (M13b), and a message that takes the lock after the mark is
+  refused before the agent is asked, which is M10, since the stop ended its
+  opening first (#528, `docs/design/conversation-admission.md`). A submission task that panicked before the agent was asked
   stays M13, by the system, even if its opening also ended: a fault, not a
   refusal.
 
@@ -708,10 +707,10 @@ Each row has at least one test, named after it.
   - M7b `m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_opened`
   - M7c `m7c_with_the_reviews_full_a_message_is_withdrawn_and_unavailable`
   - M9 `m9_a_denied_message_is_not_sent_and_the_next_asks_again`, `m9_a_message_nobody_answers_expires_and_is_not_sent`, `m9_a_message_whose_caller_went_is_withdrawn_on_record`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_the_mounts_release`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_a_close`
-  - M10 `m10_a_release_before_the_submission_lock_refuses_the_message`, a stop then an opening that failed (G3-3) `m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`, `m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_it`, `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`, `m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing`, `m10_a_message_admitted_in_one_opening_is_not_sent_into_another`, `m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not_unresolved`, `m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message`; read as it is refused, so a release after a refusal keeps its code (G4-2): `m10_a_release_after_a_turn_running_refusal_keeps_turn_running`
+  - M10 `m10_a_release_before_the_submission_lock_refuses_the_message`, a stop then an opening that failed (G3-3) `m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`, `m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_it`, `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`, `m10_a_message_admitted_in_one_opening_is_not_sent_into_another`, `m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not_unresolved`, `m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message`; read as it is refused, so a release after a refusal keeps its code (G4-2): `m10_a_release_after_a_turn_running_refusal_keeps_turn_running`
   - M11 `m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`, `m11_an_apps_message_is_refused_while_the_persons_admitted_input_has_not_reached_the_agent`
   - M13 `m13_a_message_the_conversation_refuses_is_on_record_as_not_sent` (and its code, in M6's conflict), `m13_a_message_whose_submission_task_failed_before_the_agent_was_asked_is_not_sent` (by the system)
-  - M13b: no test here. The row records a fault, not a behaviour this PR keeps: the stranded message and the `Busy` that follows are #528's, which is to test a person's message and an app's with the stop landing past the gateway's check. Round 5's probe reached it by holding the SDK's scheduler lock with a mode change made on the agent directly, the one lever the fixture has between the recheck and the enqueue
+  - M13b `m13b_a_desktop_stop_past_the_messages_check_waits_for_it_and_the_message_settles`; a message after the stop's mark is M10, `m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`; a person's message in the same place, and with the SDK's scheduler lock held by a mode change made on the agent directly, in `tests/conversation/desktop_stop.rs`
   - M14, C13 `m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carried_is_lost`
   - M15, C11b `m15_c11b_a_message_whose_enqueue_failed_once_the_agent_was_asked_is_unresolved` (inside the enqueue: the "asked" boundary), `m15_a_message_whose_submission_task_failed_once_the_agent_was_asked_is_unresolved` (by the system)
   - M16 `m16_a_message_whose_step_cannot_be_recorded_is_not_sent_or_shown`

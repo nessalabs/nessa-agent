@@ -328,6 +328,60 @@ The terminal projection work in #121 continues to consume SDK terminal evidence.
 This design adds no gateway terminal ledger and reserves no competing projection
 authority.
 
+### A desktop stop and a submission
+
+A desktop stop (`ConversationService::stop_active_agents`) takes a snapshot of
+the conversations when its pass begins. For each one it takes the
+conversation's submission lock, then marks and stops the current owner if one
+is still registered. Admission stays open throughout. A submission holds its
+conversation's submission lock (`mode_changes`) from before its checks through
+the enqueue.
+
+Each conversation's slot has a stopping mark. It is set when a stop of that
+owner begins, and it is never cleared. A submission asks for it under the lock, right after it finds the
+agent and before it records anything. If the mark is set, the submission is
+refused with `Agent(Closed)` (`conversation_closed`). That is the same refusal
+the SDK already gives a send to a closing agent. The mark also covers the
+moment after a close is confirmed, when the agent's lifecycle opens again but
+its slot is still in place.
+
+The desktop stop holds the submission lock while it sets the mark, waits for
+any opening to finish, and ends the owner's apps. That orders the mark with any
+submission between its checks and its enqueue, and a submission arriving in
+that time waits for the lock. The stop lets the lock go before the agent
+closes, so nothing on the conversation waits for the close itself: reads
+answer throughout.
+
+Without that order, a stop landing past the checks closed the agent under the
+submission. The reopened lifecycle then admitted the message as waiting work
+that never ran. The receipt watcher kept that agent, and its history lease, so
+every later read answered `Busy` (#528).
+
+A stopped agent lets go of its history soon after the stop, not at the same
+moment, as after any close. So the first read after a stop can still answer
+`Busy` once; it does not last (#542).
+
+A send refused as closed is not final. The refusal lasts while the stop runs,
+until its slot is let go, and the next send after that opens the conversation
+again. A client treats `conversation_closed` on a send as "not sent now", not
+as the conversation being gone.
+
+The wait for the lock, the mark and the stop run on the stop's own task. The
+caller waits at most the owner's `stopMs`. Past that, it is told the owner went
+over budget (reported as a deadline), and the task carries on until the close
+is confirmed and the slot is let go. Retirement keeps its own order: it drains
+admission before it stops anything.
+
+| When | Stop | Message | Test |
+| --- | --- | --- | --- |
+| A send arrives while a stop is closing the agent | Marked before it, its apps ended; reads answer | Refused as closed, before the mode is verified and with nothing recorded (an app's message is recorded refused `mcp_cancelled`, row M10 of `mcp-app-calls.md`); the next send after the release opens the conversation again. A retry of a message the agent already has is answered with its own delivery | `a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`, `an_owner_marked_as_stopping_is_handed_no_message`, `a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`, `a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed` |
+| The owner changed while the stop waited for the lock | Marks and stops the owner live when it takes the lock | Settles on that owner | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
+| Past its checks, before or in the enqueue | Waits for the lock, then marks and stops | Settles there: completed, cancelled by the close, or failed when the close cuts its turn short | `a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks`, `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` |
+| Enqueued | Marks and stops | Settles there | `a_desktop_stop_after_the_enqueue_settles_the_message` |
+| A submission holds the lock past the budget (for example, waiting for its agent to attach) | Over budget, with nothing stopped yet; carries on, then marks and stops once the lock is free | Settles there | `a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on`, `the_wait_for_the_lock_and_the_stop_share_one_budget` |
+| The close runs past the budget | Over budget; carries on until the close is confirmed and the slot let go | A send meanwhile is refused as closed; reads answer; afterwards the conversation opens again | `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go` |
+| The close fails | The stop's error; the slot keeps the agent, marked | Refused as closed, as after a person's failed close | `a_desktop_stop_whose_close_fails_leaves_its_owner_refusing_work` |
+
 ## Enforcers and affected ownership
 
 | Contract | Enforcer | Primary modules |

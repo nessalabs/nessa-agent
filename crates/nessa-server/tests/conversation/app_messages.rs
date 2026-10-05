@@ -1018,14 +1018,48 @@ async fn m10_a_release_before_the_submission_lock_refuses_the_message() {
     );
 }
 
+/// Wait until `count` hold the conversation's submission lock or wait for it.
+async fn lock_reaches(fixture: &Fixture, count: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture
+            .service
+            .inner
+            .mode_changes
+            .holders_and_waiters(&fixture.id)
+            < count
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the submission lock reaches its holders and waiters");
+}
+
+/// Queue a holder of the submission lock behind whoever holds or waits for
+/// it now, `waiting` of them, and hold it until the returned sender is used
+/// or dropped: so a test can act between one holder letting go and the next.
+async fn queued_holder(fixture: &Fixture, waiting: usize) -> oneshot::Sender<()> {
+    let (release, gate) = oneshot::channel::<()>();
+    let service = fixture.service.clone();
+    let id = fixture.id.clone();
+    tokio::spawn(async move {
+        let _held = service.inner.mode_changes.lock(&id).await;
+        let _ = gate.await;
+    });
+    lock_reaches(fixture, waiting + 1).await;
+    release
+}
+
+/// Row M13b: a desktop stop that lands past the message's first check —
+/// held here in its resolve, where pending mode changes are read — waits for
+/// the submission lock the message holds (#528). The message is sent into
+/// its opening, and the stop then ends it: the message settles on the
+/// stopped agent, never left admitted and never run, and nothing is opened
+/// again for it.
 #[tokio::test]
-async fn m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing() {
+async fn m13b_a_desktop_stop_past_the_messages_check_waits_for_it_and_the_message_settles() {
     let fixture = Fixture::new().await;
-    let executions = fixture.provider.executions.lock().unwrap().len();
-    let (message, review) = fixture.held_message(INSTANCE, "after the stop").await;
-    // The message, allowed, waits for the submission lock; then holds it
-    // past its first check, before its resolve, where pending mode changes
-    // are read.
+    let (message, review) = fixture.held_message(INSTANCE, "before the stop").await;
     let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
     let from = fixture.audit.phases().len();
     fixture.answer(&review, ALLOW).await;
@@ -1035,16 +1069,59 @@ async fn m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_not
     *fixture.repository.pending_gate.lock().unwrap() = Some((began.clone(), gate));
     drop(held);
     began.notified().await;
-    // The desktop stops every agent: no lock taken.
-    fixture.service.stop_active_agents().await.unwrap();
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.stop_active_agents().await })
+    };
+    // The message holds the lock; the stop waits for it.
+    lock_reaches(&fixture, 2).await;
     let opened = fixture.provider.open_calls.load(Ordering::SeqCst);
     let _ = open.send(());
+    let execution = message.await.unwrap().expect("the message is sent");
+    stopping.await.unwrap().unwrap();
+    assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), opened);
+    settled(&fixture, &execution).await;
+}
+
+/// Row M10, after a desktop stop's mark: the stop takes the submission lock
+/// before the message, marks the owner and ends its apps, and lets the lock
+/// go while the agent is still closing. The message is refused before the
+/// agent is asked, `mcp_cancelled` by the system, since its opening ended
+/// first; nothing is sent, and nothing is opened again for it (#528).
+#[tokio::test]
+async fn m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing() {
+    let fixture = Fixture::new().await;
+    let executions = fixture.provider.executions.lock().unwrap().len();
+    let (message, review) = fixture.held_message(INSTANCE, "after the mark").await;
+    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let (release_close, close_gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.stop_active_agents().await })
+    };
+    lock_reaches(&fixture, 2).await;
+    let from = fixture.audit.phases().len();
+    fixture.answer(&review, ALLOW).await;
+    approved_on_record(&fixture, from).await;
+    lock_reaches(&fixture, 3).await;
+    let opened = fixture.provider.open_calls.load(Ordering::SeqCst);
+    drop(held);
     assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
+    let records = fixture.audit.records.lock().unwrap().clone();
+    let last = records.last().unwrap();
+    assert_eq!(
+        last.phase,
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled)
+    );
+    assert_eq!(last.initiator, McpAppInitiator::System);
     assert_eq!(
         fixture.provider.executions.lock().unwrap().len(),
         executions
     );
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), opened);
+    let _ = release_close.send(());
+    stopping.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -1053,16 +1130,26 @@ async fn m10_a_message_admitted_in_one_opening_is_not_sent_into_another() {
     let executions = fixture.provider.executions.lock().unwrap().len();
     let (message, review) = fixture.held_message(INSTANCE, "into the old opening").await;
     let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    // The desktop stop takes the lock before the message (#528), and
+    // something else holds it after the stop and before the message.
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.stop_active_agents().await })
+    };
+    lock_reaches(&fixture, 2).await;
+    let between = queued_holder(&fixture, 2).await;
     let from = fixture.audit.phases().len();
     fixture.answer(&review, ALLOW).await;
     approved_on_record(&fixture, from).await;
-    // Its opening ends without the lock, and another begins.
-    fixture.service.stop_active_agents().await.unwrap();
+    lock_reaches(&fixture, 4).await;
+    drop(held);
+    // Its opening ends, and another begins.
+    stopping.await.unwrap().unwrap();
     fixture
         .update_context(OTHER_INSTANCE, Some("opens it again"), None)
         .await
         .unwrap();
-    drop(held);
+    drop(between);
     assert_eq!(refused(message.await.unwrap()), McpAppError::Cancelled);
     assert_eq!(
         fixture.provider.executions.lock().unwrap().len(),
@@ -1406,13 +1493,23 @@ async fn m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by
         .held_message(INSTANCE, "into a failed opening")
         .await;
     let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    // The desktop stop takes the lock before the message (#528), and
+    // something else holds it after the stop and before the message.
+    let stopping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.stop_active_agents().await })
+    };
+    lock_reaches(&fixture, 2).await;
+    let between = queued_holder(&fixture, 2).await;
     let from = fixture.audit.phases().len();
     fixture.answer(&review, ALLOW).await;
     approved_on_record(&fixture, from).await;
-    // Its opening ends without the lock, and the next one fails, holding
-    // what it may have launched: the message is refused by that failure,
-    // before the agent was asked.
-    fixture.service.stop_active_agents().await.unwrap();
+    lock_reaches(&fixture, 4).await;
+    drop(held);
+    // Its opening ends, and the next one fails, holding what it may have
+    // launched: the message is refused by that failure, before the agent
+    // was asked.
+    stopping.await.unwrap().unwrap();
     fixture.storage_open_panics.store(true, Ordering::SeqCst);
     assert!(matches!(
         fixture
@@ -1421,7 +1518,7 @@ async fn m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by
         Err(ConversationError::Unavailable)
     ));
     fixture.storage_open_panics.store(false, Ordering::SeqCst);
-    drop(held);
+    drop(between);
     // But its own apps say the stop ended its opening first: it is that
     // stop's, `mcp_cancelled` by the system (row M10), whatever refused it
     // — not the failed opening's `temporarily_unavailable` (row M13).
@@ -2535,8 +2632,9 @@ async fn c15_a_stop_during_an_admission_drops_nothing_the_message_took() {
     let (began, go) = fixture.hold_admission();
     let sending = person_sending(&fixture, "next");
     began.notified().await;
-    // The desktop stops every agent, without the submission lock, while the
-    // message that took the context is being admitted.
+    // The desktop stops every agent while the message that took the context
+    // is being admitted: it waits for the submission lock the message holds
+    // (#528), so the opening ends after the message has what it took.
     let stopping = {
         let service = fixture.service.clone();
         tokio::spawn(async move { service.stop_active_agents().await })
@@ -2726,6 +2824,7 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
         value: tokio::sync::OnceCell::new(),
         ready: Notify::new(),
         started: std::sync::atomic::AtomicBool::new(true),
+        stopping: std::sync::atomic::AtomicBool::new(false),
     });
     let live = fixture
         .service
