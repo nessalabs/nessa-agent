@@ -172,6 +172,7 @@ export const Transcript = memo(function Transcript({
           />
         ))}
         {transcript?.authenticationRequired &&
+        outbox.length === 0 &&
         (provider === "claude" || provider === "codex") ? (
           <ProviderSignIn key={provider} provider={provider} />
         ) : null}

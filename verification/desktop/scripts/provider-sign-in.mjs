@@ -101,6 +101,15 @@ await main(
                   ),
                 })
               }
+              if (surface === "desktop") {
+                await page.evaluate(() => window.__providerSignIn.sendRetry())
+                await card.waitFor({ state: "detached" })
+                await page.getByText("Try again", { exact: true }).waitFor()
+                await page.evaluate(() => window.__providerSignIn.failRetry())
+                await page.locator(".workspace-message-failed").waitFor()
+                if ((await card.count()) !== 0)
+                  throw new Error("failed newer outbox turn retained old recovery")
+              }
               await page.evaluate(() => {
                 window.__providerSignIn.recover()
               })

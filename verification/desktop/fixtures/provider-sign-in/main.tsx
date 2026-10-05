@@ -9,6 +9,7 @@ import {
   followWorkspace,
   loadWorkspace,
   openSession,
+  sendMessage,
 } from "../../../../src/desktop/workspace"
 import { fakeSource, testIndex } from "../../../../src/desktop/workspace/testing"
 import { transcriptFrom } from "../../../../src/desktop/workspace/adapters/gateway/gateway-views"
@@ -75,6 +76,16 @@ const fixture = {
   release() {
     resolve?.()
     resolve = undefined
+  },
+  sendRetry() {
+    source.hold("send")
+    void store.dispatch(
+      sendMessage({ initiator: "person", sessionId: "b", text: "Try again" }),
+    )
+  },
+  failRetry() {
+    source.refuse("send", "unavailable")
+    void source.release("send")
   },
   recover() {
     source.emit({

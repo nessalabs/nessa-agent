@@ -1600,16 +1600,24 @@ opens Terminal; Linux and other hosts report unavailable. Named tests live in
 `src-tauri/tests/provider_authentication/commands.rs` and
 `src-tauri/tests/platform/{macos,linux,other}/provider_login.rs`; `mod.rs` maps
 ownership and declares/re-exports these modules. The provider enum chooses each
-CLI's default login command.
+CLI's default login command. macOS keeps a bounded 120-second wait for first-use
+Automation consent. The effective bundle's Apple Events entitlement and purpose
+are checked by `scripts/desktop/terminal-automation.mjs`, called from the existing
+macOS release verifier; its regression tests include missing effective declarations.
+Tauri merges the declared `src-tauri/Info.plist` and signs with
+`src-tauri/Entitlements.plist`.
 `AgentError::authentication_required` reads the explicit adapter-owned refusal;
 the ACP worker translates its protocol’s reserved authentication code into that
 variant. Generic provider errors keep their numeric code and diagnostic.
 `crates/nessa-protocol/src/conversation/projection.rs` publishes it from retained
 provider reports, with restoration regressions in that crate’s
 `tests/conversation/projection.rs`. The desktop
-maps the latest turn's fact to `Transcript.authenticationRequired` and draws
+maps the latest wire turn's fact to `Transcript.authenticationRequired` and draws
 the shared `src/provider-authentication/ui/provider-sign-in.tsx`, with its
 workspace Redux controller in `workspace/ui/transcript/provider-sign-in.tsx`.
+A newer unconfirmed outbox message retires that older wire refusal even when the
+new delivery fails before acceptance; `ui/transcript/transcript.test.tsx` and the
+provider-sign-in browser fixture exercise both states.
 The floating panel carries the same typed fact through `applyView` and replaces
 that turn's error divider with the shared card; its App receives the login action
 from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)

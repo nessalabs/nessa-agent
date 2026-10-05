@@ -1,3 +1,5 @@
+use std::{process::Child, time::Duration};
+
 use crate::provider_authentication::{LoginFailure, Provider, ProviderLogin};
 
 /// Login opened in the macOS Terminal, selected by host composition.
@@ -24,12 +26,11 @@ fn script(provider: Provider) -> &'static str {
     }
 }
 
+// First-use Automation consent waits on the person; retain a bounded wait.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn open(provider: Provider) -> Result<(), LoginFailure> {
-    use std::{
-        process::{Command, Stdio},
-        thread,
-        time::{Duration, Instant},
-    };
+    use std::process::{Command, Stdio};
     let mut child = Command::new("/usr/bin/osascript")
         .args(["-e", script(provider)])
         .stdin(Stdio::null())
@@ -40,7 +41,13 @@ fn open(provider: Provider) -> Result<(), LoginFailure> {
             std::io::ErrorKind::NotFound => LoginFailure::Unavailable,
             _ => LoginFailure::LaunchFailed,
         })?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    wait_for_login(&mut child, LOGIN_TIMEOUT)
+}
+
+fn wait_for_login(child: &mut Child, timeout: Duration) -> Result<(), LoginFailure> {
+    use std::{thread, time::Instant};
+
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {

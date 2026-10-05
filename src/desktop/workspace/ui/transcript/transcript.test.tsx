@@ -330,3 +330,33 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-live")).toBeNull()
   })
 })
+
+describe("provider recovery ownership", () => {
+  it("retires recovery while a newer user-only message is sending or failed", async () => {
+    const source = fakeSource()
+    source.hold("send")
+    const { store } = await shown(source, {
+      ...emptyTranscript("b"),
+      revision: 1,
+      authenticationRequired: true,
+      messages: [conversation.messages[0]],
+    })
+    expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+    let sent: Promise<unknown> | undefined
+    await act(async () => {
+      sent = store.dispatch(
+        sendMessage({ initiator: "person", sessionId: "b", text: "Try again" }),
+      )
+      await settle()
+    })
+    expect(host.textContent).toContain("Try again")
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+    source.refuse("send", "unavailable")
+    await act(async () => {
+      await source.release("send")
+      await sent
+    })
+    expect(host.querySelector(".workspace-message-failed")).not.toBeNull()
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+  })
+})
