@@ -255,7 +255,6 @@ impl<'a> EnvelopeParser<'a> {
     fn parse_string(&mut self) -> Result<Option<String>, serde_json::Error> {
         self.expect(b'"')?;
         let mut out = String::new();
-        let mut unicode = true;
         loop {
             match self.peek() {
                 None => return Err(syntax("unterminated string")),
@@ -265,25 +264,38 @@ impl<'a> EnvelopeParser<'a> {
                 }
                 Some(b'\\') => {
                     self.index += 1;
-                    if !self.escape(unicode.then_some(&mut out))? {
-                        unicode = false;
-                        out.clear();
+                    if !self.escape(Some(&mut out))? {
+                        // The string is not Unicode. One scan finds its closing
+                        // quote; another escape rule here would be a second parser.
+                        self.finish_undecodable_string()?;
+                        return Ok(None);
                     }
                 }
-                // A raw control is malformed JSON. Once the string is already
-                // not Unicode, it is not a second reason to drop the envelope
-                // id: the closing quote is still the end of the string.
-                Some(0x00..=0x1F) if unicode => return Err(syntax("control character in string")),
-                Some(0x00..=0x1F) => self.index += 1,
-                Some(_) => {
-                    let ch = self.pop_char()?;
-                    if unicode {
-                        out.push(ch);
-                    }
-                }
+                Some(0x00..=0x1F) => return Err(syntax("control character in string")),
+                Some(_) => out.push(self.pop_char()?),
             }
         }
-        Ok(unicode.then_some(out))
+        Ok(Some(out))
+    }
+
+    /// Finish a string that is already not Unicode. A `"` ends it unless a
+    /// backslash escapes that quote. The tail is not interpreted, so a short
+    /// `\u`, an invalid escape, or a non-ASCII byte cannot fail the envelope
+    /// or split a character.
+    fn finish_undecodable_string(&mut self) -> Result<(), serde_json::Error> {
+        let mut escaped = false;
+        loop {
+            let ch = self.pop_char()?;
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => return Ok(()),
+                _ => {}
+            }
+        }
     }
 
     fn pop_char(&mut self) -> Result<char, serde_json::Error> {
@@ -295,10 +307,9 @@ impl<'a> EnvelopeParser<'a> {
         Ok(ch)
     }
 
-    /// `out` is `None` once the string is already not Unicode, so the rest is
-    /// only scanned. Returns whether this escape is a Unicode scalar. A lone
-    /// surrogate returns false and leaves the next byte of the string in place:
-    /// serde_json stops at that byte, and stopping here would hide a later `id`.
+    /// Returns whether this escape is a Unicode scalar. A lone surrogate returns
+    /// false and leaves the next byte of the string in place. The caller then
+    /// scans to the closing quote instead of parsing further escapes.
     fn escape(&mut self, mut out: Option<&mut String>) -> Result<bool, serde_json::Error> {
         let simple = match self.pop_byte()? {
             b'"' => '"',
@@ -310,10 +321,6 @@ impl<'a> EnvelopeParser<'a> {
             b'r' => '\r',
             b't' => '\t',
             b'u' => return self.unicode_escape(out),
-            // `\x` after a lone surrogate is the byte serde rejects as the
-            // end of the hex escape. The string is already not Unicode, so
-            // the byte is consumed and the walk continues to the real quote.
-            _ if out.is_none() => return Ok(false),
             _ => return Err(syntax("invalid escape")),
         };
         if let Some(out) = out.as_mut() {
@@ -584,6 +591,9 @@ mod tests {
             r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800\u12"}}"#,
             "{\"type\":\"req\",\"id\":\"request-9\",\"method\":\"m\",\"params\":{\"a\":\"\\ud800\n\"}}",
             r#"{"type":"req","id":"right","method":"m","params":{"a":"\ud800\",\"id\":\"wrong"}}"#,
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800\é"}}"#,
+            r#"{"type":"req","params":{"a":"\ud800\😀"},"id":"request-9","method":"m"}"#,
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800x\u12"}}"#,
         ] {
             let value = unique_envelope(text).unwrap_or_else(|error| panic!("{text}: {error}"));
             let id = value["id"].as_str().unwrap_or_else(|| panic!("no id in {text}"));
