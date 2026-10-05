@@ -12,10 +12,12 @@
  * keychain the gateway reads, Codex's from its own home, Opencode's from
  * Nessa's credential store — and creates no account and writes no credential.
  * A gateway without one refuses the conversation, and the run fails there.
- * It asks for five of the test server's tools, each once (`toolPrompt`), and
- * answers permission requests only for those, each once; anything else the
- * agent asks for is left unanswered. It exits non-zero unless the turn
- * completed and `show_chart` yielded a widget part in the transcript.
+ * It asks for five of the test server's tools, each once (`toolPrompt`). It
+ * allows each permission request for a tool of the test server once
+ * (`permissionDecisions`), and leaves anything else the agent asks for
+ * unanswered. The calls made are recorded in `summary.json` for review, not
+ * checked: it exits non-zero unless the turn completed and `show_chart`
+ * yielded a widget part in the transcript.
  *
  * The harness is given a stand-in (`nessa mcp-relay`) in the test server's
  * place; for each harness session that starts it, the gateway starts the

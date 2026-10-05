@@ -53,12 +53,14 @@ harness is given a stand-in, `nessa mcp-relay`, in its place, and for each
 harness session that starts it the gateway starts the server and holds the
 connection to it (ADR 344). It
 sends one message asking for five of the server's tools, each once, allows
-each one's permission request once, and writes what happened. The message is
-`toolPrompt` in `local-gateway.mjs`, which the desktop's `mcp-apps-gateway.mjs`
-asks with too: it lets the agent use its own tool search, since Codex reaches
-MCP tools only through it (#500), and forbids only other tools of the server.
-Which tools were called is read from what the gateway reports, not from the
-permissions answered: a harness may run a tool without asking.
+each permission request for one of the server's tools once, and writes what
+happened. The message is `toolPrompt` in `local-gateway.mjs`, which the
+desktop's `mcp-apps-gateway.mjs` asks with too: it lets the agent use its own
+tool search, since Codex reaches MCP tools only through it (#500), and forbids
+only other tools of the server. The prompt enforces nothing, and a harness may
+run a tool without asking (Codex runs the read-only `review_rows` unasked), so
+answering permissions does not bound what was called: the calls made are in
+`summary.json` for review.
 
 ```sh
 cargo build -p nessa-server
