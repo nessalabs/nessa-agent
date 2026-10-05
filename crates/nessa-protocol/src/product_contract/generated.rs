@@ -274,6 +274,8 @@ impl ChangeWatchErrorCode {
         }
     }
 }
+/// Published bound from the product schema.
+pub const MAX_MCP_MESSAGE_BYTES: usize = 8192;
 /// Published MCP App call timing from the product schema, in milliseconds.
 pub const MCP_APP_REVIEW_DEADLINE_MS: u64 = 300000;
 /// Published MCP App call timing from the product schema, in milliseconds.

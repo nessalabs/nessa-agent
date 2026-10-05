@@ -1509,3 +1509,167 @@ fn a_lock_that_is_not_a_regular_file_is_refused_without_blocking() {
         std::io::ErrorKind::InvalidInput
     );
 }
+
+/// An audit that keeps what it commits.
+#[derive(Default)]
+struct KeptAudit(std::sync::Mutex<Vec<crate::conversation::application::McpAppAuditRecord>>);
+impl crate::conversation::application::McpAppAudit for KeptAudit {
+    fn record(
+        &self,
+        record: crate::conversation::application::McpAppAuditRecord,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().push(record);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits() {
+    use crate::conversation::application::{
+        ContextDrop, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
+    };
+    use nessa_auth::domain::OrganizationId;
+    use nessa_protocol::conversation::domain::ConversationId;
+    use std::sync::Arc;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let mut config = agents(vec![server("mcptest", &["/s.mjs"])]);
+    let mut composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("composed");
+    // As composition starts them, beside the conversation service it hands
+    // the sink to; and as the gateway's exit finishes them.
+    let audit = Arc::new(KeptAudit::default());
+    let dropped = composed.start_recorders(audit.clone());
+    let drop = McpAppAuditRecord {
+        conversation_id: ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+        organization_id: OrganizationId::new("org").unwrap(),
+        call_id: "u1".into(),
+        request_id: "request-u1".into(),
+        app: McpAppRef {
+            execution_id: "e1".into(),
+            tool_id: "t1".into(),
+            instance_id: "i1".into(),
+        },
+        ask: McpAppAsk::UpdateModelContext {
+            server: "mcptest".into(),
+        },
+        initiator: McpAppInitiator::System,
+        phase: McpAppAuditPhase::ContextDropped {
+            cause: ContextDrop::ConversationEnded,
+        },
+    };
+    dropped.context_dropped(drop.clone());
+    super::finish_recorders(
+        [
+            composed.ticket_recorder.take(),
+            composed.context_drop_recorder.take(),
+        ]
+        .into_iter()
+        .flatten(),
+        super::RECORDERS_FINISH,
+    )
+    .await;
+    assert_eq!(*audit.0.lock().unwrap(), [drop]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn recorders_finish_together_under_one_bound() {
+    // Two recorders, each still recording at the bound.
+    let hanging = |what| {
+        let (stop, _stopping) = tokio::sync::oneshot::channel();
+        super::AuditRecorder {
+            what,
+            stop,
+            task: tokio::spawn(std::future::pending()),
+        }
+    };
+    let started = tokio::time::Instant::now();
+    super::finish_recorders(
+        [hanging("ticket ends"), hanging("context drops")],
+        super::RECORDERS_FINISH,
+    )
+    .await;
+    // Together, not one after the other: the exit waits the one bound.
+    assert_eq!(started.elapsed(), super::RECORDERS_FINISH);
+}
+
+/// The drop sink `mcp_app_ports` builds for the conversation service's
+/// `McpAppPorts` is the composed recorder's: a context dropped by the
+/// service's own close is written to the audit that recorder was started
+/// with, by the closer, before the exit's finish returns. Any other sink
+/// built there writes nothing to it. This pins the factory, not
+/// `local_auth`'s one-expression call of it.
+#[tokio::test]
+async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
+    use crate::app_call_test_support::{caller, Fixture, INSTANCE, SERVER};
+    use crate::conversation::application::{
+        ContextDrop, McpAppAsk, McpAppAuditPhase, McpAppInitiator,
+    };
+    use std::sync::Arc;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let mut config = agents(vec![server(SERVER, &["/s.mjs"])]);
+    let mut composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("composed");
+    let audit = Arc::new(KeptAudit::default());
+    let ports = super::super::local_auth::mcp_app_ports(&mut composed, audit.clone());
+    let fixture = Fixture::dropping_to(ports.dropped).await;
+    fixture
+        .update_context(INSTANCE, Some("Showing April"), None)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    super::finish_recorders(
+        [
+            composed.ticket_recorder.take(),
+            composed.context_drop_recorder.take(),
+        ]
+        .into_iter()
+        .flatten(),
+        super::RECORDERS_FINISH,
+    )
+    .await;
+    let written = audit.0.lock().unwrap().clone();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let drop = &written[0];
+    assert_eq!(drop.conversation_id, fixture.id);
+    assert_eq!(drop.request_id, "app-context");
+    assert_eq!(drop.app, fixture.app(INSTANCE));
+    assert_eq!(
+        drop.ask,
+        McpAppAsk::UpdateModelContext {
+            server: SERVER.into()
+        }
+    );
+    assert_eq!(
+        drop.phase,
+        McpAppAuditPhase::ContextDropped {
+            cause: ContextDrop::ConversationEnded
+        }
+    );
+    assert!(
+        matches!(&drop.initiator, McpAppInitiator::Person { request_id, .. } if request_id == "close"),
+        "{:?}",
+        drop.initiator
+    );
+}

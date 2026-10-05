@@ -130,11 +130,48 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   until its socket goes. Past either they are refused
   `temporarily_unavailable`, so held calls never stop `conversation.read` or
   `conversation.answer`.
+- **`mcp.sendMessage`** (MCP Apps `ui/message`, #390) puts the app's text
+  into its conversation as the person's turn, written by the app: the
+  transcript says so (`ConversationMessage.app`, `ConversationPending.app`),
+  and the agent is given it as the person's. Every message waits on its own
+  review in `permissions`, as a destructive tool's call does. Text is at most
+  what `conversation.send` takes, and not empty; outside the schema's bounds
+  it is `invalid_request`, refused before anything is recorded. Blank text,
+  whitespace only, is within them, and is `invalid_request` on record, the
+  conversation's refusal. It is shown whole
+  in its review, which must fit the 16 000 bytes an app's review may take of
+  the view: text heavy in quotes or control characters can be past that
+  while within the schema's bound, and is refused `mcp_request_too_large`
+  with no review opened. While a turn runs or input waits it is refused
+  `turn_running`: an app's message is never queued behind the person's. Any
+  other refusal of the message is its own conversation code. Its turn is
+  derived from the conversation, the mount and `requestId`: the same request
+  again is the same turn, which the agent settles without anyone being asked
+  again; sent again while the first is still in review or being sent, it is
+  refused `temporarily_unavailable`.
+- **`mcp.updateModelContext`** (MCP Apps `ui/update-model-context`) holds
+  what a mount gives the model, in place of what it gave; an update with
+  neither part, or only an empty text, clears it. The next message admitted
+  into the conversation while nothing runs and no input waits — the
+  person's or an app's — takes every context held and carries them ahead of
+  its text: taken as it is read, they are no longer held. If that message is
+  then refused, they are lost, each on record as dropped `not_sent`; if its
+  turn fails, they are lost. Either way the app may give them again. A
+  message queued behind a running turn, or steered into one, carries none
+  and leaves them held. A conversation's updates are taken one at a time, each on record
+  before it is held; the structured content is held exactly as given. They
+  are not part of the transcript. A release of the mount, or the end of the
+  opening, drops a context still held unsent; one a message took goes with
+  that message. The schema states its bounds
+  (`McpUpdateModelContextParams`): a part past its own is `invalid_request`,
+  refused before anything is recorded, as every schema bound of both
+  methods is; both parts together past what one context holds are
+  `mcp_request_too_large`.
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's
-  open reviews (their calls answer `mcp_cancelled`) and releases its
-  resource tickets, and is idempotent. Nothing is admitted, opened or issued
+  open reviews (their calls answer `mcp_cancelled`), releases its resource
+  tickets, drops its context unsent, and is idempotent. Nothing is admitted, opened or issued
   for that mount again — across a close and a reopening, and when the
   release came before the conversation was open: its later calls answer
   `mcp_cancelled`. An `mcp.callTool` already handed to the session is not

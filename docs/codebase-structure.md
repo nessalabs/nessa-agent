@@ -757,10 +757,14 @@ admitted (`McpServers::open_as`). The digest it compares is keyed per gateway
 process (`domain::ConfigurationKey`) over a server's command, arguments and
 environment, its fields chosen once by `infrastructure::launch_digest`. The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
-`mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
-service's (`conversation/application/service/app_calls.rs`, with the reviews
-in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
-`conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
+`mcp_servers/infrastructure/apps.rs`; the calls' flow, and an app's
+messages and model context (#390), are the conversation service's
+(`conversation/application/service/app_calls.rs`, with the reviews, held
+contexts and messages in flight in `app_reviews.rs` and the ports in
+`mcp_apps.rs`), their audit
+`conversation/infrastructure/mcp_app_audit.rs` — with every held context's
+drop written by the one recorder in `conversation/infrastructure/context_drops.rs`,
+which composition stops after the conversations — and their wire methods
 `product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
 one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
 `@nessa/client` they share `application/gateway-http.ts` (the origin, the
@@ -1548,9 +1552,12 @@ the export builds in its `wire-contract` subdirectory.
 
 `crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed
 product error/close values and their schema-derived policy. The product schema
-remains their owner. Generated product DTOs, the product socket and read-only
-sync application ports consume this publication; it contains no routing, IO or
-runtime state. Generic frame protocol types are `crates/nessa-protocol/src/protocol/`,
+remains their owner. Generated product DTOs, the product socket, read-only
+sync application ports and the gateway's conversation service consume this
+publication — the conversation's error codes are mapped once, in
+`crates/nessa-server/src/conversation/application/error_code.rs`, and both
+wire responses and MCP app audit records use that mapping. The module itself
+contains no routing, IO or runtime state. Generic frame protocol types are `crates/nessa-protocol/src/protocol/`,
 and the generated product DTOs `crates/nessa-protocol/src/product/generated.rs`.
 
 ### Record read benchmark

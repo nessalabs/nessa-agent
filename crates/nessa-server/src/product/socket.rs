@@ -351,7 +351,11 @@ impl ResponseClass {
             // (design row O7).
             | "pairing.deny"
             | "pairing.cancel" => Self::Control,
-            "mcp.callTool" | "mcp.readResource" => Self::App,
+            "mcp.callTool"
+            | "mcp.readResource"
+            // A message can wait on the person's review, as a call can.
+            | "mcp.sendMessage"
+            | "mcp.updateModelContext" => Self::App,
             "conversation.recordsHead"
             | "conversation.recordsPage"
             | "conversation.catalogueHead"
@@ -1321,6 +1325,8 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         // An app acts in its conversation, on its caller's behalf.
         | "mcp.callTool"
         | "mcp.readResource"
+        | "mcp.sendMessage"
+        | "mcp.updateModelContext"
         | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
         // A configured MCP server is started with the gateway's authority

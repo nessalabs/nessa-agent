@@ -21,7 +21,7 @@ diagramLinks:
 
 The gateway reads an app's HTML once and returns metadata with a single-use download ticket. The ticket lasts 60 seconds. The client checks the returned bytes against the expected length and digest.
 
-Fetching consumes the ticket before audit and delivery finish. A failed or lost reply cannot be retried with the same ticket. Release or expiry frees held bytes separately from its audit result. Redemption currently has no separate audit deadline, so audit can delay the reply.
+Fetching consumes the ticket before audit and delivery finish. A failed or lost reply cannot be retried with the same ticket. Release or expiry frees held bytes separately from its audit result. Releasing the app also drops the context it held for the model ([an app sends a message and gives the model context](an-app-sends-a-message-and-gives-the-model-context.md)). Redemption currently has no separate audit deadline, so audit can delay the reply.
 
 ```mermaid
 stateDiagram-v2

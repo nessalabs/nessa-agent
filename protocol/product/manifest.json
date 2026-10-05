@@ -35,6 +35,8 @@
     "mcp.callTool": "McpCallToolParams",
     "mcp.readResource": "McpReadResourceParams",
     "mcp.releaseApp": "McpReleaseAppParams",
+    "mcp.sendMessage": "McpSendMessageParams",
+    "mcp.updateModelContext": "McpUpdateModelContextParams",
     "mcpServers.list": null,
     "mcpServers.save": "McpServersSaveParams",
     "mcpServers.remove": "McpServersRemoveParams",
