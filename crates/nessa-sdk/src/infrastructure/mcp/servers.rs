@@ -869,7 +869,11 @@ impl McpSession {
     /// shape, [`McpError::Remote`] for the server's refusal, and the
     /// session's end cause once it has ended.
     pub async fn list_tool_pages(&self, max_pages: usize) -> Result<ListedPages, McpError> {
-        let paged = pages(&self.owner.0, max_pages).await?;
+        let paged = contain_caller_wake(
+            format!("MCP tool pages of {}", self.server()),
+            pages(&self.owner.0, max_pages),
+        )
+        .await?;
         Ok(ListedPages {
             tools: paged.tools,
             more: paged.more,
