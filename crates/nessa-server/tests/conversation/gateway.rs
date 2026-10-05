@@ -240,7 +240,14 @@ mod gateway {
             .unwrap();
     }
     pub(super) async fn response(peer: &mut TestPeer) -> serde_json::Value {
-        let Message::Text(text) = peer.message().await else {
+        // Durable create and submit write their receipt before answering.
+        // A loaded Windows runner can take longer than the one-second bound
+        // used for socket deadlines that must stay prompt.
+        let Message::Text(text) = timeout(Duration::from_secs(10), peer.output.recv())
+            .await
+            .expect("conversation command response")
+            .expect("socket closed")
+        else {
             panic!("text response expected")
         };
         serde_json::from_str(&text).unwrap()
@@ -779,9 +786,9 @@ mod gateway {
             "conversation.create",
             json!({"conversationId":id,"requestId":"create"}),
         );
-        timeout(Duration::from_secs(1), provider.opening.notified())
+        timeout(Duration::from_secs(10), provider.opening.notified())
             .await
-            .unwrap();
+            .expect("provider open follows the durable creation attempt");
         // Readiness waits for the original attachment, so this response is
         // still outstanding. The socket stays responsive, and the request
         // permit stays with the creation task.
@@ -902,9 +909,9 @@ mod gateway {
             "conversation.create",
             json!({"conversationId":id,"requestId":"create"}),
         );
-        timeout(Duration::from_secs(1), provider.opening.notified())
+        timeout(Duration::from_secs(10), provider.opening.notified())
             .await
-            .unwrap();
+            .expect("provider open follows the durable creation attempt");
         assert_eq!(state.requests.available_permits(), 127);
         for n in 0..15 {
             send_command(
@@ -970,11 +977,11 @@ mod gateway {
             assert_eq!(response(&mut peer).await["ok"], true);
             if execution == "running" {
                 timeout(
-                    Duration::from_secs(1),
+                    Duration::from_secs(10),
                     provider.execution_started.notified(),
                 )
                 .await
-                .unwrap();
+                .expect("the running turn starts after its receipt");
             }
         }
         // Another principal cannot reorder a known conversation identity.
