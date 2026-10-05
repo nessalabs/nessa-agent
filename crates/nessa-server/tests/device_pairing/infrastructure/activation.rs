@@ -358,7 +358,7 @@ async fn approval_stages_pairs_and_publishes_a_device_credential() {
     // receipt's: a policy change advances it, and the record keeps epoch 1.
     drop(
         LocalReceiverAuthority::open(
-            &private_root(fixture.directory.path(), "conversations")
+            &private_root(fixture.directory.path(), "receiver-access")
                 .join("receiver-access.sqlite3"),
             "another-policy",
             Arc::new(Time),

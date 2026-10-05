@@ -468,6 +468,32 @@ fn saved_data_this_version_cannot_read_is_said_as_such() {
     );
 }
 
+/// A missing receiver journal exits zero so launchd stops retrying it. The
+/// recorded reason is the only place the cause is named, and the sentence
+/// has to say the journal must be restored rather than the generic failure.
+#[test]
+fn a_missing_receiver_journal_is_said_as_one_that_has_to_be_restored() {
+    let record = serde_json::json!({
+        "reason": "receiverJournalMissing",
+        "exitCode": code("receiverJournalMissing"),
+        "message": "receiver access journal missing at /n/receiver-access/receiver-access.sqlite3: an enrollment still owes receiver cleanup",
+        "serviceGeneration": GENERATION,
+        "processId": 4711u32,
+    })
+    .to_string();
+    let recorded = parse_record(record.as_bytes()).expect("record");
+    let failure = diagnose(&LastExit::Code(0), Some(&recorded), "", PORT, READINESS);
+    assert_eq!(
+        failure.sentence,
+        "Nessa's background service is not starting: its receiver access journal is missing and has to be restored."
+    );
+    assert!(
+        failure.detail.contains("receiver access journal missing"),
+        "{}",
+        failure.detail
+    );
+}
+
 /// The record authorizes nothing unless it is about the registration being
 /// reconciled, and a reason this host has no words for is not shown as one.
 #[test]

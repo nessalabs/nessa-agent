@@ -123,6 +123,38 @@ impl Gateway {
         }
         server
     }
+    /// Spawn `nessa server` and return once it has exited. A process that
+    /// accepts the product socket is killed: this start was required to stop.
+    fn start_until_exit(&self) -> ExitStatus {
+        let log = std::fs::File::create(self.root.path().join("server.log")).unwrap();
+        let mut child = command(&self.root.path().join("data"))
+            .arg("server")
+            .env("NESSA_PORT", self.product.port().to_string())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + WAIT;
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status;
+            }
+            if TcpStream::connect(self.product).is_ok() {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "the gateway started\n{}",
+                    std::fs::read_to_string(self.root.path().join("server.log")).unwrap()
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the gateway neither started nor stopped\n{}",
+                std::fs::read_to_string(self.root.path().join("server.log")).unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     fn owner(&self) -> ProductClient {
         ProductClient::connect(self.product, &self.token)
     }
@@ -254,7 +286,7 @@ async fn device_at_gateway(gateway: &Gateway, device: DeviceCredential) -> Devic
         authenticated = Err(error);
     }
     let receivers = LocalReceiverAuthority::open(
-        &data.join("conversations/receiver-access.sqlite3"),
+        &data.join("receiver-access/receiver-access.sqlite3"),
         &CedarPolicyEvaluator::profile_digest(),
         Arc::new(RuntimeClock),
     )
@@ -492,6 +524,72 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
         "shutdown's reconciliation fenced it"
     );
     assert!(!ended.cleanup_pending);
+}
+
+/// Row RJ2, through the process: a killed gateway that still owes receiver
+/// cleanup does not create a journal on the next start. The exit is the
+/// journal's own reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_journal_stops_a_gateway_that_still_owes_cleanup() {
+    let gateway = Gateway::new(true);
+    let native = gateway.native.unwrap();
+    let server = tokio::task::block_in_place(|| gateway.start());
+    let created = tokio::task::block_in_place(|| gateway.owner().ok("pairing.create", json!({})));
+    let id = invitation(&created["status"]);
+    let client_root = tempfile::tempdir().unwrap();
+    let (_, store) = pending(client_root.path(), "device");
+    let client = NativeEnrollmentClient::new(store, RuntimeDependencies::default().clock);
+    let code = ManualCode::parse(created["code"].as_str().unwrap().as_bytes()).unwrap();
+    tokio::time::timeout(
+        WAIT,
+        client.enroll(TcpStream::connect(native).unwrap(), code, OsEntropy),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let credential = tokio::task::block_in_place(|| {
+        let mut owner = gateway.owner();
+        let status = owner.ok("pairing.status", json!({"invitationId": id}));
+        let approved = owner.ok(
+            "pairing.approve",
+            json!({"invitationId": id, "deviceKey": status["claimedDeviceKey"]}),
+        );
+        assert!(approved.get("activationStopped").is_none(), "{approved}");
+        let status = &approved["status"];
+        assert_eq!(status["phase"], "active", "{status}");
+        status["credentialId"].as_str().unwrap().to_owned()
+    });
+    tokio::task::block_in_place(|| {
+        gateway.owner().ok(
+            "credential.revoke",
+            json!({"requestId": "revoke-device", "credentialId": credential}),
+        )
+    });
+    client.shutdown().await;
+    // Killed, so shutdown's reconciliation never runs and the fence stays owed.
+    drop(server);
+    let data = gateway.root.path().join("data/ci");
+    let registry = LocalCredentialStore::open(data.join("auth"), "credentials.v1.json").unwrap();
+    assert!(
+        registry
+            .pending_pairings()
+            .unwrap()
+            .iter()
+            .any(|record| record.cleanup_pending()),
+        "the killed gateway still owes receiver cleanup"
+    );
+    drop(registry);
+    let journal = data.join("receiver-access/receiver-access.sqlite3");
+    assert!(journal.is_file(), "the journal was written while serving");
+    std::fs::remove_file(&journal).unwrap();
+    let status = tokio::task::block_in_place(|| gateway.start_until_exit());
+    assert_eq!(status.code(), Some(35), "{status}");
+    assert!(
+        !journal.exists(),
+        "startup created a journal while cleanup is owed"
+    );
+    let log = std::fs::read_to_string(gateway.root.path().join("server.log")).unwrap();
+    assert!(log.contains("receiver access journal missing"), "{log}");
 }
 
 /// Row S1: without a native section the gateway opens no private state and

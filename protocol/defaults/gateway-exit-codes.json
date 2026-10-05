@@ -15,6 +15,7 @@
     "stoppedOnRequest": 31,
     "usage": 32,
     "datasetRefused": 33,
-    "serveAndShutdown": 34
+    "serveAndShutdown": 34,
+    "receiverJournalMissing": 35
   }
 }
