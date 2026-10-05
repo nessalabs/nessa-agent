@@ -740,20 +740,7 @@ fn an_unretained_query_replacement_clears_the_cached_input() {
             json!({"toolCallId":"search-1","rawInput":replacement})
         };
         tool_call(&update, &mut names).unwrap();
-        assert!(
-            matches!(
-                names.get("search-1"),
-                Some(ObservedTool::Reviewable {
-                    arguments_json: None,
-                    ..
-                })
-            ),
-            "named={named}"
-        );
-        assert!(
-            permission(&names, json!({"toolCallId":"search-1"})).is_err(),
-            "named={named}: the previous query stayed approvable"
-        );
+        assert_no_cached_query(&names, &format!("named={named}"));
         let review = permission(
             &names,
             json!({"toolCallId":"search-1","rawInput":replacement}),
@@ -774,6 +761,151 @@ fn object_with_json_len(bytes: usize) -> Value {
     let value = json!({"q": "x".repeat(bytes - overhead)});
     assert_eq!(serde_json::to_string(&value).unwrap().len(), bytes);
     value
+}
+
+/// An object of `bytes` JSON whose text is shorter in characters than in bytes.
+///
+/// The retained-input budget charges UTF-8 bytes. A character count would
+/// under-charge this value and free too little room for the next one.
+fn object_with_multibyte_json_len(bytes: usize, mark: &str) -> Value {
+    let overhead = serde_json::to_string(&json!({"q":""})).unwrap().len();
+    let content_bytes = bytes.checked_sub(overhead).expect("object is at least {}");
+    assert!(mark.len() >= 2 && content_bytes >= mark.len());
+    let mut text = String::from(mark);
+    text.push_str(&"x".repeat(content_bytes - mark.len()));
+    let value = json!({"q": text});
+    assert!(text.chars().count() < text.len());
+    assert_eq!(serde_json::to_string(&value).unwrap().len(), bytes);
+    value
+}
+
+fn query_update(named: bool, raw_input: Value) -> Value {
+    if named {
+        json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+            "rawInput": raw_input})
+    } else {
+        json!({"toolCallId":"search-1","rawInput": raw_input})
+    }
+}
+
+fn assert_cached_query(names: &HashMap<String, ObservedTool>, expected: &Value, label: &str) {
+    let review = permission(names, json!({"toolCallId":"search-1"})).unwrap();
+    assert_eq!(review.name, "WebSearch", "{label}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        *expected,
+        "{label}"
+    );
+}
+
+/// A later object that fits is the query a sparse permission shows.
+///
+/// The budget is already full. The replacement fits only because this call's
+/// own cached bytes are released first, and those bytes are counted in UTF-8
+/// rather than characters. One extra byte clears the cache. Freeing another
+/// call's input afterwards does not bring the old query back; only a new
+/// object that fits does.
+#[test]
+fn a_fitting_replacement_is_the_query_a_sparse_permission_shows() {
+    let max = super::MAX_RETAINED_INPUT_BYTES;
+    let old = object_with_multibyte_json_len(32, "é");
+    let filler = object_with_json_len(max - 32);
+    let replacement = object_with_multibyte_json_len(32, "ü");
+    let over = object_with_json_len(33);
+    assert_ne!(old, replacement);
+    for named in [true, false] {
+        let label = format!("named={named}");
+        let mut names = HashMap::new();
+        tool_call(
+            &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+            &mut names,
+        )
+        .unwrap();
+        tool_call(
+            &json!({"toolCallId":"filler","name":"WebFetch","rawInput":filler}),
+            &mut names,
+        )
+        .unwrap();
+        tool_call(&query_update(named, replacement.clone()), &mut names).unwrap();
+        assert_cached_query(&names, &replacement, &label);
+        tool_call(&query_update(named, over.clone()), &mut names).unwrap();
+        assert_no_cached_query(&names, &label);
+        tool_call(&json!({"toolCallId":"filler","rawInput":{}}), &mut names).unwrap();
+        assert_no_cached_query(&names, &format!("{label}: budget released"));
+        tool_call(&query_update(named, replacement.clone()), &mut names).unwrap();
+        assert_cached_query(&names, &replacement, &format!("{label}: resent"));
+    }
+}
+
+/// A supplied value that is not an object is not the cached query. Null and a
+/// missing field are omissions, so they leave the query in place.
+#[test]
+fn a_non_object_input_clears_the_cached_query() {
+    for named in [true, false] {
+        for raw_input in [
+            json!("next query"),
+            json!(["next query"]),
+            json!(1),
+            json!(true),
+        ] {
+            let label = format!("named={named} input={raw_input}");
+            let mut names = HashMap::new();
+            let old = json!({"query": "old"});
+            tool_call(
+                &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+                &mut names,
+            )
+            .unwrap();
+            tool_call(&query_update(named, Value::Null), &mut names).unwrap();
+            assert_cached_query(&names, &old, &format!("{label}: null"));
+            tool_call(
+                &json!({"toolCallId":"search-1","status":"pending"}),
+                &mut names,
+            )
+            .unwrap();
+            assert_cached_query(&names, &old, &format!("{label}: omitted"));
+            tool_call(&query_update(named, raw_input), &mut names).unwrap();
+            assert_no_cached_query(&names, &label);
+        }
+    }
+}
+
+/// A rejected identity change is not an accepted input update.
+#[test]
+fn a_rejected_identity_change_keeps_the_cached_query() {
+    let mut names = HashMap::new();
+    let old = json!({"query": "old"});
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(tool_call(
+        &json!({"toolCallId":"search-1","name":"WebFetch","rawInput":{"url":"https://example.com"}}),
+        &mut names
+    )
+    .is_err());
+    assert_cached_query(&names, &old, "rejected rename");
+}
+
+fn assert_no_cached_query(names: &HashMap<String, ObservedTool>, label: &str) {
+    assert!(
+        matches!(
+            names.get("search-1"),
+            Some(ObservedTool::Reviewable {
+                arguments_json: None,
+                ..
+            })
+        ),
+        "{label}"
+    );
+    assert!(
+        matches!(
+            permission(names, json!({"toolCallId":"search-1"})),
+            Err(AgentError::Protocol(_))
+        ),
+        "{label}: the previous query stayed approvable"
+    );
 }
 
 #[test]

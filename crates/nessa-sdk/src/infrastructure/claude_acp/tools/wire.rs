@@ -137,7 +137,7 @@ pub(in crate::infrastructure::claude_acp) enum ObservedTool {
         name: String,
         /// Latest object input that fit the retention budget. `None` means
         /// nothing is cached: this call never carried an object that fit, or
-        /// a later object could not be retained and the previous one was
+        /// a later value could not be retained and the previous one was
         /// cleared.
         arguments_json: Option<Box<str>>,
     },
@@ -182,7 +182,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
     // Validate the complete representation before retaining provider name state.
     let mut update = acp_tool_call(value)?;
     let id = identifier(value, "toolCallId")?.to_owned();
-    let cached = cache_input(names, &id, object_arguments(value));
+    let cached = cache_input(names, &id, supplied_input(value));
     if let Some(name) = frame_tool_name(value)? {
         // Names are bounded before retention; together with 256-byte IDs and
         // 4,096 entries, this bounds the map's string payload independently of
@@ -231,8 +231,8 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         ObservedTool::Declined => None,
     }) {
         // A query update may restate only the input. The name already observed
-        // for this call stays. An omitted object leaves the cached query; an
-        // object that cannot be retained clears it.
+        // for this call stays. An omitted object leaves the cached query; a
+        // supplied value that cannot be retained clears it.
         match cached {
             CachedInput::Replace(encoded) => *slot = Some(encoded),
             CachedInput::Cleared => *slot = None,
@@ -265,9 +265,25 @@ fn frame_tool_name(value: &Value) -> Result<Option<&str>, AgentError> {
     }
 }
 
-/// Object `rawInput` on this frame, when it carries one worth remembering.
-fn object_arguments(value: &Value) -> Option<&Value> {
-    value.get("rawInput").filter(|input| input.is_object())
+/// What this frame supplies as tool input.
+enum SuppliedInput<'a> {
+    /// The field is absent or null. A later review may keep using the cache.
+    Omitted,
+    /// An object the cache may retain.
+    Object(&'a Value),
+    /// A value was supplied and it is not an object, so it is not the cached query.
+    Unusable,
+}
+
+/// `rawInput` as the cache sees it. Null is absence, matching a permission
+/// update. Any other non-object was supplied and must not stand in for the
+/// previous query.
+fn supplied_input(value: &Value) -> SuppliedInput<'_> {
+    match value.get("rawInput") {
+        None | Some(Value::Null) => SuppliedInput::Omitted,
+        Some(input) if input.is_object() => SuppliedInput::Object(input),
+        Some(_) => SuppliedInput::Unusable,
+    }
 }
 
 /// What this frame does to the object input cached for its tool call.
@@ -276,25 +292,30 @@ enum CachedInput {
     Unchanged,
     /// The frame carried an object that fit the retention budget.
     Replace(Box<str>),
-    /// The frame carried an object that could not be retained. The previous
-    /// cache is not this input and must not be offered in its place.
+    /// The frame supplied input that could not be retained: an object past
+    /// the budget, or a value that is not an object. The previous cache is
+    /// not this input and must not be offered in its place.
     Cleared,
 }
 
 /// Decide how `incoming` changes the input cached for `id`.
 ///
 /// An omitted object leaves the cache alone. An object that fits replaces it.
-/// An object that does not fit clears it: a later sparse permission must not
-/// approve the previous query while the provider's latest update carried a
-/// different one. The tool row itself still succeeds, so a permission frame
-/// that carries the new object can be reviewed from that frame.
+/// An object that does not fit, and any supplied non-object, clears it: a
+/// later sparse permission must not approve the previous query after the
+/// provider's latest update carried a different value. The tool row itself
+/// still succeeds, so a permission frame that carries the new object can be
+/// reviewed from that frame. Bytes already cached for this call are available
+/// to its replacement; other calls' input is not.
 fn cache_input(
     names: &HashMap<String, ObservedTool>,
     id: &str,
-    incoming: Option<&Value>,
+    incoming: SuppliedInput<'_>,
 ) -> CachedInput {
-    let Some(incoming) = incoming else {
-        return CachedInput::Unchanged;
+    let incoming = match incoming {
+        SuppliedInput::Omitted => return CachedInput::Unchanged,
+        SuppliedInput::Unusable => return CachedInput::Cleared,
+        SuppliedInput::Object(value) => value,
     };
     let previous = names
         .get(id)
