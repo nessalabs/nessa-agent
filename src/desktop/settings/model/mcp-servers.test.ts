@@ -15,6 +15,7 @@ import {
   editedServer,
   formReady,
   launchChanged,
+  namesKept,
   valuesNeeded,
   initialMcpServersState,
   mcpServersReducer,
@@ -58,6 +59,8 @@ function run(state: McpServersState, ...events: McpServersEvent[]) {
 }
 
 const ok = <T>(value: T): Outcome<T> => ({ ok: true, value })
+/** A write answered, its list live (L1, L4). */
+const live = { live: true }
 const no = (failure: Failure): Outcome<never> => ({ ok: false, failure })
 
 /** Answers the request in flight. */
@@ -288,7 +291,7 @@ describe("the form", () => {
       },
     })
     expect(state.pending).not.toHaveProperty("request.previousName")
-    state = answer(state, ok(undefined))
+    state = answer(state, ok(live))
     expect(state.form).toBeNull()
     expect(state.pending?.kind).toBe("list")
   })
@@ -517,8 +520,230 @@ describe("a changed launch (U32–U35)", () => {
     )
     expect(state.form?.problem).toEqual({ field: "env", text: sentences.valuesAgain })
     expect(sentences.valuesAgain).toBe(
-      "Changing the command or arguments needs every value entered again.",
+      "Changing the command, arguments or variables needs every stored value entered again.",
     )
+  })
+})
+
+describe("a stored value kept only for the same launch (V1–V10)", () => {
+  const two: ListedServer = { ...charts, envNames: ["A", "B"] }
+  const editing = () => run(listed(listOf(two, nessa)), { type: "edit", name: "charts" })
+  const judged = (state: McpServersState) => {
+    const server = editedServer(state)
+    return {
+      changed: launchChanged(state.form!, server),
+      needed: valuesNeeded(state.form!, server),
+      keepable: namesKept(state.form!, server),
+      ready: formReady(state.form!, server),
+    }
+  }
+  const value = (state: McpServersState, name: string, typed: string) =>
+    run(state, {
+      type: "changeVariable",
+      key: keyOf(state, name),
+      patch: { value: typed },
+    })
+  const sentEnv = (state: McpServersState) => {
+    const pending = run(state, { type: "save" }).pending
+    return pending?.kind === "save" ? pending.request.server.env : undefined
+  }
+  /** A new variable row named `name`, with `typed` for its value. */
+  const added = (state: McpServersState, name: string, typed = "") => {
+    const next = run(state, { type: "addVariable" })
+    const key = next.form!.env[next.form!.env.length - 1].key
+    return run(next, {
+      type: "changeVariable",
+      key,
+      patch: { name, ...(typed === "" ? {} : { value: typed }) },
+    })
+  }
+
+  it("V1: nothing changed keeps every stored value", () => {
+    const state = editing()
+    expect(judged(state)).toEqual({
+      changed: false,
+      needed: false,
+      keepable: true,
+      ready: true,
+    })
+    expect(sentEnv(state)).toEqual([
+      { name: "A", value: null },
+      { name: "B", value: null },
+    ])
+  })
+
+  it("V2: another command needs every value, and nothing can be kept", () => {
+    const state = run(editing(), { type: "change", patch: { command: "/bin/new" } })
+    expect(judged(state)).toEqual({
+      changed: true,
+      needed: true,
+      keepable: false,
+      ready: false,
+    })
+  })
+
+  it("V3: a variable added while another is kept needs every value again", () => {
+    const state = added(editing(), "C", "c")
+    expect(judged(state)).toEqual({
+      changed: true,
+      needed: true,
+      keepable: false,
+      ready: false,
+    })
+    // A value entered for A is still not one kept: Keep is not offered.
+    expect(judged(value(state, "A", "a")).keepable).toBe(false)
+  })
+
+  it("V4: one value edited while another is kept needs the other again", () => {
+    const state = value(editing(), "A", "a")
+    expect(judged(state)).toEqual({
+      changed: true,
+      needed: true,
+      keepable: true,
+      ready: false,
+    })
+    // An edited value cleared is still one edited: the gateway would compare it.
+    const cleared = run(state, { type: "clearVariable", key: keyOf(state, "A") })
+    expect(judged(cleared).needed).toBe(true)
+  })
+
+  it("V5: a stored variable removed needs the others again", () => {
+    const state = run(editing(), { type: "removeVariable", key: keyOf(editing(), "B") })
+    expect(judged(state)).toEqual({
+      changed: true,
+      needed: true,
+      keepable: false,
+      ready: false,
+    })
+  })
+
+  it("V6: every stored value entered, the changed launch saves with no null", () => {
+    const state = value(value(added(editing(), "C", "c"), "A", "a"), "B", "b")
+    expect(judged(state)).toMatchObject({ changed: true, needed: false, ready: true })
+    expect(sentEnv(state)).toEqual([
+      { name: "A", value: "a" },
+      { name: "B", value: "b" },
+      { name: "C", value: "c" },
+    ])
+    const removed = value(
+      run(editing(), { type: "removeVariable", key: keyOf(editing(), "B") }),
+      "A",
+      "a",
+    )
+    expect(judged(removed)).toMatchObject({ needed: false, ready: true })
+    expect(sentEnv(removed)).toEqual([{ name: "A", value: "a" }])
+  })
+
+  it("V7: changed back, the stored values are kept again", () => {
+    const withC = added(editing(), "C", "c")
+    const dropped = run(withC, { type: "removeVariable", key: keyOf(withC, "C") })
+    expect(judged(dropped)).toEqual({
+      changed: false,
+      needed: false,
+      keepable: true,
+      ready: true,
+    })
+    const edited = value(editing(), "A", "a")
+    const kept = run(edited, { type: "keepVariable", key: keyOf(edited, "A") })
+    expect(judged(kept)).toEqual({
+      changed: false,
+      needed: false,
+      keepable: true,
+      ready: true,
+    })
+    expect(sentEnv(kept)).toEqual([
+      { name: "A", value: null },
+      { name: "B", value: null },
+    ])
+  })
+
+  it("V8: an empty added row is not a variable added", () => {
+    const state = run(editing(), { type: "addVariable" })
+    expect(judged(state)).toEqual({
+      changed: false,
+      needed: false,
+      keepable: true,
+      ready: true,
+    })
+    expect(sentEnv(state)).toHaveLength(2)
+    // A name alone is one, and so is a value alone.
+    expect(judged(added(editing(), "C")).changed).toBe(true)
+    const valueOnly = run(editing(), { type: "addVariable" })
+    const key = valueOnly.form!.env[2].key
+    expect(
+      judged(run(valueOnly, { type: "changeVariable", key, patch: { value: "v" } }))
+        .changed,
+    ).toBe(true)
+  })
+
+  it("V9: keeping is offered only with the command, arguments and names as stored", () => {
+    const state = editing()
+    const key = state.form!.args[0].key
+    expect(judged(run(state, { type: "changeArgument", key, value: "x" })).keepable).toBe(
+      false,
+    )
+    // Adding is no launch at all: nothing is stored to keep.
+    expect(
+      namesKept({ name: "", command: "", args: [], env: [], enabled: true }, undefined),
+    ).toBe(true)
+  })
+
+  it("V10: refused a missing value after a variable was added, says why", () => {
+    let state = value(value(added(editing(), "C", "c"), "A", "a"), "B", "b")
+    state = answer(
+      run(state, { type: "save" }),
+      no({ kind: "invalid", problem: "environmentValueMissing", name: "B" }),
+    )
+    expect(state.form?.problem).toEqual({ field: "env", text: sentences.valuesAgain })
+  })
+})
+
+describe("a write's live (L1–L5)", () => {
+  const notLive = { live: false }
+  it("L1: a save that went live says nothing, and the list is read", () => {
+    let state = run(listed(), { type: "edit", name: "charts" }, { type: "save" })
+    state = answer(state, ok(live))
+    expect(state.notice).toBeNull()
+    expect(state.form).toBeNull()
+    expect(state.pending?.kind).toBe("list")
+  })
+
+  it("L2: a save stored while the gateway stops says so, past the list read next", () => {
+    let state = run(listed(), { type: "edit", name: "charts" }, { type: "save" })
+    state = answer(state, ok(notLive))
+    expect(state.form).toBeNull()
+    expect(state.pending?.kind).toBe("list")
+    state = answer(state, ok(listOf(charts, nessa)))
+    expect(state.notice?.text).toBe(
+      "Saved. The gateway is stopping, so new conversations get it once it starts again.",
+    )
+  })
+
+  it("L3: a switch stored while the gateway stops says it changed", () => {
+    const state = answer(run(listed(), { type: "toggle", name: "charts" }), ok(notLive))
+    expect(state.notice?.text).toBe(sentences.notLiveSaved("change"))
+    expect(sentences.notLiveSaved("change")).toMatch(/^Changed\. /)
+  })
+
+  it("L4: a remove that went live says nothing", () => {
+    const state = answer(
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      ok(live),
+    )
+    expect(state.notice).toBeNull()
+  })
+
+  it("L5: a remove whose list didn't go live as a whole says so", () => {
+    let state = answer(
+      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      ok(notLive),
+    )
+    state = answer(state, ok(listOf(nessa)))
+    expect(state.notice?.text).toBe(
+      "Removed. The rest of the list takes effect once the configuration is fixed, or the gateway starts again.",
+    )
+    // The next action clears it, as any write's notice.
+    expect(run(state, { type: "add" }).notice).toBeNull()
   })
 })
 
@@ -543,7 +768,7 @@ describe("the switch", () => {
     expect(canWrite(state)).toBe(false)
     // Nothing optimistic: the switch shows what the list said until it says otherwise.
     expect(state.list.phase === "listed" && state.list.list.servers[0].enabled).toBe(true)
-    state = answer(state, ok(undefined))
+    state = answer(state, ok(live))
     expect(state.pending?.kind).toBe("list")
     state = answer(state, ok(listOf({ ...charts, enabled: false }, nessa)))
     expect(state.list.phase === "listed" && state.list.list.servers[0].enabled).toBe(
@@ -569,7 +794,7 @@ describe("removing", () => {
       kind: "remove",
       request: { revision: "r1", name: "charts" },
     })
-    state = answer(state, ok(undefined))
+    state = answer(state, ok(live))
     expect(state.confirming).toBeNull()
     expect(state.pending?.kind).toBe("list")
     state = answer(state, ok(listOf(nessa)))
@@ -991,7 +1216,7 @@ describe("inspecting", () => {
     // Inspected, removed while it ran; the inspection answers, then the list.
     let state = started()
     state = run(state, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
-    state = answer(state, ok(undefined))
+    state = answer(state, ok(live))
     state = run(state, { type: "inspected", seq: seqOf(state), outcome: ok(result) })
     state = answer(state, ok(listOf(nessa)))
     expect(state.inspection).toEqual({
@@ -1002,7 +1227,7 @@ describe("inspecting", () => {
     // The list first, then the inspection's answer: the same.
     let later = started()
     later = run(later, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
-    later = answer(answer(later, ok(undefined)), ok(listOf(nessa)))
+    later = answer(answer(later, ok(live)), ok(listOf(nessa)))
     expect(later.inspection?.phase).toBe("running")
     later = run(later, { type: "inspected", seq: seqOf(later), outcome: ok(result) })
     expect(later.inspection).toEqual(state.inspection)
@@ -1081,7 +1306,7 @@ describe("a list too large to show (U44–U49)", () => {
 
   it("U44: a list read after a write that comes back too large closes the form", () => {
     // A switch saved, then the form opened while the list is read again.
-    let state = answer(run(listed(), { type: "toggle", name: "charts" }), ok(undefined))
+    let state = answer(run(listed(), { type: "toggle", name: "charts" }), ok(live))
     state = { ...state, form: run(listed(), { type: "edit", name: "charts" }).form }
     expect(state.form?.editing).toBe("charts")
     state = answer(state, no(tooLarge("r8")))
@@ -1103,7 +1328,7 @@ describe("a list too large to show (U44–U49)", () => {
       kind: "remove",
       request: { revision: "r7", name: "big" },
     })
-    state = answer(state, ok(undefined))
+    state = answer(state, ok(live))
     expect(state.confirming).toBeNull()
     expect(state.pending?.kind).toBe("list")
     expect(state.list.phase === "tooLarge" && state.list.name).toBe("")
@@ -1276,8 +1501,9 @@ describe("stored servers sharing a name (G1–G9)", () => {
     const state = run(thrice(), { type: "askRemove", name: "charts" })
     expect(state.confirming).toEqual({ name: "charts", count: 3 })
     expect(sentences.removeFirst("charts")).toBe("Remove the first server named “charts”")
-    expect(sentences.removeFirstAsk("charts")).toBe(
-      "Remove the first server named “charts”? New conversations stop getting it. Open ones keep it until they close.",
+    // It names the first one's command: the one the gateway removes (M5).
+    expect(sentences.removeFirstAsk("charts", "/usr/bin/node")).toBe(
+      "Remove the first server named “charts”, which runs /usr/bin/node? New conversations stop getting it. Open ones keep it until they close.",
     )
     expect(run(state, { type: "cancelRemove" }).confirming).toBeNull()
   })
@@ -1298,7 +1524,7 @@ describe("stored servers sharing a name (G1–G9)", () => {
       kind: "remove",
       request: { revision: "r1", name: "charts" },
     })
-    state = answer(state, ok(undefined))
+    state = answer(state, ok(live))
     expect(state.confirming).toBeNull()
     state = answer(state, ok(listOf(other, second, third, nessa)))
     expect(sharesName(state, "charts")).toBe(true)

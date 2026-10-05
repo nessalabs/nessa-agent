@@ -6,6 +6,8 @@ import {
   useReducer,
   useRef,
   type KeyboardEvent,
+  type DragEvent,
+  type ClipboardEvent,
   type ReactNode,
 } from "react"
 import type { McpServersGateway } from "../adapters/mcp-servers-gateway"
@@ -21,6 +23,7 @@ import {
   launchChanged,
   lineBreaks,
   linesOf,
+  namesKept,
   valuesNeeded,
   initialMcpServersState,
   mcpServersReducer,
@@ -693,7 +696,7 @@ function SharedGroup({
         </ul>
         {confirming ? (
           <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeFirstAsk(group.name)}
+            {sentences.removeFirstAsk(group.name, group.rows[0].server.command)}
           </p>
         ) : null}
       </div>
@@ -780,7 +783,9 @@ function FormGroup({
   const onArgumentKeyDown = (event: KeyboardEvent, key: number) => {
     // Enter is another argument; Shift+Enter a line break in this one (F11).
     if (event.key !== "Enter" || event.shiftKey || event.altKey) return
-    if (event.metaKey || event.ctrlKey || event.nativeEvent.isComposing) return
+    // An IME's Enter commits its text: Safari says so only by keyCode 229 (M1).
+    const composing = event.nativeEvent.isComposing || event.keyCode === 229
+    if (event.metaKey || event.ctrlKey || composing) return
     event.preventDefault()
     addArgument(key)
   }
@@ -812,6 +817,7 @@ function FormGroup({
   const listed = editedServer(state)
   const relaunched = launchChanged(form, listed)
   const waiting = valuesNeeded(form, listed)
+  const keepable = namesKept(form, listed)
   return (
     <section
       ref={section}
@@ -918,8 +924,9 @@ function FormGroup({
                 }
               />
               <SecretField
-                row={row}
+                secret={secretOf(row)}
                 relaunched={relaunched}
+                keepable={keepable}
                 describedBy={
                   [described("env"), row.stored && waiting ? ids.values : undefined]
                     .filter(Boolean)
@@ -1069,15 +1076,45 @@ function ArgumentField({
  * is held instead and never drawn: the field gives way to how many lines it
  * is, a trailing line break pointed out with a one-click trim, and Clear.
  */
+/**
+ * What the value field draws of its row: flags and counts, never the value
+ * itself, which goes no further than the model (M6).
+ */
+interface Secret {
+  readonly key: number
+  readonly name: string
+  readonly stored: boolean
+  readonly edited: boolean
+  readonly held: boolean
+  readonly empty: boolean
+  /** A held value's lines, and whether it ends with a line break (S4, S5). */
+  readonly lines: number
+  readonly endsWithBreak: boolean
+}
+
+const secretOf = (row: VariableRow): Secret => ({
+  key: row.key,
+  name: row.name,
+  stored: row.stored,
+  edited: row.edited,
+  held: row.held,
+  empty: row.value === "",
+  lines: row.held ? linesOf(row.value) : 0,
+  endsWithBreak: row.held && endsWithLineBreak(row.value),
+})
+
 function SecretField({
-  row,
+  secret: row,
   relaunched,
+  keepable,
   describedBy,
   dispatch,
   focusAfter,
 }: {
-  row: VariableRow
+  secret: Secret
   relaunched: boolean
+  /** Whether a stored value may be kept: the command, arguments and variable names as stored (V9). */
+  keepable: boolean
   describedBy: string | undefined
   dispatch: Dispatch
   /** Where focus goes once this field is drawn again, within its row. */
@@ -1085,8 +1122,15 @@ function SecretField({
 }) {
   const field = useRef<HTMLInputElement>(null)
   const label = `Value of ${row.name || "the variable"}`
+  /** Text with a line break, pasted or dropped, which a password field would drop: held (S4, M3). */
+  const hold = (event: ClipboardEvent | DragEvent, text: string) => {
+    if (!hasLineBreak(text)) return
+    event.preventDefault()
+    focusAfter('[data-mcp-action="clear-value"]')
+    dispatch({ type: "pasteVariable", key: row.key, value: text })
+  }
   const keep =
-    row.stored && row.edited ? (
+    row.stored && row.edited && keepable ? (
       <button
         type="button"
         className="settings-button"
@@ -1110,15 +1154,22 @@ function SecretField({
         data-mcp-secret-held
       >
         <span data-mcp-pasted>
-          {sentences.pasted(linesOf(row.value))}
-          {endsWithLineBreak(row.value) ? `, ${sentences.endsWithBreak}` : null}
+          {sentences.pasted(row.lines)}
+          {row.endsWithBreak ? `, ${sentences.endsWithBreak}` : null}
         </span>
-        {endsWithLineBreak(row.value) ? (
+        {row.endsWithBreak ? (
           <button
             type="button"
             className="settings-button"
             data-mcp-action="trim-value"
-            onClick={() => dispatch({ type: "trimVariable", key: row.key })}
+            onClick={() => {
+              // Focus stays: on this button while a line break is left to
+              // remove, else on Clear, the next in the group (M2).
+              focusAfter(
+                '[data-mcp-action="trim-value"], [data-mcp-action="clear-value"]',
+              )
+              dispatch({ type: "trimVariable", key: row.key })
+            }}
           >
             {sentences.trimBreak}
           </button>
@@ -1148,7 +1199,7 @@ function SecretField({
         placeholder={
           row.stored
             ? row.edited
-              ? row.value === ""
+              ? row.empty
                 ? sentences.storedValueCleared
                 : undefined
               : relaunched
@@ -1156,19 +1207,14 @@ function SecretField({
                 : sentences.storedValue
             : "Value"
         }
-        autoComplete="off"
+        // Not "off", which a browser may ignore and fill a saved password into (M4).
+        autoComplete="new-password"
         autoCorrect="off"
         autoCapitalize="off"
         spellCheck={false}
         data-mcp-secret
-        onPaste={(event) => {
-          const text = event.clipboardData.getData("text/plain")
-          if (!hasLineBreak(text)) return
-          // A password field would drop the line breaks: held instead (S4).
-          event.preventDefault()
-          focusAfter('[data-mcp-action="clear-value"]')
-          dispatch({ type: "pasteVariable", key: row.key, value: text })
-        }}
+        onPaste={(event) => hold(event, event.clipboardData.getData("text/plain"))}
+        onDrop={(event) => hold(event, event.dataTransfer.getData("text/plain"))}
         onChange={(event) =>
           dispatch({
             type: "changeVariable",

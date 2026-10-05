@@ -39,8 +39,10 @@ export type McpServersApi = {
    * under `previousName` — at the revision last listed. A variable whose
    * value is `null` keeps the value stored for that name; a stored variable
    * left out is removed.
-   * @returns The stored list's new revision. New conversations get the new
-   * server set; running ones keep theirs.
+   * @returns The stored list's new revision, and `live`: whether new
+   * conversations get the list as now written (running ones keep theirs).
+   * `live` is false when the gateway is stopping, and the next start reads
+   * the stored list.
    * @throws {@link NessaMcpServersError}: `mcp_servers_invalid` with its
    * problem, `mcp_servers_revision_conflict` with the revision now, and the
    * rest of `McpServersErrorCode`'s write refusals.
@@ -48,6 +50,9 @@ export type McpServersApi = {
   save(params: McpServersSaveParams): Promise<McpServersWriteResult>
   /**
    * Take a stored server out of the configuration, at the revision last listed.
+   * @returns As `save`. `live` is also false when the rest of the list, as
+   * edited by hand, is still past a bound: the removed server is out of new
+   * conversations all the same, and the rest stay as they were.
    * @throws {@link NessaMcpServersError}, as `save`.
    */
   remove(params: McpServersRemoveParams): Promise<McpServersWriteResult>

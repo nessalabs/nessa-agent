@@ -34,6 +34,7 @@ import type {
   RemoveRequest,
   SaveRequest,
   ServerList,
+  WriteResult,
 } from "../model/mcp-servers"
 
 /** What Settings asks of the window's gateway client. */
@@ -53,8 +54,8 @@ export interface McpServersGateway {
   /** Tells `handler` how the connection stands, now and on each change, until the returned stop. */
   follow(handler: (connection: McpServersConnection) => void): () => void
   list(): Promise<Outcome<ServerList>>
-  save(request: SaveRequest): Promise<Outcome<void>>
-  remove(request: RemoveRequest): Promise<Outcome<void>>
+  save(request: SaveRequest): Promise<Outcome<WriteResult>>
+  remove(request: RemoveRequest): Promise<Outcome<WriteResult>>
   inspect(name: string): Promise<Outcome<Inspection>>
 }
 
@@ -302,7 +303,7 @@ export function mcpServersGateway(options: {
     list: () => outcome(async () => serverList(await (await api()).list())),
     save: (request) =>
       outcome(async () => {
-        await (
+        const { live } = await (
           await api()
         ).save({
           revision: request.revision,
@@ -318,10 +319,14 @@ export function mcpServersGateway(options: {
             enabled: request.server.enabled,
           },
         })
+        return { live }
       }),
     remove: (request) =>
       outcome(async () => {
-        await (await api()).remove({ revision: request.revision, name: request.name })
+        const { live } = await (
+          await api()
+        ).remove({ revision: request.revision, name: request.name })
+        return { live }
       }),
     inspect: (name) => outcome(async () => inspection(await (await api()).inspect(name))),
   }

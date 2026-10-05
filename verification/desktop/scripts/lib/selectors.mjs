@@ -367,7 +367,8 @@ export const names = {
     variableName: "Variable name",
     storedValue: "Stored value kept",
     storedValueAgain: "Enter the value again",
-    valuesAgain: "Changing the command or arguments needs every value entered again.",
+    valuesAgain:
+      "Changing the command, arguments or variables needs every stored value entered again.",
     empty: "No servers yet",
     notAdmin: "Only an administrator can manage MCP servers.",
     conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
@@ -383,8 +384,8 @@ export const names = {
     removeByNameAsk: (name) =>
       `Remove “${name}”? This removes the first server stored under that name. New conversations stop getting it. Open ones keep it until they close.`,
     removeFirst: (name) => `Remove the first server named “${name}”`,
-    removeFirstAsk: (name) =>
-      `Remove the first server named “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    removeFirstAsk: (name, command) =>
+      `Remove the first server named “${name}”, which runs ${command}? New conversations stop getting it. Open ones keep it until they close.`,
     nameShared: (count) =>
       `${count} servers share this name. Only the first can be removed here, and none edited.`,
     storedValueCleared: "Empty: the stored value will be cleared",

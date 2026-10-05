@@ -91,11 +91,15 @@ export function mcpServersListResult(value: unknown): McpServersListResult {
   return { revision: item.revision, servers: item.servers.map(entry) }
 }
 
-/** The answer to `mcpServers.save` and `.remove`: the stored list's revision now. */
+/**
+ * The answer to `mcpServers.save` and `.remove`: the stored list's revision
+ * now, and whether new conversations get that list as written.
+ */
 export function mcpServersWriteResult(value: unknown): McpServersWriteResult {
-  const item = object(value, ["revision"], "MCP server write")
-  if (!text(item.revision)) throw new Error("Invalid MCP server write")
-  return { revision: item.revision }
+  const item = object(value, ["revision", "live"], "MCP server write")
+  if (!text(item.revision) || typeof item.live !== "boolean")
+    throw new Error("Invalid MCP server write")
+  return { revision: item.revision, live: item.live }
 }
 
 function tool(value: unknown): McpInspectedTool {

@@ -153,7 +153,10 @@ Steps, per engine, in order on one page (--only <names> to pick):
              "Pasted value: N lines, ends with a line break", trimmed only
              when asked, and stored as pasted; then the stored value cleared
              (edited to empty: said, and stored empty), and a value typed
-             again (S1–S6)
+             again (S1–S6); last, a variable added beside the kept value: the
+             gateway refuses a kept value then (a Node client), and the
+             window asks for it again, offers no keeping, and keeps it once
+             the variable is removed (V3, V7, V9)
   narrow     with the row, the form and the inspection open, at 800 and 390px:
              nothing outside its card, no sideways scroll, the fold held, the
              row's actions under its text under a 420px page
@@ -993,6 +996,8 @@ const checks = {
     }
     await button(variable, names.mcp.trimBreak).click()
     seen.trimmed = await variable.locator(css.mcpPasted).textContent()
+    // The last break gone, its button goes; focus stays in the group (M2).
+    seen.onTrim = await focused(page)
     let sentFrom = context.opened.sent.length
     await button(edit, names.mcp.save).click()
     seen.pasteSaved = await gone(edit)
@@ -1035,6 +1040,63 @@ const checks = {
     await settled(page)
     seen.storedRestored = storedValue(stack.config, RENAMED, VARIABLE) === context.secret
 
+    // A variable added while the stored value is kept (V3, V7): the gateway
+    // keeps a value only for the same launch, so the window asks for it again.
+    const listedNow = await stack.client.mcpServers.list()
+    const stored = listedNow.servers.find((each) => each.name === RENAMED)
+    seen.addedRefused = await stack.client.mcpServers
+      .save({
+        revision: listedNow.revision,
+        server: {
+          kind: stored.kind,
+          name: stored.name,
+          command: stored.command,
+          args: stored.args,
+          env: [
+            ...stored.envNames.map((name) => ({ name, value: null })),
+            { name: "MCP_TEST_ADDED", value: "added" },
+          ],
+          enabled: stored.enabled,
+        },
+      })
+      .then(
+        () => null,
+        (error) => error.refusal ?? { code: String(error) },
+      )
+    await button(row(page, RENAMED), names.mcp.edit).click()
+    edit = form(page)
+    variable = variableOf(edit)
+    const kept = variable.locator(css.mcpSecret)
+    const note = edit.locator(css.mcpValuesNeeded)
+    const save = button(edit, names.mcp.save)
+    const shown = async () => ({
+      placeholder: await kept.getAttribute("placeholder"),
+      note: await note.textContent(),
+      saveEnabled: await save.isEnabled(),
+      keep: await button(variable, names.mcp.keepStored).isVisible(),
+    })
+    seen.keepBefore = await shown()
+    await button(edit, names.mcp.addVariable).click()
+    const added = edit.locator("[data-mcp-variable-key]").last()
+    await added.getByLabel(names.mcp.variableName, { exact: true }).fill("MCP_TEST_ADDED")
+    await added.locator(css.mcpSecret).fill("added")
+    seen.keepAdded = await shown()
+    await kept.fill("typed")
+    // Typed while a variable is added: keeping is not offered (V9).
+    seen.keepTyped = await shown()
+    await kept.fill("")
+    await added.getByRole("button", { name: "Remove MCP_TEST_ADDED" }).click()
+    seen.keepRemovedEdited = await shown()
+    await button(variable, names.mcp.keepStored).click()
+    seen.keepBack = await shown()
+    sentFrom = context.opened.sent.length
+    await save.click()
+    seen.keepSaved = await gone(edit)
+    await settled(page)
+    seen.keepRequests = context.opened.sent.slice(sentFrom)
+    seen.keepStoredValue = storedValue(stack.config, RENAMED, VARIABLE) === context.secret
+    seen.keepSecretInPage = await pageHolds(page, context.secret)
+
     if (seen.field.tag !== "INPUT" || seen.field.type !== "password")
       failures.push(`the value field is ${JSON.stringify(seen.field)}`)
     // Playwright's ARIA snapshot reads any input's DOM value, a password
@@ -1055,6 +1117,8 @@ const checks = {
       failures.push("the accessibility tree read does not hold the page's summary")
     if (seen.trimmed !== names.mcp.pasted(4, false))
       failures.push(`trimmed, the held value says "${seen.trimmed}"`)
+    if (seen.onTrim.on !== "clear-value")
+      failures.push(`after the trim, focus is on ${JSON.stringify(seen.onTrim)}`)
     if (!seen.pasteSaved) failures.push("the form is open after the paste's save")
     if (seen.storedPem !== "as pasted, trimmed")
       failures.push(`config.json stores the pasted value ${seen.storedPem}`)
@@ -1076,6 +1140,52 @@ const checks = {
         failures.push(`the ${what}'s requests are ${JSON.stringify(requests)}`)
     if (!seen.restored || !seen.storedRestored)
       failures.push("the value was not typed back afterwards")
+    if (
+      seen.addedRefused?.code !== "mcp_servers_invalid" ||
+      seen.addedRefused.details?.problem !== "environment_value_missing"
+    )
+      failures.push(
+        `the gateway answered a kept value beside an added variable with ${JSON.stringify(seen.addedRefused)}`,
+      )
+    const expectShown = (what, got, want) => {
+      if (JSON.stringify(got) !== JSON.stringify(want))
+        failures.push(`${what}: ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`)
+    }
+    const keptShown = {
+      placeholder: names.mcp.storedValue,
+      note: "",
+      saveEnabled: true,
+      keep: false,
+    }
+    const askedAgain = {
+      placeholder: names.mcp.storedValueAgain,
+      note: names.mcp.valuesAgain,
+      saveEnabled: false,
+      keep: false,
+    }
+    expectShown("before adding", seen.keepBefore, keptShown)
+    expectShown("a variable added", seen.keepAdded, askedAgain)
+    expectShown("typed beside it", seen.keepTyped, {
+      placeholder: null,
+      note: "",
+      saveEnabled: true,
+      keep: false,
+    })
+    expectShown("the added one removed, the value emptied", seen.keepRemovedEdited, {
+      placeholder: names.mcp.storedValueCleared,
+      note: "",
+      saveEnabled: true,
+      keep: true,
+    })
+    expectShown("kept again", seen.keepBack, keptShown)
+    if (!seen.keepSaved) failures.push("the form is open after the kept save")
+    if (
+      JSON.stringify(seen.keepRequests) !==
+      JSON.stringify(["mcpServers.save", "mcpServers.list"])
+    )
+      failures.push(`the kept save's requests are ${JSON.stringify(seen.keepRequests)}`)
+    if (!seen.keepStoredValue) failures.push("the kept value is not the one stored")
+    if (seen.keepSecretInPage) failures.push("the variable's value is in the page")
     return { seen, failures }
   },
 
@@ -1479,7 +1589,7 @@ const checks = {
       await button(group, names.mcp.cancel).click()
       seen.onCancel = await focused(page)
       seen.sentOnAsk = context.opened.sent.length - before
-      if (seen.asked !== names.mcp.removeFirstAsk(DUPLICATE))
+      if (seen.asked !== names.mcp.removeFirstAsk(DUPLICATE, process.execPath))
         failures.push(`the group asked "${seen.asked}"`)
       if (seen.onAsk.on !== "cancel" || seen.onAsk.group !== DUPLICATE)
         failures.push(`asked, focus is on ${JSON.stringify(seen.onAsk)}`)

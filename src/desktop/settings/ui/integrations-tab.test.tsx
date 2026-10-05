@@ -233,7 +233,7 @@ describe("Integrations", () => {
     expect(save?.argument).toMatchObject({
       server: { env: [{ name: "TOKEN", value: "very-secret-value" }] },
     })
-    await answer(fake, "save", { ok: true, value: undefined })
+    await answer(fake, "save", { ok: true, value: { live: true } })
     await answer(fake, "list", list(charts, nessa))
     expect(host.querySelector("[data-mcp-form]")).toBeNull()
     expect(host.innerHTML).not.toContain("very-secret-value")
@@ -326,7 +326,7 @@ describe("Integrations", () => {
     await type(field, "big")
     await click(button("Remove", panel))
     await click(panel?.querySelector('[data-mcp-action="confirm"]') ?? undefined)
-    await answer(fake, "remove", { ok: true, value: undefined })
+    await answer(fake, "remove", { ok: true, value: { live: true } })
     await answer(fake, "list", list(charts, nessa))
     expect(host.querySelector("[data-mcp-too-large]")).toBeNull()
     expect(row("charts")).not.toBeNull()
@@ -423,6 +423,48 @@ describe("Integrations", () => {
       expect(host.innerHTML).not.toContain("AAAA")
     })
 
+    it("S5 (M2): Remove line break keeps focus: on itself while a break is left, then on Clear", async () => {
+      await editing()
+      await paste(field(), "sk-1\n\n")
+      await click(button("Remove line break", variable()))
+      expect(document.activeElement).toBe(button("Remove line break", variable()))
+      await click(button("Remove line break", variable()))
+      expect(button("Remove line break", variable())).toBeUndefined()
+      expect(document.activeElement).toBe(button("Clear", variable()))
+    })
+
+    it("S4 (M3): text with a line break dropped on the field is held, as a paste", async () => {
+      const fake = await editing()
+      const drop = (text: string) => {
+        const event = new Event("drop", { bubbles: true, cancelable: true })
+        Object.defineProperty(event, "dataTransfer", {
+          value: { getData: (kind: string) => (kind === "text/plain" ? text : "") },
+        })
+        return event
+      }
+      const plain = drop("sk-1")
+      await act(async () => {
+        field()?.dispatchEvent(plain)
+      })
+      expect(plain.defaultPrevented).toBe(false)
+      const lines = drop("a\nb")
+      await act(async () => {
+        field()?.dispatchEvent(lines)
+      })
+      expect(lines.defaultPrevented).toBe(true)
+      expect(variable().querySelector("[data-mcp-pasted]")?.textContent).toBe(
+        "Pasted value: 2 lines",
+      )
+      expect(host.innerHTML).not.toContain("a\nb")
+      await click(button("Save"))
+      expect(saved(fake)).toEqual([{ name: "TOKEN", value: "a\nb" }])
+    })
+
+    it("S1 (M4): the field asks the browser for a new password, never a saved one", async () => {
+      await editing()
+      expect(field()?.getAttribute("autocomplete")).toBe("new-password")
+    })
+
     it("S4: a trailing break left in is saved as pasted", async () => {
       const fake = await editing()
       await paste(field(), "sk-1\n")
@@ -502,7 +544,7 @@ describe("Integrations", () => {
     await type(command, "/bin/new")
     expect(value.placeholder).toBe("Enter the value again")
     expect(note?.textContent).toBe(
-      "Changing the command or arguments needs every value entered again.",
+      "Changing the command, arguments or variables needs every stored value entered again.",
     )
     expect(value.getAttribute("aria-describedby")).toContain(note?.id)
     expect(button("Save")?.disabled).toBe(true)
@@ -631,6 +673,103 @@ describe("Integrations", () => {
     expect(button("Inspect", row("charts"))?.disabled).toBe(true)
   })
 
+  describe("a stored value kept only for the same launch (V2–V9)", () => {
+    const two = { ...charts, envNames: ["A", "B"] }
+    async function editing() {
+      const fake = fakeGateway()
+      await mount(fake.gateway)
+      await answer(fake, "list", list(two, nessa))
+      await click(button("Edit", row("charts")))
+      return fake
+    }
+    const variable = (name: string) => {
+      const found = host.querySelector(`[data-mcp-variable="${name}"]`)
+      if (!found) throw new Error(`no ${name} variable`)
+      return found
+    }
+    const value = (name: string) =>
+      variable(name).querySelector("[data-mcp-secret]") as HTMLInputElement
+    const note = () => host.querySelector("[data-mcp-values-needed]")?.textContent
+    const again =
+      "Changing the command, arguments or variables needs every stored value entered again."
+
+    it("V3 and V7: a variable added while another is kept asks for every value; removed, kept again", async () => {
+      const fake = await editing()
+      await click(button("Add variable", form()))
+      const added = form().querySelectorAll("[data-mcp-variable-key]")[2]
+      await type(added.querySelector("input"), "C")
+      await type(added.querySelector("[data-mcp-secret]"), "c")
+      expect(value("A").placeholder).toBe("Enter the value again")
+      expect(value("B").placeholder).toBe("Enter the value again")
+      expect(note()).toBe(again)
+      expect(button("Save")?.disabled).toBe(true)
+      // A value entered for A is no keeping: Keep is not offered (V9).
+      await type(value("A"), "a")
+      expect(button("Keep stored value", variable("A"))).toBeUndefined()
+      await type(value("A"), "")
+      await click(form().querySelector('[aria-label="Remove C"]') ?? undefined)
+      // A is still edited (empty): B waits, Keep comes back for A.
+      expect(note()).toBe(again)
+      expect(button("Keep stored value", variable("A"))).toBeDefined()
+      await click(button("Keep stored value", variable("A")))
+      expect(note()).toBe("")
+      expect(value("B").placeholder).toBe("Stored value kept")
+      await click(button("Save"))
+      expect(fake.requests.at(-1)?.argument).toMatchObject({
+        server: {
+          env: [
+            { name: "A", value: null },
+            { name: "B", value: null },
+          ],
+        },
+      })
+    })
+
+    it("V4: one value edited while another is kept asks for the other again", async () => {
+      const fake = await editing()
+      await type(value("A"), "a")
+      expect(value("B").placeholder).toBe("Enter the value again")
+      expect(note()).toBe(again)
+      expect(button("Save")?.disabled).toBe(true)
+      expect(button("Keep stored value", variable("A"))).toBeDefined()
+      await type(value("B"), "b")
+      expect(note()).toBe("")
+      await click(button("Save"))
+      expect(fake.requests.at(-1)?.argument).toMatchObject({
+        server: {
+          env: [
+            { name: "A", value: "a" },
+            { name: "B", value: "b" },
+          ],
+        },
+      })
+    })
+
+    it("V5: a stored variable removed asks for the others again", async () => {
+      await editing()
+      await click(form().querySelector('[aria-label="Remove B"]') ?? undefined)
+      expect(value("A").placeholder).toBe("Enter the value again")
+      expect(note()).toBe(again)
+      expect(button("Save")?.disabled).toBe(true)
+      await type(value("A"), "a")
+      expect(button("Keep stored value", variable("A"))).toBeUndefined()
+      expect(button("Save")?.disabled).toBe(false)
+    })
+  })
+
+  it("L5: a remove whose list didn't go live as a whole says so", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Remove", row("charts")))
+    await click(row("charts").querySelector('[data-mcp-action="confirm"]') ?? undefined)
+    await answer(fake, "remove", { ok: true, value: { live: false } })
+    await answer(fake, "list", list(nessa))
+    expect(host.querySelector("[data-mcp-notice]")?.textContent).toBe(
+      "Removed. The rest of the list takes effect once the configuration is fixed, or the gateway starts again.",
+    )
+  })
+
   describe("rows sharing a name (G3–G6)", () => {
     const first = { ...charts, args: ["first.mjs"] }
     const second = { ...charts, args: ["second.mjs"], enabled: false }
@@ -682,7 +821,7 @@ describe("Integrations", () => {
       await thrice()
       await click(button(action, group()))
       expect(group().querySelector("[data-mcp-confirm]")?.textContent).toBe(
-        "Remove the first server named “charts”? New conversations stop getting it. Open ones keep it until they close.",
+        "Remove the first server named “charts”, which runs /usr/bin/node? New conversations stop getting it. Open ones keep it until they close.",
       )
       expect(document.activeElement).toBe(button("Cancel", group()))
       await click(button("Cancel", group()))
@@ -701,7 +840,7 @@ describe("Integrations", () => {
         method: "remove",
         argument: { revision: "r1", name: "charts" },
       })
-      await answer(fake, "remove", { ok: true, value: undefined })
+      await answer(fake, "remove", { ok: true, value: { live: true } })
       await answer(fake, "list", list(docs, second, third, nessa))
       expect(group().querySelector("[data-mcp-shared]")?.textContent).toContain(
         "2 servers",
@@ -709,7 +848,7 @@ describe("Integrations", () => {
       expect(document.activeElement).toBe(button(action, group()))
       await click(button(action, group()))
       await click(group().querySelector('[data-mcp-action="confirm"]') ?? undefined)
-      await answer(fake, "remove", { ok: true, value: undefined })
+      await answer(fake, "remove", { ok: true, value: { live: true } })
       await answer(fake, "list", list(docs, third, nessa))
       expect(host.querySelector("[data-mcp-group]")).toBeNull()
       expect(button("Edit", row("charts"))?.disabled).toBe(false)
@@ -788,6 +927,22 @@ describe("Integrations", () => {
       expect(fields()).toHaveLength(1)
     })
 
+    it("F11 (M1): Enter that Safari marks only by keyCode 229 is the input method's", async () => {
+      await adding()
+      await click(button("Add argument", form()))
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      })
+      Object.defineProperty(event, "keyCode", { value: 229 })
+      await act(async () => {
+        fields()[0].dispatchEvent(event)
+      })
+      expect(event.defaultPrevented).toBe(false)
+      expect(fields()).toHaveLength(1)
+    })
+
     it("F12: removing an argument focuses the next one, or Add argument", async () => {
       await adding()
       for (const value of ["a", "b"]) {
@@ -848,7 +1003,7 @@ describe("Integrations", () => {
       await type(nameField(), "maps")
       await type(host.querySelector("[data-mcp-form] textarea"), "/bin/maps")
       await click(button("Save"))
-      await answer(fake, "save", { ok: true, value: undefined })
+      await answer(fake, "save", { ok: true, value: { live: true } })
       // Resting while the list is read, then focused once it is answered.
       await answer(fake, "list", list(charts, { ...charts, name: "maps" }, nessa))
       expect(active()).toBe(button("Add server…"))
@@ -863,7 +1018,7 @@ describe("Integrations", () => {
       await click(button("Edit", row("charts")))
       await type(nameField(), "graphs")
       await click(button("Save"))
-      await answer(fake, "save", { ok: true, value: undefined })
+      await answer(fake, "save", { ok: true, value: { live: true } })
       await answer(fake, "list", list({ ...charts, name: "graphs" }, nessa))
       expect(active()).toBe(button("Edit", row("graphs")))
     })
@@ -896,7 +1051,7 @@ describe("Integrations", () => {
       const fake = await listedTab()
       await click(button("Remove", row("charts")))
       await click(row("charts").querySelector('[data-mcp-action="confirm"]') ?? undefined)
-      await answer(fake, "remove", { ok: true, value: undefined })
+      await answer(fake, "remove", { ok: true, value: { live: true } })
       await answer(fake, "list", list(nessa))
       expect(active()).toBe(button("Add server…"))
     })

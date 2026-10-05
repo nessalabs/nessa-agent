@@ -81,9 +81,10 @@ describe("client.mcpServers answers", () => {
     await expect(tool.api.inspect("charts")).resolves.toMatchObject({
       tools: [{ name: "", ui: { uri: "ui://c" } }],
     })
-    const write = session(() => ({ revision: "" }))
+    const write = session(() => ({ revision: "", live: true }))
     await expect(write.api.remove({ revision: "r1", name: "" })).resolves.toEqual({
       revision: "",
+      live: true,
     })
   })
 
@@ -96,7 +97,11 @@ describe("client.mcpServers answers", () => {
   })
 
   it("sends a save and a remove as given, and answers the new revision", async () => {
-    const { api, calls } = session(() => ({ revision: "r2" }))
+    const answers = [
+      { revision: "r2", live: true },
+      { revision: "r2", live: false },
+    ]
+    const { api, calls } = session(() => answers.shift())
     const save = {
       revision: "r1",
       previousName: "old",
@@ -104,9 +109,11 @@ describe("client.mcpServers answers", () => {
     }
     delete (save.server as Partial<typeof entry>).envNames
     delete (save.server as Partial<typeof entry>).managed
-    await expect(api.save(save as never)).resolves.toEqual({ revision: "r2" })
+    await expect(api.save(save as never)).resolves.toEqual({ revision: "r2", live: true })
+    // A remove that leaves a hand-edited list past a bound answers live false.
     await expect(api.remove({ revision: "r2", name: "charts" })).resolves.toEqual({
       revision: "r2",
+      live: false,
     })
     expect(calls.map((each) => [each.method, each.params])).toEqual([
       ["mcpServers.save", save],
@@ -161,7 +168,10 @@ describe("client.mcpServers answers", () => {
       "list",
       { revision: "r", servers: [{ ...entry, managed: undefined }] },
     ],
-    ["a write without a revision", "remove", {}],
+    ["a write without a revision", "remove", { live: true }],
+    ["a write without live", "remove", { revision: "r" }],
+    ["a write whose live is not a boolean", "remove", { revision: "r", live: "yes" }],
+    ["a write with unknown fields", "remove", { revision: "r", live: true, extra: 1 }],
     ["an incomplete inspection without a cut", "inspect", { complete: false, tools: [] }],
     [
       "a complete inspection with a cut",

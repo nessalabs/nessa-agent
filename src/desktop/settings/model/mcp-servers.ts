@@ -2,9 +2,10 @@
  * Settings › Connections › Integrations: the gateway's stored MCP servers, as
  * the window manages them (#391). One reducer, from the design's state table
  * (rows U1–U31, issue #391's PR 3 design, U32–U43 from its review,
- * U44–U50 for a list too large to show, #391 comment 5986496625, and S1–S8,
+ * U44–U50 for a list too large to show, #391 comment 5986496625, S1–S8,
  * G1–G9 and F8–F12 for the secret field and rows sharing a name, #391
- * comment 5987640015); its tests are one row at least one test, in
+ * comment 5987640015, and V1–V10, L1–L6 and M1–M6 for the kept-value rule
+ * and a write's `live`, #391 comment 5988122201); its tests are one row at least one test, in
  * `mcp-servers.test.ts`.
  *
  * The window never retypes a gateway rule (gate 13). Whether a name, command,
@@ -60,6 +61,16 @@ export interface SaveRequest {
 export interface RemoveRequest {
   readonly revision: string
   readonly name: string
+}
+
+/**
+ * What a save or remove answered. `live`: whether new conversations get the
+ * list as now written. False when the gateway is stopping, or when a remove
+ * left a list edited by hand still past a bound (the removed server is out
+ * all the same, and the rest stay as they were).
+ */
+export interface WriteResult {
+  readonly live: boolean
 }
 
 /**
@@ -397,9 +408,16 @@ export const sentences = {
   empty: "No servers yet",
   managed: "Managed by Nessa",
   storedValue: "Stored value kept",
-  /** A stored variable's placeholder once the command or arguments changed (U33). */
+  /** A stored variable's placeholder once the launch changed (U33, V2–V5). */
   storedValueAgain: "Enter the value again",
-  valuesAgain: "Changing the command or arguments needs every value entered again.",
+  valuesAgain:
+    "Changing the command, arguments or variables needs every stored value entered again.",
+  /** A save or switch the gateway stored while stopping (L2, L3). */
+  notLiveSaved: (what: "save" | "change") =>
+    `${what === "save" ? "Saved" : "Changed"}. The gateway is stopping, so new conversations get it once it starts again.`,
+  /** A remove whose resulting list did not go live as a whole (L5). */
+  notLiveRemoved:
+    "Removed. The rest of the list takes effect once the configuration is fixed, or the gateway starts again.",
   listFailed: "The servers couldn't be listed.",
   /** A list refused for a reason a list can have (F10). */
   listRefused: (why: string) => `The servers couldn't be listed: ${why}.`,
@@ -450,8 +468,9 @@ export const sentences = {
     `Remove ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
   /** A group's one action: the gateway removes by name, the first stored under it (G3). */
   removeFirst: (name: string) => `Remove the first server named ${quoted(name)}`,
-  removeFirstAsk: (name: string) =>
-    `Remove the first server named ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
+  /** Names the first one's command: the server the gateway will remove (M5). */
+  removeFirstAsk: (name: string, command: string) =>
+    `Remove the first server named ${quoted(name)}, which runs ${command}? New conversations stop getting it. Open ones keep it until they close.`,
   /** A name typed against a list too large to show may be stored more than once (G9). */
   removeByNameAsk: (name: string) =>
     `Remove ${quoted(name)}? This removes the first server stored under that name. New conversations stop getting it. Open ones keep it until they close.`,
@@ -711,22 +730,43 @@ const sameArgs = (a: readonly string[], b: readonly string[]) =>
 
 const argsOf = (form: ServerForm) => form.args.map((row) => row.value)
 
+/** A row a save sends: a stored one, or one with a name or a value (V8). */
+const sent = (row: VariableRow) => row.stored || row.name !== "" || row.value !== ""
+
+/**
+ * Whether the form keeps the server's command, arguments and variable names
+ * as listed: none added, none removed (V1, V9). Only then may a stored value
+ * be kept, and only then is "Keep stored value" offered.
+ */
+export function namesKept(form: ServerForm, listed: ListedServer | undefined): boolean {
+  if (form.editing === undefined || listed === undefined) return true
+  const stored = form.env.filter((row) => row.stored).map((row) => row.name)
+  return (
+    form.command === listed.command &&
+    sameArgs(argsOf(form), listed.args) &&
+    form.env.every((row) => row.stored || !sent(row)) &&
+    listed.envNames.every((name) => stored.includes(name))
+  )
+}
+
 /**
  * Whether the form launches the server it edits otherwise than the list
- * says: another command or other arguments. The gateway keeps no stored
- * value across a change of launch (U33), so every value is entered again.
+ * says: another command, other arguments, a variable added or removed, or a
+ * stored value edited, which the window can't compare with the one stored.
+ * The gateway keeps a stored value only for the same launch (U33, V2–V5),
+ * so then every value is entered again.
  */
 export function launchChanged(
   form: ServerForm,
   listed: ListedServer | undefined,
 ): boolean {
   if (form.editing === undefined || listed === undefined) return false
-  return form.command !== listed.command || !sameArgs(argsOf(form), listed.args)
+  return !namesKept(form, listed) || form.env.some((row) => row.stored && row.edited)
 }
 
 /**
  * Whether a stored variable still waits for its value, the launch having
- * changed (U33): one not edited. An edited empty value is one entered (S7).
+ * changed (U33, V2–V5): one not edited. An edited empty value is one entered (S7).
  */
 export function valuesNeeded(
   form: ServerForm,
@@ -838,12 +878,10 @@ export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {
       name: form.name,
       command: form.command,
       args: argsOf(form),
-      env: form.env
-        .filter((row) => row.stored || row.name !== "" || row.value !== "")
-        .map((row) => ({
-          name: row.name,
-          value: row.stored && !row.edited ? null : row.value,
-        })),
+      env: form.env.filter(sent).map((row) => ({
+        name: row.name,
+        value: row.stored && !row.edited ? null : row.value,
+      })),
       enabled: form.enabled,
     },
   }
@@ -1130,7 +1168,15 @@ function answeredWrite(
   if (outcome.ok)
     return listAgain({
       ...done,
-      notice: null,
+      // Stored, but not what new conversations get yet: said (L1–L5).
+      notice: (outcome.value as WriteResult).live
+        ? null
+        : said(
+            pending.kind === "remove"
+              ? sentences.notLiveRemoved
+              : sentences.notLiveSaved(fromForm ? "save" : "change"),
+            "write",
+          ),
       form: fromForm ? null : state.form,
       confirming: pending.kind === "remove" ? null : state.confirming,
       // The name removed is not typed again for the list read next (U45).

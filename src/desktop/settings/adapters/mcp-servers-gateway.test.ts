@@ -198,7 +198,7 @@ describe("mcpServersGateway", () => {
   })
 
   it("sends a save as the wire takes it, a stdio server", async () => {
-    const save = vi.fn(() => Promise.resolve({ revision: "r2" }))
+    const save = vi.fn(() => Promise.resolve({ revision: "r2", live: false }))
     const gateway = mcpServersGateway({
       connected: () => Promise.resolve(client({ save }).value),
       after: () => () => {},
@@ -215,7 +215,7 @@ describe("mcpServersGateway", () => {
           enabled: false,
         },
       }),
-    ).resolves.toEqual({ ok: true, value: undefined })
+    ).resolves.toEqual({ ok: true, value: { live: false } })
     expect(save).toHaveBeenCalledWith({
       revision: "r1",
       previousName: "a",
@@ -228,6 +228,27 @@ describe("mcpServersGateway", () => {
         enabled: false,
       },
     })
+  })
+
+  it("answers a remove's live as the wire says it (L4, L5)", async () => {
+    const answers = [
+      { revision: "r2", live: true },
+      { revision: "r3", live: false },
+    ]
+    const remove = vi.fn(() => Promise.resolve(answers.shift()!))
+    const gateway = mcpServersGateway({
+      connected: () => Promise.resolve(client({ remove }).value),
+      after: () => () => {},
+    })
+    await expect(gateway.remove({ revision: "r1", name: "a" })).resolves.toEqual({
+      ok: true,
+      value: { live: true },
+    })
+    await expect(gateway.remove({ revision: "r2", name: "b" })).resolves.toEqual({
+      ok: true,
+      value: { live: false },
+    })
+    expect(remove).toHaveBeenCalledWith({ revision: "r1", name: "a" })
   })
 
   it("reads an inspection's CSP lists that are not empty, and the permissions asked for", async () => {
