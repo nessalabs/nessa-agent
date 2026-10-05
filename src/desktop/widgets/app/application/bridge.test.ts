@@ -1469,6 +1469,74 @@ describe("an app in its conversation (#390)", () => {
     expect(sent).toEqual(["A"])
   })
 
+  it("D15, D-D (E2-2): a view that fails with an update queued: the one in flight is answered, the one queued is never sent", async () => {
+    const { sent, answers, conversation } = gatewayBehind()
+    const app = harness({ ports: { conversation } })
+    await live(app)
+    app.say(update(2, "A"))
+    app.say(update(3, "B"))
+    await flush()
+    expect(sent).toEqual(["A"])
+    // The app leaves its frame: the view fails, and is not gone. Only the
+    // mount's release ends the queued request.
+    app.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: {} })
+    await flush()
+    expect(app.bridge.view().lifecycle.kind).toBe("failed")
+    answers.shift()?.()
+    for (let round = 0; round < 3; round++) await flush()
+    expect(sent).toEqual(["A"])
+  })
+
+  it("D15, D-D (E2-3): a settled request leaves no listener on its mount's signal, however many the mount makes", async () => {
+    // The mount's signal, as its resource read is given it.
+    const signals: AbortSignal[] = []
+    const server = fixtureServerPort()
+    const app = harness({
+      server: {
+        ...server,
+        readResource: (address, uri, signal) => {
+          signals.push(signal)
+          return server.readResource(address, uri, signal)
+        },
+      },
+      ports: { conversation: speaking().conversation },
+    })
+    await flush()
+    const [mountSignal] = signals
+    expect(mountSignal).toBeDefined()
+    // What listens for the mount's abort now, by adding and removing.
+    const listening = new Set<unknown>()
+    let added = 0
+    const add = mountSignal!.addEventListener.bind(mountSignal)
+    const remove = mountSignal!.removeEventListener.bind(mountSignal)
+    vi.spyOn(mountSignal!, "addEventListener").mockImplementation(
+      (type, listener, options) => {
+        if (type === "abort") {
+          added++
+          listening.add(listener)
+        }
+        add(type, listener, options)
+      },
+    )
+    vi.spyOn(mountSignal!, "removeEventListener").mockImplementation(
+      (type, listener, options) => {
+        if (type === "abort") listening.delete(listener)
+        remove(type, listener, options)
+      },
+    )
+    await live(app)
+    for (let id = 2; id < 2 + 3 * pendingLimit; id++) {
+      app.say(id % 2 ? messageRequest(id) : update(id, "x"))
+      await flush()
+    }
+    expect(
+      app.take().filter((message) => "result" in message && message.id !== 1),
+    ).toHaveLength(3 * pendingLimit)
+    // One listener a request, each gone once its request was answered.
+    expect(added).toBe(3 * pendingLimit)
+    expect(listening.size).toBe(0)
+  })
+
   it("D15, D-D: an update the app was told timed out is not sent when its turn comes; the next live one is, in order", async () => {
     const { sent, answers, conversation } = gatewayBehind()
     const app = harness({ ports: { conversation } })
@@ -1497,7 +1565,7 @@ describe("an app in its conversation (#390)", () => {
     ])
   })
 
-  it("D15, D-D: a flood of updates that time out behind one in flight sends no more than were live: the queue is bounded by the bridge's pendingLimit", async () => {
+  it("D15, D-D: a flood of updates that time out behind one in flight sends no more than were live: the sends are bounded by the bridge's pendingLimit, not the queue", async () => {
     const { sent, answers, conversation } = gatewayBehind()
     const app = harness({ ports: { conversation } })
     await live(app)

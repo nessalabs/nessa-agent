@@ -299,12 +299,28 @@ describe("an app's context", () => {
       { kind: "refused", reason: "This app may not speak in this conversation" },
     ],
     ["conversation_not_found", { kind: "server-gone" }],
-    // The client cannot say these were not held: never told as a refusal.
+  ])(
+    "D14: is answered for %s as a tool's call would be: the client is certain",
+    async (code, answer) => {
+      const apps = fakeApps({
+        updateModelContext: vi.fn(() => Promise.reject(refusal(code))),
+      })
+      expect(
+        await gatewayAppConversation(apps).updateModelContext(
+          address,
+          { content: [text("x")] },
+          live,
+        ),
+      ).toEqual(answer)
+    },
+  )
+
+  it.each([
     ["temporarily_unavailable", { kind: "uncertain", serverGone: false }],
     ["conversation_closed", { kind: "uncertain", serverGone: true }],
     ["mcp_session_unavailable", { kind: "uncertain", serverGone: true }],
   ])(
-    "D14: is answered for %s as a tool's call would be, once the client is certain",
+    "D14: is uncertain for %s, never a refusal: the client cannot say it was not held",
     async (code, answer) => {
       const apps = fakeApps({
         updateModelContext: vi.fn(() => Promise.reject(refusal(code))),
@@ -387,6 +403,45 @@ describe("a mount's context updates (D15)", () => {
     expect(await first).toEqual({ kind: "uncertain", serverGone: false })
     expect(await second).toEqual({ kind: "failed" })
     expect(await third).toEqual(taken)
+  })
+
+  it("D15, D-D (E2-3): a mount's queue keeps nothing once it drains, whatever its updates answered", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    // The adapter's own table of queues, as the first update for this mount
+    // is set in it.
+    const set = vi.spyOn(Map.prototype, "set")
+    let calls = 0
+    const apps = fakeApps({
+      updateModelContext: vi.fn(async () => {
+        calls += 1
+        if (calls === 2) throw refusal("temporarily_unavailable")
+        if (calls === 3) throw new Error("fault")
+        return { requestId: "request-1", applied: true }
+      }),
+    })
+    const conversation = gatewayAppConversation(apps)
+    const over = new AbortController()
+    over.abort()
+    const updates = [
+      conversation.updateModelContext(address, { content: [text("a")] }, live),
+      conversation.updateModelContext(address, { content: [text("b")] }, live),
+      conversation.updateModelContext(address, { content: [text("c")] }, live),
+      conversation.updateModelContext(address, { content: [text("d")] }, over.signal),
+      conversation.updateModelContext(otherMount, { content: [text("e")] }, live),
+    ]
+    const queues = set.mock.calls.flatMap((args, index) =>
+      args[0] === app.instanceId
+        ? [set.mock.contexts[index] as Map<string, unknown>]
+        : [],
+    )
+    set.mockRestore()
+    // One table, keyed by mount.
+    expect(new Set(queues).size).toBe(1)
+    const [queue] = queues
+    expect(queue?.has(app.instanceId)).toBe(true)
+    await Promise.all(updates)
+    await flush()
+    expect(queue?.size).toBe(0)
   })
 })
 
