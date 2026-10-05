@@ -34,6 +34,7 @@ const functional = [
   "committed-transcript",
   "load-fallback",
   "gateway-states",
+  "conversation-unread",
   "linked-devices",
   "widgets",
   "mcp-apps",

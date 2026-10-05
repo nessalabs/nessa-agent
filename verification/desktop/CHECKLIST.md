@@ -765,6 +765,22 @@ says why where the conversations would be.
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a
   fake gateway socket that refuses the credential as `product/socket.rs` does).
+- [ ] **A conversation the window listed but could not read says what could not
+  be read, in the open transcript and in the Agents peek.** The gateway
+  answers the handshake and lists one running conversation, then refuses
+  `conversation.read` as `temporarily_unavailable`. The transcript's note says
+  "Nessa couldn’t read this conversation just now.", inside the chat area,
+  and never the unconfirmed-call sentence. Agents then shows that conversation
+  under Working; at a width that holds the peek beside the list, that peek
+  says the same sentence, and at a width that does not, the peek opened
+  beneath the row does. No console error, page error, or failed request.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
+  _Check:_ `conversation-unread.mjs` (the real frontend as the desktop app,
+  against the same fake host as `gateway-states.mjs` and a socket that lists
+  the conversation and refuses the read).
+  _Not in a browser:_ a request row's unreadable. Needs you is a conversation
+  whose read already asked the person something, so a first read that fails
+  never lands there. `overview.test.tsx` holds that sentence.
 - [ ] **A gateway that answers shows its conversations in the main window, and
   a turn made elsewhere without a reload.** Over the host's endpoint and the
   panel's credential (the file the gateway provisioned, which the native host
