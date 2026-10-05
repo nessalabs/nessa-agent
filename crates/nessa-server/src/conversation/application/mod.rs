@@ -31,7 +31,10 @@
 //! A retirement, or a close while a mode change is pending, whose stop runs past
 //! its budget carries on until that slot is released
 //! (`a_mode_retirement_past_its_budget_lets_the_agent_go`,
-//! `a_pending_mode_close_past_its_budget_lets_the_agent_go`). Opening waits out
+//! `a_pending_mode_close_past_its_budget_lets_the_agent_go`). The pending close
+//! lets its uploads go before the slot
+//! (`a_pending_mode_close_past_its_budget_lets_the_uploads_go_before_the_slot`).
+//! Opening waits out
 //! the stopped agent's history lease for at most `history_lease`
 //! (`a_read_right_after_a_persons_close_is_not_busy`).
 //! Archive and delete: archiving is a flag in the summary, written as a

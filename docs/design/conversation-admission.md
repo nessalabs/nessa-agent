@@ -382,7 +382,7 @@ the slot owned, and the delete is carried on in-process.
 | When | Stop | Message | Test |
 | --- | --- | --- | --- |
 | Close with a pending mode change, and the close runs past the budget | Over budget (`ApprovalModeUncertain`); carries on until the slot is released, with no second close | Not admitted while the close is still unconfirmed; the next send after the release runs | `a_pending_mode_close_past_its_budget_lets_the_agent_go` |
-| That close then confirms | The caller has already answered, so the task lets the uploads go in the closer's name. Within the budget the caller does it, once | Uploads released once | `a_pending_mode_close_past_its_budget_lets_the_uploads_go`, `a_pending_mode_close_within_its_budget_releases_uploads_once` |
+| That close then confirms | The uploads are let go before the slot, in the closer's name. Within the budget the caller does it, once. A conversation that opens again is not this close's release | Uploads released once, while the slot is still held | `a_pending_mode_close_past_its_budget_lets_the_uploads_go`, `a_pending_mode_close_within_its_budget_releases_uploads_once`, `a_pending_mode_close_past_its_budget_lets_the_uploads_go_before_the_slot` |
 | That release fails | The attempt is still made, and the error is logged | The release was asked | `a_pending_mode_close_past_its_budget_still_asks_to_let_the_uploads_go_when_that_fails` |
 | Mode recovery retires the session, and the close runs past the budget | The same as the pending close, except it does not let uploads go: this is not the conversation closing | The same | `a_mode_retirement_past_its_budget_lets_the_agent_go` |
 

@@ -693,6 +693,10 @@ pub(crate) struct MemoryAttachments {
     pub(crate) asked: AtomicUsize,
     pub(crate) releases: Mutex<Vec<AttachmentRelease>>,
     pub(crate) release_fails: AtomicBool,
+    /// When set, `release` notifies [`Self::release_entered`] and waits for
+    /// this before it records the release. A test looks at the slot there.
+    pub(crate) hold_release: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) release_entered: Notify,
 }
 impl ConversationAttachments for MemoryAttachments {
     fn holds<'a>(
@@ -710,6 +714,11 @@ impl ConversationAttachments for MemoryAttachments {
     }
     fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()> {
         Box::pin(async move {
+            let parked = self.hold_release.lock().unwrap().take();
+            if let Some(wait) = parked {
+                self.release_entered.notify_one();
+                let _ = wait.await;
+            }
             self.held.lock().unwrap().retain(|held| {
                 held.0 != release.organization_id || held.1 != release.conversation_id
             });

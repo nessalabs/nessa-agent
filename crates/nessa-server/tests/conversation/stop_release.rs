@@ -627,6 +627,49 @@ async fn a_pending_mode_close_past_its_budget_still_asks_to_let_the_uploads_go_w
     fixture.service.shutdown().await.unwrap();
 }
 
+/// The slot stays until the uploads are let go. A release that runs after the
+/// slot is gone would retire a conversation that has already opened again.
+#[tokio::test(start_paused = true)]
+async fn a_pending_mode_close_past_its_budget_lets_the_uploads_go_before_the_slot() {
+    let fixture = Fixture::new(short_stop()).await;
+    fixture.live().await;
+    fixture.leave_mode_pending().await;
+    fixture.hold_upload();
+    let (continue_release, hold) = oneshot::channel();
+    *fixture.attachments.hold_release.lock().unwrap() = Some(hold);
+    let close_gate = hold_close(&fixture.provider);
+    let stopped = fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await;
+    assert!(matches!(
+        stopped,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    assert!(fixture.attachments.releases.lock().unwrap().is_empty());
+    assert!(fixture.owns_slot().await);
+    close_gate.send(()).unwrap();
+    tokio::time::timeout(BOUND, fixture.attachments.release_entered.notified())
+        .await
+        .expect("the close lets the uploads go");
+    assert!(
+        fixture.owns_slot().await,
+        "the slot stays until the uploads are let go"
+    );
+    continue_release.send(()).unwrap();
+    let release = one_close_release(&fixture).await;
+    assert_closer(&fixture, "close", &release);
+    slot_is_gone(&fixture).await;
+    fixture.hold_upload();
+    assert_eq!(fixture.attachments.releases.lock().unwrap().len(), 1);
+    assert_eq!(
+        fixture.attachments.held.lock().unwrap().len(),
+        1,
+        "a hold taken after the slot is gone is not this close's"
+    );
+    fixture.service.shutdown().await.unwrap();
+}
+
 /// A stop signaled while an opening is waiting out a held history lease ends
 /// that wait. The opening answers unavailable instead of sitting out the lease.
 #[tokio::test]
