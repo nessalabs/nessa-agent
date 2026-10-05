@@ -7,8 +7,10 @@
  * and look for are read from that file (`scenarioScript`), so the file is
  * their owner.
  *
- * Signed out. One conversation per engine and layout, because closing one
- * ends its session. Chromium and WebKit. `--mode prod` previews a production
+ * Signed out. One conversation per engine and layout for the permission and
+ * the failure. A prompt that returns an error retires that provider session,
+ * so the cancel turn is a new conversation: closing the failed one would not
+ * be what ends it. Chromium and WebKit. `--mode prod` previews a production
  * build; the fake host answers the endpoint, so the preview does not need the
  * dev server's proxy. The page's console and request lines stay in this
  * check's results, recorded by `browser.mjs`.
@@ -70,7 +72,8 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
           as the review was, and the gateway's turn is completed
   fail    the next turn fails after speaking: the window keeps that text,
           and the gateway's turn is failed
-  cancel  the next turn speaks and waits; closing the conversation ends it
+  cancel  a new conversation, because the failed prompt retired the provider
+          session: the turn speaks and waits; closing the conversation ends it
           cancelled, and the window still shows the text from before the wait
 
 The strings come from the scenario file. A turn the gateway does not reach
@@ -268,13 +271,18 @@ const checks = {
   },
 
   cancel: async (page, stack, run) => {
+    // The failed prompt retired the provider session, so this turn is a new
+    // conversation. Closing that one is what sends session/cancel.
+    const conversationId = randomUUID()
+    const marker = `C${randomUUID().slice(0, 8)}`
     const { view, turn } = await agentTurn(
       stack.client,
-      run.conversationId,
-      stack.script.cancel,
+      conversationId,
+      `${marker} ${stack.script.cancel}`,
       {
         agent: run.agent,
-        seconds: 30,
+        create: true,
+        seconds: 45,
         ready: (_current, pending) =>
           pending.status === "running" &&
           replyText(pending).includes(stack.script.beforeCancel),
@@ -289,19 +297,37 @@ const checks = {
         `the cancel turn is ${turn?.status ?? "missing"} (${JSON.stringify(replyText(turn))}), not waiting after ${JSON.stringify(stack.script.beforeCancel)}`,
       )
     else {
-      const shown = await waitFor(
-        async () =>
-          (await pageText(page)).includes(stack.script.beforeCancel) ? true : null,
-        20_000,
-      )
-      if (!shown)
+      const { conversations } = await stack.client.conversation.list({})
+      const title = conversations.find(
+        (each) => each.conversationId === conversationId,
+      )?.title
+      const row = title ? page.locator(css.sessionRow, { hasText: title }).first() : null
+      const listed = row
+        ? await row
+            .waitFor({ timeout: 20_000 })
+            .then(() => true)
+            .catch(() => false)
+        : false
+      if (!listed)
+        failures.push(
+          `no session row for the cancel turn (${JSON.stringify(title)}) within 20 s`,
+        )
+      else await row.click()
+      const shown = listed
+        ? await waitFor(
+            async () =>
+              (await pageText(page)).includes(stack.script.beforeCancel) ? true : null,
+            20_000,
+          )
+        : null
+      if (listed && !shown)
         failures.push(
           `the window does not show ${JSON.stringify(stack.script.beforeCancel)}`,
         )
       let closed
       try {
-        await stack.client.conversation.close(run.conversationId)
-        closed = await stack.client.conversation.read(run.conversationId)
+        await stack.client.conversation.close(conversationId)
+        closed = await stack.client.conversation.read(conversationId)
       } catch (error) {
         failures.push(
           `closing the conversation did not leave a readable turn: ${error.message}`,
@@ -310,7 +336,7 @@ const checks = {
       const status = closed?.messages?.at(-1)?.status
       if (closed && status !== "cancelled")
         failures.push(`the closed turn is ${status ?? "missing"}, not cancelled`)
-      if (closed && !(await pageText(page)).includes(stack.script.beforeCancel))
+      if (closed && shown && !(await pageText(page)).includes(stack.script.beforeCancel))
         failures.push("the window dropped the text it showed before the cancel")
     }
     return {
