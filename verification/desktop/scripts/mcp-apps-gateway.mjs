@@ -13,11 +13,10 @@
  *
  * It asks the agent, through `NessaClient`, to call the server's app tool
  * (`review_rows`) once (`toolPrompt`, as `live-check.mjs` asks). It answers
- * at most one permission request, for that tool, and requires exactly one
- * completed call of it (`setupOutcome`): an agent that calls it more than
- * once leaves the run "could not run". Calls of other tools are not checked,
- * and a harness may ask no permission at all (the recorded Codex turn asks
- * none for `review_rows`). Then, in each engine, it
+ * the permission requests of one call of that tool (`admitOnce`) and requires
+ * exactly one completed call of it (`setupOutcome`): an agent that calls it
+ * more than once leaves the run "could not run". Calls of other tools are
+ * not checked. Then, in each engine, it
  * signs the page in with the gateway's owner token through `/browser/login`
  * from the page, loads the window, which opens the conversation by itself
  * (the newest of its first channel), and checks the review app the
@@ -148,8 +147,8 @@ async function startStack(options) {
 }
 
 /**
- * Asks `agent` to call the app tool once, answers at most one permission
- * request, for that tool, and waits
+ * Asks `agent` to call the app tool once, answers the permission requests
+ * of one call of it (`admitOnce`), and waits
  * for the turn to end (`agentTurn`). A gateway with no sign-in for the agent
  * refuses the conversation, and an agent that calls the app tool more than
  * once leaves the steps nothing unambiguous to read: both are "could not run".
@@ -170,8 +169,8 @@ async function appToolTurn(client, conversationId, agent) {
       agent,
       create: true,
       seconds: 300,
-      // Only a permission request for the app tool is answered, and only
-      // one; any other request stays unanswered.
+      // Only the permission requests of one call of the app tool are
+      // answered; any other request stays unanswered.
       onView: async (view) => {
         for (;;) {
           const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)

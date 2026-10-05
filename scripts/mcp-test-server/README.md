@@ -52,15 +52,11 @@ configured as `mcptest` (also wrapped, so its own traffic is recorded). The
 harness is given a stand-in, `nessa mcp-relay`, in its place, and for each
 harness session that starts it the gateway starts the server and holds the
 connection to it (ADR 344). It
-sends one message asking for five of the server's tools, each once, allows
-each permission request for one of the server's tools once, and writes what
-happened. The message is `toolPrompt` in `local-gateway.mjs`, which the
+sends one message asking for five of the server's tools, each once, and writes
+what happened. The message is `toolPrompt` in `local-gateway.mjs`, which the
 desktop's `mcp-apps-gateway.mjs` asks with too: it lets the agent use its own
 tool search, since Codex reaches MCP tools only through it (#500), and forbids
-only other tools of the server. The prompt enforces nothing, and a harness may
-run a tool without asking (the recorded Codex turn has no permission request
-for the read-only `review_rows`), so answering permissions does not bound what
-was called: the calls made are in `summary.json` for review.
+only other tools of the server.
 
 ```sh
 cargo build -p nessa-server
@@ -82,8 +78,11 @@ It uses the sign-in each agent already has on this machine — Claude's
 credential from the keychain the gateway reads, Codex's own home, OpenCode's
 from Nessa's credential store — and creates none. A gateway that has no
 credential for an agent refuses the conversation, and the check stops there.
-It allows only calls to the test server's tools, each once, never a standing
-approval; anything else the agent asks for is left unanswered. It exits
+It allows each permission request for a test-server tool once
+(`permissionDecisions`), never a standing approval, and leaves anything else
+the agent asks for unanswered. A harness may call a tool without asking, so
+this does not bound what was called; the calls made are in `summary.json`,
+not checked. It exits
 non-zero unless the turn completed and `show_chart` yielded a widget part,
 and removes the gateway's own data
 directory (its owner token among it) at the end. Recordings and
