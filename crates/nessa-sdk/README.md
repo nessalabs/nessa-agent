@@ -194,8 +194,12 @@ automatic session storage, hooks, invocation, and UI integration.
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
   `permissions` attribution and answer/cancellation evidence, and `tools` the original review input.
-  The private `caller_wake` module keeps a panic from a caller's `Waker` inside
-  the public Agent waits listed in [Caller wakers](docs/agent_execution/lifecycle.md#caller-wakers). The controller
+  The `caller_wake` module keeps a panic from a caller's `Waker` inside the
+  waits listed in [Caller wakers](docs/agent_execution/lifecycle.md#caller-wakers).
+  It is visible inside this crate and is not a public export. Agent waits and
+  the infrastructure waits in that table — MCP sessions, process cleanup,
+  record-storage open and shutdown, and committed-change watches — call this
+  one function. The controller
   pairs input with accepted requests, bounds retention, and projects domain state.
   No provider JSON or process handles enter this layer. See the
   [execution guides](docs/agent_execution/README.md) for the current contracts.

@@ -176,10 +176,11 @@ impl AppReviews {
         state.epoch
     }
 
-    /// The conversation was deleted: end the current opening, and begin no
-    /// other; what was held of it — its released mounts — is let go, as
-    /// nothing will name it again. `release` runs under the lock.
-    pub fn delete(&self, release: impl FnOnce()) {
+    /// The conversation was deleted by `by`: end the current opening, and
+    /// begin no other; what was held of it — its released mounts — is let
+    /// go, as nothing will name it again. `release` runs under the lock.
+    /// Reviews still open are withdrawn as that same `by`.
+    pub fn delete(&self, by: &McpAppInitiator, release: impl FnOnce()) {
         let ended = {
             let mut state = self.state.lock().expect("app reviews");
             state.deleted = true;
@@ -192,7 +193,7 @@ impl AppReviews {
             state.bytes = 0;
             std::mem::take(&mut state.pending)
         };
-        withdraw_ended(ended, &McpAppInitiator::System);
+        withdraw_ended(ended, by);
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
