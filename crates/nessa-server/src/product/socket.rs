@@ -392,26 +392,17 @@ fn reserve_app_mount(
     }))
 }
 
-/// The mount `params` names, when every identity is one the schema can carry.
-/// Anything else is left uncounted: the method's own schema refuses it.
+/// The mount `params` names, when it is one [`super::mcp_apps::counted_mount`]
+/// accepts: the same conversation and app dispatch would. Anything else is
+/// left uncounted, so the method's own schema refuses it and a full lane
+/// still names `socket.app_calls`.
 fn app_mount_key(params: &serde_json::Value) -> Option<AppMountKey> {
-    let params = params.as_object()?;
-    let conversation_id = params.get("conversationId")?.as_str()?;
-    let app = params.get("app")?.as_object()?;
-    let execution_id = app.get("executionId")?.as_str()?;
-    let tool_id = app.get("toolId")?.as_str()?;
-    let instance_id = app.get("instanceId")?.as_str()?;
-    let identity = |value: &str| !value.is_empty() && value.len() <= 256;
-    let instance = Uuid::try_parse(instance_id)
-        .is_ok_and(|parsed| parsed.hyphenated().to_string() == instance_id);
-    if !identity(conversation_id) || !identity(execution_id) || !identity(tool_id) || !instance {
-        return None;
-    }
+    let mount = super::mcp_apps::counted_mount(params)?;
     Some(AppMountKey {
-        conversation_id: conversation_id.to_owned(),
-        execution_id: execution_id.to_owned(),
-        tool_id: tool_id.to_owned(),
-        instance_id: instance_id.to_owned(),
+        conversation_id: mount.conversation_id,
+        execution_id: mount.execution_id,
+        tool_id: mount.tool_id,
+        instance_id: mount.instance_id,
     })
 }
 
