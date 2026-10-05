@@ -11,7 +11,9 @@ use crate::conversation::application::{
     ProviderSessionErasers, RequestedConversation, ResourceTickets, SubmissionMode,
     SubmittedMessage, TicketEnd, TicketRefusal,
 };
-use crate::conversation::application::{ConversationAgent, ConversationAgents};
+use crate::conversation::application::{
+    ConversationAgent, ConversationAgents, ConversationDeletionBudgets,
+};
 use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries, Provider,
@@ -437,6 +439,15 @@ impl Fixture {
 
     /// As [`Self::new`], in `owner`'s conversation.
     pub(crate) async fn for_owner(owner: ConversationCaller) -> Self {
+        Self::built(owner, DELETION_BUDGETS).await
+    }
+
+    /// As [`Self::new`], its agent's stops bounded by `budgets`.
+    pub(crate) async fn with_deletion_budgets(budgets: ConversationDeletionBudgets) -> Self {
+        Self::built(caller("fixture"), budgets).await
+    }
+
+    async fn built(owner: ConversationCaller, budgets: ConversationDeletionBudgets) -> Self {
         let as_owner = |action: &str| ConversationCaller {
             action_id: action.into(),
             ..owner.clone()
@@ -498,7 +509,7 @@ impl Fixture {
                 listing: Arc::new(Unlisted),
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
                 provider_sessions: ProviderSessionErasers::default(),
-                deletion_budgets: DELETION_BUDGETS,
+                deletion_budgets: budgets,
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
             },

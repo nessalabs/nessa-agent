@@ -755,29 +755,7 @@ async fn conversations(
     // the conversations' apps report.
     let (service, resource_route) = match mcp.as_mut() {
         Some(mcp) => {
-            if let Some(events) = mcp.ticket_events.take() {
-                let (stop, stopping) = tokio::sync::oneshot::channel();
-                mcp.ticket_recorder = Some(super::mcp_servers::AuditRecorder {
-                    what: "ticket ends",
-                    stop,
-                    task: tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
-                        events,
-                        mcp_app_audit.clone(),
-                        stopping,
-                    )),
-                });
-            }
-            let (dropped, drops) = tokio::sync::mpsc::unbounded_channel();
-            let (stop, stopping) = tokio::sync::oneshot::channel();
-            mcp.context_drop_recorder = Some(super::mcp_servers::AuditRecorder {
-                what: "context drops",
-                stop,
-                task: tokio::spawn(crate::conversation::infrastructure::audit_context_drops(
-                    drops,
-                    mcp_app_audit.clone(),
-                    stopping,
-                )),
-            });
+            let dropped = mcp.start_recorders(mcp_app_audit.clone());
             let service = ConversationService::with_mcp_apps(
                 dependencies,
                 ConversationLimits::default(),
@@ -789,7 +767,7 @@ async fn conversations(
                     )),
                     audit: mcp_app_audit.clone(),
                     tickets: mcp.resource_tickets.clone(),
-                    dropped: Arc::new(dropped),
+                    dropped,
                 },
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))

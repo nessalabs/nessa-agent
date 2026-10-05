@@ -305,3 +305,89 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error() {
         Err(crate::core::RunError::Agent(_))
     ));
 }
+
+/// An audit that keeps what it commits.
+#[derive(Default)]
+struct KeptAudit(std::sync::Mutex<Vec<crate::conversation::application::McpAppAuditRecord>>);
+impl crate::conversation::application::McpAppAudit for KeptAudit {
+    fn record(
+        &self,
+        record: crate::conversation::application::McpAppAuditRecord,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().push(record);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits() {
+    use crate::conversation::application::{
+        ContextDrop, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
+    };
+    use std::sync::Arc;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let mut config = agents(vec![server("mcptest", &["/s.mjs"])]);
+    let mut composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap()
+        .expect("composed");
+    // As composition starts them, beside the conversation service it hands
+    // the sink to; and as the gateway's exit finishes them.
+    let audit = Arc::new(KeptAudit::default());
+    let dropped = composed.start_recorders(audit.clone());
+    let drop = McpAppAuditRecord {
+        conversation_id: crate::conversation::domain::ConversationId::new(
+            "00000000-0000-4000-8000-000000000001",
+        )
+        .unwrap(),
+        organization_id: nessa_auth::domain::OrganizationId::new("org").unwrap(),
+        call_id: "u1".into(),
+        request_id: "request-u1".into(),
+        app: McpAppRef {
+            execution_id: "e1".into(),
+            tool_id: "t1".into(),
+            instance_id: "i1".into(),
+        },
+        ask: McpAppAsk::UpdateModelContext {
+            server: "mcptest".into(),
+        },
+        initiator: McpAppInitiator::System,
+        phase: McpAppAuditPhase::ContextDropped {
+            cause: ContextDrop::ConversationEnded,
+        },
+    };
+    dropped.context_dropped(drop.clone());
+    super::finish_recorders(
+        [
+            composed.ticket_recorder.take(),
+            composed.context_drop_recorder.take(),
+        ]
+        .into_iter()
+        .flatten(),
+        super::RECORDERS_FINISH,
+    )
+    .await;
+    assert_eq!(*audit.0.lock().unwrap(), [drop]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn recorders_finish_together_under_one_bound() {
+    // Two recorders, each still recording at the bound.
+    let hanging = |what| {
+        let (stop, _stopping) = tokio::sync::oneshot::channel();
+        super::AuditRecorder {
+            what,
+            stop,
+            task: tokio::spawn(std::future::pending()),
+        }
+    };
+    let started = tokio::time::Instant::now();
+    super::finish_recorders(
+        [hanging("ticket ends"), hanging("context drops")],
+        super::RECORDERS_FINISH,
+    )
+    .await;
+    // Together, not one after the other: the exit waits the one bound.
+    assert_eq!(started.elapsed(), super::RECORDERS_FINISH);
+}

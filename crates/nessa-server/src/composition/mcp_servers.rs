@@ -13,6 +13,7 @@
 //! server directly instead, because then its calls and an app's would reach
 //! different sessions.
 use super::agent::{agent_search_path, AgentsConfig};
+use crate::conversation::application::{DroppedContexts, McpAppAudit};
 use crate::core::RunError;
 use crate::mcp_servers::{
     domain::{configuration_digest, relay_arguments},
@@ -39,6 +40,10 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 /// deadline between the calls it answers: an unredeemed ticket's bytes are
 /// let go of, and its expiry reported, at most this long after it.
 pub(super) const RESOURCE_TICKET_SWEEP: Duration = Duration::from_secs(5);
+/// How long the gateway's exit waits for its MCP App recorders, together,
+/// to record what was already reported: bounded, as the app calls' own
+/// records are, so a record that hangs does not hold the exit.
+pub(super) const RECORDERS_FINISH: Duration = Duration::from_secs(10);
 
 /// What composition hands the server lifecycle: the servers to start once it
 /// is listening and stop once conversations have, and the relay to serve.
@@ -65,6 +70,42 @@ pub(super) struct McpComposition {
     pub(super) context_drop_recorder: Option<AuditRecorder>,
 }
 
+impl McpComposition {
+    /// Start the recorders of what outlives an app's call, each writing to
+    /// `audit`: every ticket's unredeemed end (`audit_ticket_ends`, on the
+    /// store's events, taken once), and every held context's drop
+    /// (`audit_context_drops`). The sink the conversations' apps report
+    /// each drop to is returned, for the conversation service; both are
+    /// finished by [`finish_recorders`] after the conversations.
+    pub(super) fn start_recorders(
+        &mut self,
+        audit: Arc<dyn McpAppAudit>,
+    ) -> Arc<dyn DroppedContexts> {
+        if let Some(events) = self.ticket_events.take() {
+            let (stop, stopping) = tokio::sync::oneshot::channel();
+            self.ticket_recorder = Some(AuditRecorder {
+                what: "ticket ends",
+                stop,
+                task: tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
+                    events,
+                    audit.clone(),
+                    stopping,
+                )),
+            });
+        }
+        let (dropped, drops) = unbounded_channel();
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        self.context_drop_recorder = Some(AuditRecorder {
+            what: "context drops",
+            stop,
+            task: tokio::spawn(crate::conversation::infrastructure::audit_context_drops(
+                drops, audit, stopping,
+            )),
+        });
+        Arc::new(dropped)
+    }
+}
+
 /// A task recording what the conversations report after the command that
 /// caused it — a ticket's unredeemed end, or a held context's drop — named
 /// by `what` in its logs.
@@ -73,15 +114,21 @@ pub(super) struct AuditRecorder {
     pub(super) stop: tokio::sync::oneshot::Sender<()>,
     pub(super) task: tokio::task::JoinHandle<()>,
 }
-impl AuditRecorder {
-    /// Record everything already reported, then stop: called once the
-    /// conversations, and their apps, have ended.
-    pub(super) async fn finish(self) {
-        let what = self.what;
-        let _ = self.stop.send(());
-        // Bounded, as the app calls' own records are: a record that hangs
-        // must not hold the gateway's exit.
-        match tokio::time::timeout(std::time::Duration::from_secs(10), self.task).await {
+
+/// Have every recorder in `recorders` record everything already reported,
+/// then stop — all at once, under the one `bound` — called once the
+/// conversations, and their apps, have ended. A recorder still recording at
+/// the bound is let go of, and said so
+/// (`recorders_finish_together_under_one_bound`).
+pub(super) async fn finish_recorders(
+    recorders: impl IntoIterator<Item = AuditRecorder>,
+    bound: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + bound;
+    futures_util::future::join_all(recorders.into_iter().map(|recorder| async move {
+        let what = recorder.what;
+        let _ = recorder.stop.send(());
+        match tokio::time::timeout_at(deadline, recorder.task).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => tracing::error!(%error, what, "an MCP App recorder failed"),
             Err(_) => tracing::warn!(
@@ -89,7 +136,8 @@ impl AuditRecorder {
                 "an MCP App recorder was still recording when the gateway stopped"
             ),
         }
-    }
+    }))
+    .await;
 }
 
 /// Where the relay socket of the namespace at `namespace` is, for the user

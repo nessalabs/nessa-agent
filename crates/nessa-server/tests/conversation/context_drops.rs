@@ -63,8 +63,14 @@ fn dropped(call: &str) -> McpAppAuditRecord {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn a_stopping_recorder_writes_every_drop_already_reported_in_order() {
+    let captured = Capture(Arc::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
     let (sender, drops) = tokio::sync::mpsc::unbounded_channel();
     let audit = Arc::new(Kept::default());
     let (stop, stopping) = tokio::sync::oneshot::channel();
@@ -76,9 +82,23 @@ async fn a_stopping_recorder_writes_every_drop_already_reported_in_order() {
     let _ = stop.send(());
     audit_context_drops(drops, audit.clone(), stopping).await;
     assert_eq!(audit.calls(), ["u1", "u2", "u3"]);
-    // A drop reported once it stopped has no one to write it, and says so.
+    // A drop reported once it stopped has no one to write it, and says so,
+    // by its conversation and its call.
     sender.context_dropped(dropped("u4"));
     assert_eq!(audit.calls().len(), 3);
+    let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logged.contains("an MCP App context's drop could not be audited: nothing receives it"),
+        "{logged}"
+    );
+    assert!(
+        logged.contains("call_id=\"u4\"") || logged.contains("call_id=u4"),
+        "{logged}"
+    );
+    assert!(
+        logged.contains("00000000-0000-4000-8000-000000000001"),
+        "{logged}"
+    );
 }
 
 #[tokio::test]

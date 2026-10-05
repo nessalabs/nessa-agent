@@ -17,12 +17,16 @@ use crate::conversation::application::app_reviews::{
 use crate::conversation::application::view::{
     ConversationMessageApp, ConversationMessageStatus, ConversationPermissionOrigin,
 };
-use crate::conversation::application::{ContextDrop, ConversationRepository, McpAppAsk};
 use crate::conversation::application::{
-    ConversationLimits, SubmissionMode, SubmissionReceipt, SubmittedImage, SubmittedMessage,
-    MAX_APP_CALLS,
+    ContextDrop, ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+    McpAppAsk,
 };
-use crate::conversation::domain::ConversationDeletion;
+use crate::conversation::application::{
+    ConversationDeletionBudgets, ConversationLimits, SubmissionMode, SubmissionReceipt,
+    SubmittedImage, SubmittedMessage, MAX_APP_CALLS,
+};
+use crate::conversation::domain::{ConversationApprovalMode, ConversationDeletion};
+use crate::conversation_test_support::DELETION_BUDGETS;
 use crate::product_contract::generated::ConversationErrorCode;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
@@ -1424,6 +1428,132 @@ async fn m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by
     );
 }
 
+/// A future polled only while its gate is open. Woken while it is shut, it
+/// says so, and waits to be opened: so a test can act between what it
+/// awaited finishing and its going on.
+struct Gated<F> {
+    inner: std::pin::Pin<Box<F>>,
+    gate: Arc<Gate>,
+}
+#[derive(Default)]
+struct Gate {
+    shut: std::sync::atomic::AtomicBool,
+    woken_shut: Notify,
+    waker: std::sync::Mutex<Option<std::task::Waker>>,
+}
+impl Gate {
+    fn open(&self) {
+        self.shut.store(false, Ordering::SeqCst);
+        if let Some(waker) = self.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+    }
+}
+impl<F: std::future::Future> std::future::Future for Gated<F> {
+    type Output = F::Output;
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<F::Output> {
+        if self.gate.shut.load(Ordering::SeqCst) {
+            *self.gate.waker.lock().unwrap() = Some(cx.waker().clone());
+            self.gate.woken_shut.notify_one();
+            return std::task::Poll::Pending;
+        }
+        self.inner.as_mut().poll(cx)
+    }
+}
+
+#[tokio::test]
+async fn m10_a_release_after_a_turn_running_refusal_keeps_turn_running() {
+    use super::super::{SubmitFailure, Writer};
+    use nessa_sdk::domain::agent_execution::{
+        executions::ExecutionId, prompts::McpAppSource, tools::McpTool,
+    };
+    let fixture = Fixture::new().await;
+    let finish = running(&fixture, "running").await;
+    let epoch = {
+        let slot = fixture
+            .service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(&fixture.id)
+            .cloned()
+            .unwrap();
+        slot.value.get().unwrap().as_ref().ok().unwrap().app_epoch
+    };
+    // The app's message, as its call submits it once allowed, its caller
+    // held between its submission's answer and its reading of it.
+    let writer = Writer::App {
+        sender: McpAppSource::new(
+            ExecutionId::new(&fixture.execution_id).unwrap(),
+            ToolCallId::new(&fixture.tool_id).unwrap(),
+            McpTool::new(SERVER, UI_TOOL).unwrap(),
+        )
+        .unwrap(),
+        apps: fixture.service.apps_of(&fixture.id),
+        epoch,
+        mount: fixture.app(INSTANCE),
+    };
+    // Its submission waits on the conversation's lock while its caller
+    // waits on the submission.
+    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let gate = Arc::new(Gate::default());
+    let message = tokio::spawn(Gated {
+        inner: Box::pin({
+            let service = fixture.service.clone();
+            let id = fixture.id.clone();
+            let caller = fixture.caller("refused-while-running");
+            async move {
+                service
+                    .submit_as(
+                        id,
+                        caller,
+                        "app-refused-while-running".into(),
+                        SubmittedMessage {
+                            text: "me too".into(),
+                            ..SubmittedMessage::default()
+                        },
+                        SubmissionMode::Queue,
+                        writer,
+                    )
+                    .await
+            }
+        }),
+        gate: gate.clone(),
+    });
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!message.is_finished());
+    gate.shut.store(true, Ordering::SeqCst);
+    drop(held);
+    // Refused `turn_running`, its submission done — and only then is the
+    // mount released, before its caller reads the refusal.
+    tokio::time::timeout(Duration::from_secs(5), gate.woken_shut.notified())
+        .await
+        .expect("the submission answered");
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    gate.open();
+    // The refusal keeps its own reason: the release came after it (M10 is
+    // read as it is refused, not once its caller has the answer).
+    let result = message.await.unwrap();
+    assert!(
+        matches!(
+            result,
+            Err(SubmitFailure::NotAsked(ConversationError::TurnRunning))
+        ),
+        "{result:?}"
+    );
+    let _ = finish.send(());
+}
+
 #[tokio::test]
 async fn m15_c11b_a_message_whose_enqueue_failed_once_the_agent_was_asked_is_unresolved() {
     let fixture = Fixture::new().await;
@@ -2621,6 +2751,62 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
     let tombstone = fixture.repository.load(&fixture.id).await.unwrap().unwrap();
     assert_eq!(tombstone.deletion().unwrap().request(), "delete");
     stopping.abort();
+}
+
+#[tokio::test]
+async fn c15_a_close_whose_stop_runs_past_its_budget_drops_once_as_the_closers() {
+    let fixture = Fixture::with_deletion_budgets(ConversationDeletionBudgets {
+        stop: Duration::from_millis(100),
+        ..DELETION_BUDGETS
+    })
+    .await;
+    holding(&fixture).await;
+    // A mode change whose outcome is not known — begun, its end never
+    // recorded: the close stops the agent, within the stop budget, rather
+    // than closing it.
+    fixture
+        .repository
+        .begin_mode_change(ConversationModeRequest {
+            conversation_id: fixture.id.clone(),
+            organization_id: fixture.owner.organization_id.clone(),
+            request_id: "mode".into(),
+            initiator_principal_id: fixture.owner.principal_id.clone(),
+            initiator_surface_id: fixture.owner.surface_id.clone(),
+            prior: ConversationApprovalMode::Ask,
+            requested: ConversationApprovalMode::Auto,
+            state: ConversationModeRequestState::Pending,
+            application: None,
+            requested_at_ms: 1,
+        })
+        .await
+        .unwrap();
+    // The agent's close hangs past that budget, and the stop gives up on it.
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(gate);
+    let closed = fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await;
+    assert!(
+        matches!(closed, Err(ConversationError::ApprovalModeUncertain)),
+        "{closed:?}"
+    );
+    // Nothing else has ended the apps — no delete, no slot released — so
+    // only the stop's own end, before its first await, can have dropped it:
+    // on record once, by the closer.
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::ConversationEnded, person_by("close"))]
+    );
+    // The gateway's own stop later finds nothing left to drop.
+    let _ = release.send(());
+    let _ = fixture.service.shutdown().await;
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::ConversationEnded, person_by("close"))]
+    );
+    assert_eq!(fixture.drops.reported(), 1);
+    assert!(fixture.held_now().is_empty());
 }
 
 /// The conversation fenced as deleted by its owner's request `request`, as

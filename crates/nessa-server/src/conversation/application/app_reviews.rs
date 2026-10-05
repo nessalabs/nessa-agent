@@ -14,12 +14,13 @@
 //! held until a message admitted while the conversation is idle takes it.
 //! Taken, it leaves the mount at once, and belongs to that message. A
 //! release, an opening's end, a new opening and a delete drop only what is
-//! still held, unsent; a message that took some and went nowhere hands them
-//! back to be dropped ([`AppReviews::not_sent`]). Whatever drops a context,
-//! this is the one owner of its drop's record: built here, from the update
-//! that held it and who dropped it, and reported to [`DroppedContexts`] at
-//! the moment of removal, after the lock — never handed to the caller to
-//! record, so no caller's cancellation, budget or panic can lose it. The
+//! still held, unsent; what a message took that went nowhere is reported
+//! dropped as its [`Taken`] goes. Whatever drops a context, this is the one
+//! owner of its drop's record: built here, from the update that held it and
+//! who dropped it, and reported to [`DroppedContexts`] at the moment of
+//! removal, after the lock — or, for what a message took, as the `Taken`
+//! that holds it is dropped — never handed to the caller to record, so no
+//! caller's cancellation, budget or panic can lose it. The
 //! conversation's one update lock orders the updates themselves. And the app
 //! messages in flight, by the turn each becomes, so one request is asked
 //! about once at a time (`docs/design/mcp-app-calls.md`, "An app in its
@@ -247,18 +248,14 @@ impl AppReviews {
         }
     }
 
-    /// Report each context whose update is in `updates` as dropped unsent,
-    /// for `cause`, `by` whom: called once they are out of the state and
-    /// the lock is let go of, before anything is awaited.
+    /// [`report_dropped`] to this conversation's recorder.
     fn report_dropped(
         &self,
         updates: Vec<McpAppAuditRecord>,
         cause: ContextDrop,
         by: &McpAppInitiator,
     ) {
-        for update in updates {
-            self.dropped.context_dropped(drop_record(update, cause, by));
-        }
+        report_dropped(self.dropped.as_ref(), updates, cause, by);
     }
 
     /// A new opening of the conversation's agent: its epoch, which every app
@@ -396,8 +393,8 @@ impl AppReviews {
     /// admitted while the conversation is idle: they leave their mounts now,
     /// and free their room. Nothing is ever put back. A release or an end
     /// from now on finds them gone, and a mount's newer update is held anew.
-    /// Should the message then go nowhere, they are handed back to
-    /// [`Self::not_sent`].
+    /// Should the message then go nowhere, each is reported dropped unsent
+    /// as the [`Taken`] goes.
     #[must_use]
     pub fn take_held(&self) -> Taken {
         let taken = std::mem::take(&mut self.state.lock().expect("app reviews").contexts);
@@ -405,18 +402,12 @@ impl AppReviews {
             .into_iter()
             .map(|held| (held.context, held.update))
             .unzip();
-        Taken { contexts, updates }
-    }
-
-    /// What a message took ([`Self::take_held`]) went nowhere: it was
-    /// refused, or failed before the agent was asked. Each is dropped
-    /// unsent, by the system; the app may give it again.
-    pub fn not_sent(&self, taken: Taken) {
-        self.report_dropped(
-            taken.updates,
-            ContextDrop::NotSent,
-            &McpAppInitiator::System,
-        );
+        Taken {
+            contexts,
+            updates,
+            dropped: self.dropped.clone(),
+            armed: true,
+        }
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -615,12 +606,63 @@ impl AppReviews {
 }
 
 /// The contexts a message took ([`AppReviews::take_held`]), and the records
-/// of the updates that gave them: what a drop of them, should the message go
-/// nowhere ([`AppReviews::not_sent`]), is recorded against.
-#[derive(Debug, Default)]
+/// of the updates that gave them: what a drop of them is recorded against.
+///
+/// The one owner of what the message took. Dropped before the agent was
+/// asked to take the message — refused, failed, its task unwinding or let
+/// go of — each is reported dropped unsent, by the system, to the
+/// conversation's recorder (row C11). From the moment the agent is asked
+/// ([`Self::asking`]) they follow the message: taken, or unknown — the agent
+/// could not say, or the task failed mid-ask — the message's own record
+/// covers them, and dropping this reports nothing (row C11b). Only the
+/// agent's refusal hands them back ([`Self::refused`]).
 pub struct Taken {
     pub contexts: Vec<AppModelContext>,
     pub updates: Vec<McpAppAuditRecord>,
+    dropped: Arc<dyn DroppedContexts>,
+    /// Whether dropping this reports each as dropped unsent.
+    armed: bool,
+}
+impl Taken {
+    /// The agent is being asked to take the message that carries these:
+    /// from here they follow it, and dropping this reports nothing.
+    pub fn asking(&mut self) {
+        self.armed = false;
+    }
+
+    /// The agent refused the message: they went nowhere. Each is reported
+    /// dropped unsent, by the system, as this goes; the app may give it
+    /// again.
+    pub fn refused(mut self) {
+        self.armed = true;
+    }
+}
+impl Drop for Taken {
+    fn drop(&mut self) {
+        if self.armed {
+            report_dropped(
+                self.dropped.as_ref(),
+                std::mem::take(&mut self.updates),
+                ContextDrop::NotSent,
+                &McpAppInitiator::System,
+            );
+        }
+    }
+}
+
+/// Report each context whose update is in `updates` to `dropped` as dropped
+/// unsent, for `cause`, `by` whom: called once they are out of the state and
+/// the lock is let go of, before anything is awaited — the one place a
+/// drop's record is built and sent.
+fn report_dropped(
+    dropped: &dyn DroppedContexts,
+    updates: Vec<McpAppAuditRecord>,
+    cause: ContextDrop,
+    by: &McpAppInitiator,
+) {
+    for update in updates {
+        dropped.context_dropped(drop_record(update, cause, by));
+    }
 }
 
 /// An update on record whose context was not held: its mount was released,

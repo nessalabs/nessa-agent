@@ -1,6 +1,6 @@
 use super::session_key::conversation_session;
 use super::{
-    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer, Taken},
+    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     projection::{bound_view, clipped, Projection, MAX_TEXT},
@@ -428,6 +428,18 @@ pub(super) enum Reach {
     /// It does, and what failed is the evidence of its taking it.
     Taken,
 }
+impl Reach {
+    /// How far a submission got that failed with `error` once the agent was
+    /// asked to take it: read by [`SubmitFailure::reach`], and by the
+    /// submission's own task as the agent answers, for what it took.
+    fn of_asked(error: &ConversationError) -> Self {
+        match error {
+            ConversationError::Agent(AgentError::SubmissionUnresolved) => Self::Unknown,
+            ConversationError::AdmissionEvidence { .. } => Self::Taken,
+            _ => Self::NotTaken,
+        }
+    }
+}
 impl SubmitFailure {
     /// The one reading of how far a failed submission got, for the contexts
     /// it took and for an app's record of its message.
@@ -436,10 +448,8 @@ impl SubmitFailure {
             Self::Retired | Self::NotAsked(_) | Self::TaskFailed { asked: false } => {
                 Reach::NotTaken
             }
-            Self::Asked(ConversationError::Agent(AgentError::SubmissionUnresolved))
-            | Self::TaskFailed { asked: true } => Reach::Unknown,
-            Self::Asked(ConversationError::AdmissionEvidence { .. }) => Reach::Taken,
-            Self::Asked(_) => Reach::NotTaken,
+            Self::TaskFailed { asked: true } => Reach::Unknown,
+            Self::Asked(error) => Reach::of_asked(error),
         }
     }
     /// The answer, whatever it got to: a task that failed, or the gateway
@@ -458,6 +468,7 @@ pub enum SubmissionMode {
 }
 /// Who writes a submission: the person, or an app of theirs, admitted in an
 /// opening of the conversation for one mount.
+#[derive(Clone)]
 pub(super) enum Writer {
     Person,
     App {
@@ -481,17 +492,24 @@ impl Writer {
     /// released, the opening it was admitted in not ended, and that opening
     /// the live one. The person's always may.
     fn still_admitted(&self, live: &LiveConversation) -> Result<(), ConversationError> {
-        let Self::App {
-            apps, epoch, mount, ..
-        } = self
-        else {
+        let Self::App { apps, epoch, .. } = self else {
             return Ok(());
         };
         let reopened = !Arc::ptr_eq(&live.app_reviews, apps) || live.app_epoch != *epoch;
-        if reopened || apps.admit(*epoch, mount).is_err() {
+        if reopened || self.opening_ended() {
             return Err(ConversationError::McpApp(McpAppError::Cancelled));
         }
         Ok(())
+    }
+    /// Whether an app's own apps say, now, that the opening its message was
+    /// admitted in ended or its mount was released. Never the person's.
+    fn opening_ended(&self) -> bool {
+        match self {
+            Self::Person => false,
+            Self::App {
+                apps, epoch, mount, ..
+            } => apps.admit(*epoch, mount).is_err(),
+        }
     }
 }
 enum SubmissionDelivery {
@@ -1850,10 +1868,11 @@ impl ConversationService {
     /// contexts its apps hold, under the submission lock, and carries them
     /// ahead of what it says: they leave their mounts there and then. If it
     /// is then refused, or fails before the agent was asked, they went
-    /// nowhere, and are handed back to be dropped ([`AppReviews::not_sent`]:
-    /// `ContextDropped{not_sent}`, by the system); if whether the agent has
-    /// it is unknown, they follow it, with no drop recorded. A message refused before the take, queued behind a turn or
-    /// steered into one takes none, and leaves them held
+    /// nowhere, and each is reported dropped as the task's
+    /// [`Taken`](super::app_reviews::Taken) goes (`ContextDropped{not_sent}`,
+    /// by the system); if whether the agent has it is unknown, they follow
+    /// it, with no drop recorded. A message refused before the take, queued
+    /// behind a turn or steered into one takes none, and leaves them held
     /// (`docs/design/mcp-app-calls.md`, rows C9–C11b).
     ///
     /// An app's message is refused [`ConversationError::TurnRunning`] while a
@@ -1871,9 +1890,12 @@ impl ConversationService {
     /// asked to take it, so that one refused or failed before then is known
     /// not to have reached it ([`SubmitFailure`]). An app's message refused
     /// before then, for whatever reason, while its own apps say its opening
-    /// ended or its mount was released, is refused as that
-    /// ([`McpAppError::Cancelled`], row M10): the stop or release came first
+    /// had ended or its mount been released when it was refused, is refused
+    /// as that ([`McpAppError::Cancelled`], row M10): the stop or release
+    /// came first
     /// (`m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`).
+    /// One that came after the refusal leaves it as it was
+    /// (`m10_a_release_after_a_turn_running_refusal_keeps_turn_running`).
     pub(super) async fn submit_as(
         &self,
         id: ConversationId,
@@ -1888,19 +1910,10 @@ impl ConversationService {
         // own task: what the caller reads to know whether it was.
         let asked = Arc::new(AtomicBool::new(false));
         let asking = asked.clone();
-        // What it took, and from whose apps, set as it takes them: handed
-        // back to be dropped, should it go nowhere.
-        let took = Arc::new(std::sync::Mutex::new(None::<(Arc<AppReviews>, Taken)>));
-        let taking = took.clone();
-        // An app's own apps, its opening and its mount: what says whether a
-        // refusal came after that opening ended (M10).
-        let admitted_in = match &writer {
-            Writer::App {
-                apps, epoch, mount, ..
-            } => Some((apps.clone(), *epoch, mount.clone())),
-            Writer::Person => None,
-        };
-        let outcome = tokio::spawn(async move {
+        // Who wrote it, read as it is refused (M10).
+        let refused_for = writer.clone();
+        let asked_when_refused = asked.clone();
+        let submission = async move {
             let SubmittedMessage {
                 text,
                 images,
@@ -2096,13 +2109,16 @@ impl ConversationService {
             // held, and from here they are its own. A release or an end finds
             // them gone, and a mount's newer update is held anew
             // (`c9_a_message_takes_the_contexts_and_a_release_meanwhile_drops_none`).
+            // What it took is this task's own: should the task end, however,
+            // before the agent was asked, each is reported dropped unsent as
+            // it goes (row C11).
+            let mut taken = None;
             let carried = match original {
                 Some(original) => original,
                 None if idle => {
-                    let mut taken = live.app_reviews.take_held();
-                    let contexts = std::mem::take(&mut taken.contexts);
-                    *taking.lock().expect("taken contexts") =
-                        Some((live.app_reviews.clone(), taken));
+                    let mut took = live.app_reviews.take_held();
+                    let contexts = std::mem::take(&mut took.contexts);
+                    taken = Some(took);
                     contexts
                 }
                 None => Vec::new(),
@@ -2117,6 +2133,12 @@ impl ConversationService {
                 estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
                 reserved_output_tokens: reserved,
             };
+            // Asked from here: whatever becomes of this task, what it took
+            // follows the message, and only the agent's own refusal hands
+            // it back (C11b).
+            if let Some(took) = taken.as_mut() {
+                took.asking();
+            }
             asking.store(true, Ordering::SeqCst);
             let delivery = match mode {
                 SubmissionMode::Queue => live
@@ -2144,11 +2166,18 @@ impl ConversationService {
                         })
                 }
             };
-            // Refused: what it took went nowhere, and the caller hands each
-            // back to be dropped (`c11_a_refused_submission_drops_what_it_took_on_record`).
+            // Refused: what it took went nowhere, and each is reported
+            // dropped unsent (`c11_a_refused_submission_drops_what_it_took_on_record`).
             // Admitted, and saved before the agent answered: what it carried
             // went with it, and should the turn then fail, it is lost (C13).
-            let delivery = delivery.map_err(ConversationError::Agent)?;
+            // Unresolved: it follows the message, whose record covers it.
+            let delivery = delivery.map_err(ConversationError::Agent);
+            if let (Err(error), Some(took)) = (&delivery, taken) {
+                if Reach::of_asked(error) == Reach::NotTaken {
+                    took.refused();
+                }
+            }
+            let delivery = delivery?;
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -2186,6 +2215,25 @@ impl ConversationService {
                     })
                 }
             }
+        };
+        let outcome = tokio::spawn(async move {
+            let submitted: Result<SubmissionReceipt, Halt> = submission.await;
+            // An app's message refused before the agent was asked, while its
+            // own apps say its opening had ended or its mount been released:
+            // the stop or the release came first, whatever the refusal says
+            // (row M10). Read here, on its own task, as it is refused — not
+            // once its caller has the answer, when a release that came after
+            // a refusal for its own reason would take that reason's place
+            // (`m10_a_release_after_a_turn_running_refusal_keeps_turn_running`).
+            match submitted {
+                Err(Halt::Failed(_))
+                    if !asked_when_refused.load(Ordering::SeqCst)
+                        && refused_for.opening_ended() =>
+                {
+                    Err(ConversationError::McpApp(McpAppError::Cancelled).into())
+                }
+                submitted => submitted,
+            }
         })
         .await;
         let asked = asked.load(Ordering::SeqCst);
@@ -2197,26 +2245,6 @@ impl ConversationService {
             Ok(Err(Halt::Failed(error))) => SubmitFailure::NotAsked(error),
             Err(_) => SubmitFailure::TaskFailed { asked },
         };
-        // An app's message refused before the agent was asked, once its own
-        // apps say its opening ended or its mount was released: the stop or
-        // the release came first, whatever the refusal says (row M10).
-        let failure = match (failure, &admitted_in) {
-            (SubmitFailure::NotAsked(_), Some((apps, epoch, mount)))
-                if apps.admit(*epoch, mount).is_err() =>
-            {
-                SubmitFailure::NotAsked(ConversationError::McpApp(McpAppError::Cancelled))
-            }
-            (failure, _) => failure,
-        };
-        // What it took went nowhere: lost, each drop reported by its apps,
-        // and the app may give it again. Should the agent have it, or nobody
-        // know, it follows the message, whose own record covers it (C11b).
-        let took = took.lock().expect("taken contexts").take();
-        if let Some((apps, taken)) = took {
-            if failure.reach() == Reach::NotTaken {
-                apps.not_sent(taken);
-            }
-        }
         Err(failure)
     }
     /// `new_submission` is false for a retry of a submission the agent already
@@ -3713,7 +3741,8 @@ impl ConversationService {
     /// reported there and then, before the agent's close is first awaited:
     /// a caller that gives up on the stop — a select, a budget, a panic —
     /// cannot lose a drop's record, and none takes anything of the stop's
-    /// budget.
+    /// budget (`c15_a_close_whose_stop_runs_past_its_budget_drops_once_as_the_closers`,
+    /// where nothing else would end the apps).
     async fn stop_slot(
         &self,
         id: &ConversationId,

@@ -598,8 +598,8 @@ fn update(mount: &str, call: &str) -> McpAppAuditRecord {
 }
 
 /// The calls of the updates `taken` names.
-fn calls(taken: Vec<McpAppAuditRecord>) -> Vec<String> {
-    taken.into_iter().map(|update| update.call_id).collect()
+fn calls(taken: &[McpAppAuditRecord]) -> Vec<String> {
+    taken.iter().map(|update| update.call_id.clone()).collect()
 }
 
 /// Each of `calls`' updates dropped for `cause` by `by`, in that order.
@@ -750,28 +750,87 @@ fn c9_a_take_empties_the_mounts_frees_their_room_and_leaves_a_release_or_an_end_
             .collect::<Vec<_>>(),
         ["c0", "c1", "c2", "c3"]
     );
-    assert_eq!(calls(taken.updates), ["u0", "u1", "u2", "u3"]);
+    assert_eq!(calls(&taken.updates), ["u0", "u1", "u2", "u3"]);
     // Gone from the mounts at once: their room is free, and a release or an
     // end has nothing of them to drop.
     assert!(held(&reviews).is_empty());
     assert_eq!(reviews.room(EPOCH, &app("other"), true), Ok(()));
     reviews.release_app(&app("i0"), &releaser(), || {});
+    // Each taken follows its message once the agent is asked for it.
+    let mut first = taken;
+    first.asking();
+    drop(first);
     // A mount's newer update is held anew; a second take takes only it.
     give(&reviews, "i1", Some(context("u5", "newer")));
     assert_eq!(held(&reviews), ["newer"]);
-    assert_eq!(calls(reviews.take_held().updates), ["u5"]);
-    assert!(reviews.take_held().contexts.is_empty());
+    let mut second = reviews.take_held();
+    assert_eq!(calls(&second.updates), ["u5"]);
+    second.asking();
+    drop(second);
+    let mut none = reviews.take_held();
+    assert!(none.contexts.is_empty());
+    none.asking();
+    drop(none);
     give(&reviews, "i2", Some(context("u6", "held")));
-    let taken = reviews.take_held();
+    let mut taken = reviews.take_held();
+    taken.asking();
     reviews.end(EPOCH, &releaser(), || {});
     // Nothing taken was dropped by the release or the end.
     assert!(reported.take().is_empty());
-    // A message that took some and went nowhere hands them back: each
-    // dropped as not sent, by the system, against its own update.
-    reviews.not_sent(taken);
+    // A message that took some and that the agent refused hands them back:
+    // each dropped as not sent, by the system, against its own update.
+    taken.refused();
     assert_eq!(
         reported.take(),
         each(&["u6"], ContextDrop::NotSent, &McpAppInitiator::System)
+    );
+}
+
+#[test]
+fn c11_what_a_message_took_is_reported_dropped_as_it_goes_unless_the_agent_was_asked() {
+    let (reviews, reported) = reporting();
+    give(&reviews, "i1", Some(context("u1", "one")));
+    give(&reviews, "i2", Some(context("u2", "two")));
+    // Gone before the agent was asked — refused, failed, its task unwound
+    // or let go of: each reported dropped unsent, by the system, as it goes.
+    let taken = reviews.take_held();
+    assert!(reported.take().is_empty());
+    drop(taken);
+    assert_eq!(
+        reported.take(),
+        each(
+            &["u1", "u2"],
+            ContextDrop::NotSent,
+            &McpAppInitiator::System
+        )
+    );
+    // Once the agent is asked they follow the message: taken, or unknown,
+    // it reports nothing as it goes (row C11b).
+    give(&reviews, "i1", Some(context("u3", "three")));
+    let mut taken = reviews.take_held();
+    taken.asking();
+    drop(taken);
+    assert!(reported.take().is_empty());
+    // Asked, then refused by the agent: handed back, reported once.
+    give(&reviews, "i1", Some(context("u4", "four")));
+    let mut taken = reviews.take_held();
+    taken.asking();
+    taken.refused();
+    assert_eq!(
+        reported.take(),
+        each(&["u4"], ContextDrop::NotSent, &McpAppInitiator::System)
+    );
+    // A task that panics before it asks unwinds through what it took: still
+    // reported.
+    give(&reviews, "i1", Some(context("u5", "five")));
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _taken = reviews.take_held();
+        panic!("the submission's task fell over");
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(
+        reported.take(),
+        each(&["u5"], ContextDrop::NotSent, &McpAppInitiator::System)
     );
 }
 

@@ -42,7 +42,7 @@ impl DroppedContexts for UnboundedSender<McpAppAuditRecord> {
 /// Record each drop `drops` receives, in the order they were dropped — until
 /// every sender is gone, or `stop` says the gateway is stopping, when every
 /// drop already sent is recorded before it returns. Its caller bounds how
-/// long that may take (composition's `AuditRecorder::finish`).
+/// long that may take (composition's `finish_recorders`).
 ///
 /// A record that cannot be committed is logged, by its conversation and its
 /// call, and the next is tried: the context is already dropped, and the log

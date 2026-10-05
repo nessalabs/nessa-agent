@@ -398,10 +398,13 @@ impl CompositionRoot {
                         servers.stop().await;
                         // Last: the conversations' ends released their
                         // tickets and dropped their apps' contexts, and each
-                        // end and each drop is recorded before exit.
-                        for recorder in [tickets, drops].into_iter().flatten() {
-                            recorder.finish().await;
-                        }
+                        // end and each drop is recorded before exit, both
+                        // recorders together under one bound.
+                        super::mcp_servers::finish_recorders(
+                            [tickets, drops].into_iter().flatten(),
+                            super::mcp_servers::RECORDERS_FINISH,
+                        )
+                        .await;
                     }
                 },
                 async {
