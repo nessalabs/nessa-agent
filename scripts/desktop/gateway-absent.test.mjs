@@ -48,7 +48,13 @@ test("desktop dev names a quiet gateway and still starts", (context) => {
   chmodSync(pnpm, 0o755)
   const result = spawnSync(process.execPath, [resolve("scripts/desktop/dev.mjs")], {
     encoding: "utf8",
-    env: { ...process.env, npm_execpath: pnpm, NESSA_PORT: "9", NESSA_STAGE: "dev" },
+    env: {
+      ...process.env,
+      npm_execpath: pnpm,
+      NESSA_PORT: "9",
+      NESSA_STAGE: "dev",
+      VITE_NESSA_STAGE: "dev",
+    },
   })
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /not answering/)

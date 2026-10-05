@@ -1,18 +1,33 @@
 import copies from "./startup-refusals.json"
 
 /**
- * The sentences a window shows when startup cannot reach the local server.
+ * What startup can say, in one file (`startup-refusals.json`).
  *
- * One file owns them (`startup-refusals.json`). The desktop host reads that
- * same file for the log line and the page it shows when the document never
- * arrives; this module is what the running page says.
+ * `line` is the sentence a person reads. `code` is the stable token under
+ * it. The other strings are the log: the host, `pnpm app`, and the page's
+ * own console. The desktop host reads this same file.
  */
-const sentences: Readonly<Record<string, string>> = copies
-
 export type StartupRefusalReason = "not-provisioned" | "not-ready" | "wrong-stage"
 
 /** Sentences read by name. A stage mismatch is filled, not looked up. */
 export type NamedStartupSentence = "not-provisioned" | "not-ready" | "not-listening"
+
+/** Keys of `code` in the shared file. Each one is a `STARTUP_` token. */
+export type StartupCodeKey =
+  | "not-provisioned"
+  | "not-ready"
+  | "not-listening"
+  | "wrong-stage"
+  | "document-unserved"
+  | "script-unserved"
+  | "still-compiling"
+  | "runtime"
+  | "host"
+
+function owned(value: object, key: string): unknown {
+  if (!Object.hasOwn(value, key)) return undefined
+  return (value as Record<string, unknown>)[key]
+}
 
 export type StageMismatch = {
   readonly bundle: string
@@ -20,10 +35,25 @@ export type StageMismatch = {
 }
 
 function sentence(key: string): string {
-  if (!Object.hasOwn(sentences, key)) throw new Error(`missing startup sentence ${key}`)
-  const value = sentences[key]
+  const value = owned(copies, key)
   if (typeof value !== "string" || value.length === 0)
     throw new Error(`startup sentence ${key} is not text`)
+  return value
+}
+
+/** The one sentence a person reads on the startup screen. */
+export function startupLine(): string {
+  return sentence("line")
+}
+
+/** The copyable token for `key`. The log sentence stays off the screen. */
+export function startupCode(key: StartupCodeKey): string {
+  const table = owned(copies, "code")
+  if (typeof table !== "object" || table === null)
+    throw new Error("startup codes are missing")
+  const value = owned(table, key)
+  if (typeof value !== "string" || !/^STARTUP_[A-Z]+$/.test(value))
+    throw new Error(`startup code ${key} is not a code`)
   return value
 }
 

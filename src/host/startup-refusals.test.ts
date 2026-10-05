@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
+import { COULD_NOT_START } from "../startup/application/copy"
 import {
   documentUnservedSentence,
   hostRefusalFromInvoke,
   HostRefusalError,
   scriptUnservedSentence,
+  startupCode,
+  startupLine,
   startupRefusalSentence,
   wrongStageSentence,
+  type StartupCodeKey,
 } from "./startup-refusals"
 
 describe("startup refusals", () => {
@@ -37,6 +41,24 @@ describe("startup refusals", () => {
       4,
     ])
       expect(hostRefusalFromInvoke(value)).toBeUndefined()
+  })
+
+  it("publishes one line and a code for every startup failure", () => {
+    expect(startupLine()).toBe(COULD_NOT_START)
+    expect(startupLine()).toBe("Nessa couldn’t start")
+    const codes: Record<StartupCodeKey, string> = {
+      "not-provisioned": "STARTUP_GATEWAY",
+      "not-ready": "STARTUP_GATEWAY",
+      "not-listening": "STARTUP_GATEWAY",
+      "wrong-stage": "STARTUP_STAGE",
+      "document-unserved": "STARTUP_PAGE",
+      "script-unserved": "STARTUP_MODULE",
+      "still-compiling": "STARTUP_COMPILE",
+      runtime: "STARTUP_PAGE",
+      host: "STARTUP_HOST",
+    }
+    for (const [key, code] of Object.entries(codes) as [StartupCodeKey, string][])
+      expect(startupCode(key)).toBe(code)
   })
 
   it("fills the page and the script into the dev-server sentences", () => {

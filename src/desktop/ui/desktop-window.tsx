@@ -7,7 +7,11 @@ import { useDriftInEffect } from "../adapters/window-preferences"
 import { useWorkspaceLayoutPreference } from "../adapters/workspace-layout-preference"
 import { SettingsHost, useSettingsOpening } from "../settings"
 import { SessionsInSidebar, ThreeColumns } from "../workspace"
+import { useWorkspaceSelector } from "../workspace/adapters/store/hooks"
+import { selectFailure } from "../workspace/adapters/store/selectors"
+import { startupFailureCode } from "../workspace/ui/startup-failure"
 import { DesktopApp } from "./desktop-app"
+import { StartupFallback } from "./startup-fallback"
 
 /**
  * The window: the workspace in the layout chosen in Settings › Workspace ›
@@ -36,10 +40,15 @@ export function DesktopWindow({
   useMotionInEffect()
   useDriftInEffect()
   const settings = useSettingsOpening()
+  const startup = startupFailureCode(useWorkspaceSelector(selectFailure))
   return (
     <>
-      {/* Settings is modal: the window under it takes no focus or pointer while it is open. */}
-      <div className="desktop-window-under" inert={settings.open || undefined}>
+      {/* Settings is modal: the window under it takes no focus or pointer while it is open.
+          A startup screen covers both and takes the pointer itself. */}
+      <div
+        className="desktop-window-under"
+        inert={settings.open || startup !== null || undefined}
+      >
         {layout === "classic" ? (
           <DesktopApp {...props} />
         ) : layout === "sidebar" ? (
@@ -48,7 +57,12 @@ export function DesktopWindow({
           <ThreeColumns {...props} />
         )}
       </div>
-      <SettingsHost {...props} open={settings.open} onClose={settings.close} />
+      <SettingsHost
+        {...props}
+        open={settings.open && startup === null}
+        onClose={settings.close}
+      />
+      <StartupFallback />
     </>
   )
 }

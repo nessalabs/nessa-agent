@@ -2,21 +2,22 @@
  * The document shown until the page's module runs, and what it says when that
  * module never arrives.
  *
- * Vite injects this into `index.html` and `desktop.html`. The words are
- * `startup-refusals.json`, the same file the running page and the Rust host
- * read. The bootstrap is inline: a held-back script request must not be able
- * to take the explanation with it.
+ * Vite injects this into `index.html` and `desktop.html`. Until the module
+ * runs it says Loading. If the module never arrives, the same calm screen
+ * the running page uses replaces it: the shared line, a code, and icon
+ * actions. The filled sentence is logged, not shown. The bootstrap is
+ * inline: a held-back script request must not be able to take it with it.
  */
 import { readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const sentences = JSON.parse(
-  readFileSync(
-    resolve(dirname(fileURLToPath(import.meta.url)), "startup-refusals.json"),
-    "utf8",
-  ),
-)
+const here = dirname(fileURLToPath(import.meta.url))
+
+const sentences = JSON.parse(readFileSync(resolve(here, "startup-refusals.json"), "utf8"))
+const faceTemplate = readFileSync(resolve(here, "startup-face.html"), "utf8")
+const screenCss = readFileSync(resolve(here, "startup-screen.css"), "utf8")
+const actionsSource = readFileSync(resolve(here, "startup-actions.js"), "utf8")
 
 export const LOAD_FALLBACK_WAIT_MS = 15_000
 
@@ -150,12 +151,20 @@ const rootMarkup = `<div id="root">
       </main>
     </div>`
 
+function embedSource(value) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c")
+}
+
 function bootstrap() {
-  const copies = JSON.stringify(sentences).replaceAll("<", "\\u003c")
+  const copies = embedSource(sentences)
+  const face = embedSource(faceTemplate)
+  const actions = actionsSource.replaceAll("</", "<\\/")
   return `<script data-nessa-load-bootstrap>
       ;(() => {
         const copies = ${copies}
+        const faceTemplate = ${face}
         const waitMs = ${LOAD_FALLBACK_WAIT_MS}
+        ${actions}
         const title = document.querySelector("[data-nessa-load-title]")
         const fill = (key, values) => {
           const text = Object.hasOwn(copies, key) ? copies[key] : ""
@@ -165,11 +174,36 @@ function bootstrap() {
             text,
           )
         }
-        const show = (text) => {
-          if (title) title.textContent = text
-        }
         const page = () => location.href
         const mounted = () => document.documentElement.dataset.nessaMounted === "1"
+        const escapeText = (text) =>
+          String(text)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+        const codeOf = (key) => {
+          const table = copies.code
+          if (!table || typeof table !== "object" || !Object.hasOwn(table, key)) return key
+          const value = table[key]
+          return typeof value === "string" && value ? value : key
+        }
+        const line = () =>
+          typeof copies.line === "string" && copies.line ? copies.line : ""
+        // The person sees the line and the code. The filled sentence is the log.
+        const showFailure = (key, detail) => {
+          if (mounted()) return
+          if (document.documentElement.dataset.nessaStartupShown === "1") return
+          document.documentElement.dataset.nessaStartupShown = "1"
+          console.error("[nessa] " + detail)
+          const message = document.querySelector("[data-nessa-load-message]")
+          if (!message) return
+          message.setAttribute("role", "alert")
+          message.setAttribute("data-nessa-startup-screen", "")
+          message.innerHTML = faceTemplate
+            .replaceAll("{{LINE}}", escapeText(line()))
+            .replaceAll("{{CODE}}", escapeText(codeOf(key)))
+          wireStartupActions(message)
+        }
         // The bootstrap is parsed before the app's module tag, and Vite inserts
         // an inline module ahead of it. The app entry is the last module that
         // names a src. Look it up when the failure happens, not while parsing.
@@ -183,7 +217,10 @@ function bootstrap() {
         }
         const showUnserved = (element) => {
           if (mounted()) return
-          show(fill("script-unserved", { page: page(), script: scriptUrl(element) }))
+          showFailure(
+            "script-unserved",
+            fill("script-unserved", { page: page(), script: scriptUrl(element) }),
+          )
         }
         const isScript = (target) =>
           !!target && target !== window && String(target.tagName).toUpperCase() === "SCRIPT"
@@ -202,7 +239,7 @@ function bootstrap() {
               return
             }
             const message = event.message || "the page stopped while starting"
-            show("Could not load " + page() + ". " + message)
+            showFailure("runtime", "Could not load " + page() + ". " + message)
           },
           true,
         )
@@ -210,13 +247,17 @@ function bootstrap() {
           if (document.documentElement.dataset.nessaMounted === "1") return
           const reason = event.reason
           const message = reason instanceof Error ? reason.message : String(reason ?? "")
-          show("Could not load " + page() + ". " + message)
+          showFailure("runtime", "Could not load " + page() + ". " + message)
         })
         setTimeout(() => {
           if (document.documentElement.dataset.nessaMounted === "1") return
           if (document.documentElement.dataset.nessaModule === "started") return
+          if (document.documentElement.dataset.nessaStartupShown === "1") return
           if (!title || title.textContent !== "Loading") return
-          show(fill("still-compiling", { page: page(), script: scriptUrl() }))
+          showFailure(
+            "still-compiling",
+            fill("still-compiling", { page: page(), script: scriptUrl() }),
+          )
         }, waitMs)
       })()
     </script>`
@@ -231,7 +272,7 @@ export function embedLoadFallback(html) {
   if (!html.includes('<script type="module"'))
     throw new Error("load fallback found no module script")
   return html
-    .replace("</head>", `${style}\n  </head>`)
+    .replace("</head>", `<style>\n${screenCss}\n</style>\n${style}\n  </head>`)
     .replace(/<div id="root">\s*<\/div>/, rootMarkup)
     .replace('<script type="module"', `${bootstrap()}\n    <script type="module"`)
 }

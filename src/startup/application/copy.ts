@@ -1,7 +1,12 @@
+import { startupLine } from "../../host/startup-refusals"
 import type { GatewayStartupStatus } from "./gateway-startup"
 
-/** What a person reads when Nessa could not start, wherever it is said. */
-export const COULD_NOT_START = "Nessa couldn’t start"
+/**
+ * What a person reads when Nessa could not start, wherever it is said.
+ * The words are `startup-refusals.json`'s `line`: the host page and this
+ * module cannot each keep a copy.
+ */
+export const COULD_NOT_START = startupLine()
 
 /** The line under it, when trying again is the thing to do. */
 export const TRY_AGAIN_HINT = "Trying again usually fixes this."
@@ -9,7 +14,7 @@ export const TRY_AGAIN_HINT = "Trying again usually fixes this."
 /**
  * The one sentence a person reads about startup (ADR 221), shared by setup and
  * the panel so they cannot word it differently. The host's own message is
- * technical and stays behind "Details"; nothing here reads it.
+ * technical and stays in the log; nothing here reads it.
  */
 export function startupSentence(status: GatewayStartupStatus): string | undefined {
   switch (status.state) {

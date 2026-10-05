@@ -89,8 +89,10 @@ describe("embedded load fallback", () => {
 describe("a page the dev server did not serve", () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     delete document.documentElement.dataset.nessaModule
     delete document.documentElement.dataset.nessaMounted
+    delete document.documentElement.dataset.nessaStartupShown
   })
 
   function boot(html = readFileSync("index.html", "utf8")) {
@@ -107,19 +109,36 @@ describe("a page the dev server did not serve", () => {
     )
     expect(bootstrap?.hasAttribute("src")).toBe(false)
     expect(bootstrap?.textContent).toContain("did not serve")
+    expect(bootstrap?.textContent).toContain("STARTUP_MODULE")
     window.eval(bootstrap?.textContent ?? "")
     const title = document.querySelector<HTMLElement>("[data-nessa-load-title]")
     if (!title) throw new Error("missing load title")
     return { title }
   }
 
+  function logged(): string[] {
+    return vi.mocked(console.error).mock.calls.map((call) => call.map(String).join(" "))
+  }
+
   it("names the page and the script when the module is not served", () => {
-    const { title } = boot()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    boot()
     const script = document.querySelector<HTMLScriptElement>("script[type=module]")
     script?.dispatchEvent(new Event("error"))
-    expect(title.textContent).toContain(window.location.href)
-    expect(title.textContent).toContain("/src/main.tsx")
-    expect(title.textContent).toContain("did not serve")
+    const screen = document.querySelector("[data-nessa-startup-screen]")
+    expect(screen?.textContent).toContain("Nessa couldn’t start")
+    expect(screen?.textContent).toContain("STARTUP_MODULE")
+    expect(screen?.textContent).not.toContain("did not serve")
+    expect(screen?.textContent).not.toContain("/src/main.tsx")
+    expect(screen?.querySelector("[data-nessa-startup-mark]")?.getAttribute("src")).toBe(
+      "/src-tauri/icons/nessa-avatar.svg",
+    )
+    expect(screen?.querySelector("[aria-label=Restart]")).toBeInstanceOf(
+      HTMLButtonElement,
+    )
+    expect(screen?.querySelector("[aria-label=Quit]")).toBeInstanceOf(HTMLButtonElement)
+    expect(logged().join("\n")).toContain("did not serve")
+    expect(logged().join("\n")).toContain("/src/main.tsx")
   })
 
   it("names a module tag that is parsed after the bootstrap runs", () => {
@@ -135,15 +154,18 @@ describe("a page the dev server did not serve", () => {
     window.eval(bootstrap?.textContent ?? "")
     if (!script) throw new Error("missing module script")
     document.body.append(script)
+    vi.spyOn(console, "error").mockImplementation(() => {})
     script.dispatchEvent(new Event("error"))
-    const title = document.querySelector("[data-nessa-load-title]")
-    expect(title?.textContent).toContain("/src/main.tsx")
-    expect(title?.textContent).toContain("did not serve")
+    const screen = document.querySelector("[data-nessa-startup-screen]")
+    expect(screen?.textContent).toContain("STARTUP_MODULE")
+    expect(screen?.textContent).not.toContain("/src/main.tsx")
+    expect(logged().join("\n")).toContain("/src/main.tsx")
   })
 
   it("names the app module, not an earlier inline module, while it is still compiling", () => {
     vi.useFakeTimers()
-    const { title } = boot()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    boot()
     const inline = document.createElement("script")
     inline.type = "module"
     inline.textContent = "inline"
@@ -153,16 +175,25 @@ describe("a page the dev server did not serve", () => {
     const app = document.querySelector("script[type=module]")
     app?.before(inline, client)
     vi.advanceTimersByTime(15_000)
-    expect(title.textContent).toContain("/src/main.tsx")
-    expect(title.textContent).not.toContain("@vite/client")
+    const loggedText = logged().join("\n")
+    expect(loggedText).toContain("/src/main.tsx")
+    expect(loggedText).not.toContain("@vite/client")
+    expect(document.querySelector("[data-nessa-startup-code]")?.textContent).toBe(
+      "STARTUP_COMPILE",
+    )
   })
 
   it("says the dev server may still be compiling when the module has not started", () => {
     vi.useFakeTimers()
-    const { title } = boot()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    boot()
     vi.advanceTimersByTime(15_000)
-    expect(title.textContent).toContain("compiling")
-    expect(title.textContent).toContain("/src/main.tsx")
+    const screen = document.querySelector("[data-nessa-startup-screen]")
+    expect(screen?.textContent).toContain("Nessa couldn’t start")
+    expect(screen?.textContent).toContain("STARTUP_COMPILE")
+    expect(screen?.textContent).not.toContain("compiling")
+    expect(logged().join("\n")).toContain("compiling")
+    expect(logged().join("\n")).toContain("/src/main.tsx")
   })
 
   it("leaves Loading once the module has started", () => {
@@ -174,10 +205,13 @@ describe("a page the dev server did not serve", () => {
   })
 
   it("names a runtime error that happens before the page mounts", () => {
-    const { title } = boot()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    boot()
     window.dispatchEvent(new ErrorEvent("error", { message: "boom" }))
-    expect(title.textContent).toContain("Could not load")
-    expect(title.textContent).toContain("boom")
+    const screen = document.querySelector("[data-nessa-startup-screen]")
+    expect(screen?.textContent).toContain("STARTUP_PAGE")
+    expect(screen?.textContent).not.toContain("boom")
+    expect(logged().join("\n")).toContain("boom")
   })
 
   it("fills the desktop window, which has no surface", () => {

@@ -1,0 +1,91 @@
+/* The calm startup screen. The loading fallback keeps its own glow; this
+   mark is the same avatar, drawn flat. A full window sets
+   data-nessa-startup-overlay. The load fallback's message does not: that
+   box is already the visible corner of the panel. */
+
+[data-nessa-startup-screen] {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  box-sizing: border-box;
+  color: #ededed;
+  text-align: center;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    sans-serif;
+}
+
+[data-nessa-startup-overlay] {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  padding: 1.5rem;
+  background: #121214;
+}
+
+[data-nessa-load-fallback]:has([data-nessa-startup-screen])::before,
+[data-nessa-load-fallback]:has([data-nessa-startup-screen])::after {
+  content: none;
+  display: none;
+  animation: none;
+}
+
+img[data-nessa-startup-mark],
+svg[data-nessa-startup-mark] {
+  width: 28px;
+  height: 28px;
+  display: block;
+  box-shadow: none;
+  filter: none;
+  animation: none;
+  border-radius: 0;
+}
+
+[data-nessa-startup-line] {
+  margin: 0;
+  color: rgb(237 237 237 / 82%);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+[data-nessa-startup-code] {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgb(237 237 237 / 46%);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
+  cursor: copy;
+  user-select: all;
+}
+
+[data-nessa-startup-actions] {
+  display: flex;
+  gap: 4px;
+}
+
+[data-nessa-startup-actions] button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(237 237 237 / 72%);
+  cursor: pointer;
+}
+
+[data-nessa-startup-actions] button:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+[data-nessa-startup-actions] svg {
+  display: block;
+}

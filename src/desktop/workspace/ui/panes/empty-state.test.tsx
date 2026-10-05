@@ -12,10 +12,6 @@ import { afterEach, beforeEach, expect, it } from "vitest"
 import { loadWorkspace } from "../../adapters/store/commands"
 import { selectFailure } from "../../adapters/store/selectors"
 import { fakeSource, settle, testStore } from "../../testing"
-import {
-  startupRefusalSentence,
-  wrongStageSentence,
-} from "../../../../host/startup-refusals"
 import { EmptyWorkspace } from "./empty-state"
 
 let root: Root
@@ -74,7 +70,7 @@ it("S8: Try Again reads the index again, and a read that answers opens the works
   expect(store.getState().workspace.status).toBe("ready")
 })
 
-it("a stage mismatch names both stages", async () => {
+it("a startup failure is not this pane", async () => {
   const store = testStore(fakeSource())
   await act(async () =>
     root.render(
@@ -83,26 +79,13 @@ it("a stage mismatch names both stages", async () => {
           failure="wrong-stage"
           stages={{ bundle: "dev", requested: "prod" }}
         />
-      </Provider>,
-    ),
-  )
-  expect(host.querySelector("[role=status] p")?.textContent).toBe(
-    wrongStageSentence({ bundle: "dev", requested: "prod" }),
-  )
-})
-
-it("a server that is not answering says so", async () => {
-  const store = testStore(fakeSource())
-  await act(async () =>
-    root.render(
-      <Provider store={store}>
         <EmptyWorkspace failure="not-listening" />
       </Provider>,
     ),
   )
-  expect(host.querySelector("[role=status] p")?.textContent).toBe(
-    startupRefusalSentence("not-listening"),
-  )
+  expect(host.querySelector("[role=status]")).toBeNull()
+  expect(host.textContent).not.toContain("different stages")
+  expect(host.textContent).not.toContain("not answering")
 })
 
 it("a workspace that was read shows nothing here", async () => {

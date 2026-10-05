@@ -27,6 +27,22 @@ pub(crate) fn fill(key: &str, values: &[(&str, &str)]) -> String {
     text
 }
 
+/// The sentence a person reads. The log sentences stay on [`sentence`].
+pub(crate) fn line() -> String {
+    sentence("line")
+}
+
+/// The copyable token for `key` (`STARTUP_GATEWAY` and the rest).
+pub(crate) fn code(key: &str) -> String {
+    copies()
+        .get("code")
+        .and_then(|table| table.get(key))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(key)
+        .to_string()
+}
+
 /// A refusal the page branches on. Other failures stay a sentence
 /// ([`SurfaceCommandError::Message`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -115,5 +131,18 @@ mod tests {
             "{mismatch}"
         );
         assert!(!mismatch.contains("{bundle}"), "{mismatch}");
+    }
+
+    #[test]
+    fn the_screen_reads_a_line_and_a_code_and_the_log_stays_a_sentence() {
+        let said = line();
+        assert!(said.contains("couldn’t start"), "{said}");
+        assert!(!said.contains("just start"), "{said}");
+        assert_eq!(code("document-unserved"), "STARTUP_PAGE");
+        assert_eq!(code("not-listening"), "STARTUP_GATEWAY");
+        assert_eq!(code("wrong-stage"), "STARTUP_STAGE");
+        assert_eq!(code("host"), "STARTUP_HOST");
+        let absent = sentence("not-provisioned");
+        assert!(absent.contains("just start"), "{absent}");
     }
 }

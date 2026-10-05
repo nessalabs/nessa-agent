@@ -45,9 +45,10 @@ again.
 typed `StartupRefusal` instead of an error. `setup` then manages
 `HostStartup::Refused`, shows the main window, and does nothing else: no
 gateway, no tray, no shortcuts. The page asks `host_startup` first and, when
-refused, shows *"Nessa couldn't start."* with **Try again** (restarts the app),
-**Quit**, and a **Details** disclosure holding the technical reason and a copy
-button. The panel joins the taskbar, since there is no tray. The commands that
+refused, shows the calm startup screen: *"Nessa couldn't start."*, the
+copyable code `STARTUP_HOST`, and Restart and Quit as icon actions. The
+technical reason is written to the log. The panel joins the taskbar, since
+there is no tray. The commands that
 need `HostDependencies` stay registered; the refused page never mounts anything
 that calls them, and if one were called it would answer that its state is not
 there rather than panic.
@@ -115,11 +116,12 @@ that runs past its bound ends the attempt, and the attempt's settlement is what
 moves the projection to `Failed`. The panel keeps no timers and makes no
 guesses.
 
-`Failed` keeps the host's technical message for its log. The panel and
-onboarding show *"Nessa couldn't start"* with **Try again**, and onboarding's
-failure screen deliberately shows no diagnostic; only the refused-start window
-of §1 offers **Details**. No failure reason is inferred from the message's
-text.
+`Failed` keeps the host's technical message for its log. The panel's
+connection notice and onboarding show *"Nessa couldn't start"* with **Try
+again**, and onboarding's failure screen deliberately shows no diagnostic.
+The refused-start window of §1 is the calm screen: the same sentence, a
+copyable code, and icon actions, with the technical reason only in the log.
+No failure reason is inferred from the message's text.
 
 The panel subscribes to the startup projection the way onboarding does, through
 one shared monitor, and shows it in the composer's connection notice, in place

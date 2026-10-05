@@ -4,12 +4,14 @@
 //! listening, the webview stays on `about:blank` and a transparent panel
 //! shows the desktop through it. This module names that: if a window's own
 //! page has not started loading, the host navigates it to a document that
-//! says which page was not served.
+//! says which page was not served, in the log. The window shows the same
+//! calm screen as every other startup failure.
 //!
 //! The scheme is registered in every build. [`crate::links`] allows the
 //! navigation only while the dev server is the app's origin, so a packaged
-//! window cannot be sent here. The document reflects the page URL from the
-//! query and escapes it; its policy is `default-src 'none'`.
+//! window cannot be sent here. The page URL stays in the query and the log;
+//! the document does not echo it. Its policy allows the inline style and
+//! the inline actions, and nothing else.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -144,8 +146,10 @@ pub fn respond(method: &Method, path: &str, query: Option<&str>) -> Response<Cow
     if method != Method::GET || path != FAILURE_PATH {
         return plain(StatusCode::NOT_FOUND, "Not found");
     }
-    let page = page_from_query(query);
-    let body = document(&page);
+    // The page URL is the log's and the query's (`load_failure_url`). The
+    // document does not read it back.
+    let _ = query;
+    let body = document();
     let mut response = Response::new(Cow::Owned(body.into_bytes()));
     let headers = response.headers_mut();
     headers.insert(
@@ -155,7 +159,9 @@ pub fn respond(method: &Method, path: &str, query: Option<&str>) -> Response<Cow
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'"),
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+        ),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -173,38 +179,38 @@ fn plain(status: StatusCode, body: &'static str) -> Response<Cow<'static, [u8]>>
     response
 }
 
-fn page_from_query(query: Option<&str>) -> String {
-    let raw = query.unwrap_or("");
-    let page = Url::parse(&format!("http://localhost/?{raw}"))
-        .ok()
-        .and_then(|url| {
-            url.query_pairs()
-                .find(|(key, _)| key == "page")
-                .map(|(_, value)| value.into_owned())
-        })
-        .filter(|page| !page.is_empty())
-        .unwrap_or_else(|| "http://localhost:1420/".to_string());
-    page.chars().take(2048).collect()
+fn avatar_mark() -> String {
+    include_str!("../icons/nessa-avatar.svg").replacen("<svg ", "<svg data-nessa-startup-mark ", 1)
 }
 
-fn document(page: &str) -> String {
-    let said = escape(&host_refusal::fill("document-unserved", &[("page", page)]));
+fn document() -> String {
+    let face = include_str!("../../src/host/startup-face.html")
+        .replace(
+            r#"<img data-nessa-startup-mark src="/src-tauri/icons/nessa-avatar.svg" alt="" width="28" height="28" />"#,
+            &avatar_mark(),
+        )
+        .replace("{{LINE}}", &escape(&host_refusal::line()))
+        .replace("{{CODE}}", &escape(&host_refusal::code("document-unserved")));
+    let css = include_str!("../../src/host/startup-screen.css");
+    let actions = include_str!("../../src/host/startup-actions.js");
     format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <title>Nessa</title>
 <style>
-  html, body {{ margin: 0; height: 100%; background: #121214; color: #ededed;
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }}
-  main {{ min-height: 100%; display: grid; place-items: center; padding: 1.5rem; }}
-  p {{ max-width: 36rem; overflow-wrap: anywhere; text-align: center; }}
+  html, body {{ margin: 0; height: 100%; background: #121214; }}
+  {css}
 </style>
 </head>
 <body>
-<main><p role="status">{said}</p></main>
+<main data-nessa-startup-screen data-nessa-startup-overlay role="alert">{face}</main>
+<script>
+{actions}
+wireStartupActions(document.querySelector("[data-nessa-startup-screen]"));
+</script>
 </body>
 </html>
 "#
@@ -222,6 +228,20 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
     use tauri::http::Method;
+
+    fn page_from_query(query: Option<&str>) -> String {
+        let raw = query.unwrap_or("");
+        let page = Url::parse(&format!("http://localhost/?{raw}"))
+            .ok()
+            .and_then(|url| {
+                url.query_pairs()
+                    .find(|(key, _)| key == "page")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .filter(|page| !page.is_empty())
+            .unwrap_or_else(|| "http://localhost:1420/".to_string());
+        page.chars().take(2048).collect()
+    }
 
     #[test]
     fn an_app_page_counts_and_a_blank_document_does_not() {
@@ -250,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn the_page_round_trips_through_the_query_and_is_escaped() {
+    fn the_page_round_trips_through_the_query_and_stays_off_the_screen() {
         let page = "http://localhost:1420/index.html?surface=setup";
         let url = load_failure_url(page);
         assert_eq!(page_from_query(url.query()), page);
@@ -260,9 +280,17 @@ mod tests {
             Some("page=%3Cscript%3Ealert(1)%3C%2Fscript%3E"),
         );
         let body = String::from_utf8(response.body().to_vec()).unwrap();
-        assert!(!body.contains("<script>"));
-        assert!(body.contains("&lt;script&gt;"));
+        assert!(!body.contains("<script>alert"));
+        assert!(!body.contains("&lt;script&gt;"));
         assert!(body.contains("default-src 'none'"));
-        assert!(body.contains("did not serve") || body.contains("not serving"));
+        assert!(body.contains("STARTUP_PAGE"), "{body}");
+        assert!(body.contains("data-nessa-startup-mark"), "{body}");
+        assert!(body.contains("aria-label=\"Restart\""), "{body}");
+        assert!(body.contains("aria-label=\"Quit\""), "{body}");
+        assert!(!body.contains("not serving"), "{body}");
+        assert!(
+            !body.contains("/src-tauri/icons/nessa-avatar.svg"),
+            "{body}"
+        );
     }
 }

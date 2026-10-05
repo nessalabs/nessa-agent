@@ -36,6 +36,12 @@ export const css = {
   loadMessage: "[data-nessa-load-message]",
   loadMark: "[data-nessa-load-mark]",
   loadTitle: "[data-nessa-load-title]",
+  startupScreen: "[data-nessa-startup-screen]",
+  startupMark: "[data-nessa-startup-mark]",
+  startupLine: "[data-nessa-startup-line]",
+  startupCode: "[data-nessa-startup-code]",
+  startupRestart: '[data-nessa-startup-action="restart"]',
+  startupQuit: '[data-nessa-startup-action="quit"]',
 
   // Panes (data-pane-key is the pane's identity; data-pane-focused marks the focused one)
   pane: "[data-pane-key]",
@@ -503,6 +509,8 @@ export const harmlessConsole = [
   // A fresh browser asks for /favicon.ico, which the dev server does not serve.
   // Chrome's message does not name the URL, so both the text and the source are matched.
   { text: /status of 404/i, url: /\/favicon\.ico(\?|$)/ },
+  // The startup screen logs its detailed cause. The screen shows the code.
+  { text: /^\[nessa\] /, url: /.*/ },
   // The fixture MCP App asks for a page its CSP does not declare, on purpose
   // (`mcp-apps.mjs --only csp`): the engine reports the refusal it is checked for.
   // Its navigations of its own frame are refused by the proxy's policy, and
