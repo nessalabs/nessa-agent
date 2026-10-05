@@ -375,7 +375,6 @@ function closed(
 function project(
   state: LinkedDevicesState,
   value: Extract<ReadValue, { kind: "on" }>,
-  poll: boolean,
 ): LinkedDevicesState {
   const enrollments = value.enrollments
   let code = state.code
@@ -418,7 +417,7 @@ function project(
       return match?.fingerprint ? { ...device, fingerprint: match.fingerprint } : device
     }),
   )
-  const notice = noticeAfterRead(state, hidden !== null, poll)
+  const notice = noticeAfterRead(state, hidden !== null)
   const confirm =
     state.confirmRevoke !== null &&
     devices.some((device) => device.credentialId === state.confirmRevoke)
@@ -437,16 +436,8 @@ function project(
   }
 }
 
-/** A poll keeps whatever was said. Any other read keeps an action's words. */
-function noticeAfterRead(
-  state: LinkedDevicesState,
-  hidden: boolean,
-  poll: boolean,
-): Notice | null {
-  if (poll) {
-    if (state.notice) return state.notice
-    return hidden ? said("codeHidden", "read") : null
-  }
+/** An action's words stay. A read's words are whatever this read found. */
+function noticeAfterRead(state: LinkedDevicesState, hidden: boolean): Notice | null {
   if (state.notice?.from === "action") return state.notice
   return hidden ? said("codeHidden", "read") : null
 }
@@ -556,12 +547,14 @@ function answeredRead(
   if (!outcome.ok) {
     const wipe = wipeFor(outcome.failure)
     const notice =
-      pending.poll && state.notice ? state.notice : said(outcome.failure.kind, "read")
+      pending.poll && state.notice?.from === "action"
+        ? state.notice
+        : said(outcome.failure.kind, "read")
     return { ...state, ...wipe, pending: null, notice }
   }
   if (outcome.value.kind === "off") return closed(state, "off")
   if (outcome.value.kind === "refused") return closed(state, "refused")
-  return project(state, outcome.value, pending.poll === true)
+  return project(state, outcome.value)
 }
 
 function answeredCreate(

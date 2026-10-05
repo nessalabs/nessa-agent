@@ -533,6 +533,46 @@ describe("linked devices", () => {
     expect(polled.notice?.kind).toBe("tryAgain")
   })
 
+  it("a later poll clears a read error, and drops codeHidden once nothing is open", () => {
+    const listed = on()
+    const failed = reduce(
+      listed,
+      { type: "poll" },
+      {
+        type: "answered",
+        seq: listed.seq + 1,
+        outcome: { ok: false, failure: { kind: "unavailable" } },
+      },
+    )
+    expect(failed.notice).toEqual({ kind: "unavailable", from: "read" })
+    const recovered = reduce(
+      failed,
+      { type: "poll" },
+      {
+        type: "answered",
+        seq: failed.seq + 1,
+        outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+      },
+    )
+    expect(recovered.notice).toBeNull()
+    const hidden = {
+      ...on(),
+      hiddenInvitation: other,
+      notice: { kind: "codeHidden" as const, from: "read" as const },
+    }
+    const cleared = reduce(
+      hidden,
+      { type: "poll" },
+      {
+        type: "answered",
+        seq: hidden.seq + 1,
+        outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+      },
+    )
+    expect(cleared.hiddenInvitation).toBeNull()
+    expect(cleared.notice).toBeNull()
+  })
+
   it("does not approve a claimed device whose fingerprint was not computed", () => {
     const state = connected({
       ok: true,

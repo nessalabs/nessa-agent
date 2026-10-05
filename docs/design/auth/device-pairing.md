@@ -2177,6 +2177,8 @@ Approve is withheld; Deny remains. Revoke is `credential.revoke`. The window
 says an open connection ends the next time it reads.
 
 One request is in flight. A poll does not clear what an action said. A
+read's error does not stay once a later poll succeeds, and a hidden code is
+said only while that invitation is still open. A
 create that was not answered shows no code; a later available invitation
 with no code held says the code was not shown. Refresh is cancel, then
 create, and a failed cancel does not create. `activationStopped: retryable`
