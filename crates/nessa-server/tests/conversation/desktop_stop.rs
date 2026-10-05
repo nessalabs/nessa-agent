@@ -18,7 +18,9 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-/// Long enough for anything here that is not waiting on purpose.
+/// Long enough for anything here that is not waiting on purpose. Every wait
+/// polls with a sleep rather than a yield, so the bound also ends a wait under
+/// a paused clock, where time only moves while nothing is runnable.
 const BOUND: Duration = Duration::from_secs(5);
 
 /// Holds the one submission that names a file inside its file-link record:
@@ -166,7 +168,7 @@ impl Fixture {
                 .holders_and_waiters(&self.id)
                 < 2
             {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
@@ -187,22 +189,31 @@ impl Fixture {
                 < 2
                 && !stopping.is_finished()
             {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await;
     }
 
     /// Each message's status, by its execution id, once none of them is
-    /// queued or running: a message left admitted and never run fails this.
+    /// queued or running: a message left admitted and never run fails this,
+    /// and so does a conversation that keeps answering `Busy`.
+    ///
+    /// One `Busy` right after a stop is not the fault this is about: a
+    /// stopped agent's last handles let go of its history soon after the
+    /// stop, not at it, as after any close (`ConversationDeletionBudgets`'s
+    /// `history_lease`). So it is asked again, within the bound.
     async fn settled(&self) -> Vec<(String, ConversationMessageStatus)> {
         tokio::time::timeout(BOUND, async {
             loop {
-                let view = self
-                    .service
-                    .read(self.id.clone(), caller("read"))
-                    .await
-                    .expect("the conversation stays readable");
+                let view = match self.service.read(self.id.clone(), caller("read")).await {
+                    Ok(view) => view,
+                    Err(ConversationError::Storage(StorageError::Busy)) => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                    Err(error) => panic!("the conversation stays readable: {error:?}"),
+                };
                 let settled = view.messages.iter().all(|message| {
                     !matches!(
                         message.status,
@@ -216,20 +227,34 @@ impl Fixture {
                         .map(|message| (message.execution_id.clone(), message.status))
                         .collect();
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await
-        .expect("no message is left admitted and never run")
+        .expect("no message is left admitted and never run, and the conversation opens again")
+    }
+
+    /// Send `text` until it is admitted, asking again after a `Busy` within
+    /// the bound, as [`Self::settled`] does.
+    async fn admitted(&self, action: &str, text: &str) {
+        tokio::time::timeout(BOUND, async {
+            loop {
+                match self.send(action, text, false).await.unwrap() {
+                    Ok(_) => return,
+                    Err(ConversationError::Storage(StorageError::Busy)) => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(error) => panic!("{action} is admitted: {error:?}"),
+                }
+            }
+        })
+        .await
+        .expect("a message is admitted, not refused as busy for good");
     }
 
     /// The conversation still takes a message and runs it.
     async fn still_usable(&self) {
-        let receipt = tokio::time::timeout(BOUND, self.send("afterwards", "Afterwards", false))
-            .await
-            .expect("a later message is answered")
-            .unwrap();
-        receipt.expect("a later message is admitted, not refused as busy");
+        self.admitted("afterwards", "Afterwards").await;
         let settled = self.settled().await;
         assert!(
             settled.iter().any(|(id, status)| id == "afterwards"
@@ -250,7 +275,8 @@ fn caller(action: &str) -> ConversationCaller {
 
 /// Row 1: the stop takes the lock first. A message sent while it stops waits
 /// for it, then opens the conversation again and runs there — it is never
-/// handed to the agent being stopped.
+/// handed to the agent being stopped. A read waits for the stop too, as it
+/// waits for a person's close.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_sent_while_a_desktop_stop_runs_waits_and_runs_on_a_new_agent() {
     let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
@@ -261,16 +287,46 @@ async fn a_message_sent_while_a_desktop_stop_runs_waits_and_runs_on_a_new_agent(
     // The stop holds the submission lock while the agent's close is held.
     tokio::time::timeout(BOUND, async {
         while fixture.provider.close_calls.load(Ordering::SeqCst) == 0 {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
     .expect("the stop reaches the agent's close");
     let sending = fixture.send("during-stop", "During the stop", false);
     fixture.lock_contended().await;
+    let reading = tokio::spawn({
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        async move { service.read(id, caller("read-during-stop")).await }
+    });
+    tokio::time::timeout(BOUND, async {
+        while fixture
+            .service
+            .inner
+            .mode_changes
+            .holders_and_waiters(&fixture.id)
+            < 3
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the read waits for the stop as well");
+    assert!(!reading.is_finished());
     release_close.send(()).unwrap();
     stopping.await.unwrap().unwrap();
-    sending.await.unwrap().unwrap();
+    match sending.await.unwrap() {
+        Ok(_) => {}
+        // Asked again, as `admitted` does: once is not the fault.
+        Err(ConversationError::Storage(StorageError::Busy)) => {
+            fixture.admitted("during-stop", "During the stop").await;
+        }
+        Err(error) => panic!("the message waits for the stop and is admitted: {error:?}"),
+    }
+    assert!(matches!(
+        reading.await.unwrap(),
+        Ok(_) | Err(ConversationError::Storage(StorageError::Busy))
+    ));
     let settled = fixture.settled().await;
     assert_eq!(
         settled,
@@ -343,7 +399,7 @@ async fn a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue() {
             .holders_and_waiters(&fixture.id)
             == 0
         {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -369,13 +425,14 @@ async fn a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Row 3: the agent has the message when the stop comes. The stop holds the
-/// lock while the agent finishes what it was given, the message settles on
-/// the stopped agent, and the conversation opens again afterwards.
+/// Row 3: the agent has the message when the stop comes — behaviour the
+/// ordering keeps, not one it adds. The agent finishes what it was given, the
+/// message settles on the stopped agent, and the conversation opens again
+/// afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_desktop_stop_after_the_enqueue_settles_the_message() {
     let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
-    fixture.live().await;
+    let live = fixture.live().await;
     let (release, execution_gate) = oneshot::channel::<()>();
     *fixture.provider.execution_gate.lock().unwrap() = Some(execution_gate);
     fixture
@@ -385,19 +442,15 @@ async fn a_desktop_stop_after_the_enqueue_settles_the_message() {
         .unwrap();
     fixture.provider.execution_started.notified().await;
     let stopping = fixture.stop();
+    // The close detaches the agent first, and only then waits for the turn.
     tokio::time::timeout(BOUND, async {
-        while fixture
-            .service
-            .inner
-            .mode_changes
-            .holders_and_waiters(&fixture.id)
-            == 0
-        {
-            tokio::task::yield_now().await;
+        while live.agent.attachment_status().phase() == AttachmentPhase::Attached {
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
-    .expect("the stop takes the submission lock");
+    .expect("the stop reaches the agent while its turn runs");
+    drop(live);
     release.send(()).unwrap();
     stopping.await.unwrap().unwrap();
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
@@ -468,7 +521,7 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
     });
     tokio::time::timeout(BOUND, async {
         while fixture.provider.close_calls.load(Ordering::SeqCst) == 0 {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -484,7 +537,7 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
             .holders_and_waiters(&fixture.id)
             < 3
         {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -548,4 +601,53 @@ async fn the_wait_for_the_lock_and_the_stop_share_one_budget() {
         "the stop ended with its one budget, not a second one after the wait: {spent:?}"
     );
     sending.await.unwrap().unwrap();
+}
+
+/// Row 5: the stop has the lock and the agent's close runs past the budget.
+/// The stop answers over budget and carries on: it holds the lock until the
+/// close is confirmed and the slot let go, so a message sent meanwhile waits
+/// for it and runs on a new agent — never on the closed one, whose lifecycle
+/// would take it and never run it. Paused time, so the budget is exact.
+#[tokio::test(start_paused = true)]
+async fn a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go() {
+    let budget = Duration::from_millis(300);
+    let fixture = Fixture::new(budget).await;
+    fixture.live().await;
+    let (release_close, close_gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
+    let stopped = fixture.service.stop_active_agents().await;
+    assert!(
+        matches!(
+            &stopped,
+            Err(ConversationError::Retirement(failures))
+                if failures.len() == 1 && matches!(failures[0].1, AgentError::Deadline)
+        ),
+        "{stopped:?}"
+    );
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
+    let sending = fixture.send("after-budget", "After the budget", false);
+    fixture.lock_contended().await;
+    release_close.send(()).unwrap();
+    match sending.await.unwrap() {
+        Ok(_) => {}
+        Err(ConversationError::Storage(StorageError::Busy)) => {
+            fixture.admitted("after-budget", "After the budget").await;
+        }
+        Err(error) => panic!("the message waits for the stop and is admitted: {error:?}"),
+    }
+    let settled = fixture.settled().await;
+    assert_eq!(
+        settled,
+        vec![(
+            "after-budget".to_owned(),
+            ConversationMessageStatus::Completed
+        )]
+    );
+    assert_eq!(
+        fixture.provider.open_calls.load(Ordering::SeqCst),
+        2,
+        "the message opened the conversation again"
+    );
+    fixture.still_usable().await;
+    fixture.service.shutdown().await.unwrap();
 }

@@ -330,26 +330,39 @@ authority.
 
 ### A desktop stop and a submission
 
-A desktop stop (`ConversationService::stop_active_agents`) stops every live
-agent and leaves admission open. A submission holds its conversation's
-submission lock (`mode_changes`) from before its checks through the enqueue,
-so each owner's stop takes the same lock first, stops whatever agent is live
-then, and holds the lock until that stop ends. Without that order, a stop
-landing past the checks closed the agent under the submission. The closed
-lifecycle then reopened for a future attachment and admitted the message as
-waiting work that never ran. The receipt watcher kept that agent, and its
-history lease, so every later read answered `Busy` (#528). Retirement keeps
-its own order: it drains admission before it stops anything.
+A desktop stop (`ConversationService::stop_active_agents`) stops every agent
+live when its pass begins, and leaves admission open. A submission holds its
+conversation's submission lock (`mode_changes`) from before its checks through
+the enqueue. So each owner's stop takes the same lock first, stops whatever
+agent is live then, and holds the lock until that stop ends.
 
-The wait for the lock and the stop share the owner's one `stopMs` budget.
+Without that order, a stop landing past the checks closed the agent under the
+submission. The closed lifecycle then reopened for a future attachment and
+admitted the message as waiting work that never ran. The receipt watcher kept
+that agent, and its history lease, so every later read answered `Busy` (#528).
+Retirement keeps its own order: it drains admission before it stops anything.
+
+Every command that takes the lock waits for a stop in progress: a send, a read,
+a person's close. That is the same wait they already have behind a person's
+close. A stopped agent lets go of its history soon after the stop, not at the
+same moment, as after any close. So the first read after a stop can still
+answer `Busy` once; it does not last (#542).
+
+The wait for the lock and the stop share the owner's one `stopMs` budget. A
+stop that has the lock runs on a task of its own. Past the budget it is reported
+as over budget, and it carries on, still holding the lock, until the close is
+confirmed and the slot is released. The agent's close goes on regardless, so
+releasing the slot is the one part left to do. Until then, the closed agent must
+not be found by a submission.
 
 | Submission when the stop comes | Stop | Message | Test |
 | --- | --- | --- | --- |
-| Before its checks | Stops the agent first | Waits, then opens the conversation again and runs there | `a_message_sent_while_a_desktop_stop_runs_waits_and_runs_on_a_new_agent` |
-| Lock held by a command that let the owner go | Stops what is live when it takes the lock | — | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
+| Before its checks | Stops the agent first; a read waits for it too | Waits, then opens the conversation again and runs there | `a_message_sent_while_a_desktop_stop_runs_waits_and_runs_on_a_new_agent` |
+| Lock held by a command that let the owner go, and a message ahead of the stop opened it again | Stops what is live when it takes the lock | Settles on the agent it opened | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
 | Past its checks, before or in the enqueue | Waits for the enqueue, then stops the agent | Settles there: completed, or cancelled by the close | `a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks`, `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` |
 | Enqueued | Stops the agent | Settles there | `a_desktop_stop_after_the_enqueue_settles_the_message` |
-| Holds the lock past the budget | Not stopped: over budget, reported as a deadline; the agent stays owned | Runs; a later stop stops it | `a_desktop_stop_that_cannot_take_the_lock_within_its_budget_leaves_the_agent_running`, `the_wait_for_the_lock_and_the_stop_share_one_budget` |
+| Holds the lock past the budget (for example, waiting for its agent to attach) | Not stopped: over budget, reported as a deadline; the agent stays running and owned | Runs; a later stop stops it | `a_desktop_stop_that_cannot_take_the_lock_within_its_budget_leaves_the_agent_running`, `the_wait_for_the_lock_and_the_stop_share_one_budget` |
+| Comes after a stop that has the lock but runs past the budget | Over budget, reported as a deadline; carries on until the close is confirmed and the slot released | Waits, then opens the conversation again and runs there | `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go` |
 
 ## Enforcers and affected ownership
 

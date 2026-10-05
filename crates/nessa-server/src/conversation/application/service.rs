@@ -3395,10 +3395,9 @@ impl ConversationService {
         // Give every owner its own bounded attempt. A stalled opening or provider
         // cannot consume another owner's cleanup opportunity.
         let attempts = slots.into_iter().map(|(id, slot)| async move {
-            let deadline = Instant::now() + self.inner.deletion_budgets.stop;
             let stopped = match submissions {
                 Submissions::Drained => {
-                    self.stop_slot_by(&id, slot, actor, &McpAppInitiator::System, deadline)
+                    self.stop_slot(&id, slot, actor, &McpAppInitiator::System)
                         .await
                 }
                 Submissions::Admitted => {
@@ -3407,7 +3406,7 @@ impl ConversationService {
                     // here, or the conversation opened again after it answers
                     // `Busy` (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
                     drop(slot);
-                    self.stop_after_submission(&id, actor, deadline).await
+                    self.stop_after_submission(&id, actor).await
                 }
             };
             // Retirement reports every stop as the agent's error: over its
@@ -3444,8 +3443,15 @@ impl ConversationService {
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
     ) -> Result<(), StopFailure> {
-        let deadline = Instant::now() + self.inner.deletion_budgets.stop;
-        self.stop_slot_by(id, slot, actor, ended_by, deadline).await
+        match tokio::time::timeout(
+            self.inner.deletion_budgets.stop,
+            self.stopping(id, slot, actor, ended_by),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(StopFailure::Failed),
+            Err(_) => Err(StopFailure::OverBudget),
+        }
     }
 
     /// A desktop stop of one owner, ordered with its submissions: wait for
@@ -3455,73 +3461,84 @@ impl ConversationService {
     /// agent with the message in it, so the message settles there; one that
     /// comes after waits, and opens the conversation again (#528).
     ///
-    /// The wait counts against the owner's one stop budget, ending at
-    /// `deadline`. A submission holding the lock past it leaves this owner
-    /// unstopped — [`StopFailure::OverBudget`], with its agent running and
-    /// still owned — rather than stopping it under that submission
+    /// The wait and the stop share the owner's one stop budget. A
+    /// submission holding the lock past it leaves this owner unstopped —
+    /// [`StopFailure::OverBudget`], with its agent running and still owned —
+    /// rather than stopping it under that submission
     /// (`a_desktop_stop_that_cannot_take_the_lock_within_its_budget_leaves_the_agent_running`).
+    /// A stop that has the lock runs to its end on a task of its own, still
+    /// holding it: the agent's close goes on whether or not anyone waits for
+    /// it, and its slot has to be let go of before a submission can find the
+    /// closed agent there. Past the budget this answers `OverBudget` and the
+    /// stop carries on (`a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go`).
     async fn stop_after_submission(
         &self,
         id: &ConversationId,
         actor: &ActionContext,
-        deadline: Instant,
     ) -> Result<(), StopFailure> {
-        let Ok(_submissions) =
+        let deadline = Instant::now() + self.inner.deletion_budgets.stop;
+        let Ok(submissions) =
             tokio::time::timeout_at(deadline, self.inner.mode_changes.lock(id)).await
         else {
             return Err(StopFailure::OverBudget);
         };
         // The owner the lock's last holder left: a submission may have
         // released it or opened the conversation again while this waited.
-        let slot = self.inner.conversations.lock().await.get(id).cloned();
-        match slot {
-            Some(slot) => {
-                self.stop_slot_by(id, slot, actor, &McpAppInitiator::System, deadline)
-                    .await
-            }
-            None => Ok(()),
+        let Some(slot) = self.inner.conversations.lock().await.get(id).cloned() else {
+            return Ok(());
+        };
+        let service = self.clone();
+        let id = id.clone();
+        let actor = actor.clone();
+        let stop = tokio::spawn(async move {
+            let stopped = service
+                .stopping(&id, slot, &actor, &McpAppInitiator::System)
+                .await;
+            drop(submissions);
+            stopped
+        });
+        match tokio::time::timeout_at(deadline, stop).await {
+            Ok(Ok(stopped)) => stopped.map_err(StopFailure::Failed),
+            // Whatever it had done is unknown, so its cleanup is too.
+            Ok(Err(_panicked)) => Err(StopFailure::Failed(AgentError::CleanupUncertain)),
+            Err(_) => Err(StopFailure::OverBudget),
         }
     }
 
-    /// [`Self::stop_slot`], within a budget that ends at `deadline`.
-    async fn stop_slot_by(
+    /// Stop the agent of `slot`, however long that takes: wait for it to
+    /// finish opening if it has not, end its apps by `ended_by`, close it,
+    /// and release its slot once the close is confirmed.
+    async fn stopping(
         &self,
         id: &ConversationId,
         slot: Arc<Slot>,
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
-        deadline: Instant,
-    ) -> Result<(), StopFailure> {
-        let attempt = async {
-            loop {
-                let ready = slot.ready.notified();
-                tokio::pin!(ready);
-                ready.as_mut().enable();
-                if let Some(value) = slot.value.get() {
-                    return match value {
-                        Ok(live) => {
-                            self.end_apps(id, live, ended_by);
-                            match live.agent.close(actor.clone()).await {
-                                Ok(_) => {
-                                    live.join_attachment_owner().await;
-                                    self.release_slot(id, &slot).await;
-                                    Ok(())
-                                }
-                                Err(error) => Err(error),
+    ) -> Result<(), AgentError> {
+        loop {
+            let ready = slot.ready.notified();
+            tokio::pin!(ready);
+            ready.as_mut().enable();
+            if let Some(value) = slot.value.get() {
+                return match value {
+                    Ok(live) => {
+                        self.end_apps(id, live, ended_by);
+                        match live.agent.close(actor.clone()).await {
+                            Ok(_) => {
+                                live.join_attachment_owner().await;
+                                self.release_slot(id, &slot).await;
+                                Ok(())
                             }
+                            Err(error) => Err(error),
                         }
-                        // One rule for a failed opening: while it may still hold
-                        // what it launched, its stop cannot be confirmed.
-                        Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
-                        Err(_) => Ok(()),
-                    };
-                }
-                ready.await;
+                    }
+                    // One rule for a failed opening: while it may still hold
+                    // what it launched, its stop cannot be confirmed.
+                    Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
+                    Err(_) => Ok(()),
+                };
             }
-        };
-        match tokio::time::timeout_at(deadline, attempt).await {
-            Ok(result) => result.map_err(StopFailure::Failed),
-            Err(_) => Err(StopFailure::OverBudget),
+            ready.await;
         }
     }
 
