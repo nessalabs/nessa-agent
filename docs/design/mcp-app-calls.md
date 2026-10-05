@@ -401,8 +401,10 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   already holds (`holds_turn`, read from the SDK snapshot) is not asked
   again, since a denial could not take it back.
 - **One rule at the wire.** Every schema bound of both methods — a
-  message's text, each part of a context — is `invalid_request` at the wire
-  (`product/mcp_apps.rs`), with nothing recorded. `mcp_request_too_large` is
+  message's text, empty or past its bytes, and each part of a context — is
+  `invalid_request` at the wire (`product/mcp_apps.rs`, reading the
+  generated `MIN_MCP_MESSAGE_CHARACTERS`, `MAX_MCP_MESSAGE_BYTES` and
+  `MAX_MCP_CONTEXT_BYTES`), with nothing recorded. `mcp_request_too_large` is
   the service's answer, on record: past `max_input_bytes`, past
   `AppModelContext::MAX_BYTES` for both parts together, or past the review's
   room.
@@ -410,12 +412,18 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   first — its app, its server, its text or context — and its liveness after:
   so a released mount sending bad content is answered `invalid_request`, not
   `mcp_cancelled`.
-- **What a message is.** Text only. Blank is `invalid_request`, on record.
-  Past the schema's 8192 bytes — held equal to `ConversationSendParams.text`
+- **What a message is.** Text only. Empty is outside the schema's
+  `minLength`, `invalid_request` at the wire with nothing recorded (M3).
+  Blank — whitespace only — is within it, and is the conversation's own
+  rule: `invalid_request`, on record (M3). Past the schema's 8192 bytes — held equal to `ConversationSendParams.text`
   by the generator, and published as the contract's `MAX_MCP_MESSAGE_BYTES`,
   which the gateway's configuration of `max_input_bytes` is held to too — it
   is `invalid_request` at the wire. Past the service's own `max_input_bytes`
-  (never larger) it is `mcp_request_too_large`, on record. A review that
+  (never larger) it is `mcp_request_too_large`, on record. Both of the
+  conversation's rules have one owner, which `submit_as` reads for every
+  message and `app_message` asks early, so the app is told on record before
+  anyone is asked: `blank_text` and `ConversationLimits::past_input_bound`
+  (`service.rs`). A review that
   would not fit `MAX_APP_REVIEW_BYTES` is `mcp_request_too_large`, and no
   review opens.
 - **One request at a time.** While a message is in review or being sent, the
@@ -450,8 +458,9 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   failed among them. A release or stop that lands after the refusal leaves
   it as it was: a `turn_running` stays `turn_running`. Anything else is
   `MessageNotSent` (M13): a refusal while the message's own opening is still
-  live. A stop that lands after the recheck and before the enqueue is the
-  agent's own refusal (M13b): it was asked. Only `submission_unresolved` (the
+  live. A desktop stop that lands after the recheck and before the enqueue
+  is not seen by the gateway at all (M13b): the stopped agent may still
+  admit the message, which is then stranded (#528). Only `submission_unresolved` (the
   agent's admission failing inside the enqueue), or the submission's own
   task failing once the agent was asked, is `MessageUnresolved` (M15):
   "unknown" is what the gateway knows of a task that failed after asking,
@@ -558,7 +567,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 |---|---|---|---|---|
 | M1 | — | the 32 gateway slots, or the socket's 4, are full | — | `temporarily_unavailable`; nothing recorded |
 | M2 | — | the app is not an MCP tool call with a UI here, or names another server | — | `Refused(mcp_app_unknown / mcp_server_mismatch)` |
-| M3 | — | blank text | — | `Refused(invalid_request)` |
+| M3 | — | empty text / blank text (whitespace only) | — | `invalid_request` at the wire (the schema's `minLength`), nothing recorded / `Refused(invalid_request)`, on record (the conversation's `blank_text`) |
 | M4 | — | text past the schema bound / past `max_input_bytes` | — | `invalid_request` at the wire, nothing recorded / `Refused(mcp_request_too_large)` |
 | M5 | — | the mount was released, or its opening ended | — | `Refused(mcp_cancelled)`, by the system |
 | M6 | — | the derived execution is a turn the live conversation holds (a retry) | Sending | `Admitted`; no review |
@@ -572,7 +581,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 | M11 | Sending, under the lock | a turn runs or input waits (not for M6) | — | `Refused(turn_running)`; nothing taken |
 | M12 | Sending, under the lock | idle; the enqueue returns (`InputAccepted` saved) | — | carries the contexts it took (C9); `MessageSent{execution_id}`; answered `{executionId}`; the transcript shows the person's turn with `app` set |
 | M13 | Sending | the submission is refused while its opening is live (deadline, storage, invalid, conflict, …), or its task failed before the agent was asked | — | `MessageNotSent{execution_id, code}`, by the app — by the system for a task that failed; that code; what it took is C11 |
-| M13b | Sending, past the recheck | a desktop stop ends the opening after the recheck and before the enqueue | — | the agent was asked, and refuses it (`Closed`): `MessageNotSent{execution_id, code}`, by the app; what it took, if anything, is C11. Not M10: the recheck passed, and the agent's refusal is the answer |
+| M13b | Sending, past the recheck | a desktop stop (which takes no submission lock) ends the opening after the recheck and before the enqueue | — | the stop drops what is held first, `ContextDropped{conversation_ended}` by the stopper (the system, for a desktop stop), so the message takes nothing. The stopped agent may still admit it: `MessageSent{execution_id}`, by the app, answered `{executionId}`, carrying nothing. The message is stranded in the stopped agent and never runs, and the conversation answers `Busy` afterwards; a person's message does the same (#528, which predates this). Not M10: the recheck passed |
 | M14 | Sending | taken, admission evidence failed | — | `MessageSent{execution_id, code}`; the evidence failure's code |
 | M15 | Sending | `SubmissionUnresolved` (the agent's admission failed inside the enqueue), or the submission's own task failed once the agent was asked | — | `MessageUnresolved{execution_id, code}`, by the app — by the system for a task that failed; that code; what it took is C11b. Of a task that failed once the agent was asked, the gateway knows only that it asked: "unknown" is literally true, and the SDK's own record of the turn settles it |
 | M16 | before the send | a record cannot be written | — | `audit_unavailable`; the step not taken |
@@ -673,9 +682,13 @@ sequenceDiagram
   took beyond its own `MessageUnresolved` (C11b).
 - A stop that ends a message's opening before it is refused is M10 whatever
   then refused it, a failed reopening among them: the message's own apps
-  are asked, as it is refused. One that ends it after the recheck and
-  before the enqueue is the agent's refusal, M13b, by the app: the agent
-  was asked. A submission task that panicked before the agent was asked
+  are asked, as it is refused. A desktop stop that ends it after the
+  recheck and before the enqueue (M13b) may leave the message admitted by
+  the stopped agent, recorded `MessageSent` by the app and carrying
+  nothing, since the stop dropped what was held as `conversation_ended` by
+  the stopper: the message is stranded there and never runs, and the
+  conversation answers `Busy` afterwards. That is #528's to fix, for a
+  person's message as much as an app's. A submission task that panicked before the agent was asked
   stays M13, by the system, even if its opening also ended: a fault, not a
   refusal.
 
@@ -686,7 +699,7 @@ Each row has at least one test, named after it.
 - `crates/nessa-server/tests/conversation/app_messages.rs`:
   - M1, C1 `m1_c1_messages_and_contexts_take_one_of_the_gateways_app_call_slots`
   - M2 `m2_a_message_from_no_app_or_for_another_server_is_refused_on_record`
-  - M3, M4 (the service's bound) `m3_m4_a_blank_message_or_one_past_the_input_bound_is_refused`
+  - M3 (blank, on record), M4 (the service's bound) `m3_m4_a_blank_message_or_one_past_the_input_bound_is_refused`; M3 at the wire: `gateway.rs` below
   - M5 `m5_a_released_mount_sends_nothing_and_asks_nobody`
   - M6, M17 `m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_again`, and after a reopening `m17_a_retry_of_a_sent_message_after_a_reopening_is_not_asked_again`
   - M6b `m6b_the_same_request_while_it_is_in_flight_is_refused` (and M6 once it settled), `m6b_a_request_whose_caller_went_is_free_to_be_sent_again`
@@ -697,7 +710,7 @@ Each row has at least one test, named after it.
   - M10 `m10_a_release_before_the_submission_lock_refuses_the_message`, a stop then an opening that failed (G3-3) `m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`, `m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_it`, `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`, `m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing`, `m10_a_message_admitted_in_one_opening_is_not_sent_into_another`, `m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not_unresolved`, `m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message`; read as it is refused, so a release after a refusal keeps its code (G4-2): `m10_a_release_after_a_turn_running_refusal_keeps_turn_running`
   - M11 `m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`, `m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothing_runs`
   - M13 `m13_a_message_the_conversation_refuses_is_on_record_as_not_sent` (and its code, in M6's conflict), `m13_a_message_whose_submission_task_failed_before_the_agent_was_asked_is_not_sent` (by the system)
-  - M13b: no test. The only await between the recheck and the enqueue is the SDK's `idle_for_approval_change`, on the agent's scheduler lock; the one thing the fixture can hold that lock with outside the conversation's own lock is a mode change made on the agent directly, held at the provider. Tried (round 4): a desktop stop that lands while that change holds the lock ends the apps, but the agent still admits the message once the change lets go, so it is sent rather than refused `Closed`, and the row cannot be reached that way. Its recording is M13's (`m13_a_message_the_conversation_refuses_is_on_record_as_not_sent`, by the app)
+  - M13b: no test here. The row records a fault, not a behaviour this PR keeps: the stranded message and the `Busy` that follows are #528's, which is to test a person's message and an app's with the stop landing past the gateway's check. Round 5's probe reached it by holding the SDK's scheduler lock with a mode change made on the agent directly, the one lever the fixture has between the recheck and the enqueue
   - M14, C13 `m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carried_is_lost`
   - M15, C11b `m15_c11b_a_message_whose_enqueue_failed_once_the_agent_was_asked_is_unresolved` (inside the enqueue: the "asked" boundary), `m15_a_message_whose_submission_task_failed_once_the_agent_was_asked_is_unresolved` (by the system)
   - M16 `m16_a_message_whose_step_cannot_be_recorded_is_not_sent_or_shown`
@@ -744,7 +757,10 @@ Each row has at least one test, named after it.
 - `crates/nessa-server/tests/composition/mcp_servers.rs`: the recorders as
   composition starts them write a drop reported to the sink it hands the
   conversation service, before the exit's finish returns
-  (`a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits`),
+  (`a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits`);
+  a context the service itself drops, on a close, reaches that audit through
+  the `McpAppPorts` that `local_auth` wires (`mcp_app_ports`), by the closer
+  (`a_composed_gateways_dropped_context_is_written_by_its_recorder`);
   and the exit finishes both under the one bound, not one after the other
   (`recorders_finish_together_under_one_bound`). The order — recorders after
   the conversations — is `passive_cleanup`'s, by reading.
@@ -757,9 +773,14 @@ Each row has at least one test, named after it.
 - `crates/nessa-server/tests/conversation/agreement.rs`: `McpAppCode::ALL`
   against the protocol, and the bounds the schema states
   (`an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps`).
-- `crates/nessa-server/tests/conversation/wire_errors.rs`: R1-8
-  (`a_message_naming_an_app_the_session_never_saw_is_an_invalid_request`).
-- `crates/nessa-server/tests/mcp_servers/gateway.rs`: both methods on the
+- `crates/nessa-server/tests/conversation/error_code.rs`, beside
+  `application/error_code.rs`: R1-8
+  (`a_message_naming_an_app_the_session_never_saw_is_an_invalid_request`),
+  and each app refusal and audit code on the wire as itself.
+- `crates/nessa-server/tests/mcp_servers/gateway.rs`: M3 at the wire, an
+  empty message refused with nothing recorded and a blank one on record
+  (`m3_an_empty_message_is_refused_at_the_wire_and_a_blank_one_on_record`);
+  both methods on the
   app lane, M1 and C1 at the socket, M4 at the wire, C3 at the wire for each
   part past its schema bound — a multibyte part at exactly 8192 bytes
   applied, one byte over refused with nothing recorded — and on record for
@@ -794,7 +815,7 @@ Each row above has a test, named after it:
 - Lanes over the socket: `mcp_app_lane` in
   `crates/nessa-server/tests/mcp_servers/gateway.rs`.
 - Bounds and codes the schema states again:
-  `crates/nessa-server/tests/conversation/agreement.rs` and `wire_errors.rs`.
+  `crates/nessa-server/tests/conversation/agreement.rs` and `error_code.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
 - An app in its conversation, the gateway's rows: listed under
   ["Tests (gateway)"](#tests-gateway) above.

@@ -122,8 +122,10 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   transcript says so (`ConversationMessage.app`, `ConversationPending.app`),
   and the agent is given it as the person's. Every message waits on its own
   review in `permissions`, as a destructive tool's call does. Text is at most
-  what `conversation.send` takes; past the schema's bound it is
-  `invalid_request`, refused before anything is recorded. It is shown whole
+  what `conversation.send` takes, and not empty; outside the schema's bounds
+  it is `invalid_request`, refused before anything is recorded. Blank text,
+  whitespace only, is within them, and is `invalid_request` on record, the
+  conversation's refusal. It is shown whole
   in its review, which must fit the 16 000 bytes an app's review may take of
   the view: text heavy in quotes or control characters can be past that
   while within the schema's bound, and is refused `mcp_request_too_large`
@@ -139,11 +141,11 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   neither part, or only an empty text, clears it. The next message admitted
   into the conversation while nothing runs and no input waits — the
   person's or an app's — takes every context held and carries them ahead of
-  its text: taken, they are no longer held. If that message is then refused,
-  or its turn fails, they are lost, and the app may give them again. A
-  message queued
-  behind a running turn, or steered into one, carries none and leaves them
-  held. A conversation's updates are taken one at a time, each on record
+  its text: taken as it is read, they are no longer held. If that message is
+  then refused, they are lost, each on record as dropped `not_sent`; if its
+  turn fails, they are lost. Either way the app may give them again. A
+  message queued behind a running turn, or steered into one, carries none
+  and leaves them held. A conversation's updates are taken one at a time, each on record
   before it is held; the structured content is held exactly as given. They
   are not part of the transcript. A release of the mount, or the end of the
   opening, drops a context still held unsent; one a message took goes with
