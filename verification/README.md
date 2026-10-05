@@ -23,6 +23,8 @@ verification/
     fixture.tsx             typed current gateway view cases
   desktop/
     CHECKLIST.md            what we always test and reproduce, with the contract each item holds
+    evidence/
+      conversation-unread/  screenshots the pull request shows for that check
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases

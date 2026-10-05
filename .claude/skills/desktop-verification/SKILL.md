@@ -135,3 +135,22 @@ Report against [evidence and closure](../../../CODING_STANDARDS.md#evidence-and-
 
 Label a hypothesis as one. A green run of the wrong check, engine or build
 is not evidence.
+
+## Evidence on the pull request
+
+A desktop change's screenshots and the lines that prove the check go on the
+pull request, in the description and in one comment. A link to an agent
+artifact page does not render on github.com.
+
+Commit the shots on the branch under `verification/desktop/evidence/<check>/`,
+named for the surface (`transcript-note.png`, `agents-peek.png`). Crop to the
+surface that changed and keep each file small. In the description and the
+comment, link them from the repo root so GitHub renders them inline:
+
+```md
+![Transcript note](verification/desktop/evidence/conversation-unread/transcript-note.png)
+```
+
+Quote only the short lines: each `ok` or `FAIL` for that check, and the
+assertion lines from a revert probe. Leave out the JSON document and the
+server warmup.
