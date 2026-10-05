@@ -8,6 +8,10 @@ For extension and dependency rules, see [AGENTS.md](../AGENTS.md),
 [coding standards](../CODING_STANDARDS.md), and
 [codebase structure](codebase-structure.md).
 
+For lifecycle diagrams and user flows, browse the [system state atlas](state/README.md).
+Its component maps lead to scoped statecharts with source and regression links;
+this document remains the owner of the implementation ownership map.
+
 Every change must meet the [repository-wide organization gate](../CODING_STANDARDS.md#organization-across-the-repository).
 Keep ownership maps, tests, and documentation aligned with the implementation;
 this applies equally to host, shell, server, SDK, and supporting scripts.
@@ -873,8 +877,9 @@ provider adapters remain separate features. Existing design proposals do not rep
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
 The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. The server `device_pairing` consumer implements native enrollment on top of it: the
-gateway runtime and listener, and the device client, over the JSON codec, framing
-and deadline socket both ends share in `crates/nessa-protocol` —
+gateway runtime and listener. The device client is owned by `nessa-client-core`.
+Both consume the JSON codec, framing and enrollment deadline socket in
+`crates/nessa-protocol` —
 owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
 It ends at Approved. When `config.json` names `native.listenAddress`, composition
 restores the gateway key before any bind, mounts the listener and joins its drain
@@ -906,13 +911,21 @@ product DTOs, handshake rules and read codecs, native pairing framing and its
 deadline socket, and the conversation read model (`ConversationView` and the
 projection that folds committed records into it). The gateway depends on it,
 and so does the device client; it depends on neither
-([ADR 483](adr/todo/483-protocol-and-client-core-crates.md)).
+([ADR 483](adr/done/483-protocol-and-client-core-crates.md)).
 
 `nessa-protocol/src/product_contract/generated.rs` contains pure schema-derived
 product outcome values and close policy. Product DTOs/socket and read-only sync
 application ports consume that publication. The product schema owns its
 vocabulary; this contract contains no routing or IO and is separate from generic
 protocol frames.
+
+**Device client core** (`crates/nessa-client-core`) — reusable Rust library and
+standalone retained-sync example. Owns device enrollment, private profile/cache,
+finite retained reads and bounded watch composition. The gateway's real paired
+process tests consume its public entry point through a dev-dependency. Shared
+schemas, framing and conversation projection remain in `nessa-protocol`; the
+client graph cannot reach the gateway runtime. See the
+[module map](../crates/nessa-client-core/README.md).
 
 ## Gateway authorization
 

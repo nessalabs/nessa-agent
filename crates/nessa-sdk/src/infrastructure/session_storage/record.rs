@@ -12,6 +12,7 @@ use super::{
     record_writer::RecordWriter,
     terminal_discovery::TerminalCache,
 };
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::{
     application::agent_execution::sessions::{
         storage::{
@@ -129,9 +130,18 @@ impl RecordStorage {
         self.runtime().await.map(|_| ())
     }
 
+    /// The SQLite runtime, opening it on first use.
+    ///
+    /// The worker thread's ready oneshot wakes this wait. `contain_caller_wake`
+    /// is the only owner of that fault, for `initialize` and for every other
+    /// method whose first call opens the runtime.
     pub(super) async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
         self.owner.initialize()?;
-        initialize_runtime(&self.runtime, &self.options).await
+        contain_caller_wake(
+            "record storage runtime",
+            initialize_runtime(&self.runtime, &self.options),
+        )
+        .await
     }
 
     async fn open_inner(
@@ -255,7 +265,9 @@ impl SessionStorage for RecordStorage {
         Box::pin(async move { self.open_inner(id, true).await })
     }
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
-        Box::pin(async move { self.read_committed_source(&id).await })
+        Box::pin(contain_caller_wake("record committed read", async move {
+            self.read_committed_source(&id).await
+        }))
     }
 }
 
@@ -676,10 +688,8 @@ mod tests {
         );
         assert_eq!(watch_ready(&mut healthy), ChangeWatchState::Dirty);
         drop(wait);
-        assert_eq!(
-            watch_ready(&mut faulty),
-            ChangeWatchState::NotificationFailed
-        );
+        // The panicking waiter lost that wake. The notice stayed Dirty.
+        assert_eq!(watch_ready(&mut faulty), ChangeWatchState::Dirty);
         // The exact completed retry observes intact committed-prefix bookkeeping.
         lease
             .save_changes(
@@ -700,10 +710,8 @@ mod tests {
         ));
         drop(lease);
         storage.shutdown().await.unwrap();
-        assert_eq!(
-            watch_ready(&mut faulty),
-            ChangeWatchState::NotificationFailed
-        );
+        // A waker panic is not a terminal notice, so shutdown still closes it.
+        assert_eq!(watch_ready(&mut faulty), ChangeWatchState::Closed);
         drop(registrations);
         drop(faulty);
     }

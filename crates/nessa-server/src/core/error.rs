@@ -22,6 +22,42 @@ use std::io::{self, ErrorKind};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+/// Browser serving failed, and shutdown from the same run did not confirm.
+///
+/// The browser error and the shutdown evidence are the originals from that
+/// run. Neither is rewritten into the other. A confirmed shutdown is
+/// [`RunError::Serve`] alone, because there is no shutdown failure to keep.
+/// `shutdown` is `None` when cleanup never published a report — the same fact
+/// as [`RunError::Shutdown`] with `None`, not a successful stop.
+/// [`std::error::Error::source`] on the [`RunError`] that carries this is the
+/// browser error; the shutdown evidence stays in `shutdown`.
+///
+/// The value is boxed where [`RunError`] carries it so the other fatal errors
+/// stay small enough to return directly.
+#[derive(Debug)]
+pub struct ServeAndShutdown {
+    serve: io::Error,
+    shutdown: Option<ShutdownFailure>,
+}
+
+impl ServeAndShutdown {
+    /// Both originals from one run. `shutdown` is `None` when cleanup never published.
+    pub(crate) fn new(serve: io::Error, shutdown: Option<ShutdownFailure>) -> Self {
+        Self { serve, shutdown }
+    }
+
+    /// The error the browser listener returned.
+    pub fn serve(&self) -> &io::Error {
+        &self.serve
+    }
+
+    /// The shutdown report that did not confirm, or `None` when shutdown
+    /// never reported.
+    pub fn shutdown(&self) -> Option<&ShutdownFailure> {
+        self.shutdown.as_ref()
+    }
+}
+
 /// Fatal errors that stop the server process.
 #[derive(Debug)]
 pub enum RunError {
@@ -58,6 +94,9 @@ pub enum RunError {
         source: io::Error,
     },
     Serve(io::Error),
+    /// Browser serving failed, and shutdown from the same run did not confirm.
+    /// See [`ServeAndShutdown`].
+    ServeAndShutdown(Box<ServeAndShutdown>),
     /// Composed owners did not confirm cleanup on the way down. `Some` is the
     /// shutdown report that did not confirm: every owner's typed outcome, and
     /// the first owner, in cleanup order, whose outcome is still unknown.
@@ -322,6 +361,18 @@ impl fmt::Display for RunError {
                 _ => write!(f, "failed to bind {addr}: {source}"),
             },
             Self::Serve(source) => write!(f, "server stopped: {source}"),
+            Self::ServeAndShutdown(failure) => match failure.shutdown() {
+                Some(error) => write!(
+                    f,
+                    "server stopped: {}; shutdown did not confirm all cleanup: {error}",
+                    failure.serve()
+                ),
+                None => write!(
+                    f,
+                    "server stopped: {}; shutdown never reported whether cleanup completed",
+                    failure.serve()
+                ),
+            },
             Self::Shutdown(Some(error)) => {
                 write!(f, "shutdown did not confirm all cleanup: {error}")
             }
@@ -351,6 +402,7 @@ impl std::error::Error for RunError {
             | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
+            Self::ServeAndShutdown(failure) => Some(failure.serve()),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),
             Self::Native(NativeFailure::Directory(source) | NativeFailure::Bind { source, .. }) => {
                 Some(source)

@@ -28,10 +28,10 @@ use nessa_auth::{
     },
     domain::{pairing::TerminalCause, Action, AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_server::{
     app::dependencies::RuntimeDependencies, conversation::infrastructure::LocalReceiverAuthority,
-    device_pairing::infrastructure::NativeEnrollmentClient,
 };
 use serde_json::{json, Value};
 use std::{
@@ -583,7 +583,7 @@ async fn a_missing_journal_stops_a_gateway_that_still_owes_cleanup() {
     assert!(journal.is_file(), "the journal was written while serving");
     std::fs::remove_file(&journal).unwrap();
     let status = tokio::task::block_in_place(|| gateway.start_until_exit());
-    assert_eq!(status.code(), Some(34), "{status}");
+    assert_eq!(status.code(), Some(35), "{status}");
     assert!(
         !journal.exists(),
         "startup created a journal while cleanup is owed"

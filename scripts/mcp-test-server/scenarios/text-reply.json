@@ -1,0 +1,7 @@
+{
+  "turns": [
+    {
+      "steps": [{ "do": "text", "chunks": ["Ready."] }, { "do": "end" }]
+    }
+  ]
+}

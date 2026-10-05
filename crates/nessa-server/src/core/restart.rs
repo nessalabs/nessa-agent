@@ -113,6 +113,7 @@ pub(super) fn restart(error: &RunError) -> Restart {
         | RunError::Agent(_)
         | RunError::Bind { .. }
         | RunError::Serve(_)
+        | RunError::ServeAndShutdown(_)
         | RunError::Shutdown(_)
         // The rest of native pairing can clear: a held private state, a taken
         // port, a failed listener, unavailable storage.
@@ -123,6 +124,7 @@ pub(super) fn restart(error: &RunError) -> Restart {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ServeAndShutdown;
     use crate::device_pairing::application::{CleanupError, ReceiverError};
     use crate::env::{EnvironmentError, HOST};
     use nessa_auth::domain::pairing::PairingError;
@@ -203,6 +205,10 @@ mod tests {
                 source: Error::from(ErrorKind::AddrInUse),
             },
             RunError::Serve(Error::from(ErrorKind::BrokenPipe)),
+            RunError::ServeAndShutdown(Box::new(ServeAndShutdown::new(
+                Error::from(ErrorKind::BrokenPipe),
+                None,
+            ))),
             RunError::Shutdown(None),
             // No typed cause to judge: the message is prose, and prose is not
             // evidence that the next attempt would fail the same way.

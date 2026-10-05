@@ -12,9 +12,12 @@
  * keychain the gateway reads, Codex's from its own home, Opencode's from
  * Nessa's credential store — and creates no account and writes no credential.
  * A gateway without one refuses the conversation, and the run fails there.
- * It allows only calls to the test server's tools, each once; anything else
- * the agent asks for is left unanswered. It exits non-zero unless the turn
- * completed and `show_chart` yielded a widget part in the transcript.
+ * It asks for five of the test server's tools, each once (`toolPrompt`). It
+ * allows each permission request for a tool of the test server once, never
+ * a standing approval (`permissionDecisions`), and leaves anything else the
+ * agent asks for unanswered. The calls made are recorded in `summary.json`
+ * for review, not checked: it exits non-zero unless the turn completed and
+ * `show_chart` yielded a widget part in the transcript.
  *
  * The harness is given a stand-in (`nessa mcp-relay`) in the test server's
  * place; for each harness session that starts it, the gateway starts the
@@ -56,17 +59,19 @@ import {
   agentCommand,
   serverScript,
   startLocalGateway,
+  toolPrompt,
 } from "./local-gateway.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-/** What the model is asked to do: call every tool once, in order. */
-export const PROMPT = [
-  `Use the tools of the "${SERVER}" MCP server. Call each of these exactly once, in this order,`,
-  "waiting for each result before the next: report_rows (no arguments), link_resources",
-  '(no arguments), rows.get with {"id": 2}, always_fails (no arguments), show_chart (no',
-  "arguments). Do not use any other tool. When all five have returned, reply with DONE.",
-].join(" ")
+/** What the model is asked to do: call these five tools once each, in order. */
+const PROMPT = toolPrompt([
+  { name: "report_rows" },
+  { name: "link_resources" },
+  { name: "rows.get", args: { id: 2 } },
+  { name: "always_fails" },
+  { name: "show_chart" },
+])
 
 async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))]) {
   const command = agentCommand(agent)

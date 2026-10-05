@@ -6,9 +6,8 @@ use super::{
 };
 use crate::attachments::application::{AttachmentCaller, BeginError, BeginOutcome, BeginUpload};
 use nessa_auth::application::session::AuthenticatedSession;
-use nessa_protocol::product::generated::{
-    AttachmentBeginParams, AttachmentBeginResult, ConversationErrorCode,
-};
+use nessa_protocol::product::generated::{AttachmentBeginParams, AttachmentBeginResult};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
 pub(super) async fn dispatch(

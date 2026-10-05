@@ -1,9 +1,10 @@
 //! What the durable MCP App record holds, what it keeps out, and what it
 //! refuses to overwrite.
 use super::*;
-use crate::conversation::application::{McpAppCode, McpAppRef, TicketEnd};
+use crate::conversation::application::{McpAppRef, TicketEnd};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A clock that answers what it is told, one tick per question.
@@ -110,7 +111,7 @@ async fn a_resource_read_records_the_uri_it_asked_for() {
     let directory = root.path().join("mcp-apps");
     let audit = audit_at(&directory, 500);
     let mut record = call(
-        McpAppAuditPhase::Refused(McpAppCode::AppUnknown),
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpAppUnknown),
         app_initiator(),
     );
     record.ask = McpAppAsk::ReadResource {
@@ -142,7 +143,7 @@ async fn every_phase_of_one_request_is_its_own_record() {
     let review = || "permission-1".to_string();
     let cases = [
         (
-            McpAppAuditPhase::Refused(McpAppCode::ServerMismatch),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpServerMismatch),
             app_initiator(),
             json!({"kind": "refused", "code": "mcp_server_mismatch"}),
         ),
@@ -275,7 +276,7 @@ async fn each_withdrawal_and_failure_keeps_its_cause() {
     let directory = root.path().join("mcp-apps");
     audit_at(&directory, 1)
         .record(call(
-            McpAppAuditPhase::Completed(McpAppOutcome::Failed(McpAppCode::TimedOut)),
+            McpAppAuditPhase::Completed(McpAppOutcome::Failed(ConversationErrorCode::McpTimedOut)),
             McpAppInitiator::System,
         ))
         .await
@@ -404,7 +405,7 @@ async fn a_record_larger_than_any_stored_is_refused_rather_than_written() {
     let directory = root.path().join("mcp-apps");
     let audit = audit_at(&directory, 1);
     let mut record = call(
-        McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge),
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpRequestTooLarge),
         app_initiator(),
     );
     record.ask = McpAppAsk::ReadResource {

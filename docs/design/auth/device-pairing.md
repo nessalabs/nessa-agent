@@ -764,14 +764,14 @@ Extend the current request/control admission representation, not NativeService c
 | D3 | Caller/socket disappears while approved stage/cleanup SQL closure is held | Detached request holds original shared permit; physical stage/cleanup lease retains registry and exact effect correlation. Product drain remains pending until actual route completes; native drain remains pending until physical closure releases. `owner_shutdown_waits_for_detached_pairing_effect`. |
 | D4 | Native listener/registration and conversation shutdown have independent failures | Run every original stop future, collect all outcomes, never short-circuit another stop because one failed. Report carries independent optional ConversationError and NativeShutdownError; unreported remains distinct. No relabeling original terminal cause/initiator. `owner_shutdown_retains_independent_failures`. |
 | D5 | Both shared product capacities drained and original native listener/registration physically drained | Only then run bounded original Terminal cleanup lookup/fence reconciliation. Configured max_receipts/max_registry_bytes and the original StageOwnership recheck remain enforcers; terminal cleanup-pending is not limited to32. Preserve Claimed/Approved/Staging without automatic consent/activation. `owner_shutdown_reconciles_after_original_dispatch_drain`. |
-| D6 | Reconciliation unavailable/uncertain, or shutdown waiter lost/panics | Keep canonical cleanup pending and original physical owners retained by owned shutdown task. The shutdown report slot stays `None` until the actual result, read as `RunError::Shutdown(None)` (never reported); no success or private-store release claim. `owner_shutdown_loss_keeps_original_physical_owners`. |
+| D6 | Reconciliation unavailable/uncertain, or the cleanup owner is lost or panics | Reconciliation that does not complete is `NativeShutdownFailure::Cleanup` on the published report (the ordering table's D6, `shutdown_settles_ended_enrollments_after_the_drains`). A cleanup owner that never publishes leaves the slot `None`, read as `RunError::Shutdown(None)`. A panic after publication leaves that report. `compose_run_result` returns the join as `Shutdown(None)` only when browser serving succeeded, the native listener did not fail, and the report had confirmed. Otherwise the browser error, the listener failure, or the published report is the result. Drop does not start another drain or reconciliation and does not claim the private store was released. `cleanup_owner_panic_is_returned_to_process_composition`; `a_shutdown_that_never_reported_is_not_treated_as_confirmed`. |
 | D7 | All stops/drains/reconciliation confirmed | Release retained private-state/runtime/registry composition after original result; current browser serve shutdown reports confirmed. Subsequent open succeeds with original state, not regenerated identities. `owner_shutdown_confirmed_allows_exact_reopen`. |
 
-Implementation locations: product/state.rs capacity constants/Notify/owned-permit wrapper plus close_and_drain operation; product/socket.rs wraps admitted original permits and classifies pairing deny/cancel as existing controls. composition/native_pairing.rs owns prepared listener/private-state/runtime and original joined task, including bounded pending cleanup coordinator. composition/root.rs launches native lifecycle only after both binds/startup/endpoint preparation, records combined shutdown report before invoking stop, polls original stop futures concurrently with product drain, and invokes final native terminal reconciliation after drain. core/error.rs exposes finite NativeShutdownError and combined shutdown error retaining the existing ConversationError; core restart/exit-code still use existing shutdown classification. The report is the one `ShutdownReport` in `core/shutdown.rs` (its states and orderings are the shutdown report table in [authorized record reads](../authorized-record-reads.md#shutdown-report-order-table)), not an added Connect ledger.
+Implementation locations: product/state.rs capacity constants/Notify/owned-permit wrapper plus close_and_drain operation; product/socket.rs wraps admitted original permits and classifies pairing deny/cancel as existing controls. composition/native_pairing.rs owns prepared listener/private-state/runtime and original joined task, including bounded pending cleanup coordinator. composition/root.rs launches native lifecycle only after both binds/startup/endpoint preparation, records combined shutdown report before invoking stop, polls original stop futures concurrently with product drain, and invokes final native terminal reconciliation after drain. `core/error.rs` exposes `RunError::Shutdown` and `RunError::ServeAndShutdown`. A shutdown failure alone exits as `shutdown` and is worth starting again. Browser serving and shutdown together exit as `serveAndShutdown` (34) and are also worth starting again. The report is the one `ShutdownReport` in `core/shutdown.rs` (its states and orderings are the shutdown report table in [authorized record reads](../authorized-record-reads.md#shutdown-report-order-table)), not an added Connect ledger.
 
-Normal peer failures are observed with redacted finite facts. Requested native listener accept failure triggers the existing whole-gateway stop promptly. Its finite serving failure is retained independently alongside conversation/native shutdown failures; browser health cannot continue advertising a configured native service after that task has silently ended. The original shutdown report slot stays `None`, read as `RunError::Shutdown(None)`, until the owned shutdown task reports its actual combined result.
+Normal peer failures are observed with redacted finite facts. A native listener accept failure triggers the existing whole-gateway stop promptly (row S14), so browser health cannot keep advertising a native service whose listener has ended. That listener failure is the process result when browser serving itself succeeded; the shutdown report is read first, and when it did not confirm it is taken so a later read cannot claim success. `native_listener_failure_stops_the_gateway_and_is_the_process_result`. The report slot stays `None` until `passive_cleanup` publishes; an unpublished slot reads as `RunError::Shutdown(None)`.
 
-A cancelled root shutdown future must leave the *owned original shutdown task* running; merely dropping join handles is not sufficient to claim drain. Existing physical owners already retain themselves on caller loss, but the combined shutdown observer must also retain private state until terminal reconciliation settles. No new approval/authority flag is introduced; task ownership plus current semaphore/registry evidence is sufficient. All test barriers bounded and physical children joined before evidence is accepted.
+A cancelled root future drops its join of the spawned cleanup task. The task keeps running, and dropping the join does not confirm drain. If that task panics, the futures it still holds drop with it. Nothing else re-drains or reconciles. No new approval/authority flag is introduced; task ownership plus current semaphore/registry evidence is sufficient. All test barriers bounded and physical children joined before evidence is accepted.
 
 ### Fixed manual-code output publication
 
@@ -826,24 +826,18 @@ cannot claim success.
 | Browser serving fails, conversation or native stop reports a failure | `ServeAndShutdown` retains original browser error and combined independent stop evidence; same fixture and native counterpart. |
 | Browser serving fails, stop never reports | `ServeAndShutdown` retains original browser error with unreported cleanup, never inventing a successful stop; `serving_failure_preserves_unreported_shutdown`. |
 
-### Original shutdown panic retention
+### Cleanup owner loss
 
-The root installs private `ShutdownRetention` before any stop await, including
-before polling the owned stop task. Its owned values are the same product state,
-conversation service and `PreparedNative`/private directory. If that task panics,
-is never polled, or is cancelled, Drop closes current admission and asks the same
-idempotent stop/drain owners concurrently. It retains the private lock until both
-product request/control permits and native connection/registration physical
-permits return. Drop performs no terminal reconciliation and writes no report;
-the empty report slot (`Shutdown(None)`) and canonical original cleanup-pending
-remain truthful. Normal
-shutdown takes this retained ownership only after its canonical reconciliation.
+The cleanup owner is the task `serve_with_cleanup` spawns. `passive_cleanup`
+publishes the report, every outcome unknown, before its first await. There is
+no second retention owner. Drop of that task does not drain again, reconcile,
+or write a report.
 
-| Ordering | Required result / enforcing fixture |
-| --- | --- |
-| Original stop panics with a gated detached product request | Native physical drain alone cannot release private state; exact `FilePairingState` reopen stays `Locked` until original product permit returns; `shutdown_panic_retains_private_until_original_product_drain`. |
-| Unpolled original stop is dropped with a gated request | The preinstalled retained owner uses the same backstop and no confirmation; same fixture's unpolled counterpart. |
-| Original normal stop settles both drains and reconciliation | Guard is consumed without another effect; exact private reopen succeeds and original failure facts remain; normal counterpart fixture. |
+| Ordering | Result | Enforcing fixture |
+| --- | --- | --- |
+| The owner never publishes (the slot stays `None`) | `RunError::Shutdown(None)`. Not a successful stop, and not a reported failure. | `a_shutdown_that_never_reported_is_not_treated_as_confirmed` |
+| The owner publishes, then panics | The published report stays. The join is the process result, `Shutdown(None)`, only when browser serving succeeded, the native listener did not fail, and the report had confirmed. A published failure, a browser serve error, or a native listener failure is the result instead, and the join is discarded. | `cleanup_owner_panic_is_returned_to_process_composition` |
+| Browser serving fails in the same run | A confirmed shutdown stays the original `Serve`. An unconfirmed or unpublished shutdown is `RunError::ServeAndShutdown`, keeping the original browser error and the shutdown evidence. | `the_process_result_carries_both_serving_and_what_shutdown_reported`; `serving_failure_preserves_unreported_shutdown` |
 
 An exact-key repeated owner approval that returns canonical `Active` is a
 historical enrollment receipt. The route consumes that already admitted owner
@@ -852,17 +846,13 @@ infer current read authority from `Active`; all later reads ask current owners.
 `owner_route_approval_uses_exact_claim_then_actual_registry_receiver_publication`
 enforces this settled counterpart of O5.
 
-A repeated panic from the original conversation storage/provider shutdown must
-not unwind the retention-only parent task. That parent launches the existing
-conversation stop in an owned child task and observes its typed join fault while
-after reader/product/native physical drains have returned. It publishes no confirmation
-or terminal effect. `shutdown_storage_panic_cannot_unwind_retained_product_drain`
-uses a real `ConversationService` with its existing substituted storage port,
-an observer fault during original storage shutdown and a gated product permit.
-Retention first rejoins retirement/readers/product/native; its repeated storage
-panic is contained after that permit returns. Private reopen stays `Locked`
-before release, and the original retirement actor stays. This observer fixture
-does not claim storage starts before product drain in the new N3 pipeline.
+A panic inside conversation shutdown is a fault of that same cleanup task.
+Whatever the report had already recorded stays in the slot. When that report
+had not confirmed, and browser serving succeeded with no native listener
+failure, the published report is the process result and the join is discarded.
+The join is the process result only when the report had confirmed and neither
+the browser listener nor the native listener stopped the process. There is no
+retention parent that catches the panic and drains again.
 
 
 ### Pending discovery candidates and current authority
@@ -975,7 +965,7 @@ Approved before source integration against native5d57 and mergedc2f3. The follow
 
 ## One assembly and report owner
 
-Existing `composition/shutdown.rs` owns combined orchestration, retention and serve-result composition; root wires original owners and signals Axum. Existing incoming `core/shutdown.rs` becomes the single typed evidence/aggregate owner; native duplicate ShutdownFailure struct in core/error.rs is removed into this owner. Do not preserve two shutdown protocols or duplicate passive_cleanup. Original ReaderWorkers/native/conversation/MCP owners continue implementing their own cleanup; assembly records their observed results.
+`composition/root.rs` owns combined orchestration and serve-result composition (`passive_cleanup`, `serve_outcome`); it wires the original owners and signals Axum. `core/shutdown.rs` is the single typed evidence owner. Do not preserve two shutdown protocols or duplicate `passive_cleanup`. Original ReaderWorkers/native/conversation/MCP owners continue implementing their own cleanup; assembly records their observed results.
 
 One ShutdownReport carries the actual evidence, one outcome per cleanup owner (unknown, ok, or the typed failure); the report's stage is the first owner, in cleanup order, whose outcome is still unknown. The stage does not say whether that owner has not started, is still pending, or ended without reporting; an unknown outcome carries no more than that. None/absence of conversations is explicit successful no-owner evidence rather than an unknown result. The reader drain keeps private fields and diagnostic deadline. Conversation cleanup (retirement and storage together) is one `conversations: Outcome<ConversationError>` carrying the original typed error; there is no separate retirement, storage or `PairingWorkerFault` slot. Native shutdown is one `native: Outcome<NativeShutdownFailure>`, whose typed cause is either `ListenerFault` (the listener task ended before its drain was observed, carrying its `PairingWorkerFault`) or `Cleanup` (receiver reconciliation did not complete); there are no per-stage serving, maintenance, worker or terminal fields. Each outcome is recorded once, synchronously, right after its own await returns: `passive_cleanup` records the native outcome only after `native.await`, so nothing about native is in the report at stop initiation. Actual StoppedNative retains PreparedNative through reconciliation; an outcome snapshot never replaces physical ownership.
 
@@ -985,19 +975,19 @@ Evidence is recorded synchronously in the original report mutex before each next
 
 | Row | Trigger / ordering | Evidence and physical ownership before next await |
 | --- | --- | --- |
-| N1 Stop initiation | Stop signal, original native serving failure or caller loss selects original owned shutdown task. Close product admission, signal Axum immediately and request native stop; start original owned conversation retire child plus reader/native/product drains. | Arm retention first and publish the report, every outcome unknown, before polling; the native outcome is not recorded here but after its own await. Retire publishes original context/retired/provider stop before its first await. No storage shutdown yet. |
+| N1 Stop initiation | Stop signal, original native serving failure or caller loss selects original owned shutdown task. Close product admission, signal Axum immediately and request native stop; start original owned conversation retire child plus reader/native/product drains. | Publish the report, every outcome unknown, before polling; the native outcome is not recorded here but after its own await. Retire publishes original context/retired/provider stop before its first await. No storage shutdown yet. |
 | N2 Parallel drains | Poll record/catalogue physical drain, original retire child, native shutdown and product request drain independently. Ready completions win diagnostic reader deadline; deadline records failure but retains/polls physical owners. | Each result actually observed by assembly is synchronously published before another await. Native-owned listener/maintenance/runtime facts are not invented before native owner reports; if that owner surfaces partial outcomes, publish them at that original reporting seam. No success inferred from dropped observer or timeout. |
 | N3 Storage gate | Both physical reader drains, original retire result, native physical shutdown and product drain have returned. Only original successful retirement (or absent service) allows existing ConversationService.shutdown rejoin then storage shutdown. | Reader and watch outcomes are already recorded before this await. Retirement and storage report as the one `conversations` outcome, recorded once after its await returns; failed/panicked retirement is that outcome's typed `ConversationError` and storage is not started or retried to replace the first failure. Private native/read/MCP Arcs remain retained. |
 | N4 MCP stage (NEW) | After storage returns, or is intentionally NotStarted from retirement failure, stop the injected original MCP servers; do this even conversations are absent, or retirement/storage have typed failures. | Reader, watch and `conversations` outcomes are recorded in the report (stage `Servers`) BEFORE McpServers.stop await; the native outcome is still unknown. Pending MCP panic/cancel preserves these exact facts in interrupted aggregate. Unit stop return proves call returned under existing SDK contract, not separately typed physical MCP success. |
-| N5 Native final reconciliation (NEW) | MCP stop has returned; actual native StoppedNative then performs existing original terminal reconciliation. | Publish ReconcilePending with servers_returned before await. Retain original private state/receivers through actual canonical CAS. Reconcile error/panic/cancel retains all earlier facts; retention fallback never writes terminal confirmation. |
-| N6 Final report | All awaited stages return and original terminal reconciliation completes (or native absent). | Synchronously derive Confirmed only from successful required typed drains/retirement/storage/reconcile plus MCP call-return; otherwise a nonempty aggregate preserves independent failures. Disarm retention only after final publication. Browser serve error remains alongside shutdown aggregate through native ServeAndShutdown. |
-| N7 Caller/task loss | Original task still owns cleanup after observer loss; if task/child faults, armed retention re-drains original owners with contained child faults. | Drop never confirms cleanup or performs terminal reconciliation. Preserve observed report facts; fallback may rejoin idempotent original retire/physical drains but never start storage before reader joins and original retirement success. Include MCP in retained owners. Repeated fault retains physical/private ownership rather than fabricating confirmation. |
+| N5 Native final reconciliation (NEW) | MCP stop has returned; actual native StoppedNative then performs existing original terminal reconciliation. | The native outcome is recorded after its await, with every earlier outcome already in the report. Reconcile error or a panic after that publication retains those facts; nothing writes a confirmation the owners did not return. |
+| N6 Final report | All awaited stages return and original terminal reconciliation completes (or native absent). | Synchronously derive Confirmed only from successful required typed drains/retirement/storage/reconcile plus MCP call-return; otherwise a nonempty aggregate preserves independent failures. A browser serve error from the same run stays beside an unconfirmed aggregate as `RunError::ServeAndShutdown`, and is `Serve` alone when shutdown confirmed. `the_process_result_carries_both_serving_and_what_shutdown_reported`; `serving_failure_preserves_unreported_shutdown`. |
+| N7 Caller/task loss | The cleanup owner is the task `serve_with_cleanup` spawns. Dropping the root future detaches that task; it is not aborted, and dropping the join is not confirmation. A panic before publication leaves the slot `None`. A panic after publication leaves the published report. | `compose_run_result` returns the join as `RunError::Shutdown(None)` only when browser serving succeeded, the native listener did not fail, and the report had confirmed. A browser serve error, a native listener failure, or a published unconfirmed report is the result instead, and the join is discarded. Drop does not drain again, reconcile, or claim the private store was released. `cleanup_owner_panic_is_returned_to_process_composition`; `a_shutdown_that_never_reported_is_not_treated_as_confirmed`. |
 
 N3 conservatively waits all initial physical drains before storage; it retains approved readers+retirement preconditions and avoids reporting native completion later than its physical join. Original admitted response/source permits, native8 connection retention and requests128/controls32 remain their own ledgers. No new capacity or authority state.
 
 ## Required combined regression contrasts
 
-Actual held reader + blocked retirement: retirement begins at Stop, storage remains untouched until both retire and readers settle. Original retirement error/panic with physical reader late return: first failure retained, storageNotStarted, MCP still attempted. Successful retirement/readers with failed storage then pending MCP: typed storage error survives MCP panic/cancel. Absent conversations plus pending MCP keeps report pending. Known native/reader error + successful storage then pending MCP retains every known fact. MCP returned + pending native reconcile keeps private reopen pending and report unconfirmed; reconcile error retains previous failures. Original browser error remains alongside cleanup failure. Retention observer/task loss and repeated child panic cannot publish terminal confirmation or release retained physical state early. Existing physical read leases, allfive passive busy routing/deadlines and positive delivery stay covered separately.
+Actual held reader + blocked retirement: retirement begins at Stop, storage remains untouched until both retire and readers settle. Original retirement error/panic with physical reader late return: first failure retained, storageNotStarted, MCP still attempted. Successful retirement/readers with failed storage then pending MCP: typed storage error survives MCP panic/cancel. Absent conversations plus pending MCP keeps report pending. Known native/reader error + successful storage then pending MCP retains every known fact. MCP returned + pending native reconcile keeps private reopen pending and report unconfirmed; reconcile error retains previous failures. Original browser error remains alongside cleanup failure. A panic or drop of the cleanup task does not add another owner: the published report stays, an unpublished slot is `Shutdown(None)`, and nothing drains or reconciles again. `cleanup_owner_panic_is_returned_to_process_composition`. Existing physical read leases, allfive passive busy routing/deadlines and positive delivery stay covered separately.
 
 ## Representation and phase framing API decision
 
@@ -1021,7 +1011,7 @@ The native live adapter consumes the existing generic product `run_authenticated
 
 The native mapping consumes manifest-published `session.terminated` with the existing generated SessionTermination shape: write that ordinary event under the directional output deadline, then physically close even if delivery fails. Browser CloseFrame presentation remains current. The same native client reader validates this event and records typed Closed(reason); real EOF without a valid termination retains honest disconnected/unknown meaning. Authentication failure uses the enrollment/auth-pending ceiling and cannot construct ready. Termination does not authorize deleting cached data or infer current scope revocation. Duplicate/malformed termination, every valid reason, delivery failure before actual close and plain EOF require distinct fixtures. WebSocket bytes are never written to this profile.
 
-The calling-side application port lives in `read_only_sync/application/client_session.rs`; product continues owning wire/routing and selectively publishes the same generated DTOs/codec. The port owns the one current GatewayError/Cancellation/attempt outcome meanings; no native duplicate error or renewed per-RPC operation budget. Generated DTOs remain untrusted wire values. Public request/response wrappers validate through current codec/scope owners and retain private fields with immutable access; exposing a generated public-field DTO alone is not this application contract.
+The calling-side application port lives in `crates/nessa-client-core/src/read_only_sync/application/gateway.rs`; product continues owning wire/routing and selectively publishes the same generated DTOs/codec. The port owns the one current GatewayError/Cancellation/attempt outcome meanings; no native duplicate error or renewed per-RPC operation budget. Generated DTOs remain untrusted wire values. Public request/response wrappers validate through current codec/scope owners and retain private fields with immutable access; exposing a generated public-field DTO alone is not this application contract.
 
 | Consumer ownership state | Borrow and evidence owner | Finish, drop and next pass |
 | --- | --- | --- |
@@ -2049,7 +2039,7 @@ convergence are [slice 3](#protected-reads-over-the-native-channel-slice-3).
 A paired device reads its conversations over the same native TLS listener it
 enrolled on, authenticated by the key the gateway pinned at enrollment and the
 credential identifier slice 2b delivered. No bearer secret is involved. The
-read-only example client (`examples/read_only_sync.rs`) uses this channel and
+read-only example client (`crates/nessa-client-core/examples/read_only_sync.rs`) uses this channel and
 nothing else for its online commands, and it purges a receiver's cached data
 only after the gateway's pinned enrollment status says Terminal.
 
@@ -2145,6 +2135,8 @@ keeps that, and the command's output reports the status it read.
   buffer of at most 65536 bytes and one pending output frame of at most
   131072 bytes plus TLS overhead, on one of the eight permits.
 - Two-device convergence against a real `nessa server` is shown by the
-  `examples/protected_sync_bench.rs` harness, which is not run in CI; CI covers
+  `crates/nessa-server/examples/protected_sync_bench.rs` harness, which is not run
+  in CI. Build its client with
+  `cargo build -p nessa-client-core --example read_only_sync`; CI covers
   the same flow through the composition tests' gateway process and real
   client subprocesses, and the listener tests above.

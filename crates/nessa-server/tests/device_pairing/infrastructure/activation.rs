@@ -26,6 +26,7 @@ use nessa_auth::{
         Action, AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId,
     },
 };
+use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_protocol::pairing::{
     wire::{
         decode_reply, encode_request, NativePairingReply, NativePairingRequest, NativePairingStatus,
@@ -44,8 +45,8 @@ use nessa_server::{
             ReceiverRequest,
         },
         infrastructure::{
-            ConversationReceivers, NativeClientError, NativeConnectionFailure,
-            NativeEnrollmentClient, NativeEnrollmentConnections, PairingRuntimeError,
+            ConversationReceivers, NativeConnectionFailure, NativeEnrollmentConnections,
+            PairingRuntimeError,
         },
     },
 };

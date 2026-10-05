@@ -63,6 +63,17 @@ controls adapter lifetime. Future background adapters must expose explicit
 startup/shutdown owned by composition; dropping a pointer is not a substitute
 for draining writes or stopping workers.
 
+## Rust device client
+
+`nessa-client-core::composition` composes the standalone retained-sync example:
+private profile, private enrollment state, enrollment client, protected session,
+and one cache. `composition::clock` supplies a wall clock through Auth's `Clock`
+for cache observations and a separate monotonic clock through
+`nessa_protocol::clock::Clock` for socket budgets. Device application ports
+receive these dependencies explicitly; they do not resolve gateway state.
+`composition::execute` takes input and output handles for command presentation.
+Gateway process tests call that public entry point through a dev-dependency.
+
 ## Rust desktop host
 
 `src-tauri/src/composition.rs` holds `HostDependencies`: the settings store, the

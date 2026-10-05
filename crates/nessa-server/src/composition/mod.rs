@@ -1,7 +1,7 @@
 //! Constructs trusted gateway dependencies once per server and the CLI client
 //! adapter for online commands. Offline bootstrap is isolated in auth_command.
-//! `read_only_example` composes the standalone Cargo example's private cache,
-//! clock and output; its offline branches receive no credential or connector.
+//! The standalone retained-sync example is composed in `nessa-client-core`.
+//! Gateway tests consume its public entry point as a dev-dependency.
 //!
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
@@ -63,5 +63,6 @@ mod provisioning;
 mod warm_up;
 
 mod cli;
-mod read_only_example;
-pub use read_only_example::run_read_only_example;
+#[cfg(test)]
+#[path = "../../tests/composition/read_only_online.rs"]
+mod read_only_online_tests;

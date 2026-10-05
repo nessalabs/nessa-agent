@@ -814,6 +814,10 @@ impl Agent {
             };
         }
         let work = self.inner.lifecycle.accept_waiting_work()?;
+        // Captured with the permit. Close detaches the attachment before it
+        // takes this scheduler lock, so a later read would name the binding
+        // preset for a generation that was admitted under the live one.
+        let approval_mode = self.approval_mode_at(work.live_generation());
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -845,7 +849,6 @@ impl Agent {
         let audit_actor = actor.clone();
         let admission_generation =
             format!("{}:{}", self.inner.instance_id, work.provider_generation());
-        let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
         let effort_level = self.effort_level();
         let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
         let audit_record = ExecutionAuditRecord::QueueAdmitted(
@@ -1429,6 +1432,12 @@ impl Agent {
         }
         let close_notice = self.inner.lifecycle.close_notice();
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
+        let approval_mode = self.approval_mode_at(
+            work_owner
+                .as_ref()
+                .expect("admitted steering owner")
+                .live_generation(),
+        );
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -1557,7 +1566,6 @@ impl Agent {
                         .expect("admitted steering owner")
                         .provider_generation()
                 );
-                let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
                 let effort_level = self.effort_level();
                 let receipt = Self::accept_pending(
                     &mut scheduler,

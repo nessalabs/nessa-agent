@@ -11,6 +11,7 @@ use crate::domain::mcp_apps::{
 use crate::infrastructure::json_rpc::json_fits;
 use base64::Engine;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 
 /// The protocol revision this client asks for.
 pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -69,7 +70,7 @@ pub(crate) fn structured_result(structured: &Value) -> Result<ToolContent, Execu
 pub(crate) struct ToolsPage {
     /// Its tools. A tool whose name cannot be an [`McpTool`] is left out; one
     /// whose `_meta.ui.resourceUri` cannot be read is kept without a UI, and
-    /// its `visibility` is read all the same ([`tool_ui`]).
+    /// its `visibility` is read all the same ([`declared_ui`]).
     pub(crate) tools: Vec<ListedTool>,
     /// Each named tool on it, with whether the model may not see it
     /// ([`model_may_see`]).
@@ -98,7 +99,7 @@ pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpE
             let name = tool.get("name")?.as_str()?;
             let identity = McpTool::new(server, name).ok()?;
             Some(
-                ListedTool::new(identity, tool_ui(tool.pointer("/_meta/ui")))
+                ListedTool::new(identity, tool_ui(tool))
                     .with_hints(tool_hints(tool.get("annotations"))),
             )
         })
@@ -114,10 +115,73 @@ pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpE
     })
 }
 
-/// Whether the model may see and call `tool`, a tool as `tools/list` gives it:
-/// when its `_meta.ui.visibility` says so, or says nothing ([`visibility`]).
+/// Whether the model may see and call `tool`, a tool as `tools/list` gives it
+/// ([`declared_ui`]).
 pub(crate) fn model_may_see(tool: &Value) -> bool {
-    visibility(tool.pointer("/_meta/ui/visibility")).model()
+    tool_visibility(tool).model()
+}
+
+/// Who may see `tool`, one entry as `tools/list` gives it ([`declared_ui`]).
+pub(crate) fn tool_visibility(tool: &Value) -> UiVisibility {
+    declared_ui(tool).1
+}
+
+/// One visibility per name, in the order each name is first seen. A side is
+/// included only when every entry for that name includes it
+/// ([`UiVisibility::every`]).
+pub(crate) fn one_visibility_per_name(
+    entries: impl IntoIterator<Item = (String, UiVisibility)>,
+) -> Vec<(String, UiVisibility)> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut folded: Vec<(String, UiVisibility)> = Vec::new();
+    for (name, who) in entries {
+        if let Some(&at) = index.get(&name) {
+            folded[at].1 = folded[at].1.every(who);
+        } else {
+            index.insert(name.clone(), folded.len());
+            folded.push((name, who));
+        }
+    }
+    folded
+}
+
+/// The model record for a kept list: one bool per name, hidden when any
+/// entry excludes the model. Names that could not be a [`ListedTool`] are
+/// taken from `hidden`, which is the per-entry record [`tools_page`] built.
+pub(crate) fn hidden_for_model(
+    tools: &[ListedTool],
+    hidden: &[(String, bool)],
+) -> Vec<(String, bool)> {
+    let known: HashSet<String> = tools
+        .iter()
+        .map(|tool| tool.tool().tool().to_owned())
+        .collect();
+    let mut entries: Vec<(String, UiVisibility)> = tools
+        .iter()
+        .map(|tool| (tool.tool().tool().to_owned(), tool.ui().visibility()))
+        .collect();
+    for (name, is_hidden) in hidden {
+        if known.contains(name) {
+            continue;
+        }
+        entries.push((name.clone(), UiVisibility::new(!is_hidden, true)));
+    }
+    one_visibility_per_name(entries)
+        .into_iter()
+        .map(|(name, who)| (name, !who.model()))
+        .collect()
+}
+
+/// A listed tool's `_meta.ui`, and who may see it. One reading for the model
+/// and for an app: no `_meta.ui` is both; a `_meta.ui` that is present and
+/// not an object cannot be read, and is no one's (#424), the same as a
+/// `visibility` that is not an array of strings.
+fn declared_ui(tool: &Value) -> (Option<&Value>, UiVisibility) {
+    match tool.pointer("/_meta/ui") {
+        Some(ui) if ui.is_object() => (Some(ui), visibility(ui.get("visibility"))),
+        Some(_) => (None, UiVisibility::new(false, false)),
+        None => (None, visibility(None)),
+    }
 }
 
 /// `_meta.ui.visibility`: absent is both; an array of strings names who.
@@ -148,16 +212,14 @@ fn tool_hints(annotations: Option<&Value>) -> ToolHints {
 
 /// A tool's `_meta.ui`, each part read on its own: a `resourceUri` that is
 /// absent or cannot be read is no UI, and does not take the tool's
-/// `visibility` with it.
-fn tool_ui(declared: Option<&Value>) -> ToolUi {
+/// `visibility` with it. Who may see it is [`declared_ui`].
+fn tool_ui(tool: &Value) -> ToolUi {
+    let (declared, who) = declared_ui(tool);
     let uri = declared
         .and_then(|ui| ui.get("resourceUri"))
         .and_then(Value::as_str)
         .and_then(|uri| UiResourceUri::new(uri).ok());
-    ToolUi::new(
-        uri,
-        visibility(declared.and_then(|ui| ui.get("visibility"))),
-    )
+    ToolUi::new(uri, who)
 }
 
 /// The MCP App at `requested`, from a `resources/read` answer: the one content

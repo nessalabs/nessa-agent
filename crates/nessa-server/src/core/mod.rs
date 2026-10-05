@@ -44,7 +44,9 @@ mod startup_failure;
 pub mod trusted_origin;
 
 pub use bootstrap::run;
-pub use error::{Dataset, DatasetRefusal, MissingReceiverJournal, NativeFailure, RunError};
+pub use error::{
+    Dataset, DatasetRefusal, MissingReceiverJournal, NativeFailure, RunError, ServeAndShutdown,
+};
 pub use launch::Launch;
 pub use shutdown::{
     NativeShutdownFailure, Outcome, ReaderDrain, ServersOutcome, ShutdownFailure, ShutdownReport,
