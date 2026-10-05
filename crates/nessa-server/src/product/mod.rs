@@ -18,6 +18,9 @@
 //! (`device_pairing`'s `openProduct`): only the credential verifier differs,
 //! through `socket::SessionProof`.
 //!
+//! `mcp_servers` translates `mcpServers.list`, `.save`, `.remove` and
+//! `.inspect` into `mcp_servers::application::McpServerSettings` (#391).
+//!
 //! `change_watch` owns original watch permits and first task faults; normal host
 //! cleanup in composition consumes its close/drain through ProductRouteState.
 
@@ -35,6 +38,7 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 
 mod conversation;
 mod mcp_apps;
+pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 

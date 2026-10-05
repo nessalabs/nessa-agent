@@ -1,4 +1,4 @@
-use nessa_local_database::{open, OpenError, Schema};
+use nessa_local_database::{open, open_existing, OpenError, Schema};
 use std::path::PathBuf;
 
 const DEFINITION: &str = "CREATE TABLE parents (id TEXT PRIMARY KEY) STRICT;
@@ -15,6 +15,20 @@ fn private_directory() -> (tempfile::TempDir, PathBuf) {
     let root = directory.path().join("private");
     nessa_local_storage::create_directory(&root).unwrap();
     (directory, root)
+}
+
+#[test]
+fn open_existing_leaves_a_missing_file_absent_and_opens_one_that_is_there() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    assert!(matches!(
+        open_existing(&path, &schema()),
+        Err(OpenError::File(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(!path.exists());
+    drop(open(&path, &schema()).unwrap());
+    drop(open_existing(&path, &schema()).unwrap());
+    assert!(path.is_file());
 }
 
 #[test]

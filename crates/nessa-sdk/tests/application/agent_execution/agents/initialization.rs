@@ -886,6 +886,78 @@ async fn queued_work_admitted_before_attachment_binds_to_the_published_provider(
     agent.close(close_action()).await.unwrap();
 }
 
+struct AuthenticationRefusingStartup;
+impl AgentProvider for AuthenticationRefusingStartup {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("codex", "fixture", "unsigned").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        Box::pin(async {
+            Err(ProviderOpenError::no_resources(
+                AgentError::AuthenticationRequired { diagnostic: None },
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn startup_authentication_queue_settlement_retains_primary_cause_without_provider_report() {
+    for rejected_audit in [false, true] {
+        let storage = MemoryStorage::default();
+        let audit: Arc<dyn ExecutionAudit> = if rejected_audit {
+            Arc::new(QueueSettlementRejectingAudit)
+        } else {
+            Arc::new(AcceptingAudit)
+        };
+        let agent = prepared(Arc::new(AuthenticationRefusingStartup), &storage, audit).await;
+        let queued = agent
+            .enqueue(request("startup-auth"), actor())
+            .await
+            .unwrap();
+        let authority = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert!(agent
+            .start_attachment(authority)
+            .unwrap()
+            .wait()
+            .await
+            .is_err());
+        let expected = if rejected_audit {
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(AgentError::AuthenticationRequired { diagnostic: None }),
+                subsequent_error: Box::new(AgentError::AuditFailure),
+            }
+        } else {
+            AgentError::AuthenticationRequired { diagnostic: None }
+        };
+        assert_eq!(queued.wait().await, Err(expected.clone()));
+        let snapshot = storage.snapshot();
+        assert_eq!(snapshot.invocations[0].provider_report, None);
+        assert_eq!(snapshot.invocations[0].result, Some(Err(expected.clone())));
+        drop(agent);
+        let restored = Agent::prepare(
+            Arc::new(AuthenticationRefusingStartup),
+            storage.manager().await,
+            Arc::new(AcceptingAudit),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            restored
+                .enqueue(request("startup-auth"), actor())
+                .await
+                .unwrap()
+                .wait()
+                .await,
+            Err(expected)
+        );
+    }
+}
+
 #[tokio::test]
 async fn initial_open_failure_settles_every_owned_queue_receipt() {
     let storage = MemoryStorage::default();

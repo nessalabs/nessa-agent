@@ -6,7 +6,9 @@ use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri, UiVisibility};
-use crate::infrastructure::acp::sessions::{ForwardedResults, StandInGrant, StdioMcpServer};
+use crate::infrastructure::acp::sessions::{
+    ForwardedResults, McpServerProblem, StandInGrant, StdioMcpServer,
+};
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
 use std::{
@@ -33,8 +35,23 @@ pub const MAX_TOOL_PAGES: usize = 32;
 /// The most tools one server may list.
 pub const MAX_TOOLS: usize = 1024;
 
+/// The environment variable a host's MCP stand-ins carry their session
+/// token in. A server process is never given it
+/// ([`McpServerProblem::ReservedEnvironmentName`]), so a server cannot read a
+/// token meant for the gateway, nor pass one on.
+pub const MCP_SESSION_VARIABLE: &str = "NESSA_MCP_SESSION";
+
+/// The most bytes in the name of a variable a server is started with
+/// ([`McpServerLaunch::problem`]).
+pub const MAX_MCP_ENVIRONMENT_NAME_BYTES: usize = 256;
+
 /// One configured stdio server and what it is started with.
-#[derive(Clone, Debug)]
+///
+/// Its `Debug` names the environment's variables and never prints their
+/// values, which may be credentials
+/// (`a_launch_prints_its_environment_names_never_its_values`). Two launches
+/// are equal when every field is: what [`McpServers::open_as`] compares.
+#[derive(Clone, PartialEq, Eq)]
 pub struct McpServerLaunch {
     /// The trusted configuration: name, absolute executable, arguments.
     pub server: StdioMcpServer,
@@ -42,6 +59,59 @@ pub struct McpServerLaunch {
     pub working_directory: PathBuf,
     /// The server's whole environment; nothing is inherited.
     pub environment: BTreeMap<OsString, OsString>,
+}
+impl std::fmt::Debug for McpServerLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerLaunch")
+            .field("server", &self.server)
+            .field("working_directory", &self.working_directory)
+            .field("environment", &self.environment.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+impl McpServerLaunch {
+    /// Why this server cannot be started as configured, or `None` when it
+    /// can: its [`StdioMcpServer::problem`], then its environment — each
+    /// name 1 to [`MAX_MCP_ENVIRONMENT_NAME_BYTES`] bytes of ASCII letters,
+    /// digits and `_`, not starting with a
+    /// digit, and not [`MCP_SESSION_VARIABLE`]; each value without NUL.
+    pub fn problem(&self) -> Option<McpServerProblem> {
+        self.server.problem().or_else(|| {
+            self.environment.iter().find_map(|(name, value)| {
+                let Some(name) = name.to_str().filter(|name| {
+                    (1..=MAX_MCP_ENVIRONMENT_NAME_BYTES).contains(&name.len())
+                        && !name.starts_with(|c: char| c.is_ascii_digit())
+                        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                }) else {
+                    return Some(McpServerProblem::EnvironmentName {
+                        server: self.server.name.clone(),
+                        name: name.to_string_lossy().into_owned(),
+                    });
+                };
+                if name == MCP_SESSION_VARIABLE {
+                    return Some(McpServerProblem::ReservedEnvironmentName {
+                        server: self.server.name.clone(),
+                        name: name.to_owned(),
+                    });
+                }
+                value
+                    .as_encoded_bytes()
+                    .contains(&0)
+                    .then(|| McpServerProblem::EnvironmentValue {
+                        server: self.server.name.clone(),
+                        name: name.to_owned(),
+                    })
+            })
+        })
+    }
+    /// Why `launches` cannot run together, or `None` when they can: the
+    /// set's rules ([`StdioMcpServer::problem_in`]), then each launch's
+    /// [`Self::problem`]. What [`McpServers::new`] and [`McpServers::replace`]
+    /// ask.
+    pub fn problem_in(launches: &[McpServerLaunch]) -> Option<McpServerProblem> {
+        StdioMcpServer::problem_in(launches.iter().map(|launch| &launch.server))
+            .or_else(|| launches.iter().find_map(Self::problem))
+    }
 }
 
 /// The configured MCP servers, and every session open on them.
@@ -58,23 +128,30 @@ pub struct McpServerLaunch {
 /// `docs/design/mcp-connections.md`, and each row has a test in
 /// `tests/infrastructure/mcp/`.
 ///
+/// The configured set is live: [`McpServers::replace`] swaps it, and each
+/// opening reads the set as it is then. A session already open keeps the
+/// server it was opened on until it ends; replacing the set closes nothing.
+///
 /// Cloning shares the servers. [`McpServers::stop`] closes every session and
-/// refuses new ones.
+/// refuses new ones, and every later replacement.
 #[derive(Clone)]
 pub struct McpServers {
-    inner: Arc<Inner>,
+    /// Visible to this module's tests, which hold `live` as `stop` does.
+    pub(super) inner: Arc<Inner>,
 }
 
-struct Inner {
-    launches: BTreeMap<String, McpServerLaunch>,
+pub(super) struct Inner {
+    /// The configured set now, by name. Swapped whole by `replace`, under
+    /// `live`'s lock, so a replacement and a stop are ordered.
+    launches: RwLock<Arc<BTreeMap<String, McpServerLaunch>>>,
     clock: Arc<dyn Clock>,
     launcher: Arc<dyn Launcher>,
     /// Set once, by `stop`; what an opening races.
-    stopping: watch::Sender<bool>,
+    pub(super) stopping: watch::Sender<bool>,
     /// The sessions open now. A session is registered under this lock only
     /// while `stopping` is unset, and `stop` sets it and takes them under the
     /// same lock, so no session opens after a stop has looked.
-    live: Mutex<Live>,
+    pub(super) live: Mutex<Live>,
 }
 
 /// Whose a session is: the SDK session (a conversation's) its harness was
@@ -172,7 +249,7 @@ impl std::fmt::Debug for McpOwner {
 }
 
 #[derive(Default)]
-struct Live {
+pub(super) struct Live {
     next: u64,
     sessions: BTreeMap<u64, Weak<Session>>,
 }
@@ -180,7 +257,9 @@ struct Live {
 struct Session {
     id: u64,
     server: String,
-    owned_by: McpOwner,
+    /// The SDK session and grant it was opened for; `None` for a session
+    /// opened once ([`McpServers::open_once`]), which belongs to none.
+    owned_by: Option<McpOwner>,
     connection: Arc<Connection>,
     /// The server's answer to `initialize`, given to the harness as its own.
     initialized: Arc<Value>,
@@ -251,8 +330,8 @@ impl McpServers {
     ///
     /// # Errors
     ///
-    /// [`McpError::InvalidConfiguration`] unless every server passes
-    /// [`StdioMcpServer::all_valid`].
+    /// [`McpError::InvalidConfiguration`] with the first problem
+    /// [`McpServerLaunch::problem_in`] finds.
     pub fn new(servers: Vec<McpServerLaunch>, clock: Arc<dyn Clock>) -> Result<Self, McpError> {
         Self::with_launcher(servers, clock, Arc::new(ProcessLauncher))
     }
@@ -262,17 +341,9 @@ impl McpServers {
         clock: Arc<dyn Clock>,
         launcher: Arc<dyn Launcher>,
     ) -> Result<Self, McpError> {
-        let configured: Vec<StdioMcpServer> =
-            servers.iter().map(|each| each.server.clone()).collect();
-        if !StdioMcpServer::all_valid(&configured) {
-            return Err(McpError::InvalidConfiguration);
-        }
         Ok(Self {
             inner: Arc::new(Inner {
-                launches: servers
-                    .into_iter()
-                    .map(|launch| (launch.server.name.clone(), launch))
-                    .collect(),
+                launches: RwLock::new(Arc::new(by_name(servers)?)),
                 clock,
                 launcher,
                 stopping: watch::channel(false).0,
@@ -281,9 +352,45 @@ impl McpServers {
         })
     }
 
-    /// The configured servers' names.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.inner.launches.keys().map(String::as_str)
+    /// The configured servers now, each as it is launched, in name order.
+    /// What a stand-in is admitted against and what a provider open is given
+    /// are read from here, each time.
+    pub fn configured(&self) -> Vec<McpServerLaunch> {
+        self.launches().values().cloned().collect()
+    }
+
+    /// Replace the configured set with `servers`. Openings from now on read
+    /// the new set; sessions already open, and the harnesses using them, keep
+    /// what they were opened on. Nothing is launched or closed.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::InvalidConfiguration`] with the first problem
+    /// [`McpServerLaunch::problem_in`] finds, and [`McpError::Stopped`] once
+    /// [`McpServers::stop`] has begun; the set is unchanged on both.
+    ///
+    /// # Panics
+    ///
+    /// When another thread panicked while holding the live sessions' lock or
+    /// the configured set's, which leaves them poisoned.
+    pub fn replace(&self, servers: Vec<McpServerLaunch>) -> Result<(), McpError> {
+        let launches = Arc::new(by_name(servers)?);
+        // Under the lock `stop` sets `stopping` under: a replacement either
+        // lands before the stop looks, or sees it.
+        let _live = self.inner.live.lock().expect("live sessions");
+        if *self.inner.stopping.borrow() {
+            return Err(McpError::Stopped);
+        }
+        *self.inner.launches.write().expect("configured servers") = launches;
+        Ok(())
+    }
+
+    fn launches(&self) -> Arc<BTreeMap<String, McpServerLaunch>> {
+        self.inner
+            .launches
+            .read()
+            .expect("configured servers")
+            .clone()
     }
 
     /// Open a session on `server` for `owner`: launch its process and initialize it,
@@ -300,22 +407,90 @@ impl McpServers {
     /// grant is revoked — before it launches anything, or while it opens. The
     /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
+        let launches = self.launches();
+        let launch = launches.get(server).ok_or(McpError::NotConfigured)?;
+        self.open_launch(launch, Some(owner)).await
+    }
+
+    /// Open a session, as [`Self::open`] does, on the server named
+    /// `admitted.server.name` only while it is still configured exactly as
+    /// `admitted` — executable, arguments, working directory and
+    /// environment: what a host admitted a stand-in against is what serves
+    /// it, even when the set is replaced between the admission and the
+    /// opening.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::ConfigurationChanged`] when the server under that name is
+    /// configured differently now, and every error of [`Self::open`].
+    pub async fn open_as(
+        &self,
+        admitted: &McpServerLaunch,
+        owner: McpOwner,
+    ) -> Result<McpSession, McpError> {
+        let launches = self.launches();
+        let launch = launches
+            .get(&admitted.server.name)
+            .ok_or(McpError::NotConfigured)?;
+        if launch != admitted {
+            return Err(McpError::ConfigurationChanged);
+        }
+        self.open_launch(launch, Some(owner)).await
+    }
+
+    /// Open a session on `launch` once, for no SDK session: a host's look at
+    /// a server — whether it starts, and what it lists — outside any
+    /// conversation, configured in the live set or not. Launched and
+    /// initialized as [`Self::open`] does, within [`INITIALIZE_TIMEOUT`], but
+    /// its tools are listed only when asked ([`McpSession::list_tool_pages`])
+    /// and never kept for [`Self::tool_ui`], and it serves no stand-in.
+    ///
+    /// It is closed as any session is — [`McpSession::close`], its last clone
+    /// dropped (its process group killed at once), or [`Self::stop`], which
+    /// it is registered for, so a gateway stopping ends it too.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::InvalidConfiguration`] with `launch`'s
+    /// [`McpServerLaunch::problem`], before anything is launched;
+    /// [`McpError::Stopped`], [`McpError::Start`], [`McpError::Handshake`],
+    /// [`McpError::Timeout`] and [`McpError::ServerGone`] as for
+    /// [`Self::open`]. The process is stopped on each.
+    pub async fn open_once(&self, launch: &McpServerLaunch) -> Result<McpSession, McpError> {
+        if let Some(problem) = launch.problem() {
+            return Err(McpError::InvalidConfiguration(problem));
+        }
+        self.open_launch(launch, None).await
+    }
+
+    /// Open a session on `launch`, for `owner`'s grant — or, with no owner,
+    /// once ([`Self::open_once`]): then no grant holds it and no background
+    /// list keeps its tools.
+    async fn open_launch(
+        &self,
+        launch: &McpServerLaunch,
+        owner: Option<McpOwner>,
+    ) -> Result<McpSession, McpError> {
         contain_caller_wake(
-            format!("MCP open of {server}"),
-            self.open_session(server, owner),
+            format!("MCP open of {}", launch.server.name),
+            self.open_session(launch, owner),
         )
         .await
     }
 
-    async fn open_session(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
+    async fn open_session(
+        &self,
+        launch: &McpServerLaunch,
+        owner: Option<McpOwner>,
+    ) -> Result<McpSession, McpError> {
         let inner = &self.inner;
-        let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;
+        let server = launch.server.name.as_str();
         if *inner.stopping.borrow() {
             return Err(McpError::Stopped);
         }
         // Revoked already: nothing to launch. Revoked from here on is seen
         // when the session is registered, below.
-        if owner.revoked() {
+        if owner.as_ref().is_some_and(McpOwner::revoked) {
             return Err(McpError::Closed);
         }
         let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
@@ -370,9 +545,11 @@ impl McpServers {
             // Revoked while opening: checked, and the session added to the
             // grant, under the grant's own lock, which `revoke` sets and takes
             // under — so either it takes this session or this sees it.
-            let grant = owner.grant.clone();
-            let mut granted = grant.state.lock().expect("grant");
-            if granted.revoked {
+            let grant = owner.as_ref().map(|owner| owner.grant.clone());
+            let mut granted = grant
+                .as_ref()
+                .map(|grant| grant.state.lock().expect("grant"));
+            if granted.as_ref().is_some_and(|granted| granted.revoked) {
                 connection.close(McpError::Closed);
                 return Err(McpError::Closed);
             }
@@ -391,14 +568,18 @@ impl McpServers {
                 owner: Arc::downgrade(inner),
             });
             live.sessions.insert(session.id, Arc::downgrade(&session));
-            granted.sessions.retain(|each| each.strong_count() > 0);
-            granted.sessions.push(Arc::downgrade(&session));
+            if let Some(granted) = granted.as_mut() {
+                granted.sessions.retain(|each| each.strong_count() > 0);
+                granted.sessions.push(Arc::downgrade(&session));
+            }
             drop(granted);
             session
         };
-        // Subscribed before the first list, so a change during it is not missed.
-        let notices = session.connection.notices();
-        tokio::spawn(keep_listed(Arc::downgrade(&session), notices));
+        if session.owned_by.is_some() {
+            // Subscribed before the first list, so a change during it is not missed.
+            let notices = session.connection.notices();
+            tokio::spawn(keep_listed(Arc::downgrade(&session), notices));
+        }
         Ok(McpSession {
             owner: Arc::new(Owner(session)),
         })
@@ -550,7 +731,9 @@ impl McpServers {
     /// `session`'s newest open session of `server`, if it has one.
     fn newest(&self, session: &SessionId, server: &str) -> Option<Arc<Session>> {
         self.open_sessions().into_iter().rev().find(|each| {
-            each.owned_by.session() == session
+            each.owned_by
+                .as_ref()
+                .is_some_and(|owner| owner.session() == session)
                 && each.server == server
                 && each.connection.end_cause().is_none()
         })
@@ -618,6 +801,17 @@ impl McpServers {
     }
 }
 
+/// `servers` by name, once [`McpServerLaunch::problem_in`] finds no problem.
+fn by_name(servers: Vec<McpServerLaunch>) -> Result<BTreeMap<String, McpServerLaunch>, McpError> {
+    if let Some(problem) = McpServerLaunch::problem_in(&servers) {
+        return Err(McpError::InvalidConfiguration(problem));
+    }
+    Ok(servers
+        .into_iter()
+        .map(|launch| (launch.server.name.clone(), launch))
+        .collect())
+}
+
 /// One server process and the one connection to it, for one harness session.
 /// Clones share it; it is closed by [`McpSession::close`], by the end of
 /// [`McpSession::serve`], by [`McpServers::stop`], by [`McpServers::revoke`]
@@ -660,6 +854,30 @@ impl McpSession {
             list(&self.owner.0),
         )
         .await
+    }
+
+    /// List the tools on the first `max_pages` pages of `tools/list`, at most
+    /// [`MAX_TOOLS`] of them, and say whether the server had more: a look at
+    /// what a server offers ([`McpServers::open_once`]) that stops at its
+    /// bound instead of failing past it. Nothing is kept: neither
+    /// [`McpServers::tool_ui`] nor a stand-in's visibility reads this list.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Timeout`] for a page not answered within
+    /// [`REQUEST_TIMEOUT`], [`McpError::Malformed`] for a page of the wrong
+    /// shape, [`McpError::Remote`] for the server's refusal, and the
+    /// session's end cause once it has ended.
+    pub async fn list_tool_pages(&self, max_pages: usize) -> Result<ListedPages, McpError> {
+        let paged = contain_caller_wake(
+            format!("MCP tool pages of {}", self.server()),
+            pages(&self.owner.0, max_pages),
+        )
+        .await?;
+        Ok(ListedPages {
+            tools: paged.tools,
+            more: paged.more,
+        })
     }
 
     /// Read the MCP App at `uri` from this session's server.
@@ -708,7 +926,11 @@ impl McpSession {
                 self.owner.0.connection.clone(),
                 self.owner.0.initialized.clone(),
                 self.owner.0.visibility.clone(),
-                self.owner.0.owned_by.forwarded(),
+                self.owner
+                    .0
+                    .owned_by
+                    .as_ref()
+                    .map_or_else(ForwardedResults::new, McpOwner::forwarded),
                 &self.owner.0.server,
                 input,
                 output,
@@ -792,45 +1014,75 @@ pub(super) fn tools_changed(notice: &Value) -> bool {
     notice.get("method").and_then(Value::as_str) == Some("notifications/tools/list_changed")
 }
 
-/// Every page of `tools/list`, kept as the session's tools when all were read
-/// and no list asked later has been kept already.
-async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
-    let order = session.visibility.ask();
-    let mut tools = Vec::new();
-    let mut hidden = Vec::new();
+/// What [`McpSession::list_tool_pages`] read: the tools of the pages it
+/// read, and whether the server had more than it read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedPages {
+    /// The tools listed on the pages read, in order, at most [`MAX_TOOLS`].
+    pub tools: Vec<ListedTool>,
+    /// Whether the server had more — another page past the bound, or tools
+    /// past [`MAX_TOOLS`] — that was not read.
+    pub more: bool,
+}
+
+/// The tools on `session`'s first `max_pages` pages of `tools/list`, at most
+/// [`MAX_TOOLS`] of them, with each tool's visibility; and whether there was
+/// more.
+async fn pages(session: &Session, max_pages: usize) -> Result<Paged, McpError> {
+    let mut paged = Paged::default();
     let mut cursor: Option<String> = None;
-    for _ in 0..MAX_TOOL_PAGES {
+    for _ in 0..max_pages {
         let params = cursor.map(|cursor| json!({ "cursor": cursor }));
         let result = session
             .connection
             .request("tools/list", params, REQUEST_TIMEOUT)
             .await?;
         let page = wire::tools_page(&session.server, &result)?;
-        if tools.len() + page.tools.len() > MAX_TOOLS
-            || hidden.len() + page.hidden.len() > MAX_TOOLS
+        if paged.tools.len() + page.tools.len() > MAX_TOOLS
+            || paged.hidden.len() + page.hidden.len() > MAX_TOOLS
         {
-            return Err(McpError::TooLarge("tools/list"));
+            let room = MAX_TOOLS - paged.tools.len();
+            paged.tools.extend(page.tools.into_iter().take(room));
+            paged.more = true;
+            return Ok(paged);
         }
-        tools.extend(page.tools);
-        hidden.extend(page.hidden);
+        paged.tools.extend(page.tools);
+        paged.hidden.extend(page.hidden);
         match page.next {
             Some(next) => cursor = Some(next),
-            None => {
-                session
-                    .visibility
-                    .listed(order, wire::hidden_for_model(&tools, &hidden));
-                let mut kept = session.tools.write().expect("tool list");
-                if kept.as_ref().is_none_or(|kept| kept.order < order) {
-                    *kept = Some(Arc::new(Listed {
-                        order,
-                        tools: Arc::from(tools.clone()),
-                    }));
-                }
-                return Ok(tools);
-            }
+            None => return Ok(paged),
         }
     }
-    Err(McpError::TooLarge("tools/list"))
+    paged.more = true;
+    Ok(paged)
+}
+
+#[derive(Default)]
+struct Paged {
+    tools: Vec<ListedTool>,
+    hidden: Vec<(String, bool)>,
+    more: bool,
+}
+
+/// Every page of `tools/list`, kept as the session's tools when all were read
+/// and no list asked later has been kept already.
+async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
+    let order = session.visibility.ask();
+    let paged = pages(session, MAX_TOOL_PAGES).await?;
+    if paged.more {
+        return Err(McpError::TooLarge("tools/list"));
+    }
+    session
+        .visibility
+        .listed(order, wire::hidden_for_model(&paged.tools, &paged.hidden));
+    let mut kept = session.tools.write().expect("tool list");
+    if kept.as_ref().is_none_or(|kept| kept.order < order) {
+        *kept = Some(Arc::new(Listed {
+            order,
+            tools: Arc::from(paged.tools.clone()),
+        }));
+    }
+    Ok(paged.tools)
 }
 
 /// `first` with `visibility` in place of its own. The URI and hints stay

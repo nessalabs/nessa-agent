@@ -12,6 +12,7 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
     ffi::OsString,
+    fmt,
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -21,7 +22,8 @@ use std::{
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StdioMcpServer {
-    /// Unique ASCII server name (letters, digits, hyphen, underscore; at most 64 bytes).
+    /// Unique ASCII server name (letters, digits, hyphen, underscore; at most
+    /// [`MAX_MCP_SERVER_NAME_BYTES`]).
     pub name: String,
     /// Absolute UTF-8 executable path, launched directly without shell interpolation.
     pub command: PathBuf,
@@ -30,32 +32,240 @@ pub struct StdioMcpServer {
     pub args: Vec<String>,
 }
 impl StdioMcpServer {
-    /// Whether every server in `servers` can be launched as configured, under
-    /// a name of its own: names unique, ASCII letters, digits, `-` and `_`,
-    /// 1–64 bytes, no `__` (a harness joins server and tool with it); an
-    /// absolute UTF-8 executable; at most 64 arguments of at most 8192 bytes,
-    /// none holding NUL. The one statement of the rule: an ACP binding
-    /// ([`AcpConfig`]) and the MCP client
-    /// ([`McpServers`](crate::infrastructure::mcp::McpServers)) both ask it.
-    pub fn all_valid(servers: &[StdioMcpServer]) -> bool {
+    /// Why this server cannot be launched as configured, or `None` when it
+    /// can: a name of ASCII letters, digits, `-` and `_`, 1 to
+    /// [`MAX_MCP_SERVER_NAME_BYTES`] bytes, without
+    /// `__` and neither starting nor ending with `_` (a harness names a tool
+    /// `mcp__<server>__<tool>`, so the server's name must not run into the
+    /// separators on either side); an absolute UTF-8
+    /// executable; at most [`MAX_MCP_SERVER_ARGS`] arguments of at most
+    /// [`MAX_MCP_SERVER_ARG_BYTES`] bytes, none holding NUL. The rules for
+    /// one server; [`Self::problem_in`] adds the set's.
+    pub fn problem(&self) -> Option<McpServerProblem> {
+        if self.name.is_empty()
+            || self.name.len() > MAX_MCP_SERVER_NAME_BYTES
+            || self.name.contains("__")
+            || self.name.starts_with('_')
+            || self.name.ends_with('_')
+            || !self
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Some(McpServerProblem::Name {
+                server: self.name.clone(),
+            });
+        }
+        if !self.command.is_absolute() || self.command.to_str().is_none() {
+            return Some(McpServerProblem::Command {
+                server: self.name.clone(),
+            });
+        }
+        if self.args.len() > MAX_MCP_SERVER_ARGS
+            || self
+                .args
+                .iter()
+                .any(|arg| arg.len() > MAX_MCP_SERVER_ARG_BYTES || arg.contains('\0'))
+        {
+            return Some(McpServerProblem::Arguments {
+                server: self.name.clone(),
+            });
+        }
+        None
+    }
+    /// Why `servers` cannot be launched together, or `None` when they can:
+    /// at most [`MAX_MCP_SERVERS`], each without a [`Self::problem`], each
+    /// under a name of its own. The one statement of the set's rules: an ACP
+    /// binding ([`AcpConfig`]) and the MCP client
+    /// ([`McpServers`](crate::infrastructure::mcp::McpServers), when it is
+    /// built and when its set is replaced) both ask it. The first problem
+    /// found is the one returned, the count before any server's.
+    pub fn problem_in<'a>(
+        servers: impl IntoIterator<Item = &'a StdioMcpServer>,
+    ) -> Option<McpServerProblem> {
+        let servers: Vec<_> = servers.into_iter().collect();
+        if servers.len() > MAX_MCP_SERVERS {
+            return Some(McpServerProblem::TooMany);
+        }
         let mut names = HashSet::new();
-        servers.iter().all(|server| {
-            !server.name.is_empty()
-                && server.name.len() <= 64
-                && !server.name.contains("__")
-                && server
-                    .name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                && names.insert(&server.name)
-                && server.command.is_absolute()
-                && server.command.to_str().is_some()
-                && server.args.len() <= 64
-                && server
-                    .args
-                    .iter()
-                    .all(|arg| arg.len() <= 8192 && !arg.contains('\0'))
+        servers.into_iter().find_map(|server| {
+            server.problem().or_else(|| {
+                (!names.insert(&server.name)).then(|| McpServerProblem::DuplicateName {
+                    server: server.name.clone(),
+                })
+            })
         })
+    }
+}
+
+/// The most MCP servers one set may hold: what an ACP binding is given and
+/// what the MCP client runs ([`StdioMcpServer::problem_in`]).
+pub const MAX_MCP_SERVERS: usize = 16;
+/// The most bytes in an MCP server's name ([`StdioMcpServer::problem`]).
+pub const MAX_MCP_SERVER_NAME_BYTES: usize = 64;
+/// The most arguments an MCP server is started with
+/// ([`StdioMcpServer::problem`]).
+pub const MAX_MCP_SERVER_ARGS: usize = 64;
+/// The most bytes in one of an MCP server's arguments
+/// ([`StdioMcpServer::problem`]).
+pub const MAX_MCP_SERVER_ARG_BYTES: usize = 8192;
+
+/// Why a server, or a set of servers, cannot be launched as configured. The
+/// one owner of those rules is [`StdioMcpServer::problem_in`] (with
+/// [`StdioMcpServer::problem`] for one server's), and, for what a server
+/// process is started with,
+/// [`McpServerLaunch::problem`](crate::infrastructure::mcp::McpServerLaunch::problem).
+/// Branch on the variant; the text is for people. No variant carries an
+/// environment variable's value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpServerProblem {
+    /// More than [`MAX_MCP_SERVERS`] servers.
+    TooMany,
+    /// Two servers are configured under this name.
+    DuplicateName {
+        /// The name configured twice.
+        server: String,
+    },
+    /// The name is empty, longer than [`MAX_MCP_SERVER_NAME_BYTES`], holds `__`, starts or ends
+    /// with `_`, or holds anything but ASCII letters, digits, `-` and `_`.
+    Name {
+        /// The name as it is configured.
+        server: String,
+    },
+    /// The executable is not an absolute UTF-8 path.
+    Command {
+        /// The server's name.
+        server: String,
+    },
+    /// More than [`MAX_MCP_SERVER_ARGS`] arguments, or one longer than
+    /// [`MAX_MCP_SERVER_ARG_BYTES`] or holding NUL.
+    Arguments {
+        /// The server's name.
+        server: String,
+    },
+    /// An environment variable's name is empty, longer than
+    /// [`MAX_MCP_ENVIRONMENT_NAME_BYTES`](crate::infrastructure::mcp::MAX_MCP_ENVIRONMENT_NAME_BYTES),
+    /// starts with a digit, or holds anything but ASCII letters, digits and
+    /// `_`.
+    EnvironmentName {
+        /// The server's name.
+        server: String,
+        /// The variable's name, any byte that is not UTF-8 replaced; never
+        /// its value.
+        name: String,
+    },
+    /// An environment variable's name is one a server may not be given:
+    /// [`MCP_SESSION_VARIABLE`](crate::infrastructure::mcp::MCP_SESSION_VARIABLE),
+    /// which carries a host's session token to its stand-ins.
+    ReservedEnvironmentName {
+        /// The server's name.
+        server: String,
+        /// The reserved name.
+        name: String,
+    },
+    /// An environment variable's value holds NUL, which no process can be
+    /// given.
+    EnvironmentValue {
+        /// The server's name.
+        server: String,
+        /// The variable's name; never its value.
+        name: String,
+    },
+}
+impl fmt::Display for McpServerProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooMany => write!(f, "at most {MAX_MCP_SERVERS} MCP servers"),
+            Self::DuplicateName { server } => {
+                write!(f, "two MCP servers are configured as {server:?}")
+            }
+            Self::Name { server } => write!(f, "invalid MCP server name {server:?}"),
+            Self::Command { server } => write!(
+                f,
+                "the MCP server {server:?}'s executable must be an absolute UTF-8 path"
+            ),
+            Self::Arguments { server } => {
+                write!(f, "invalid arguments for the MCP server {server:?}")
+            }
+            Self::EnvironmentName { server, name } => write!(
+                f,
+                "invalid environment variable name {name:?} for the MCP server {server:?}"
+            ),
+            Self::ReservedEnvironmentName { server, name } => write!(
+                f,
+                "{name} is reserved and cannot be given to the MCP server {server:?}"
+            ),
+            Self::EnvironmentValue { server, name } => write!(
+                f,
+                "the environment variable {name} of the MCP server {server:?} holds NUL"
+            ),
+        }
+    }
+}
+impl std::error::Error for McpServerProblem {}
+
+/// Where an ACP binding reads its MCP servers from: a host's live set, read
+/// once at each provider open ([`McpServerList::opened`]).
+pub trait McpServerSource: Send + Sync {
+    /// The servers a provider open is given now. Called on the open's task,
+    /// so it must not block; it may be called from several opens at once.
+    fn servers(&self) -> Vec<StdioMcpServer>;
+}
+
+/// The MCP servers an [`AcpConfig`] gives its provider opens: a fixed list,
+/// or a host's [`McpServerSource`] read once for each open. An open keeps
+/// what it read for its provider session's life, through every restart of
+/// its process, so a harness already running keeps the servers it was given
+/// while a later open is given the source's servers then.
+#[derive(Clone, Default)]
+pub struct McpServerList {
+    source: Option<Arc<dyn McpServerSource>>,
+    servers: Arc<[StdioMcpServer]>,
+}
+impl McpServerList {
+    /// No MCP servers.
+    pub fn none() -> Self {
+        Self::default()
+    }
+    /// The same `servers` for every open.
+    pub fn fixed(servers: Vec<StdioMcpServer>) -> Self {
+        Self {
+            source: None,
+            servers: servers.into(),
+        }
+    }
+    /// What `source` says at each open.
+    pub fn read_from(source: Arc<dyn McpServerSource>) -> Self {
+        Self {
+            source: Some(source),
+            servers: Arc::new([]),
+        }
+    }
+    /// The servers as they are now: the fixed list, or what the source says
+    /// now. Two calls on a list read from a source may differ; a provider
+    /// open reads once, through [`Self::opened`].
+    pub fn current(&self) -> Arc<[StdioMcpServer]> {
+        match &self.source {
+            Some(source) => source.servers().into(),
+            None => self.servers.clone(),
+        }
+    }
+    /// For one provider open: the servers as they are now, fixed for that
+    /// open. The ACP binding asks this itself, once per open; a host calls it
+    /// only to check what an open would be given.
+    pub fn opened(&self) -> Self {
+        Self {
+            source: None,
+            servers: self.current(),
+        }
+    }
+}
+impl fmt::Debug for McpServerList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.source {
+            Some(_) => f.write_str("McpServerList(read at each open)"),
+            None => f.debug_list().entries(self.servers.iter()).finish(),
+        }
     }
 }
 
@@ -92,11 +302,14 @@ pub struct AcpConfig {
     /// tool events are protocol errors and permission requests are cancelled; this switch is not
     /// an OS filesystem sandbox.
     pub tools_enabled: bool,
-    /// Trusted MCP servers exposed by profiles that support MCP. Empty disables custom tools.
-    /// Servers require tools_enabled and share the provider session lifetime.
-    /// Not part of the restoration identity, so changing them keeps a saved session restorable;
-    /// the fingerprint's inputs are listed on `fingerprint` in `acp/sessions/identity.rs`.
-    pub mcp_servers: Vec<StdioMcpServer>,
+    /// Trusted MCP servers exposed by profiles that support MCP, read once at each provider
+    /// open ([`McpServerList::opened`]) and kept for that provider session's life. None
+    /// disables custom tools. Servers require tools_enabled.
+    /// Excluded from restoration identity: like `stand_ins`, they are attached to each provider
+    /// open rather than selecting the provider context, so changing them leaves a saved session
+    /// restorable; the fingerprint's inputs are listed on `fingerprint` in
+    /// `acp/sessions/identity.rs`.
+    pub mcp_servers: McpServerList,
     /// Where each provider open's MCP server processes get their per-open environment, and the
     /// results its stand-ins forward are taken from: a host's grant for the SDK session being
     /// opened, held for that provider session's life.
@@ -225,6 +438,7 @@ impl AcpConfig {
             .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
             .collect();
         self.mcp_servers
+            .current()
             .iter()
             .map(|server| {
                 serde_json::json!({
@@ -256,14 +470,13 @@ impl AcpConfig {
         self.launch_timeout + self.startup_timeout * 2 + self.shutdown_grace + self.kill_timeout * 4
     }
     pub(crate) fn validate(&self) -> Result<(), AgentError> {
-        if self.mcp_servers.len() > 16 || (!self.tools_enabled && !self.mcp_servers.is_empty()) {
-            return Err(AgentError::Configuration(
-                "at most 16 MCP servers; MCP requires tools enabled".into(),
-            ));
+        let mcp_servers = self.mcp_servers.current();
+        if let Some(problem) = StdioMcpServer::problem_in(mcp_servers.iter()) {
+            return Err(AgentError::Configuration(problem.to_string()));
         }
-        if !StdioMcpServer::all_valid(&self.mcp_servers) {
+        if !self.tools_enabled && !mcp_servers.is_empty() {
             return Err(AgentError::Configuration(
-                "invalid MCP server name, executable or arguments".into(),
+                "MCP servers require tools enabled".into(),
             ));
         }
         if !cfg!(unix) {

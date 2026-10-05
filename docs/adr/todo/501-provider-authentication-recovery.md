@@ -62,6 +62,10 @@ outside Nessa's launcher.
 | Launch pending | Additional activation | No second launch | Disabled button and component in-flight guard |
 | Launch pending | Launch acknowledged | Button available; card remains | Browser script |
 | Launch pending | Launch refused / unsupported | Button available; small launch failure shown | Browser script |
+| Startup/new/resume refuses before dispatch | Queue settles with typed primary authentication error; no provider report | Card eligible; pure refusal has no duplicate required-work notice | Real automatic attachment/retention and projection tests |
+| Startup authentication cause | Queue audit, storage or cleanup also fails | Card eligible; independent required-work failure retained | Primary-cause wrapper regressions |
+| Provider report present | Later local failure contains authentication | Report's provider outcome alone owns recovery | Contradictory report/result regressions |
+| Generic startup cause | Subsequent independent authentication error | No recovery authority | Primary-versus-independent cause regression |
 | Local A retained before observing wire B | B publishes an authentication refusal | B card shown; A remains visible | Real panel projection/render and desktop send/store regressions |
 | Wire B observed | Local A begins, then sends or fails | B recovery hidden; historical failure remains | Shared boundary owner and both real render paths |
 | Wire B observed with retained A | Same B read again under another revision | Captured boundary unchanged; recovery does not flip | Replacement-view regressions |

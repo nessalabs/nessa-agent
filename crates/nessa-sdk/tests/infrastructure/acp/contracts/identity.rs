@@ -3,7 +3,7 @@ use super::support::*;
 use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 use crate::application::agent_execution::sessions::{SessionManager, StorageError};
 use crate::domain::agent_execution::sessions::SessionId;
-use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::acp::sessions::{McpServerList, StdioMcpServer};
 use crate::infrastructure::session_storage::RecordStorage;
 
 fn provider(config: AcpConfig, model: &ModelMetadata) -> ClaudeAcpProvider {
@@ -138,7 +138,7 @@ async fn mcp_server_change_keeps_the_identity_and_restores(
     let _slot = process_test_slot().await;
     // `stand-ins` mode records the MCP entries each session request carried.
     let (root, mut config, model) = test_acp_configuration("stand-ins", 16);
-    config.mcp_servers = saved;
+    config.mcp_servers = McpServerList::fixed(saved);
     let original = provider(config.clone(), &model);
     let identity = original.identity();
     let storage_root = tempfile::tempdir().unwrap();
@@ -159,7 +159,7 @@ async fn mcp_server_change_keeps_the_identity_and_restores(
     agent.close(close_action()).await.unwrap();
     drop(agent);
     let mut changed = config;
-    changed.mcp_servers = current.clone();
+    changed.mcp_servers = McpServerList::fixed(current.clone());
     let changed = provider(changed, &model);
     assert_eq!(changed.identity(), identity);
     let restored = attached_agent(Arc::new(changed), manager().await.unwrap())
@@ -306,11 +306,11 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
     }
     // Nor is the MCP server list (ADR 344, #391).
     let mut served = config.clone();
-    served.mcp_servers.push(StdioMcpServer {
+    served.mcp_servers = McpServerList::fixed(vec![StdioMcpServer {
         name: "nessa".into(),
         command: "/trusted/nessa-mcp".into(),
         args: vec!["--workspace".into(), "/different".into()],
-    });
+    }]);
     assert_eq!(provider(served, &model).identity(), original);
     let mut left = config.clone();
     let mut right = config;

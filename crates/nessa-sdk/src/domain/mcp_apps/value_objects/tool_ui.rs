@@ -131,6 +131,14 @@ impl ToolHints {
             destructive,
         }
     }
+    /// `readOnlyHint` as the tool gave it, `None` when it said nothing.
+    pub fn read_only_hint(self) -> Option<bool> {
+        self.read_only
+    }
+    /// `destructiveHint` as the tool gave it, `None` when it said nothing.
+    pub fn destructive_hint(self) -> Option<bool> {
+        self.destructive
+    }
     /// Whether calling the tool may destroy something: MCP's own defaults,
     /// under which a tool is destructive unless it says it only reads
     /// (`readOnlyHint: true`) or says it destroys nothing

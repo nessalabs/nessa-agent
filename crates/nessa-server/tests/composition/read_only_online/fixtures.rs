@@ -4,6 +4,8 @@
 mod client;
 #[path = "fixtures/gateway.rs"]
 mod gateway;
+#[path = "fixtures/semantic.rs"]
+mod semantic;
 pub(super) use client::{command, Frame, WatchChild, WireClient};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Serialize};
@@ -70,6 +72,10 @@ impl Gateway {
     /// process, so its process-local watch producer sees the change.
     pub(super) fn start_live(root: &Path) -> Self {
         Self::spawn(root, "live", Stdio::piped())
+    }
+    /// Actual Agent-produced semantic prefix and controlled terminal suffix.
+    pub(super) fn start_semantic(root: &Path) -> Self {
+        Self::spawn(root, "semantic", Stdio::piped())
     }
     fn spawn(root: &Path, mode: &str, input: Stdio) -> Self {
         let mut child = Command::new(std::env::current_exe().unwrap())

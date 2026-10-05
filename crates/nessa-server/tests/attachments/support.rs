@@ -25,6 +25,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, Notify};
 
@@ -103,7 +104,18 @@ pub(crate) struct RecordingAudit {
     records: Mutex<Vec<AttachmentAuditRecord>>,
     pub(crate) refusing: AtomicBool,
     pub(crate) stalled: AtomicBool,
+    /// The next `record` panics after it has been counted, so a delivery task
+    /// can be left finished with a panic.
+    pub(crate) panic_in_record: AtomicBool,
+    /// Panic this many of the next `record` calls, then stop. Unlike
+    /// [`Self::panic_in_record`], the count is used up.
+    pub(crate) panic_next: AtomicUsize,
     pub(crate) attempts: AtomicUsize,
+    /// Conversation of each `record` call, in the order the sink was entered.
+    conversations: Mutex<Vec<ConversationId>>,
+    /// How long each `record` future lived, in call order. A deadline drops
+    /// the future, so this is the attempt the service actually gave it.
+    durations: Mutex<Vec<Duration>>,
     /// Signalled once per acknowledged record, so a test can wait for one
     /// without guessing how long it takes.
     pub(crate) recorded: Notify,
@@ -132,10 +144,76 @@ impl RecordingAudit {
         records.retain(|record| !matches!(record, AttachmentAuditRecord::TicketIssued { .. }));
         records
     }
+    /// How long each attempt lived, in the order the sink was asked.
+    pub(crate) fn durations(&self) -> Vec<Duration> {
+        self.durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+    /// Forget timings from earlier phases, so a later assertion reads only
+    /// the attempts it is about.
+    pub(crate) fn clear_durations(&self) {
+        self.durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+    /// Conversations whose records have entered the sink, in that order.
+    pub(crate) fn conversations(&self) -> Vec<ConversationId> {
+        self.conversations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
 }
+
+fn record_conversation(record: &AttachmentAuditRecord) -> ConversationId {
+    match record {
+        AttachmentAuditRecord::TicketIssued { ticket }
+        | AttachmentAuditRecord::TicketReplaced { ticket }
+        | AttachmentAuditRecord::TicketExpired { ticket }
+        | AttachmentAuditRecord::TicketWithdrawn { ticket, .. }
+        | AttachmentAuditRecord::UploadRejected { ticket, .. } => ticket.conversation_id().clone(),
+        AttachmentAuditRecord::HoldCreated { hold }
+        | AttachmentAuditRecord::AlreadyHeld { hold, .. }
+        | AttachmentAuditRecord::HoldReverted { hold, .. }
+        | AttachmentAuditRecord::HoldReleased { hold, .. } => hold.conversation_id().clone(),
+        AttachmentAuditRecord::BlobRemoved { removed } => {
+            removed.retirements()[0].hold().conversation_id().clone()
+        }
+    }
+}
+
+/// Times one sink call, including the drop that ends a deadline.
+struct AttemptSpan<'a> {
+    audit: &'a RecordingAudit,
+    started: tokio::time::Instant,
+}
+impl Drop for AttemptSpan<'_> {
+    fn drop(&mut self) {
+        self.audit
+            .durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(self.started.elapsed());
+    }
+}
+
 impl AttachmentAudit for RecordingAudit {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
+        let conversation_id = record_conversation(&record);
         Box::pin(async move {
+            // The service drops its admission permit when this future ends,
+            // including when a deadline drops a stall.
+            self.conversations
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(conversation_id);
+            let _span = AttemptSpan {
+                audit: self,
+                started: tokio::time::Instant::now(),
+            };
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
             let gate = {
                 let mut gate = self.gate.lock().unwrap();
@@ -147,6 +225,18 @@ impl AttachmentAudit for RecordingAudit {
                 if gate.then_refuse {
                     return Err(AuditUnavailable);
                 }
+            }
+            // After a held gate, so a test can drop the caller while this
+            // attempt is still inside the sink and only then let it panic.
+            #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
+            let counted_panic = self
+                .panic_next
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            if self.panic_in_record.load(Ordering::SeqCst) || counted_panic {
+                panic!("attachment audit sink panicked");
             }
             if self.stalled.load(Ordering::SeqCst) {
                 std::future::pending::<()>().await;

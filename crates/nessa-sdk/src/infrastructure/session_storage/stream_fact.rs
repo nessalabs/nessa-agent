@@ -767,7 +767,18 @@ pub(crate) async fn commit_fact<R: EventRuntime>(
     fact: &FramedFact,
 ) -> Result<Cursor, FactCommitError> {
     let expected = frame_fact(fact, after.offset + 1).map_err(FactCommitError::Frame)?;
-    let (matched, mut cursor) = matching_suffix(runtime, stream, after, &expected).await?;
+    commit_expected(runtime, stream, after, &expected).await
+}
+
+/// Append an already framed fact. A caller that framed several facts for one
+/// batch passes each fact's slice so the bytes are not framed twice.
+pub(crate) async fn commit_expected<R: EventRuntime>(
+    runtime: &R,
+    stream: &StreamKey,
+    after: &Cursor,
+    expected: &[NewEvent],
+) -> Result<Cursor, FactCommitError> {
+    let (matched, mut cursor) = matching_suffix(runtime, stream, after, expected).await?;
     if matched == expected.len() {
         return Ok(cursor);
     }
@@ -781,7 +792,7 @@ pub(crate) async fn commit_fact<R: EventRuntime>(
         }
         cursor = receipt.record.cursor.clone();
     }
-    let (verified, cursor) = matching_suffix(runtime, stream, after, &expected).await?;
+    let (verified, cursor) = matching_suffix(runtime, stream, after, expected).await?;
     if verified != expected.len() {
         return Err(FactCommitError::InvalidStream);
     }

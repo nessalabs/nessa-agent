@@ -75,8 +75,50 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
         assert_eq!(runtime.paths(), [bundle.join(entry)], "{id:?}");
     }
     assert_eq!(agents.mcp_servers.len(), 1);
-    assert_eq!(agents.mcp_servers[0].command, bundle.join("nessa-mcp"));
+    assert_eq!(
+        agents.mcp_servers[0].server().command(),
+        bundle.join("nessa-mcp")
+    );
     assert!(!data.join("config.json").exists());
+}
+
+/// #391 PR 2 pass 2b, decision 1: the first `mcpServers` write on a fresh
+/// install stores an `agents` block from the running values — the bundled
+/// catalog and the default workspace. The next start reads that block, and
+/// the default workspace is made all the same: making it no longer depends
+/// on the block being absent, and making it again is a no-op.
+#[test]
+fn the_default_workspace_is_made_whenever_it_is_the_one_configured() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut first = RuntimeConfig::default();
+    configure(&mut first, &bundle, &data).unwrap();
+    let agents = first.agents.as_ref().unwrap();
+    // The block the first write starts from (`composition::mcp_servers::settings`).
+    let written = serde_json::json!({"agents": {
+        "catalog": agents.catalog,
+        "workspace": agents.workspace,
+        "mcpServers": [{"name": "mcptest", "command": "/usr/bin/python3"}],
+    }});
+    let workspace = data.join("workspaces/default");
+    std::fs::remove_dir(&workspace).unwrap();
+    for _ in 0..2 {
+        let mut next = RuntimeConfig::parse(written.to_string().as_bytes()).unwrap();
+        configure(&mut next, &bundle, &data).unwrap();
+        let agents = next.agents.unwrap();
+        assert_eq!(agents.workspace, workspace);
+        assert!(workspace.is_dir());
+        // The stored server is kept and the managed one added beside it.
+        let names: Vec<_> = agents
+            .mcp_servers
+            .iter()
+            .map(|each| each.server().name())
+            .collect();
+        assert_eq!(names, ["mcptest", "nessa"]);
+    }
 }
 
 #[test]
@@ -114,6 +156,8 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::from([(
                 "codex".into(),
@@ -165,6 +209,8 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::from([(
                 "claude".into(),
@@ -247,6 +293,8 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::from([("claude".into(), runtime()), ("codex".into(), runtime())]),
         }),

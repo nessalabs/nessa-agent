@@ -8,7 +8,10 @@ use crate::conversation::application::{
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
-use crate::mcp_servers::{entrypoint::http::ResourceRoute, infrastructure::ResourceTicketStore};
+use crate::mcp_servers::{
+    application::McpServerSettings, entrypoint::http::ResourceRoute,
+    infrastructure::ResourceTicketStore,
+};
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -80,6 +83,12 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    /// What `mcpServers.list`, `.save`, `.remove` and `.inspect` manage;
+    /// `None` where this gateway holds no live MCP server set — not Unix, no
+    /// agents configured, or MCP off this run because its relay socket could
+    /// not be bound, a path was not UTF-8 or no key for its digests could be
+    /// drawn — which they answer `mcp_servers_not_configured`.
+    pub(crate) mcp_server_settings: Option<Arc<McpServerSettings>>,
     /// Owner pairing commands, composed only when `config.json` names a native
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
@@ -144,6 +153,18 @@ impl ProductRouteState {
         self.change_watches.close();
     }
 
+    /// Admit no more `mcpServers.save`, `.remove` or `.inspect` — each later
+    /// one answers `mcp_servers_stopping` — and stop the inspections under
+    /// way now, as cleanup begins rather than after the conversations drain
+    /// ([`McpServerSettings::close`]). The changes admitted run on until the
+    /// MCP stop drains them before the servers stop
+    /// ([`McpServerSettings::shutdown`]).
+    pub(crate) fn close_mcp_server_admission(&self) {
+        if let Some(settings) = &self.mcp_server_settings {
+            settings.close();
+        }
+    }
+
     /// Join the distinct actual watch resource after closing admission/connection interest.
     /// The normal host report retains its returned first fault alongside reader outcomes.
     pub(crate) async fn drain_watches(&self) -> Result<(), WatchTaskFault> {
@@ -183,6 +204,7 @@ impl ProductRouteState {
             clock: dependencies.clock,
             policy: dependencies.policy,
             admin: None,
+            mcp_server_settings: None,
             pairing: None,
             conversations: None,
             passive_read: None,
@@ -214,6 +236,13 @@ impl ProductRouteState {
     /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
+        self
+    }
+
+    /// Register what manages this gateway's stored MCP servers. Without it
+    /// the `mcpServers.*` methods answer `mcp_servers_not_configured`.
+    pub fn with_mcp_server_settings(mut self, settings: Arc<McpServerSettings>) -> Self {
+        self.mcp_server_settings = Some(settings);
         self
     }
 

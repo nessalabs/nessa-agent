@@ -5,14 +5,13 @@
 //! cache before I/O; its drop guard returns progress on completion or unwind.
 #![deny(missing_docs)]
 
+use super::save_batch::RecordRuntime;
 use super::{
     record_source::source_error,
     save_group::GroupProgress,
     stream_fact::{FrameStep, FrameValidator},
 };
-use event_stream::{
-    infrastructure::SqliteStore, Cursor, EventReader, PageLimits, Runtime, StreamKey,
-};
+use event_stream::{Cursor, EventReader, PageLimits, StreamKey};
 use nessa_sync::replication::application::SourceError;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -107,7 +106,7 @@ impl Scan {
     }
     async fn advance(
         &mut self,
-        runtime: &Runtime<SqliteStore>,
+        runtime: &RecordRuntime,
         key: &StreamKey,
         until: u64,
         proven: &mut VecDeque<u64>,
@@ -241,7 +240,7 @@ impl TerminalCache {
 
     pub(super) async fn discover(
         self: &Arc<Self>,
-        runtime: &Runtime<SqliteStore>,
+        runtime: &RecordRuntime,
         key: &StreamKey,
         query: DiscoveryQuery,
     ) -> Result<RecordReadStatus<u64>, SourceError> {

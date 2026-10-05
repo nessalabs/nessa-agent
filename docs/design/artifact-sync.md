@@ -304,7 +304,8 @@ digest/media identity omitted stored byte length, and the scan collapsed validat
 active retention with unreadability. The current structural correction keeps one
 application report validator and one ephemeral filesystem retention result. It
 preserves prior review history; at most two full rounds follow this rework before
-the bounded draft handoff rule applies. Issue383's bulk cost policy stays open.
+the bounded draft handoff rule applies. Bulk audit delivery is the contract in
+[Bulk audit delivery](#bulk-audit-delivery).
 
 | Input / ordering | Required result | One owner |
 | --- | --- | --- |
@@ -318,4 +319,131 @@ the bounded draft handoff rule applies. Issue383's bulk cost policy stays open.
 
 The report describes confirmed stored facts, not proof that an arbitrary adapter
 performed its claimed physical effects. Validation does not establish exactly-once
-audit delivery, and issue383 retains the separate bulk-audit policy limit.
+audit delivery. Bulk delivery order and its resource bounds are
+[Bulk audit delivery](#bulk-audit-delivery).
+
+## Bulk audit delivery
+
+Owner: [#383](https://github.com/nessalabs/nessa-agent/issues/383). The
+application service is the only owner of this order. `AttachmentLimits` owns
+the three numbers: `audit_deadline` (one attempt), `audit_budget` (how long the
+caller waits), and `audit_admission` (how many bulk attempts are awaited at
+once). A constructed service admits at least one call; a configured zero is
+raised to one so a phase cannot be left with no slot.
+
+This covers two bulk phases: `release` (withdrawn tickets, then retired holds,
+then removed blobs) and the expiry sweep. `begin` fails when that sweep's
+count is not zero. An upload (`redeem`) runs the same sweep, logs the count,
+and does not fail the upload for it. That sweep does not resume a parked bulk
+panic; `release` and `begin` do. Single-record writes — issuance,
+redemption, refusal, creation — keep their own `audit_deadline` and do not take
+an admission slot. A single-record write that continues after its deadline is
+outside the bulk cap. Cleanup of tickets, holds, and unheld bytes finishes
+before either bulk phase starts, and it is not undone by audit.
+
+One phase moves its records into one delivery task. That task is not one task
+per record, and it is not a queue that accepts further work. Records not yet
+admitted stay in the phase's iterator. Building one future per record that
+then waits on the semaphore would be that queue. The semaphore is the cap two
+phases share; the iterator bound is the cap inside one phase. A single phase
+can show the same in-flight count under either cap.
+`a_second_bulk_phase_waits_for_the_admission_permit` is what fails when the
+permit is dropped before the attempt.
+`a_second_phase_enters_when_the_permit_is_released` is what fails when the
+iterator admits every remaining record and those records wait on the semaphore
+ahead of the other phase. The task admits the next record only
+when a service-wide slot is free, then waits at most `audit_deadline`. The
+slot's wait is not part of the deadline. The service
+holds that permit for the awaited attempt and does not hand it to the sink, so
+a blocking write cannot keep it. When the deadline drops the wait, the permit
+is released and the next record starts its own full deadline. A durable write
+already running on the blocking pool keeps running without the admission
+permit. The sink does not start another blocking write until that one
+finishes, so a stuck sync cannot fill the pool. The
+caller waits
+until every record in the phase has been acknowledged or `audit_budget`
+elapses, whichever comes first, and then returns. The delivery task keeps
+going. Dropping the caller does not cancel it. A refusal or a deadline after
+the caller is gone is logged from that task; it does not change a count the
+caller already took. Dropping the service aborts the delivery task: a record
+not yet handed to the sink is not attempted. A durable write that has already
+started still finishes, and the sink never held its permit.
+
+The count returned to the caller is how many records were not yet acknowledged
+when the caller stopped waiting. That snapshot is taken under the same lock
+that records an acknowledgement, before the phase reaps an older task.
+`a_late_accept_after_the_caller_stops_does_not_change_the_count` accepts a
+record while that reap is in progress; moving the snapshot to after the reap
+counts the accept. A sink
+that accepts a record after that is late. The caller's failure stays, and the
+stored record keeps the cause and caller it was built with. Nothing reconciles
+the two into exactly-once delivery. A refusal and a deadline are the same
+count as a record the caller did not see acknowledged: not acknowledged in
+time. Storage failures stay a separate count.
+
+The records are the phase's metadata, not blob bytes. The task retains that
+list until it has handed each record over. At most `audit_admission` bulk
+attempts are awaited at once. A write that continued past its deadline does
+not take one of those places. One record panicking does not skip the rest of
+its phase; the panic is resumed after those records have been handed over.
+The current phase's records are owned by its delivery task before an older
+panicked task is resumed. `release` and `begin` resume that panic, and an
+empty phase of either still does. An upload's expiry sweep does not resume
+it, including a panic from the sweep's own task. `receive` maps a panic in
+the upload task to an unresolved rejection of the ticket it already redeemed.
+Resuming the parked panic there would spend that ticket for a failure that
+was not this upload, and awaiting the task would drop the panic so a later
+`release` or `begin` could not surface it. The upload leaves the finished
+task parked. Resuming one parked panic does not drop another. The payload
+that was not resumed stays parked, and the next `release` or `begin` surfaces
+it, including a sweep panic left beside an older one.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Service as AttachmentService
+    participant Task as Delivery task
+    participant Sink as AttachmentAudit
+    Caller->>Service: release or begin sweep
+    Service->>Service: Cleanup already finished
+    Service->>Task: One task, the phase's records
+    Task->>Sink: Next record, full audit_deadline
+    alt Acknowledged before audit_budget
+        Sink-->>Task: Accepted
+        Task-->>Caller: Unacknowledged count is zero
+    else Caller stops waiting
+        Caller-->>Caller: Count everything not yet acknowledged
+        Note over Task,Sink: The attempt continues for its own deadline, then the service releases its slot
+        Sink-->>Task: Late accept or refusal
+        Note over Caller,Sink: The caller's count is unchanged
+    end
+```
+
+| Ordering | Required result | Enforced by |
+| --- | --- | --- |
+| Sink acknowledges every record before the budget | Caller returns then, not at the end of the budget. Count is zero. Original cause and caller are on each record | `an_acknowledged_release_returns_when_the_records_are_written` |
+| Sink refuses at once | Every record is attempted. Each refusal counts. Cleanup has already finished. The caller does not spend the budget | `a_refusing_sink_is_attempted_for_every_record_without_spending_the_budget` |
+| Sink never answers, release | Caller returns at the budget with every record unacknowledged and cleanup done. Each record is still handed over for a full deadline, including one that starts after the caller has returned. The budget does not shorten a deadline | `a_stalled_release_still_attempts_every_record_for_its_own_deadline` |
+| Sink never answers, expiry sweep | `begin` returns `Audit` at the budget. Each expiry record still gets a full deadline, including one that starts after the caller has returned | `a_stalled_expiry_sweep_still_attempts_every_ticket` |
+| Expiry cleanup before acknowledgement | The swept tickets are already gone, so the book can issue its full capacity while an expiry attempt is still in flight | `expired_tickets_free_their_places_before_the_sweep_is_acknowledged` |
+| Caller dropped after the first attempt has started | Cleanup stays done. The remaining records are still attempted for a full deadline. A record the sink then accepts keeps the original release cause and caller | `a_lost_release_caller_does_not_cancel_the_remaining_attempts` |
+| Sink accepts only after the caller has returned | The returned failure count stays. The stored record keeps the original cause and caller | `a_record_acknowledged_after_the_caller_gave_up_stays_a_failure` |
+| More records than `audit_admission` | Only that many sink calls are in flight. The next record starts when a slot frees | `bulk_delivery_does_not_admit_more_than_its_limit` |
+| Two bulk phases at once | The phases share one permit. A second phase does not enter the sink until a deadline releases it | `a_second_bulk_phase_waits_for_the_admission_permit` |
+| A second phase is waiting while the first still has records it has not admitted | When the permit is released, the next record handed to the sink is the second phase's. The rest of the first phase is not queued ahead of it | `a_second_phase_enters_when_the_permit_is_released` |
+| `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |
+| Durable write outlives its deadline | The service releases the admission permit at the deadline while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only one attempt has been handed over. The sink is not given the permit. The overlap is `max_in_flight`, not a clock | `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
+| A durable write is still running | The sink does not start a second blocking write until that one finishes. The write still holds its place; dropping that place before the blocking write starts lets the next one in | `a_durable_write_does_not_start_until_the_previous_one_finishes` |
+| Caller dropped, then the sink refuses | The delivery task logs the refusal. The caller is no longer there to return it | `a_lost_caller_still_logs_a_refusal` |
+| Caller dropped, then a record's deadline passes | The delivery task logs the deadline. The caller is no longer there to return it | `a_lost_caller_still_logs_a_deadline` |
+| One record in a phase panics | The rest of that phase is still handed to the sink. The panic is resumed after that | `a_panicked_record_does_not_skip_the_rest_of_its_phase` |
+| Service dropped after the first attempt has started | Attempts not yet inside the sink stop. The one already inside is not followed by the rest | `dropping_the_service_stops_bulk_attempts_that_have_not_started` |
+| A delivery task panicked, then another phase has records | The new phase's task owns its records before the older panic is resumed, and those records are still handed to the sink | `a_panicked_delivery_does_not_drop_the_next_phase_s_records` |
+| A delivery task panicked, then an empty phase of `release` or `begin` | That phase still resumes the panic | `an_empty_phase_surfaces_a_panicked_delivery` |
+| A delivery task panicked, then an upload | The upload is kept. The ticket is not recorded as unresolved. A later `release` still resumes the parked panic | `a_parked_bulk_panic_does_not_reject_a_later_upload` |
+| Two delivery tasks have already panicked | Resuming one leaves the other parked. The next `release` or `begin` still panics | `a_second_parked_panic_is_resumed_by_a_later_release` |
+| An upload sweep panics while an older panic is parked | The upload is kept. Each later phase resumes one of those two panics | `a_sweep_panic_parked_beside_an_older_one_is_still_surfaced` |
+| Upload while an expiry sweep is not yet acknowledged | The upload completes. The sweep's count does not fail it. The upload's own record does not take the sweep's slot | `an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged` |
+| Accept while the caller is still waiting, then the caller stops | The acknowledgement is in the count | `an_accept_while_the_caller_is_waiting_is_counted` |
+| Accept after the caller has stopped, including while the phase reaps | The frozen count does not gain that acknowledgement. The snapshot is taken before the reap | `a_late_accept_after_the_caller_stops_does_not_change_the_count` |
+| Bulk admission semaphore is closed | The record is not handed to the sink, and it counts as not acknowledged | `a_closed_admission_does_not_hand_the_record_to_the_sink` |

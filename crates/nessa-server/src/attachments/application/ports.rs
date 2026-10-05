@@ -508,6 +508,10 @@ pub enum AttachmentAuditRecord {
 }
 
 /// Durable evidence of attachment transitions, committed before success is reported.
+///
+/// Bulk admission is a permit the service holds around this call. The sink does
+/// not receive that permit and cannot keep it after the service's deadline
+/// drops the call.
 pub trait AttachmentAudit: Send + Sync {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable>;
 }

@@ -3,6 +3,7 @@
 use super::support::*;
 use crate::application::agent_execution::providers::ApprovalMode;
 use crate::application::dto::{ModelMetadataDto, ReasoningDto};
+use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::agent_execution::tools::ToolContent;
 
 #[tokio::test]
@@ -365,19 +366,24 @@ async fn a_codex_nothing_has_signed_in_refuses_its_session_and_is_reported_as_co
     // to dress it as a transport or configuration fault, and to leave nothing
     // running behind it. Covered here so it is a contract instead of something
     // only an authenticated machine could ever discover.
-    let (root, binding) = test_codex_binding("not-signed-in", 16);
-    assert_eq!(
-        binding
-            .open(ProviderOpenRequest::without_startup_control(None))
-            .await
-            .err()
-            .map(|failure| failure.cause().clone())
-            .unwrap(),
-        AgentError::AuthenticationRequired {
-            diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
-        }
-    );
-    wait_until_gone(&root, "pid").await;
+    for restore in [
+        None,
+        Some(ExecutionSessionId::new("previous-session").unwrap()),
+    ] {
+        let (root, binding) = test_codex_binding("not-signed-in", 16);
+        assert_eq!(
+            binding
+                .open(ProviderOpenRequest::without_startup_control(restore))
+                .await
+                .err()
+                .map(|failure| failure.cause().clone())
+                .unwrap(),
+            AgentError::AuthenticationRequired {
+                diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+            }
+        );
+        wait_until_gone(&root, "pid").await;
+    }
 }
 
 #[tokio::test]
@@ -417,7 +423,7 @@ async fn a_binding_codex_cannot_honour_is_refused_before_a_process_starts() {
     // Codex brings its own tools and cannot be asked to run without them.
     let text_only = AcpConfig {
         tools_enabled: false,
-        mcp_servers: Vec::new(),
+        mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         ..config.clone()
     };
     assert_eq!(

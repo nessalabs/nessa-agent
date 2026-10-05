@@ -155,15 +155,40 @@ fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> Stri
         .trim_end()
         .to_owned()
 }
+// A provider report owns dispatched settlement. Before dispatch, the retained
+// terminal result owns automatic-attachment failure, including its primary cause
+// through queue audit/storage wrappers (startup_authentication tests).
+fn authentication_refusal(record: &InvocationRecord) -> Option<&AgentError> {
+    let mut error = match record.provider_report.as_ref() {
+        Some(report) => report.provider_result()?.as_ref().err()?,
+        None => record.result.as_ref()?.as_ref().err()?,
+    };
+    loop {
+        match error {
+            AgentError::AuthenticationRequired { .. } => return Some(error),
+            AgentError::MultipleOperationFailures { first_error, .. } => error = first_error,
+            AgentError::OperationAndCleanupFailure {
+                operation_error, ..
+            } => error = operation_error,
+            AgentError::StorageAfterExecution {
+                execution_result, ..
+            } => {
+                error = execution_result.as_ref().as_ref().err()?;
+            }
+            _ => return None,
+        }
+    }
+}
 fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let final_error = record.result.as_ref()?.as_ref().err()?;
     let report = record.provider_report.as_ref();
     let provider_error = report
         .and_then(|report| report.provider_result())
         .and_then(|result| result.as_ref().err());
-    if provider_error.is_some_and(AgentError::authentication_required) {
+    if let Some(refusal) = authentication_refusal(record) {
         let report_error = report.and_then(|report| report.clone().into_result().err());
-        return (report_error.as_ref() != provider_error || provider_error != Some(final_error))
+        return (report_error.as_ref().is_some_and(|error| error != refusal)
+            || refusal != final_error)
             .then(|| REQUIRED_WORK_FAILURE.into());
     }
     let Some(AgentError::Provider {
@@ -520,6 +545,7 @@ impl Projection {
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
+            retained_text: 0,
             execution_id: id.into(),
             user_text: String::new(),
             attachments: Vec::new(),
@@ -761,11 +787,7 @@ impl Projection {
             .retain(|pending| pending.execution_id != id);
         let offset = self.view.messages[index].event_count;
         self.view.messages[index].event_count += 1;
-        let retained_text = self.view.messages[index]
-            .parts
-            .iter()
-            .map(|part| part.text.len())
-            .sum::<usize>();
+        let retained_text = self.view.messages[index].retained_text;
         let available = (MAX_TEXT * 2).saturating_sub(retained_text);
         if matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().len() > available)
         {
@@ -817,7 +839,9 @@ impl Projection {
                     if bounded.len() != text.len() {
                         self.view.truncated = true;
                     }
+                    let next = bounded.len();
                     self.view.messages[index].parts[position].text = bounded;
+                    self.view.messages[index].retained_text = retained_text - previous + next;
                     None
                 } else {
                     let bounded = clipped(&text, available);
@@ -838,15 +862,9 @@ impl Projection {
         };
         if let Some(part) = part {
             let message = &mut self.view.messages[index];
-            if message.parts.len() < 512
-                && message
-                    .parts
-                    .iter()
-                    .map(|part| part.text.len())
-                    .sum::<usize>()
-                    + part.text.len()
-                    <= MAX_TEXT * 2
+            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
             {
+                message.retained_text += part.text.len();
                 if part.kind == "tool" {
                     self.tool_parts
                         .entry(id.to_owned())
@@ -1004,6 +1022,7 @@ impl Projection {
             .map(Into::into)
             .collect();
         self.view.messages[index].parts.clear();
+        self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);
         self.view.messages[index].event_count = 0;
         self.view.messages[index].steering_offset = record.target_event_offset;
@@ -1023,10 +1042,7 @@ impl Projection {
         self.view.messages[index].authentication_required = (self.view.messages[index].status
             == ConversationMessageStatus::Failed)
             .then_some(record)
-            .and_then(|record| record.provider_report.as_ref())
-            .and_then(|report| report.provider_result())
-            .and_then(|result| result.as_ref().err())
-            .filter(|error| error.authentication_required())
+            .and_then(authentication_refusal)
             .map(|_| true);
         // An ask is offered only while its execution is the one running here.
         // A settled or restarted message drops it, and so does a turn that is
@@ -1157,7 +1173,12 @@ pub fn bound_view_within(
             .first()
             .is_some_and(|message| !message.parts.is_empty())
         {
-            view.messages[0].parts.pop();
+            // The length leaves with the part. A returned view otherwise claims
+            // bytes for text it no longer contains.
+            // `the_text_budget_keeps_a_running_total`.
+            if let Some(removed) = view.messages[0].parts.pop() {
+                view.messages[0].retained_text -= removed.text.len();
+            }
         } else if let Some(message) = view
             .messages
             .first_mut()

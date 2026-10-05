@@ -41,7 +41,31 @@ impl LocalReceiverAuthority {
         policy_revision: &str,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, OpenError> {
-        let mut connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        Self::opened(
+            nessa_local_database::open(path, &Schema::new(DEFINITION)?)?,
+            policy_revision,
+            clock,
+        )
+    }
+
+    /// Open a journal that is already on disk. A missing file is not created.
+    pub fn open_existing(
+        path: &Path,
+        policy_revision: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, OpenError> {
+        Self::opened(
+            nessa_local_database::open_existing(path, &Schema::new(DEFINITION)?)?,
+            policy_revision,
+            clock,
+        )
+    }
+
+    fn opened(
+        mut connection: Connection,
+        policy_revision: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, OpenError> {
         validate_history(&connection).map_err(OpenError::Unreadable)?;
         let observed_at_ms = i64::try_from(clock.unix_milliseconds()).map_err(|_| {
             OpenError::Database(nessa_local_database::rusqlite::Error::InvalidQuery)

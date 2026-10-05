@@ -3191,6 +3191,7 @@ dependencies = [
 name = "nessa-sdk"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "data-encoding",
@@ -3224,6 +3225,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
+ "hmac",
  "image",
  "libc",
  "nessa-agent-credentials",

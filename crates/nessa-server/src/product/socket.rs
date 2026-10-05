@@ -1039,6 +1039,9 @@ async fn dispatch_authorized(
         method if method.starts_with("mcp.") => {
             super::mcp_apps::dispatch(state, session, frame).await
         }
+        method if method.starts_with("mcpServers.") => {
+            super::mcp_servers::dispatch(state, session, frame).await
+        }
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
@@ -1226,6 +1229,12 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcp.readResource"
         | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
+        // A configured MCP server is started with the gateway's authority
+        // and given its variables, credentials among them (#391).
+        // Inspecting runs a stored server's executable with those variables.
+        "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" | "mcpServers.inspect" => {
+            Some("credential.manage")
+        }
         // Enrolling a device creates a credential for it; Auth asks again for
         // the exact consent inside the runtime.
         "pairing.create"
@@ -2285,6 +2294,769 @@ mod tests {
         };
         assert!(!denied.ok);
         assert_eq!(denied.error.unwrap().code, "forbidden");
+    }
+
+    /// What the MCP server methods answer through `dispatch` on `state` for
+    /// `method` with `params`: whether it succeeded, and its payload, or its
+    /// error code and details.
+    async fn mcp_servers_call(
+        state: &ProductRouteState,
+        session: &AuthenticatedSession,
+        method: &str,
+        params: Value,
+    ) -> (bool, Value) {
+        let frame = RequestFrame {
+            params,
+            ..request("mcp", method)
+        };
+        let OutgoingMessage::Response(response) = dispatch(state, session, frame).await else {
+            panic!("response expected")
+        };
+        if response.ok {
+            (true, response.payload.unwrap())
+        } else {
+            let error = response.error.unwrap();
+            (false, json!({"code": error.code, "details": error.details}))
+        }
+    }
+
+    /// #391 S1: a caller without `credential.manage` is refused `forbidden`
+    /// by every MCP server method before its params are read, and nothing is
+    /// audited, read or written.
+    #[tokio::test]
+    async fn s1_mcp_servers_are_forbidden_without_credential_manage_before_params() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let files = MemoryFiles::holding(config(vec![]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_for(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Member);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        for method in [
+            "mcpServers.list",
+            "mcpServers.save",
+            "mcpServers.remove",
+            "mcpServers.inspect",
+        ] {
+            assert_eq!(action_for_method(method), Some("credential.manage"));
+            let (ok, answer) =
+                mcp_servers_call(&state, &session, method, json!({"not": "params"})).await;
+            assert!(!ok);
+            assert_eq!(answer["code"], "forbidden", "{method}");
+        }
+        assert!(audit.records().is_empty());
+        assert_eq!(files.locks.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(files.publishes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The MCP server methods on the wire: `kind: "stdio"`, variable names in
+    /// a list and never a value, a null value keeping the stored one, and each
+    /// refusal typed with its details; a gateway with no live set to manage
+    /// answers `mcp_servers_not_configured`.
+    #[tokio::test]
+    async fn mcp_servers_on_the_wire_carry_names_only_and_typed_refusals() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            absolute, config, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let (bare, _) = fixture(MembershipRole::Admin);
+        let session = authenticate(&bare).await;
+        assert_eq!(
+            mcp_servers_call(&bare, &session, "mcpServers.list", json!({})).await,
+            (
+                false,
+                json!({"code": "mcp_servers_not_configured", "details": null})
+            )
+        );
+        let files = MemoryFiles::holding(config(vec![]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_for(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let list = |state: &ProductRouteState| {
+            let state = state.clone();
+            let session = session.clone();
+            async move {
+                let (ok, listed) =
+                    mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+                assert!(ok, "{listed}");
+                listed
+            }
+        };
+        let listed = list(&state).await;
+        assert_eq!(listed["servers"][0]["kind"], "stdio");
+        assert_eq!(listed["servers"][0]["managed"], true);
+        let command = absolute("/usr/bin/python3");
+        let input = |env: Value| {
+            json!({"kind": "stdio", "name": "mcptest", "command": command,
+                "args": ["/s.py"], "env": env, "enabled": true})
+        };
+        let (ok, saved) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"],
+                "server": input(json!([{"name": "API_TOKEN", "value": "secret-value"}]))}),
+        )
+        .await;
+        assert!(ok, "{saved}");
+        assert_eq!(saved["live"], true, "{saved}");
+        let listed = list(&state).await;
+        assert_eq!(listed["revision"], saved["revision"]);
+        assert_eq!(
+            listed["servers"][0],
+            json!({"kind": "stdio", "name": "mcptest", "command": command,
+                "args": ["/s.py"], "envNames": ["API_TOKEN"], "enabled": true, "managed": false})
+        );
+        assert!(!listed.to_string().contains("secret-value"));
+        // A null keeps the stored value.
+        let (ok, kept) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"],
+                "server": input(json!([{"name": "API_TOKEN", "value": null}]))}),
+        )
+        .await;
+        assert!(ok, "{kept}");
+        assert_eq!(
+            files.document()["agents"]["mcpServers"][0]["env"],
+            json!({"API_TOKEN": "secret-value"})
+        );
+        let refusals = [
+            (
+                "mcpServers.save",
+                json!({"revision": "stale", "server": input(json!([]))}),
+                json!({"code": "mcp_servers_revision_conflict",
+                    "details": {"revision": kept["revision"]}}),
+            ),
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "NEVER", "value": null}]))}),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_value_missing", "server": "mcptest",
+                        "name": "NEVER"}}),
+            ),
+            (
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "nessa"}),
+                json!({"code": "mcp_servers_reserved_name", "details": null}),
+            ),
+            (
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "unknown"}),
+                json!({"code": "mcp_servers_not_found", "details": null}),
+            ),
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": {"kind": "remote", "name": "x", "command": "/x", "args": [],
+                        "env": [], "enabled": true}}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            (
+                "mcpServers.list",
+                json!({"extra": true}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            // A variable without `value` is refused, never read as "keep"
+            // (pass 2b, decision 6).
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "API_TOKEN"}]))}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            // A bad variable name is named.
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "1BAD", "value": "v"}]))}),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_name", "server": "mcptest",
+                        "name": "1BAD"}}),
+            ),
+        ];
+        for (method, params, expected) in refusals {
+            assert_eq!(
+                mcp_servers_call(&state, &session, method, params.clone()).await,
+                (false, expected),
+                "{method} {params}"
+            );
+        }
+        // The configuration not published: nothing applied. Published, but
+        // its directory not synced: applied, and said so.
+        files
+            .fail_publish
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": kept["revision"], "server": input(json!([]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_storage_unavailable",
+                    "details": {"applied": false}})
+            )
+        );
+        files
+            .fail_publish
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        files
+            .fail_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "API_TOKEN", "value": null}]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_storage_unavailable",
+                    "details": {"applied": true}})
+            )
+        );
+        files
+            .fail_sync
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let kept = list(&state).await;
+        audit
+            .fail_outcome
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // A refusal whose outcome cannot be recorded carries the refusal's
+        // code (pass 2b, decision 4).
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "unknown"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "audit_unavailable",
+                    "details": {"applied": false, "code": "mcp_servers_not_found"}})
+            )
+        );
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "mcptest"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "audit_unavailable", "details": {"applied": true}})
+            )
+        );
+        // An entry added to the file by hand that breaks a rule is named,
+        // whichever server the save was about.
+        let mut hand_added = files.document();
+        hand_added["agents"]["mcpServers"] = json!([
+            {"name": "hand-added", "command": "relative/server", "args": []}
+        ]);
+        *files.bytes.lock().unwrap() = Some(serde_json::to_vec(&hand_added).unwrap());
+        audit
+            .fail_outcome
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let listed = list(&state).await;
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": listed["revision"], "server": input(json!([]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "command", "server": "hand-added"}})
+            )
+        );
+        // Once shutdown has begun, a change is not admitted.
+        state.close_mcp_server_admission();
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": listed["revision"], "name": "hand-added"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_stopping", "details": null})
+            )
+        );
+    }
+
+    /// `mcpServers.inspect` on the wire: the tools with their hints and each
+    /// app's CSP and permissions in `mcp.readResource`'s shapes; each failure
+    /// typed, a server's JSON-RPC error with its details; an inspection cut
+    /// by shutdown; and a stored name required.
+    #[tokio::test]
+    async fn mcp_servers_inspect_answers_typed_tools_and_typed_failures() {
+        use crate::mcp_servers::application::{
+            InspectCut, InspectFailure, InspectedTool, InspectedUi, Inspection, ServerProblem,
+        };
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, entry, inspected_over, LeapingClock, MemoryFiles, RecordingAudit,
+            ScriptedInspector,
+        };
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+        let inspector = Arc::new(ScriptedInspector::default());
+        let (settings, _) = inspected_over(
+            MemoryFiles::holding(config(vec![entry("a")])),
+            Arc::new(RecordingAudit::default()),
+            Arc::new(LeapingClock::default()),
+            inspector.clone(),
+        );
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![
+                InspectedTool {
+                    name: "chart".into(),
+                    read_only_hint: Some(true),
+                    destructive_hint: Some(false),
+                    ui: Some(InspectedUi {
+                        uri: "ui://a/chart.html".into(),
+                        csp: UiCsp::new(
+                            vec!["https://api.example.com".into()],
+                            vec![],
+                            vec![],
+                            vec![],
+                        )
+                        .unwrap(),
+                        permissions: UiPermissions {
+                            camera: true,
+                            ..UiPermissions::default()
+                        },
+                    }),
+                },
+                InspectedTool {
+                    name: "plain".into(),
+                    read_only_hint: None,
+                    destructive_hint: None,
+                    ui: None,
+                },
+            ],
+            cut: Some(InspectCut::Tools),
+        });
+        let inspect = |name: &str| {
+            let state = state.clone();
+            let session = session.clone();
+            let params = json!({"name": name});
+            async move { mcp_servers_call(&state, &session, "mcpServers.inspect", params).await }
+        };
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "tools", "tools": [
+                    {"name": "chart", "readOnlyHint": true, "destructiveHint": false,
+                        "ui": {"uri": "ui://a/chart.html",
+                            "csp": {"connectDomains": ["https://api.example.com"],
+                                "resourceDomains": [], "frameDomains": [], "baseUriDomains": []},
+                            "permissions": {"camera": true, "microphone": false,
+                                "geolocation": false, "clipboardWrite": false}}},
+                    {"name": "plain"},
+                ]})
+            )
+        );
+        for (failure, expected) in [
+            (
+                InspectFailure::StartFailed,
+                json!({"code": "mcp_server_start_failed", "details": null}),
+            ),
+            (
+                InspectFailure::TimedOut,
+                json!({"code": "mcp_server_timed_out", "details": null}),
+            ),
+            (
+                InspectFailure::Gone,
+                json!({"code": "mcp_server_gone", "details": null}),
+            ),
+            (
+                InspectFailure::Malformed,
+                json!({"code": "mcp_server_malformed", "details": null}),
+            ),
+            (
+                InspectFailure::Stopping,
+                json!({"code": "mcp_servers_stopping", "details": null}),
+            ),
+            // A stored server the SDK refuses to start: its problem, named.
+            (
+                InspectFailure::Invalid(ServerProblem::EnvironmentName {
+                    server: "a".into(),
+                    name: "1BAD".into(),
+                }),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_name", "server": "a", "name": "1BAD"}}),
+            ),
+            (
+                InspectFailure::RemoteError {
+                    code: -32002,
+                    message: "no\nsuch".into(),
+                },
+                json!({"code": "mcp_server_remote_error",
+                    "details": {"code": -32002, "message": "no such"}}),
+            ),
+            (
+                InspectFailure::RemoteError {
+                    code: i64::MAX,
+                    message: "far".into(),
+                },
+                json!({"code": "mcp_server_remote_error", "details": null}),
+            ),
+        ] {
+            *inspector.answer.lock().unwrap() = Err(failure);
+            assert_eq!(inspect("a").await, (false, expected));
+        }
+        // Cut by shutdown after the server was started: incomplete, no tools.
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        });
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "stopping", "tools": []})
+            )
+        );
+        assert_eq!(
+            inspect("unknown").await,
+            (
+                false,
+                json!({"code": "mcp_servers_not_found", "details": null})
+            )
+        );
+        assert_eq!(
+            mcp_servers_call(&state, &session, "mcpServers.inspect", json!({})).await,
+            (false, json!({"code": "invalid_request", "details": null}))
+        );
+    }
+
+    /// I5: an inspection whose answer would pass the frame's 64 KiB loses
+    /// tools from the end until it fits, and says so with `cut: "bytes"` —
+    /// for the longest request id too; one already cut keeps its own cut.
+    #[tokio::test]
+    async fn i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits() {
+        use crate::mcp_servers::application::{InspectCut, InspectedTool, InspectedUi, Inspection};
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+        let source = |n: usize| format!("https://{}.example.com", "d".repeat(400 + n % 7));
+        let tool = |n: usize| InspectedTool {
+            name: format!("tool_{n}"),
+            read_only_hint: Some(true),
+            destructive_hint: None,
+            ui: Some(InspectedUi {
+                uri: format!("ui://a/{n}.html"),
+                csp: UiCsp::new((0..8).map(source).collect(), vec![], vec![], vec![]).unwrap(),
+                permissions: UiPermissions::default(),
+            }),
+        };
+        let request_id = "\u{1}".repeat(256);
+        for (cut, said) in [(None, "bytes"), (Some(InspectCut::Ui), "ui")] {
+            let inspection = Inspection {
+                tools: (0..64).map(tool).collect(),
+                cut,
+            };
+            let message = super::super::mcp_servers::fitted(&request_id, inspection);
+            let text = message.to_wire_text().unwrap();
+            assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{}", text.len());
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            let payload = response.payload.unwrap();
+            assert_eq!(payload["complete"], false);
+            assert_eq!(payload["cut"], said);
+            let kept = payload["tools"].as_array().unwrap();
+            assert!(!kept.is_empty() && kept.len() < 64, "{}", kept.len());
+            // From the end: the first ones stay, in order.
+            for (index, each) in kept.iter().enumerate() {
+                assert_eq!(each["name"], format!("tool_{index}"));
+            }
+        }
+        // One that fits is answered whole and complete.
+        let small = Inspection {
+            tools: (0..2).map(tool).collect(),
+            cut: None,
+        };
+        let OutgoingMessage::Response(response) = super::super::mcp_servers::fitted("id", small)
+        else {
+            panic!("a response")
+        };
+        let payload = response.payload.unwrap();
+        assert_eq!(payload["complete"], true);
+        assert!(payload.get("cut").is_none());
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
+    }
+
+    /// I5 at the edge: an answer of exactly the frame's 65536 bytes is sent
+    /// whole and complete; one byte more loses its last tool and says
+    /// `cut: "bytes"`.
+    #[test]
+    fn i5_the_frame_bound_holds_at_exactly_its_edge() {
+        use crate::mcp_servers::application::{InspectedTool, Inspection};
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let tool = |name: String| InspectedTool {
+            name,
+            read_only_hint: None,
+            destructive_hint: None,
+            ui: None,
+        };
+        let answered = |padding: usize| {
+            let inspection = Inspection {
+                tools: vec![tool("first".into()), tool("p".repeat(padding))],
+                cut: None,
+            };
+            let message = super::super::mcp_servers::fitted("id", inspection);
+            let length = message.to_wire_text().unwrap().len();
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            (length, response.payload.unwrap())
+        };
+        // The frame grows a byte for each byte of an ASCII name.
+        let (small, _) = answered(1);
+        let edge = 1 + limit - small;
+        let (length, payload) = answered(edge);
+        assert_eq!(length, limit);
+        assert_eq!(payload["complete"], true);
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
+        let (length, payload) = answered(edge + 1);
+        assert!(length <= limit, "{length}");
+        assert_eq!(payload["complete"], false);
+        assert_eq!(payload["cut"], "bytes");
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["tools"][0]["name"], "first");
+    }
+
+    /// One listed server whose single argument is `padding` bytes long.
+    fn padded_list(padding: usize) -> crate::mcp_servers::application::ServerList {
+        use crate::mcp_servers::application::{ListedServer, ServerList};
+        use crate::mcp_servers::domain::StdioServer;
+        ServerList {
+            revision: "r".repeat(64),
+            servers: vec![ListedServer {
+                server: StdioServer::new("s", "/usr/bin/python3", vec!["p".repeat(padding)]),
+                env_names: vec![],
+                enabled: true,
+                managed: false,
+            }],
+        }
+    }
+
+    /// L1 and L2 at the edge: a list answer of exactly the frame's 65536
+    /// bytes is sent whole; one byte more is refused
+    /// `mcp_servers_config_too_large` with the revision, in a frame that fits.
+    #[test]
+    fn l2_a_list_past_the_frame_bound_is_refused_with_its_revision() {
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let answered = |padding: usize| {
+            let message = super::super::mcp_servers::answered("id", padded_list(padding));
+            let length = message.to_wire_text().unwrap().len();
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            (length, response)
+        };
+        // The frame grows a byte for each byte of an ASCII argument.
+        let (small, _) = answered(1);
+        let edge = 1 + limit - small;
+        let (length, response) = answered(edge);
+        assert_eq!(length, limit);
+        assert!(response.ok);
+        assert_eq!(
+            response.payload.unwrap()["servers"][0]["args"][0]
+                .as_str()
+                .unwrap()
+                .len(),
+            edge
+        );
+        let (length, response) = answered(edge + 1);
+        assert!(length <= limit, "{length}");
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "mcp_servers_config_too_large");
+        assert_eq!(error.details, Some(json!({"revision": "r".repeat(64)})));
+    }
+
+    /// W1 at the edge: a save's list is measured for the longest request
+    /// id — 256 bytes, each written as six — so a list that passed answers
+    /// whole whatever id later asks for it.
+    #[cfg(unix)]
+    #[test]
+    fn w1_a_list_fits_for_the_longest_request_id_at_exactly_its_edge() {
+        use super::super::mcp_servers::{answered, list_fits};
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let longest = "\u{1}".repeat(256);
+        let length = |padding: usize| {
+            answered(&longest, padded_list(padding))
+                .to_wire_text()
+                .unwrap()
+                .len()
+        };
+        let edge = 1 + limit - length(1);
+        assert_eq!(length(edge), limit);
+        assert!(list_fits(&padded_list(edge)));
+        assert!(!list_fits(&padded_list(edge + 1)));
+        // With a short id the same list has room to spare.
+        assert!(answered("id", padded_list(edge + 1)).is_success());
+    }
+
+    /// A remove answers whether the stored list is now live: `false` while a
+    /// list edited by hand is still past the count after it (its server
+    /// taken out of the live set all the same), `true` once it is within it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_remove_answers_whether_the_list_went_live() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, entry, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let files = MemoryFiles::holding(config(
+            (0..17)
+                .map(|index| entry(&format!("s{index:02}")))
+                .collect(),
+        ));
+        let (settings, _) = settings_for(files, Arc::new(RecordingAudit::default()));
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let (_, listed) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        let mut revision = listed["revision"].clone();
+        // With the managed server, 17 and then 16: past the count, then within it.
+        for (name, live) in [("s16", false), ("s15", true)] {
+            let (ok, removed) = mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": revision, "name": name}),
+            )
+            .await;
+            assert!(ok, "{removed}");
+            assert_eq!(removed["live"], live, "{name}: {removed}");
+            revision = removed["revision"].clone();
+        }
+    }
+
+    /// L2, W1 and W2 over a store bounded as the gateway's: a file edited by
+    /// hand whose list would not fit is listed as a refusal carrying its
+    /// revision, and a remove naming that revision is made — even one that
+    /// leaves the list too long still — so removes recover; a save whose
+    /// list would not fit is refused `mcp_servers_config_too_large`, nothing
+    /// written, its outcome recorded refused.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers() {
+        use crate::mcp_servers::application::{McpServerAuditPhase, McpServerOutcome};
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            absolute, config, settings_at_full_size, MemoryFiles, RecordingAudit,
+        };
+        // s0 small, s1 to s14 padded.
+        let stored = |padding: usize| {
+            (0..15)
+                .map(|index| {
+                    let arg = if index == 0 {
+                        "/s0.py".to_owned()
+                    } else {
+                        "p".repeat(padding)
+                    };
+                    json!({"name": format!("s{index}"),
+                        "command": absolute("/usr/bin/python3"), "args": [arg]})
+                })
+                .collect::<Vec<_>>()
+        };
+        // Just under the file's 64 KiB, which the listed fields outgrow.
+        let bare = serde_json::to_vec(&config(stored(0))).unwrap().len();
+        let padding = (65_000 - bare) / 14;
+        let document = config(stored(padding));
+        assert!(serde_json::to_vec(&document).unwrap().len() <= 65_536);
+        let files = MemoryFiles::holding(document);
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_at_full_size(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let (ok, refused) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(!ok);
+        assert_eq!(refused["code"], "mcp_servers_config_too_large");
+        let revision = refused["details"]["revision"].clone();
+        assert!(revision.is_string(), "{refused}");
+        // Removing the small one leaves a list still too long: made all the
+        // same.
+        let (ok, removed) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.remove",
+            json!({"revision": revision, "name": "s0"}),
+        )
+        .await;
+        assert!(ok, "{removed}");
+        let (ok, refused) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(!ok);
+        assert_eq!(
+            refused,
+            json!({"code": "mcp_servers_config_too_large",
+                "details": {"revision": removed["revision"]}})
+        );
+        let (ok, removed) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.remove",
+            json!({"revision": removed["revision"], "name": "s1"}),
+        )
+        .await;
+        assert!(ok, "{removed}");
+        let (ok, listed) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(ok, "{listed}");
+        assert_eq!(listed["revision"], removed["revision"]);
+        assert_eq!(listed["servers"].as_array().unwrap().len(), 14);
+        // Saving it back would leave a list past the frame, though the file
+        // would fit.
+        let old = files.current();
+        let (ok, answer) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"], "server": {"kind": "stdio",
+                "name": "s1", "command": absolute("/usr/bin/python3"),
+                "args": ["p".repeat(padding)], "env": [], "enabled": true}}),
+        )
+        .await;
+        assert_eq!(
+            (ok, answer),
+            (
+                false,
+                json!({"code": "mcp_servers_config_too_large", "details": null})
+            )
+        );
+        assert_eq!(files.current(), old);
+        let records = audit.records();
+        assert!(matches!(
+            &records.last().unwrap().phase,
+            McpServerAuditPhase::Outcome(McpServerOutcome::Refused {
+                reason: "config_too_large",
+                ..
+            })
+        ));
     }
 
     struct UnavailablePolicy;

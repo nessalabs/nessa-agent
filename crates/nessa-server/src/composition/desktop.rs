@@ -7,6 +7,7 @@ use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
+use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
 use crate::{core::RunError, desktop_runtime::domain::RunningRuntime};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
@@ -96,15 +97,30 @@ pub(super) fn configure(
             )));
         }
     }
-    if settings.agents.is_none() {
-        let relative_workspace = Path::new("workspaces/default");
+    // The default workspace is made whenever it is the one configured, not
+    // only when nothing is: the first `mcpServers` write on a fresh install
+    // stores the `agents` block from these running values, and the next
+    // start must not depend on that block being absent
+    // (`the_default_workspace_is_made_whenever_it_is_the_one_configured`).
+    // Making it again is a no-op; a workspace chosen elsewhere is left alone.
+    let relative_workspace = Path::new("workspaces/default");
+    let default_workspace = data.join(relative_workspace);
+    if settings
+        .agents
+        .as_ref()
+        .is_none_or(|agents| agents.workspace == default_workspace)
+    {
         nessa_local_storage::create_directory_beneath(data, relative_workspace).map_err(failure)?;
+    }
+    if settings.agents.is_none() {
         settings.agents = Some(AgentsConfig {
             catalog: catalog.clone(),
-            workspace: data.join(relative_workspace),
+            workspace: default_workspace,
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::new(),
         });
@@ -152,20 +168,25 @@ pub(super) fn configure(
                 output_tokens: 4096,
             });
     }
-    // Only the Nessa-owned server is replaced. User-configured MCP servers retain their settings.
-    agents.mcp_servers.retain(|server| server.name != "nessa");
-    agents
-        .mcp_servers
-        .push(nessa_sdk::infrastructure::acp::sessions::StdioMcpServer {
-            name: "nessa".into(),
-            command: mcp,
-            args: vec![
-                "--workspace".into(),
-                agents.workspace.to_string_lossy().into_owned(),
-                "--audit-directory".into(),
-                data.join("process-audit").to_string_lossy().into_owned(),
-            ],
-        });
+    // Only the Nessa-owned server is replaced, in memory: `config.json` never
+    // gains it (`composed_settings_publish_privately_under_the_lock_and_audit_without_values`).
+    // User-configured MCP servers retain their settings.
+    agents.mcp_servers.retain(|server| !server.managed());
+    let managed = StdioServer::new(
+        MANAGED_SERVER_NAME,
+        mcp,
+        vec![
+            "--workspace".into(),
+            agents.workspace.to_string_lossy().into_owned(),
+            "--audit-directory".into(),
+            data.join("process-audit").to_string_lossy().into_owned(),
+        ],
+    );
+    // No variables of its own, so none is named twice.
+    agents.mcp_servers.push(
+        ConfiguredMcpServer::new(managed, true, [])
+            .expect("a server with no variables names none twice"),
+    );
     Ok(())
 }
 

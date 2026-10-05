@@ -965,3 +965,71 @@ async fn authentication_and_generic_provider_failures_keep_their_meaning_after_s
         wait_until_gone(&root, "pid").await;
     }
 }
+
+#[tokio::test]
+async fn unsigned_codex_startup_settles_queued_input_without_provider_report_and_restores_it() {
+    let _slot = process_test_slot().await;
+    let (root, provider) = test_codex_binding("not-signed-in", 16);
+    let provider = Arc::new(provider);
+    let storage_root = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
+    let id = SessionId::new("unsigned-codex").unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        provider.clone(),
+        manager,
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let queued = agent
+        .enqueue(prompt("unsigned-input"), close_action())
+        .await
+        .unwrap();
+    let result = attach_agent(&agent, AttachmentRequest::CallerRequested(close_action())).await;
+    let auth = AgentError::AuthenticationRequired {
+        diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+    };
+    assert_eq!(result, Err(auth.clone()));
+    assert_eq!(queued.wait().await, Err(auth.clone()));
+    let saved = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(saved.invocations[0].provider_report, None);
+    assert_eq!(saved.invocations[0].result, Some(Err(auth.clone())));
+    wait_until_gone(&root, "pid").await;
+    drop(agent);
+    let manager = SessionManager::open(
+        Some(id),
+        storage,
+        Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let restored = Agent::prepare(provider, manager, Arc::new(RecordingAudit::default()))
+        .await
+        .unwrap();
+    assert_eq!(
+        restored
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .invocations[0]
+            .result,
+        Some(Err(auth.clone()))
+    );
+    assert_eq!(
+        restored
+            .enqueue(prompt("unsigned-input"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Err(auth)
+    );
+}
