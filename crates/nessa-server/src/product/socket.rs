@@ -47,10 +47,10 @@ use nessa_protocol::protocol::{
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
@@ -322,6 +322,90 @@ fn credential_admin_code(error: CredentialAdminError) -> &'static str {
 /// How many MCP App calls one socket has running at once; past that each is
 /// refused `temporarily_unavailable` (`protocol/README.md`).
 const APP_CALLS_PER_SOCKET: usize = 4;
+/// How many of those one mount may hold. One less than the lane, so that
+/// mount's waiting reviews leave a slot another app can take
+/// (`one_mount_cannot_fill_the_app_lane`).
+const APP_CALLS_PER_MOUNT: usize = APP_CALLS_PER_SOCKET - 1;
+
+/// The mount a socket's app call belongs to: the conversation and the host's
+/// `McpAppReference`. The lane's cap is per mount
+/// (`one_mount_cannot_fill_the_app_lane`).
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct AppMountKey {
+    conversation_id: String,
+    execution_id: String,
+    tool_id: String,
+    instance_id: String,
+}
+
+/// One admitted app call's share of its mount's cap. Dropped with the slot it
+/// reserved, including when that slot is refused after the reservation
+/// (`a_lane_refusal_does_not_stick_to_the_mount`).
+struct AppMountGuard {
+    key: AppMountKey,
+    mounts: Arc<Mutex<HashMap<AppMountKey, usize>>>,
+}
+
+impl Drop for AppMountGuard {
+    fn drop(&mut self) {
+        let mut counts = self
+            .mounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(count) = counts.get_mut(&self.key) else {
+            return;
+        };
+        *count -= 1;
+        if *count == 0 {
+            counts.remove(&self.key);
+        }
+    }
+}
+
+/// The mount is already at its cap. The call is refused before it takes a
+/// lane slot.
+struct MountCap;
+
+/// Reserve one of `app`'s mount's [`APP_CALLS_PER_MOUNT`] places, when the
+/// frame names a mount. A frame that does not is not counted: an empty
+/// `mcp.callTool` still meets the lane at [`APP_CALLS_PER_SOCKET`] and is
+/// named `socket.app_calls` (`a_full_socket_slot_set_names_that_limit`).
+fn reserve_app_mount(
+    mounts: &Arc<Mutex<HashMap<AppMountKey, usize>>>,
+    frame: &RequestFrame,
+) -> Result<Option<AppMountGuard>, MountCap> {
+    let Some(key) = app_mount_key(&frame.params) else {
+        return Ok(None);
+    };
+    let mut counts = mounts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let count = counts.get(&key).copied().unwrap_or(0);
+    if count >= APP_CALLS_PER_MOUNT {
+        return Err(MountCap);
+    }
+    counts.insert(key.clone(), count + 1);
+    drop(counts);
+    Ok(Some(AppMountGuard {
+        key,
+        mounts: Arc::clone(mounts),
+    }))
+}
+
+/// The mount `params` names, when it is one [`super::mcp_apps::counted_mount`]
+/// accepts: the same conversation and app dispatch would. Anything else is
+/// left uncounted, so the method's own schema refuses it and a full lane
+/// still names `socket.app_calls`.
+fn app_mount_key(params: &serde_json::Value) -> Option<AppMountKey> {
+    let mount = super::mcp_apps::counted_mount(params)?;
+    Some(AppMountKey {
+        conversation_id: mount.conversation_id,
+        execution_id: mount.execution_id,
+        tool_id: mount.tool_id,
+        instance_id: mount.instance_id,
+    })
+}
+
 /// App calls read while one app refusal waits for the refusal lane. A control
 /// frame behind them is still admitted. Past this, reading pauses so the hold
 /// cannot grow without bound.
@@ -381,6 +465,9 @@ struct QueuedResponse {
     // The read adapter must not return it until its non-entered source thread
     // has finished and joined the SDK worker, including after caller timeout.
     _record_work: Option<RecordReadLease>,
+    // Held until this response is taken to send, with the slot: a mount's
+    // cap lasts exactly as long as the lane place it reserved.
+    _mount: Option<AppMountGuard>,
 }
 
 enum WireResponse {
@@ -408,6 +495,7 @@ struct QueuedRecordResponse {
     message: WireResponse,
     _slot: Option<Arc<OwnedSemaphorePermit>>,
     _record_work: Option<RecordReadLease>,
+    _mount: Option<AppMountGuard>,
     deadline: Instant,
 }
 impl QueuedRecordResponse {
@@ -416,23 +504,26 @@ impl QueuedRecordResponse {
             response.message,
             Some(response._slot),
             response._record_work,
+            response._mount,
         )
     }
 
     // A refused admission owns delivery only, never a fabricated read permit.
     fn refusal(message: OutgoingMessage) -> Self {
-        Self::owned(WireResponse::ordinary(message), None, None)
+        Self::owned(WireResponse::ordinary(message), None, None, None)
     }
 
     fn owned(
         message: WireResponse,
         slot: Option<Arc<OwnedSemaphorePermit>>,
         record_work: Option<RecordReadLease>,
+        mount: Option<AppMountGuard>,
     ) -> Self {
         Self {
             message,
             _slot: slot,
             _record_work: record_work,
+            _mount: mount,
             deadline: Instant::now() + RECORD_SEND_TIMEOUT,
         }
     }
@@ -504,6 +595,7 @@ async fn write_authenticated<S>(
                         message,
                         _slot,
                         _record_work,
+                        _mount,
                     } = *response;
                     send_queued(write_timeout, &mut sink, message).await.is_ok()
                 }
@@ -666,6 +758,7 @@ where
     let ordinary_slots = Arc::new(Semaphore::new(16));
     let record_slots = Arc::new(Semaphore::new(1));
     let app_slots = Arc::new(Semaphore::new(APP_CALLS_PER_SOCKET));
+    let app_mounts = Arc::new(Mutex::new(HashMap::new()));
     // An app call still running when the socket goes is cancelled: its
     // review, if it is waiting on one, is withdrawn rather than left standing
     // for nobody. One already sent finishes, and is recorded, on its own task.
@@ -767,8 +860,13 @@ where
                 None
             }
             Some(result) = requests.next(), if !requests.is_empty() => {
-                let Ok((message, class, slot, record_work)) = result else { break };
-                let queued = QueuedResponse { message, _slot: slot, _record_work: record_work };
+                let Ok((message, class, slot, record_work, mount)) = result else { break };
+                let queued = QueuedResponse {
+                    message,
+                    _slot: slot,
+                    _record_work: record_work,
+                    _mount: mount,
+                };
                 let rejected = match class {
                     ResponseClass::Control => rejected_lane(
                         "socket.control_lane",
@@ -900,6 +998,25 @@ where
         let control = matches!(class, ResponseClass::Control);
         let record = matches!(class, ResponseClass::Record);
         let app = matches!(class, ResponseClass::App);
+        // Before the lane's own slot: a mount at its cap is refused without
+        // taking one, so the last slot stays available to another mount
+        // (`one_mount_cannot_fill_the_app_lane`).
+        let mount_guard = if app {
+            match reserve_app_mount(&app_mounts, &frame) {
+                Ok(guard) => guard,
+                Err(MountCap) => {
+                    // The refusal lane holds one frame. Parking this refusal,
+                    // as a full lane does, keeps a second capped call from
+                    // closing the socket while the writer is inside a control
+                    // frame (`a_mount_cap_refusal_waits_and_keeps_the_socket`).
+                    note_limit("socket.app_mount");
+                    app_refusal = Some(failure(&frame.id, "temporarily_unavailable"));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         let slots = if control {
             &control_slots
         } else if record {
@@ -910,6 +1027,9 @@ where
             &ordinary_slots
         };
         let Ok(slot) = slots.clone().try_acquire_owned() else {
+            // The reservation must not outlive the slot it did not get
+            // (`a_lane_refusal_does_not_stick_to_the_mount`).
+            drop(mount_guard);
             note_limit(match class {
                 ResponseClass::Control => "socket.control_slots",
                 ResponseClass::Record => "socket.record_slot",
@@ -976,6 +1096,7 @@ where
                 message: WireResponse::ordinary(response),
                 _slot: slot,
                 _record_work: None,
+                _mount: mount_guard,
             };
             let rejected = if control {
                 rejected_lane(
@@ -1012,11 +1133,17 @@ where
                     read_deadline,
                 )
                 .await;
-                (message, class, slot, record_work)
+                (message, class, slot, record_work, mount_guard)
             } else {
                 let _permit = permit;
                 let message = dispatch(&request_state, &request_session, frame).await;
-                (WireResponse::ordinary(message), class, slot, None)
+                (
+                    WireResponse::ordinary(message),
+                    class,
+                    slot,
+                    None,
+                    mount_guard,
+                )
             }
         });
         if app {
@@ -1050,6 +1177,7 @@ fn queued_watch(reply: WatchReply) -> QueuedResponse {
         message,
         _slot: reply.slot,
         _record_work: None,
+        _mount: None,
     }
 }
 
@@ -1734,6 +1862,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         message,
         _slot: slot,
         _record_work: record_work,
+        _mount: mount,
         deadline,
     } = response;
     // The response's slot and read lease are given back as soon as its frame
@@ -1745,7 +1874,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
     let text = match message {
         WireResponse::Ordinary(message) => {
             let text = ordinary_text(*message)?;
-            drop((slot, record_work));
+            drop((slot, record_work, mount));
             return match within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
                 .await
             {
@@ -1762,7 +1891,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // this arm is never reached. It is still delivered as `send_queued`
         // would, under this response's deadline, rather than dropped.
         message @ WireResponse::Watch(_) => {
-            drop((slot, record_work));
+            drop((slot, record_work, mount));
             return missed_record_deadline(
                 within_deadline(deadline, send_queued(write_timeout, socket, message)).await,
             )
@@ -1773,7 +1902,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         note_limit("product.max_record_response_bytes");
         return Err(());
     }
-    drop((slot, record_work));
+    drop((slot, record_work, mount));
     missed_record_deadline(within_deadline(deadline, send_text(socket, text)).await).ok_or(())?
 }
 
@@ -3972,6 +4101,7 @@ mod tests {
             message: WireResponse::ordinary(success(id, &json!({}))),
             _slot: Arc::new(slot),
             _record_work: None,
+            _mount: None,
         };
         ordinary_send
             .send(response(
@@ -4084,6 +4214,7 @@ mod tests {
                 _record_work: Some(RecordReadLease::new(
                     record_capacity.clone().try_acquire_owned().unwrap(),
                 )),
+                _mount: None,
             }))
             .await
             .unwrap();
@@ -4096,6 +4227,7 @@ mod tests {
                 message: WireResponse::ordinary(success("control", &json!({}))),
                 _slot: control_slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
+                _mount: None,
             })))
             .await
             .unwrap();
@@ -4112,6 +4244,7 @@ mod tests {
                 _record_work: Some(RecordReadLease::new(
                     record_capacity.clone().try_acquire_owned().unwrap(),
                 )),
+                _mount: None,
             }))
             .await
             .unwrap();
@@ -4244,6 +4377,7 @@ mod tests {
                 message,
                 Some(slot.clone()),
                 Some(RecordReadLease::new((permit, slot))),
+                None,
             );
             socket.free_at_first_write = None;
             assert!(
@@ -4302,6 +4436,7 @@ mod tests {
                     .into(),
             ),
             _record_work: None,
+            _mount: None,
             deadline: Instant::now() - Duration::from_millis(1),
         };
         assert!(timeout(
@@ -4336,6 +4471,7 @@ mod tests {
                     _slot: slots.clone().try_acquire_owned().unwrap().into(),
                     _record_work: (!refusal)
                         .then(|| RecordReadLease::new(reads.clone().try_acquire_owned().unwrap())),
+                    _mount: None,
                 });
                 let sending = send_record_queued(Duration::from_secs(5), &mut socket, response);
                 tokio::time::advance(Duration::from_secs(elapsed)).await;
@@ -4377,6 +4513,7 @@ mod tests {
                 message: WireResponse::record("{\"type\":\"res\"}".into()),
                 _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
+                _mount: None,
             }))
             .await
             .unwrap();
@@ -4386,6 +4523,7 @@ mod tests {
                 message: WireResponse::ordinary(success("control", &json!({}))),
                 _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
+                _mount: None,
             })))
             .await
             .unwrap();
@@ -5226,6 +5364,7 @@ mod tests {
                     .into(),
             ),
             _record_work: None,
+            _mount: None,
             deadline: Instant::now() + Duration::from_secs(30),
         };
         let task = tokio::spawn(async move {

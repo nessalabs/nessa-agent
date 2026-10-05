@@ -5,7 +5,7 @@
 //! conversation ending), a server's failures, a resource held behind a
 //! ticket — and the audit each leaves.
 use super::*;
-use crate::app_call_test_support::{caller, Fixture, INSTANCE, OTHER_INSTANCE, SERVER, URI};
+use crate::app_call_test_support::{caller, Fixture, Hold, INSTANCE, OTHER_INSTANCE, SERVER, URI};
 use crate::conversation::application::app_reviews::{
     ALLOW, DENY, MAX_APP_REVIEW_BYTES, MAX_OPEN_APP_REVIEWS,
 };
@@ -1406,6 +1406,145 @@ async fn a_call_still_running_holds_no_reopening_or_deletion_back() {
     assert_eq!(format!("{failures:?}"), format!("{only_the_provider:?}"));
     fixture.apps.gate.0.add_permits(1);
     running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_release_during_admission_opens_no_review_and_issues_no_ticket() {
+    // The release lands while the destructive call's approval is being
+    // recorded, before its review is opened, and while a read's admission is
+    // being recorded, before its ticket is issued. Both answer cancelled,
+    // and a later call or read of that mount still does.
+    let fixture = Fixture::new().await;
+    let hold = Hold::default();
+    *fixture.audit.hold.lock().unwrap() = Some(hold.clone());
+    let calling = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        let call = fixture.call("delete_rows", None);
+        tokio::spawn(async move { service.call_app_tool(id, caller("call"), call).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), hold.waiting.notified())
+        .await
+        .expect("the call waits in its first record");
+    assert!(fixture.app_reviews().await.is_empty());
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    assert!(fixture.app_reviews().await.is_empty());
+    hold.go.add_permits(1);
+    assert_eq!(refused(calling.await.unwrap()), McpAppError::Cancelled);
+    assert!(fixture.app_reviews().await.is_empty());
+    assert_eq!(
+        refused(fixture.call_tool(fixture.call("delete_rows", None)).await),
+        McpAppError::Cancelled
+    );
+    let call_records: Vec<_> = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|record| (record.phase.clone(), record.initiator.clone()))
+        .collect();
+    assert!(
+        matches!(
+            call_records[0].0,
+            McpAppAuditPhase::ApprovalRequested { .. }
+        ),
+        "{call_records:?}"
+    );
+    assert_eq!(
+        call_records[1],
+        (
+            McpAppAuditPhase::Withdrawn {
+                permission_id: match &call_records[0].0 {
+                    McpAppAuditPhase::ApprovalRequested { permission_id } => permission_id.clone(),
+                    _ => unreachable!(),
+                },
+                cause: McpAppWithdrawal::AppTornDown,
+            },
+            McpAppInitiator::System,
+        )
+    );
+    assert_eq!(
+        call_records[2],
+        (
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled),
+            McpAppInitiator::System,
+        )
+    );
+
+    let reading_fixture = Fixture::new().await;
+    *reading_fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    let read_hold = Hold::default();
+    *reading_fixture.audit.hold.lock().unwrap() = Some(read_hold.clone());
+    let reading = {
+        let service = reading_fixture.service.clone();
+        let id = reading_fixture.id.clone();
+        let read = read(&reading_fixture, INSTANCE);
+        tokio::spawn(async move { service.read_app_resource(id, caller("read"), read).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), read_hold.waiting.notified())
+        .await
+        .expect("the read waits in its admission record");
+    assert!(reading_fixture.tickets.issued.lock().unwrap().is_empty());
+    reading_fixture
+        .service
+        .release_app(
+            reading_fixture.id.clone(),
+            caller("release"),
+            reading_fixture.app(INSTANCE),
+        )
+        .await
+        .unwrap();
+    read_hold.go.add_permits(1);
+    assert_eq!(refused(reading.await.unwrap()), McpAppError::Cancelled);
+    assert_eq!(reading_fixture.apps.reads.load(Ordering::SeqCst), 0);
+    assert!(reading_fixture.tickets.issued.lock().unwrap().is_empty());
+    assert_eq!(
+        refused(
+            reading_fixture
+                .service
+                .read_app_resource(
+                    reading_fixture.id.clone(),
+                    caller("read"),
+                    read(&reading_fixture, INSTANCE),
+                )
+                .await
+        ),
+        McpAppError::Cancelled
+    );
+    assert!(reading_fixture.tickets.issued.lock().unwrap().is_empty());
+    let read_records: Vec<_> = reading_fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|record| (record.phase.clone(), record.initiator.clone()))
+        .collect();
+    assert_eq!(
+        read_records,
+        vec![
+            (
+                McpAppAuditPhase::Admitted,
+                McpAppInitiator::App {
+                    principal_id: PrincipalId::new("person").unwrap(),
+                    surface_id: "panel".into(),
+                },
+            ),
+            (
+                McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled),
+                McpAppInitiator::System,
+            ),
+            (
+                McpAppAuditPhase::Refused(ConversationErrorCode::McpCancelled),
+                McpAppInitiator::System,
+            ),
+        ]
+    );
 }
 
 #[tokio::test]

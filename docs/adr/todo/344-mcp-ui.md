@@ -252,9 +252,9 @@ app widgets alike.
   (`bridge.test.ts`, "the mount and its release"; `app-view.test.tsx` under
   StrictMode). A first read the gateway was too busy for is made again
   (`bridge.test.ts`, L1b).
-- **Limits, each its own issue**: a release ends the reviews already open, but
-  a call admitted before it can still open one after (#397); the app lane's
-  4 slots per socket are shared by every app in the window (#398); an app is
+- **Limits, each its own issue**: a release fences the mount, so a call still
+  in admission opens no review and a read is issued no ticket (#397); one
+  mount holds at most 3 of the socket's 4 app slots (#398); an app is
   told `{}` for arguments the view does not carry (#394); a frame the gateway
   cannot decode is answered `invalid_request` when the envelope parser reads
   one JSON object, no decoded envelope name appears twice, `type` is `req`,

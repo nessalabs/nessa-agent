@@ -1,6 +1,6 @@
 //! What an MCP App's wire commands take from the caller, and what a server's
 //! error becomes on the wire (#348).
-use super::{app, remote_message, McpAppReference};
+use super::{app, counted_mount, remote_message, McpAppReference};
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 
 fn reference(execution: &str, tool: &str, instance: &str) -> McpAppReference {
@@ -34,6 +34,31 @@ fn an_app_is_named_by_bounded_identities_and_the_hosts_lowercase_uuid() {
     }
     // Exactly at the identity bound is taken.
     assert!(app(reference(&"x".repeat(256), &"y".repeat(256), MOUNT)).is_ok());
+}
+
+#[test]
+fn a_mount_is_counted_only_as_dispatch_accepts_it() {
+    let conversation = "abcdefab-cdef-4abc-8def-abcdefabcdef";
+    let params = serde_json::json!({
+        "conversationId": conversation,
+        "requestId": "r",
+        "server": "s",
+        "tool": "t",
+        "app": { "executionId": "e", "toolId": "t", "instanceId": MOUNT },
+        "argumentsJson": "{\"id\":2}"
+    });
+    let counted = counted_mount(&params).expect("schema-valid mount");
+    assert_eq!(counted.conversation_id, conversation);
+    assert_eq!(counted.execution_id, "e");
+    assert_eq!(counted.tool_id, "t");
+    assert_eq!(counted.instance_id, MOUNT);
+    // A conversation id dispatch refuses is not charged to a mount.
+    let mut wrong = params.clone();
+    wrong["conversationId"] = serde_json::json!("not-a-uuid");
+    assert!(counted_mount(&wrong).is_none());
+    wrong["conversationId"] = serde_json::json!(conversation.to_uppercase());
+    assert!(counted_mount(&wrong).is_none());
+    assert!(counted_mount(&serde_json::json!({})).is_none());
 }
 
 #[test]

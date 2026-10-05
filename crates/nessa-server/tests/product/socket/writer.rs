@@ -35,6 +35,7 @@ impl ReadyLane {
                     message: WireResponse::ordinary(message),
                     _slot: slots.clone().try_acquire_owned().unwrap().into(),
                     _record_work: None,
+                    _mount: None,
                 })))
                 .unwrap(),
             Self::Refusal(sender) => sender.try_send(message).unwrap(),
@@ -43,6 +44,7 @@ impl ReadyLane {
                     message: WireResponse::ordinary(message),
                     _slot: slots.clone().try_acquire_owned().unwrap().into(),
                     _record_work: None,
+                    _mount: None,
                 })
                 .unwrap(),
         }
@@ -116,6 +118,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
                         global_reads.clone().try_acquire_owned().unwrap(),
                     ))
                 }),
+                _mount: None,
             }))
             .await
             .unwrap();
@@ -223,6 +226,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
                     .unwrap()
                     .into(),
                 _record_work: None,
+                _mount: None,
             })))
             .await
             .unwrap();
@@ -247,6 +251,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
             _record_work: refusal.is_none().then(|| {
                 RecordReadLease::new(Box::new(global_reads.clone().try_acquire_owned().unwrap()))
             }),
+            _mount: None,
         }))
         .await
         .unwrap();
@@ -300,6 +305,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         message: WireResponse::ordinary(success(id, &json!({}))),
         _slot: slots.clone().try_acquire_owned().unwrap().into(),
         _record_work: None,
+        _mount: None,
     };
     control_send
         .send(ControlOutput::Response(Box::new(response("control"))))
@@ -317,6 +323,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
             _record_work: Some(RecordReadLease::new(Box::new(
                 global_reads.clone().try_acquire_owned().unwrap(),
             ))),
+            _mount: None,
         }))
         .await
         .unwrap();
@@ -1389,6 +1396,7 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
             message: WireResponse::ordinary(success("ordinary-in-flight", &json!({}))),
             _slot: slots.clone().try_acquire_owned().unwrap().into(),
             _record_work: None,
+            _mount: None,
         })
         .await
         .unwrap();
@@ -1527,6 +1535,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
         message: WireResponse::ordinary(success(id, &json!({}))),
         _slot: slots.clone().try_acquire_owned().unwrap().into(),
         _record_work: None,
+        _mount: None,
     };
     ordinary_send.send(response("ordinary")).await.unwrap();
     let writer = tokio::spawn(write_authenticated(

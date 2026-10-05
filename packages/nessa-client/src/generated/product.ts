@@ -950,7 +950,7 @@ export interface McpUpdateModelContextParams {
   /** The context's structured content: one JSON object, encoded (invalid_request if it is not one, or past 8192 UTF-8 bytes), held exactly as given. Absent is none. */
   structuredContentJson?: string
 }
-/** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
+/** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket, at most 3 of them from one mount, so one app's waiting reviews cannot take the lane; past either they are refused temporarily_unavailable. */
 export interface McpCallToolParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string

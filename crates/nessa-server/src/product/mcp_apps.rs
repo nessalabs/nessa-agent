@@ -211,6 +211,32 @@ pub(super) async fn dispatch(
     }
 }
 
+/// The mount an app-lane frame charges, when its conversation and app are the
+/// identities [`dispatch`] accepts. A frame that does not name those is not
+/// charged: the method's own schema refuses it, and the lane does not count
+/// it against a mount (`socket.app_calls` still applies).
+pub(super) fn counted_mount(params: &serde_json::Value) -> Option<CountedMount> {
+    let object = params.as_object()?;
+    let conversation = object.get("conversationId")?.as_str()?;
+    let reference = serde_json::from_value(object.get("app")?.clone()).ok()?;
+    let conversation = conversation_id(conversation).ok()?;
+    let reference = app(reference).ok()?;
+    Some(CountedMount {
+        conversation_id: conversation.to_string(),
+        execution_id: reference.execution_id,
+        tool_id: reference.tool_id,
+        instance_id: reference.instance_id,
+    })
+}
+
+/// A mount [`counted_mount`] accepted: the same identities dispatch would.
+pub(super) struct CountedMount {
+    pub conversation_id: String,
+    pub execution_id: String,
+    pub tool_id: String,
+    pub instance_id: String,
+}
+
 /// The app a command names, as the schema bounds it: identities of at most
 /// 256 bytes, and the host's lowercase UUID for its mount.
 fn app(app: McpAppReference) -> Result<McpAppRef, ConversationError> {

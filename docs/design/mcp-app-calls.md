@@ -32,7 +32,8 @@ the gateway does with it (#348, part b).
   `GET /mcp-resources` (`mcp_servers::entrypoint::http`).
 - **The socket's app lane** (`product::socket`): 4 calls per socket —
   `mcp.callTool`, `mcp.readResource`, `mcp.sendMessage` and
-  `mcp.updateModelContext` — and `mcp.releaseApp` on the control lane.
+  `mcp.updateModelContext` — at most 3 of them from one mount, and
+  `mcp.releaseApp` on the control lane.
 - **An app's messages and model context** (#390): the same flow and state,
   [below](#an-app-in-its-conversation-the-gateway-390).
 - **The client** (`packages/nessa-client`, `client.mcpApps`).
@@ -113,6 +114,7 @@ is opened again.
 | State | Event | Next | Effect, and what is recorded |
 | --- | --- | --- | --- |
 | — | 32 calls already running on the gateway | — | `temporarily_unavailable`; nothing recorded, nothing asked |
+| — | this mount already holds 3 of its socket's 4 app slots | — | `temporarily_unavailable`; nothing recorded |
 | — | the app is no MCP tool call with a UI in this conversation | — | `Refused(mcp_app_unknown)` |
 | — | another server than the app's | — | `Refused(mcp_server_mismatch)` |
 | — | no open session of that server | — | `Refused(mcp_session_unavailable)` |
@@ -566,7 +568,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 
 | # | State | Event | Next | Effect / record |
 |---|---|---|---|---|
-| M1 | — | the 32 gateway slots, or the socket's 4, are full | — | `temporarily_unavailable`; nothing recorded |
+| M1 | — | the 32 gateway slots, the socket's 4, or this mount's 3 of those 4, are full | — | `temporarily_unavailable`; nothing recorded |
 | M2 | — | the app is not an MCP tool call with a UI here, or names another server | — | `Refused(mcp_app_unknown / mcp_server_mismatch)` |
 | M3 | — | empty text / blank text (whitespace only) | — | `invalid_request` at the wire (the schema's `minLength`), nothing recorded / `Refused(invalid_request)`, on record (the conversation's `blank_text`) |
 | M4 | — | text past the schema bound / past `max_input_bytes` | — | `invalid_request` at the wire, nothing recorded / `Refused(mcp_request_too_large)` |
@@ -594,7 +596,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 
 | # | State | Event | Next | Effect / record |
 |---|---|---|---|---|
-| C1 | — | slots full | — | `temporarily_unavailable` |
+| C1 | — | the 32 gateway slots, the socket's 4, or this mount's 3 of those 4, are full | — | `temporarily_unavailable` |
 | C2 | — | the app is unknown / another server / released / its opening ended | — | as M2, M5 |
 | C3 | — | a part past the schema bound / both parts together past `AppModelContext::MAX_BYTES` | — | `invalid_request` at the wire, nothing recorded / `Refused(mcp_request_too_large)` |
 | C4 | — | structured content that is not one JSON object | — | `Refused(invalid_request)` |
@@ -845,21 +847,37 @@ All in `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`, under
 
 ## Lanes
 
-App calls have 4 slots on each socket. A destructive call holds its slot while
-it waits, so held calls can fill a socket's lane, but never the lanes
-`conversation.read` and `conversation.answer` use, and their responses have
-room of their own in the socket's response queue. `mcp.releaseApp` is a
-control. A socket that goes aborts its app calls; each call's own task then
-withdraws its review on record, or finishes a call already sent. The 32
-gateway-wide slots are held by those tasks, not by the socket, so a caller
-that reconnects cannot start calls past them. They are not shared out by
-person: a gateway serves its one owner, whose apps they all are.
+App calls have 4 slots on each socket, and one mount holds at most 3 of them
+(`one_mount_cannot_fill_the_app_lane`). A fourth call from that mount —
+`mcp.callTool`, `mcp.readResource`, `mcp.sendMessage` or
+`mcp.updateModelContext` — is refused `temporarily_unavailable` before it
+takes a slot, so another mount can still use the lane. A refusal because the
+lane itself is full does not leave the mount at that cap
+(`a_lane_refusal_does_not_stick_to_the_mount`). The mount that is counted is
+the one dispatch accepts: a canonical conversation id and the app reference
+(`counted_mount`). A frame that does not name that is not charged to a mount.
+A destructive call holds its
+slot while it waits, so held calls can fill a socket's lane, but never the
+lanes `conversation.read` and `conversation.answer` use, and their responses
+have room of their own in the socket's response queue. `mcp.releaseApp` is a
+control, so it still runs while the lane is full, and it fences a call that
+is still recording its admission
+(`a_release_during_admission_opens_no_review_and_issues_no_ticket`,
+`a_release_on_the_control_lane_fences_a_call_still_in_admission`): that call
+opens no review, and a read in the same window is issued no ticket. A socket
+that goes aborts its app calls; each call's own task then withdraws its
+review on record, or finishes a call already sent. The 32 gateway-wide slots
+are held by those tasks, not by the socket, so a caller that reconnects
+cannot start calls past them. They are not shared out by person: a gateway
+serves its one owner, whose apps they all are.
 
 The refusal lane holds one frame, and the writer sends a control frame before
-a refusal. A call past the app lane waits for a place on that lane. While it
-waits, the socket still reads: a control frame is admitted, and a further app
-call is held until that place is free. A stalled refusal does not leave a
-release unread.
+a refusal. A call past the app lane, and a call past one mount's cap, each
+wait for a place on that lane. While one waits, the socket still reads: a
+control frame is admitted, and a further app call is held until that place is
+free. A second capped call does not close the socket
+(`a_mount_cap_refusal_waits_and_keeps_the_socket`). A stalled refusal does not
+leave a release unread.
 
 | # | In flight | What arrives | Effect |
 | --- | --- | --- | --- |
@@ -883,6 +901,8 @@ Each row above has a test, named after it:
   L1 `a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket`.
   L2 `releases_behind_a_burst_of_refused_reads_are_still_answered`.
   L3 `a_release_is_admitted_while_an_app_refusal_waits`.
+  A second call past one mount's cap, while the writer is inside a release:
+  `a_mount_cap_refusal_waits_and_keeps_the_socket`.
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `error_code.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`;
