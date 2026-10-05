@@ -84,6 +84,9 @@ export const css = {
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
   workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
   workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
+  transcriptNote: '.workspace-transcript-note[role="status"]', // class: why a shown conversation could not be read
+  transcriptNoteText: ".workspace-transcript-note p", // class: that note's sentence
+  peekFailure: '.agents-peek-failure[role="status"]', // class: a peek's sentence — a conversation it could not read, or an answer it could not confirm
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id

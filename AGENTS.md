@@ -68,6 +68,11 @@ examples.
 - [Adding a check to CI](CODING_STANDARDS.md#adding-a-check-to-ci) — before you
   add a job.
 
+A desktop pull request puts its verification on the PR: screenshots of what a
+person sees, and only the short log lines that prove the check. Where those
+files go and which lines to quote is
+[Evidence on the pull request](.claude/skills/desktop-verification/SKILL.md#evidence-on-the-pull-request).
+
 ## Reviewing, locally and delegated
 
 - [Before handing off](CODING_STANDARDS.md#before-handing-off) — the gate run on

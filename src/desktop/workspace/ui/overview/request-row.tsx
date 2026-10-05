@@ -21,7 +21,7 @@ import { requestOf, type Request } from "../../model/overview/request"
 import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
-import { failureCopy } from "../failure-copy"
+import { failureCopy, readFailureCopy } from "../failure-copy"
 import { approvalAsker } from "../transcript/approval-request"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
@@ -85,7 +85,6 @@ export const RequestRow = memo(function RequestRow({
   const answerable = approval !== null && !settling && !answering(answer, approval.id)
   const refused = settling ? undefined : answer?.failure
   const unreadable = request.kind === "unreadable" ? request.reason : null
-  const said = refused ?? unreadable
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     const binding = overviewKeys.find((candidate) =>
@@ -154,9 +153,13 @@ export const RequestRow = memo(function RequestRow({
         <span className="agents-row-text">
           <span className="agents-row-title agents-truncate">{summary.title}</span>
           <span className="agents-request-why agents-truncate">
-            {said ? (
+            {refused ? (
               <span className="agents-request-failure" role="status">
-                {failureCopy(said)}
+                {failureCopy(refused)}
+              </span>
+            ) : unreadable ? (
+              <span className="agents-request-failure" role="status">
+                {readFailureCopy(unreadable, "conversation")}
               </span>
             ) : approval ? (
               approval.reason

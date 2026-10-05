@@ -16,7 +16,7 @@ import { Message } from "./message"
 import type { Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
-import { failureCopy } from "../failure-copy"
+import { readFailureCopy } from "../failure-copy"
 
 const noMessages: readonly MessageValue[] = []
 
@@ -153,7 +153,7 @@ export const Transcript = memo(function Transcript({
         <TranscriptHeading ref={headingRef} sessionId={sessionId} titleRef={titleRef} />
         {failure && !loaded ? (
           <div className="workspace-transcript-note" role="status">
-            <p>{failureCopy(failure)}</p>
+            <p>{readFailureCopy(failure, "conversation")}</p>
             <button
               type="button"
               className="workspace-button"

@@ -1286,6 +1286,68 @@ describe("refusals are typed (F)", () => {
     gateway.once("list", () => Promise.reject(fault))
     await expect(source.index()).rejects.toBe(fault)
   })
+
+  it("traces a refused conversation.read with the session, the subject, and the gateway code", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {})
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const { gateway, source } = started()
+      gateway.once("read", () => Promise.reject(rpcCode("temporarily_unavailable")))
+      await expect(source.transcript("a")).rejects.toMatchObject({
+        reason: "unavailable",
+      })
+      expect(debug).toHaveBeenCalledWith("[nessa] conversation read asked", {
+        subject: "conversation",
+        method: "conversation.read",
+        sessionId: "a",
+      })
+      expect(warn).toHaveBeenCalledWith("[nessa] conversation read refused", {
+        subject: "conversation",
+        method: "conversation.read",
+        sessionId: "a",
+        reason: "unavailable",
+        code: "temporarily_unavailable",
+      })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("message text nobody parses")
+
+      debug.mockClear()
+      warn.mockClear()
+      gateway.once("read", () =>
+        Promise.reject(new NessaConnectionClosedError(1001, "going away")),
+      )
+      await expect(source.transcript("a")).rejects.toMatchObject({
+        reason: "unavailable",
+      })
+      expect(warn).toHaveBeenCalledWith("[nessa] conversation read refused", {
+        subject: "conversation",
+        method: "conversation.read",
+        sessionId: "a",
+        reason: "unavailable",
+        code: "1001",
+        closeReason: "transport_interrupted",
+        socket: "closed",
+      })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("going away")
+
+      debug.mockClear()
+      warn.mockClear()
+      gateway.once("list", () => Promise.reject(rpcCode("temporarily_unavailable")))
+      await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
+      expect(debug).toHaveBeenCalledWith("[nessa] conversation read asked", {
+        subject: "index",
+        method: "conversation.list",
+      })
+      expect(warn).toHaveBeenCalledWith("[nessa] conversation read refused", {
+        subject: "index",
+        method: "conversation.list",
+        reason: "unavailable",
+        code: "temporarily_unavailable",
+      })
+    } finally {
+      debug.mockRestore()
+      warn.mockRestore()
+    }
+  })
 })
 
 describe("round 1's rows", () => {

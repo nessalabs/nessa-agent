@@ -17,7 +17,7 @@ export function StartupFallback() {
   const code = startupFailureCode(failure)
   useEffect(() => {
     if (!failure || !code) return
-    console.error(`[nessa] ${readFailureCopy(failure, stages)}`)
+    console.error(`[nessa] ${readFailureCopy(failure, "index", stages)}`)
   }, [failure, stages, code])
   if (!code) return null
   return (

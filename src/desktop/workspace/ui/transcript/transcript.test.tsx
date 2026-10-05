@@ -23,6 +23,7 @@ import {
   type Transcript as TranscriptValue,
 } from "../../model/transcript"
 import { fakeSource, settle, testStore } from "../../testing"
+import { failureCopy, readFailureCopy } from "../failure-copy"
 import { Transcript } from "./transcript"
 
 class Observer {
@@ -118,6 +119,65 @@ const buttons = () =>
       button.disabled,
     ],
   )
+
+const unreadConversation = "Nessa couldn’t read this conversation just now."
+
+async function failedRead(reason: "unavailable" | "signed-out") {
+  const source = fakeSource()
+  source.refuse("transcript", reason)
+  const store = testStore(source)
+  await store.dispatch(loadWorkspace())
+  store.dispatch(openSession({ sessionId: "b" }))
+  await settle()
+  await act(async () => {
+    root.render(
+      <Provider store={store}>
+        <ClockProvider now={() => 1000}>
+          <Transcript
+            sessionId="b"
+            arriving={false}
+            scrollRef={createRef()}
+            headingRef={createRef()}
+            onHeadingVisible={() => {}}
+          />
+        </ClockProvider>
+      </Provider>,
+    )
+  })
+  return source
+}
+
+describe("a conversation that cannot be read", () => {
+  it("says what it could not read, not that a call is unconfirmed, and reads it again", async () => {
+    const source = await failedRead("unavailable")
+    const note = host.querySelector(".workspace-transcript-note")
+    expect(note?.querySelector("p")?.textContent).toBe(unreadConversation)
+    expect(note?.querySelector("p")?.textContent).toBe(
+      readFailureCopy("unavailable", "conversation"),
+    )
+    expect(note?.querySelector("p")?.textContent).not.toBe(failureCopy("unavailable"))
+    expect(note?.querySelector("button")?.textContent).toBe("Try Again")
+    source.refuse("transcript", undefined)
+    const asked = source.calls.filter(
+      (call) => call[0] === "transcript" && call[1] === "b",
+    ).length
+    await act(async () => {
+      note?.querySelector("button")?.click()
+      await settle()
+    })
+    expect(
+      source.calls.filter((call) => call[0] === "transcript" && call[1] === "b"),
+    ).toHaveLength(asked + 1)
+    expect(host.querySelector(".workspace-transcript-note")).toBeNull()
+  })
+
+  it("says the window is signed out in the same words as any call", async () => {
+    await failedRead("signed-out")
+    const said = host.querySelector(".workspace-transcript-note p")?.textContent
+    expect(said).toBe("This window isn’t signed in to the local server.")
+    expect(said).toBe(readFailureCopy("signed-out", "conversation"))
+  })
+})
 
 describe("a transcript", () => {
   it("draws prose, steps, code and lists, and says when a message was not sent", async () => {

@@ -25,7 +25,7 @@ export function EmptyWorkspace({
   if (!failure || startupFailureCode(failure)) return null
   return (
     <div className="workspace-empty" role="status">
-      <p>{readFailureCopy(failure, stages)}</p>
+      <p>{readFailureCopy(failure, "index", stages)}</p>
       <button
         type="button"
         className="workspace-button"

@@ -24,7 +24,7 @@ import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf, modelName, nowLine } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
-import { failureCopy } from "../failure-copy"
+import { failureCopy, readFailureCopy } from "../failure-copy"
 import { ApprovalActions, ApprovalCommand } from "../transcript/approval-request"
 import { LiveRow } from "../transcript/live-row"
 import { Message } from "../transcript/message"
@@ -219,7 +219,7 @@ export const SessionPeek = memo(function SessionPeek({
 
       {!transcript && unreadable ? (
         <p className="agents-peek-failure" role="status">
-          {failureCopy(unreadable)}
+          {readFailureCopy(unreadable, "conversation")}
         </p>
       ) : null}
 

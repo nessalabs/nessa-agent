@@ -31,19 +31,34 @@ export function failureCopy(
 }
 
 /**
- * The words for an index the window could not read (`EmptyWorkspace`): the
- * same as any call's, except where no answer came, which names what could
- * not be read and from where rather than that a call is unconfirmed.
+ * What a failed read was of. `index` is the local server's conversations
+ * (`EmptyWorkspace`). `conversation` is this one — the transcript, the peek,
+ * and a request row's unreadable (#433).
  */
-const readCopy: Record<WorkspaceFailureReason, string> = {
-  ...copy,
-  unavailable: "Nessa couldn’t read the local server’s conversations just now.",
+export type ReadSubject = "index" | "conversation"
+
+/**
+ * The words for a read the window could not finish: the same as any call's,
+ * except where no answer came, which names what could not be read rather
+ * than that a call is unconfirmed
+ * (`a read says what it could not read only where no answer came`).
+ */
+const readCopy: Record<ReadSubject, Record<WorkspaceFailureReason, string>> = {
+  index: {
+    ...copy,
+    unavailable: "Nessa couldn’t read the local server’s conversations just now.",
+  },
+  conversation: {
+    ...copy,
+    unavailable: "Nessa couldn’t read this conversation just now.",
+  },
 }
 
 export function readFailureCopy(
   reason: WorkspaceFailureReason,
+  read: ReadSubject,
   stages?: StageMismatch | null,
 ): string {
   if (reason === "wrong-stage") return wrongStageSentence(stages)
-  return readCopy[reason]
+  return readCopy[read][reason]
 }

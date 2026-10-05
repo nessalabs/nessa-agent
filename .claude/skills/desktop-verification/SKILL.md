@@ -26,7 +26,8 @@ This skill is how to use them; it restates neither.
 | an app's review: reading it while the app's call waits (`appCall` and `stale()` in `gateway-source.ts`, the `callTool` routing in `dependencies.ts`), and who asks on the card or in the overview (`approval-request.tsx`, `gateway-views.ts`) | `app-review.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
-| where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the failure sentences (`workspace/ui/failure-copy.ts`), the empty workspace | `gateway-states.mjs` |
+| where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the index's failure sentences (`readFailureCopy` for `"index"` in `workspace/ui/failure-copy.ts`), the empty workspace | `gateway-states.mjs` |
+| a conversation the window listed but could not read (`readFailureCopy` for `"conversation"` in `workspace/ui/failure-copy.ts`, the transcript note, the Agents peek) | `conversation-unread.mjs` |
 | the same, once the window does read a gateway: its handshake, the conversation list, a transcript, a turn made elsewhere (needs the agent signed in on this machine, or `--scripted` for none; not in `run-all.mjs`) | `gateway-window.mjs` |
 | UI, gateway, ACP, or MCP behavior, signed out: a permission, a failed turn, a cancel, in Chromium and WebKit, with one verdict and an evidence directory | `pnpm test:e2e:scripted` (`scripted-e2e.mjs`; `--mode prod` for a production build) |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |
@@ -134,3 +135,22 @@ Report against [evidence and closure](../../../CODING_STANDARDS.md#evidence-and-
 
 Label a hypothesis as one. A green run of the wrong check, engine or build
 is not evidence.
+
+## Evidence on the pull request
+
+A desktop change's screenshots and the lines that prove the check go on the
+pull request, in the description and in one comment. A link to an agent
+artifact page does not render on github.com.
+
+Commit the shots on the branch under `verification/desktop/evidence/<check>/`,
+named for the surface (`transcript-note.png`, `agents-peek.png`). Crop to the
+surface that changed and keep each file small. In the description and the
+comment, link them from the repo root so GitHub renders them inline:
+
+```md
+![Transcript note](verification/desktop/evidence/conversation-unread/transcript-note.png)
+```
+
+Quote only the short lines: each `ok` or `FAIL` for that check, and the
+assertion lines from a revert probe. Leave out the JSON document and the
+server warmup.
