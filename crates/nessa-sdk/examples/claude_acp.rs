@@ -207,7 +207,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             credential_environment,
             workspace: workspace.clone(),
             tools_enabled: mode.ends_with("write"),
-            mcp_servers: Vec::new(),
+            mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             // The launch belongs to the operating system: a runtime written

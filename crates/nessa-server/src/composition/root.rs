@@ -6,6 +6,7 @@ use crate::desktop_runtime::{
     infrastructure::{ConversationDirectory, RetirementFiles},
 };
 use crate::env::Environment;
+use crate::mcp_servers::application::Unfinished;
 use crate::product::{ProductRouteState, WatchTaskFault};
 use crate::server::entrypoint::http;
 use crate::{
@@ -398,7 +399,11 @@ impl CompositionRoot {
                     // After agents, whose stand-ins end with their servers.
                     #[cfg(unix)]
                     if let Some((servers, tickets, drops)) = mcp_servers {
-                        servers.stop().await;
+                        let stopped = super::mcp_servers::stop(
+                            shutdown_product.mcp_server_settings.as_deref(),
+                            &servers,
+                        )
+                        .await;
                         // Last: the conversations' ends released their
                         // tickets and dropped their apps' contexts, and each
                         // end and each drop is recorded before exit, both
@@ -408,7 +413,9 @@ impl CompositionRoot {
                             super::mcp_servers::RECORDERS_FINISH,
                         )
                         .await;
+                        return stopped;
                     }
+                    Ok(())
                 },
                 async {
                     match native {
@@ -548,11 +555,16 @@ async fn cleanup_product(
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
     conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
-    servers: impl Future<Output = ()>,
+    servers: impl Future<Output = Result<(), Unfinished>>,
     native: impl Future<Output = Result<(), NativeShutdownFailure>>,
     deadline: Duration,
 ) {
     product.close_watch_admission();
+    // A stored MCP server change or inspection admitted from here on would
+    // outlive the drain before the servers stop; and the inspections under
+    // way are stopped now, not after the conversations drain
+    // (`x_early_admission_closes_and_inspections_are_cut_while_conversations_drain`).
+    product.close_mcp_server_admission();
     passive_cleanup(
         slot,
         product.drain_watches(),
@@ -580,7 +592,7 @@ async fn passive_cleanup(
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
     conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
-    servers: impl Future<Output = ()>,
+    servers: impl Future<Output = Result<(), Unfinished>>,
     native: impl Future<Output = Result<(), NativeShutdownFailure>>,
     deadline: Duration,
 ) {
@@ -622,8 +634,8 @@ async fn passive_cleanup(
         None => Ok(()),
     };
     update_report(slot, |report| report.observe_conversations(conversations));
-    servers.await;
-    update_report(slot, ShutdownReport::observe_servers);
+    let servers = servers.await;
+    update_report(slot, |report| report.observe_servers(servers));
     let native = native.await;
     update_report(slot, |report| {
         report.observe_native(native);
@@ -757,7 +769,7 @@ mod tests {
         report.observe_catalogue(Ok(()));
         report.observe_watches(Ok(()));
         report.observe_conversations(conversations);
-        report.observe_servers();
+        report.observe_servers(Ok(()));
         report.observe_native(Ok(()));
         report
     }
@@ -788,6 +800,7 @@ mod tests {
                 async {
                     task_entered.notify_one();
                     gate.await.unwrap();
+                    Ok(())
                 },
                 std::future::ready(Ok(())),
                 Duration::from_secs(30),
@@ -1011,7 +1024,7 @@ mod tests {
                         cleaned.store(true, Ordering::SeqCst);
                         Ok(())
                     }),
-                    async {},
+                    async { Ok(()) },
                     std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 )
@@ -1060,7 +1073,7 @@ mod tests {
                     async { Ok(()) },
                     async { Ok(()) },
                     Some(async { Ok(()) }),
-                    async {},
+                    async { Ok(()) },
                     std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 )
@@ -1181,7 +1194,7 @@ mod tests {
                                 Ok(())
                             }
                         }),
-                        async {},
+                        async { Ok(()) },
                         std::future::ready(Ok(())),
                         Duration::from_secs(30),
                     )
@@ -1239,7 +1252,7 @@ mod tests {
                     cleanup.store(true, Ordering::SeqCst);
                     Err(ConversationError::Audit)
                 }),
-                async {},
+                async { Ok(()) },
                 std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )
@@ -1287,7 +1300,7 @@ mod tests {
                             cleaned.store(true, Ordering::SeqCst);
                             Ok(())
                         }),
-                        async {},
+                        async { Ok(()) },
                         std::future::ready(Ok(())),
                         Duration::from_secs(30),
                     );
@@ -1332,7 +1345,7 @@ mod tests {
                     std::future::pending(),
                     std::future::pending(),
                     Some(std::future::ready(Ok(()))),
-                    async {},
+                    async { Ok(()) },
                     std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 );
@@ -1374,7 +1387,7 @@ mod tests {
                     std::future::ready(result),
                     std::future::ready(Ok(())),
                     Some(std::future::pending()),
-                    async {},
+                    async { Ok(()) },
                     std::future::ready(Ok(())),
                     Duration::from_secs(30),
                 );
@@ -1410,7 +1423,7 @@ mod tests {
             },
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
-            async {},
+            async { Ok(()) },
             std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
@@ -1441,7 +1454,7 @@ mod tests {
                     )))
                 },
                 Some(std::future::pending()),
-                async {},
+                async { Ok(()) },
                 std::future::ready(Ok(())),
                 Duration::from_secs(30),
             );
@@ -1482,7 +1495,7 @@ mod tests {
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
-            async {},
+            async { Ok(()) },
             std::future::ready(Ok(())),
             Duration::ZERO,
         )
@@ -1610,7 +1623,7 @@ mod tests {
         native_report.observe_catalogue(Ok(()));
         native_report.observe_watches(Ok(()));
         native_report.observe_conversations(Ok(()));
-        native_report.observe_servers();
+        native_report.observe_servers(Ok(()));
         native_report.observe_native(Err(native));
         let native_slot = Mutex::new(Some(native_report));
         let served = Err(std::io::Error::other("listener died"));
@@ -1661,7 +1674,7 @@ mod tests {
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
-            async {},
+            async { Ok(()) },
             std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
@@ -1675,7 +1688,7 @@ mod tests {
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Err(ConversationError::Audit))),
-            async {},
+            async { Ok(()) },
             std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
@@ -1726,7 +1739,10 @@ mod tests {
                 } else {
                     Ok(())
                 })),
-                async { servers_stopped.store(true, Ordering::SeqCst) },
+                async {
+                    servers_stopped.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
                 async {
                     // MCP stop has returned before native's join is observed.
                     assert!(servers_stopped.load(Ordering::SeqCst));
@@ -1754,7 +1770,7 @@ mod tests {
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             None::<Ready<Result<(), ConversationError>>>,
-            async {},
+            async { Ok(()) },
             std::future::ready(Ok(())),
             Duration::from_secs(30),
         )
@@ -1774,7 +1790,7 @@ mod tests {
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
                 Some(std::future::ready(Err(ConversationError::Audit))),
-                async {},
+                async { Ok(()) },
                 std::future::pending(),
                 Duration::from_secs(30),
             );
@@ -1807,7 +1823,7 @@ mod tests {
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             None::<Ready<Result<(), ConversationError>>>,
-            async {},
+            async { Ok(()) },
             std::future::ready(Err(fault)),
             Duration::from_secs(30),
         )
@@ -1895,3 +1911,7 @@ mod tests {
 #[cfg(test)]
 #[path = "../../tests/composition/watch_shutdown.rs"]
 mod watch_shutdown_tests;
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/composition/mcp_shutdown.rs"]
+mod mcp_shutdown_tests;

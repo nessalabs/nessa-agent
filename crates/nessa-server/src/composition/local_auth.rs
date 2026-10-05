@@ -274,6 +274,7 @@ pub(super) async fn product_state(
                     built.record_reader,
                     built.catalogue_reader,
                     built.resource_route,
+                    built.mcp_server_settings,
                     built.record_watches,
                     built.catalogue_watches,
                 )),
@@ -344,6 +345,7 @@ pub(super) async fn product_state(
         reader,
         catalogue,
         resource_route,
+        mcp_server_settings,
         record_watches,
         catalogue_watches,
     )) = conversations
@@ -361,6 +363,9 @@ pub(super) async fn product_state(
         // The route redeems on the store the conversation service issues on.
         if let Some((tickets, audit)) = resource_route {
             product = product.with_resource_tickets(tickets, audit);
+        }
+        if let Some(settings) = mcp_server_settings {
+            product = product.with_mcp_server_settings(settings);
         }
     }
     Ok(LocalProduct {
@@ -441,6 +446,9 @@ struct BuiltConversations {
     warm_ups: Vec<StartupWarmUp>,
     /// The MCP servers this run holds, when any are configured.
     mcp: McpParts,
+    /// What manages the stored servers and replaces the live set, where this
+    /// run holds one.
+    mcp_server_settings: Option<Arc<crate::mcp_servers::application::McpServerSettings>>,
     /// What `GET /mcp-resources` redeems on, and records each redemption
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
@@ -774,6 +782,7 @@ async fn conversations(
                 &super::mcp_servers::relay_socket(namespace, unsafe { libc::geteuid() }),
                 &gateway,
                 super::mcp_servers::server_environment(|key| std::env::var_os(key)),
+                packaged_agents,
             )
             .await?
         }
@@ -782,6 +791,17 @@ async fn conversations(
             agents.mcp_servers.clear();
             None
         }
+    };
+    let root = conversation_root(namespace);
+    let mcp_server_settings = match &mcp {
+        Some(mcp) => super::mcp_servers::settings(
+            mcp,
+            &agents,
+            super::runtime_config::config_path(namespace),
+            root.join("audit").join("mcp-servers"),
+        )?
+        .map(Arc::new),
+        None => None,
     };
     let agents = &agents;
     let root = conversation_root(
@@ -1066,6 +1086,7 @@ async fn conversations(
         agent_probe: resolver,
         warm_ups,
         mcp,
+        mcp_server_settings,
         resource_route,
     })
 }

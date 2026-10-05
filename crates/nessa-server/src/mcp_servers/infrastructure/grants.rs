@@ -4,10 +4,10 @@
 //! opens is that conversation's. The grant handed to the binding is the
 //! owner's own (`McpOwner::stand_in_grant`), so it also carries the results
 //! that open's stand-ins forward (#435).
-use crate::mcp_servers::domain::{session_token, TokenDigest, SESSION_VARIABLE};
+use crate::mcp_servers::domain::{session_token, TokenDigest};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::acp::sessions::{StandInGrant, StandInGrants};
-use nessa_sdk::infrastructure::mcp::{McpOwner, McpServers};
+use nessa_sdk::infrastructure::mcp::{McpOwner, McpServers, MCP_SESSION_VARIABLE};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -86,7 +86,7 @@ impl StandInGrants for ConversationGrants {
         // The owner's own grant: it carries what this open's stand-ins
         // forward, for the binding to attach to the calls they answer.
         owner.stand_in_grant(
-            vec![(SESSION_VARIABLE.to_owned(), token)],
+            vec![(MCP_SESSION_VARIABLE.to_owned(), token)],
             Box::new(Revoke {
                 grants: self.inner.clone(),
                 digest,

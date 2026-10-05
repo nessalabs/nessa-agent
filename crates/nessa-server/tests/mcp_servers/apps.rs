@@ -1,7 +1,7 @@
 //! What an app's call is told of each way the SDK's session can fail (#348).
 use super::failure;
 use crate::conversation::application::{McpAppError, McpAppFailure};
-use nessa_sdk::infrastructure::mcp::McpError;
+use nessa_sdk::infrastructure::{acp::sessions::McpServerProblem, mcp::McpError};
 
 #[test]
 fn each_session_failure_is_the_one_the_app_is_told() {
@@ -75,7 +75,7 @@ fn each_session_failure_is_the_one_the_app_is_told() {
             "mcp_session_unavailable",
         ),
         (
-            McpError::InvalidConfiguration,
+            McpError::InvalidConfiguration(McpServerProblem::TooMany),
             McpAppFailure::SessionEnded,
             "mcp_session_unavailable",
         ),

@@ -1,6 +1,8 @@
 //! Real separate client/gateway proofs consume canonical stores and actual paired credentials.
 #[path = "read_only_online/fixtures.rs"]
 mod fixtures;
+#[path = "read_only_online/semantic.rs"]
+mod semantic;
 use fixtures::*;
 use nessa_client_core::composition;
 use nessa_local_database::rusqlite::Connection;

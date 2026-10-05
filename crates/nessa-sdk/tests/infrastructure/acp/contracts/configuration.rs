@@ -3,7 +3,7 @@ use crate::application::agent_execution::providers::ApprovalMode;
 use crate::application::agent_execution::sessions::SessionManager;
 use crate::application::dto::ModelMetadataDto;
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
-use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::acp::sessions::{McpServerList, StdioMcpServer, MAX_MCP_SERVERS};
 use crate::infrastructure::process::ProcessScope;
 use crate::infrastructure::session_storage::InMemoryStorage;
 use serde_json::json;
@@ -482,7 +482,7 @@ fn native_configuration_cannot_enable_model_false_tools_or_extended_limits() {
     ));
     let text_only = AcpConfig {
         tools_enabled: false,
-        mcp_servers: Vec::new(),
+        mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         ..config.clone()
     };
     assert!(ClaudeAcpProvider::new(
@@ -1423,13 +1423,18 @@ async fn live_duplicate_configuration_retires_context_and_preserves_audit_failur
 
 #[test]
 fn mcp_launch_configuration_rejects_ambiguous_names_and_disabled_tools() {
-    let (_root, mut config, model) = test_acp_configuration("normal", 16);
+    let (_root, config, model) = test_acp_configuration("normal", 16);
     let server = StdioMcpServer {
         name: "nessa".into(),
         command: "/trusted/nessa-mcp".into(),
         args: vec!["--workspace".into(), "/workspace".into()],
     };
-    config.mcp_servers = vec![server.clone()];
+    let with = |servers: Vec<StdioMcpServer>| {
+        let mut config = config.clone();
+        config.mcp_servers = McpServerList::fixed(servers);
+        config
+    };
+    let mut config = with(vec![server.clone()]);
     let build = |config| {
         ClaudeAcpProvider::new(
             config,
@@ -1440,16 +1445,29 @@ fn mcp_launch_configuration_rejects_ambiguous_names_and_disabled_tools() {
     };
     assert!(build(config.clone()).is_ok());
     for name in ["", "nessa__other", "nessa/other"] {
-        let mut changed = config.clone();
-        changed.mcp_servers[0].name = name.into();
+        let changed = with(vec![StdioMcpServer {
+            name: name.into(),
+            ..server.clone()
+        }]);
         assert!(build(changed).is_err());
     }
-    let mut changed = config.clone();
-    changed.mcp_servers.push(server);
-    assert!(build(changed).is_err());
-    let mut changed = config.clone();
-    changed.mcp_servers[0].command = "relative".into();
-    assert!(build(changed).is_err());
+    assert!(build(with(vec![server.clone(), server.clone()])).is_err());
+    // At most MAX_MCP_SERVERS, asked of the one owner of the set's rules.
+    let many = |count: usize| -> Vec<StdioMcpServer> {
+        (0..count)
+            .map(|index| StdioMcpServer {
+                name: format!("s{index}"),
+                ..server.clone()
+            })
+            .collect()
+    };
+    assert!(build(with(many(MAX_MCP_SERVERS))).is_ok());
+    assert!(build(with(many(MAX_MCP_SERVERS + 1))).is_err());
+    assert!(build(with(vec![StdioMcpServer {
+        command: "relative".into(),
+        ..server.clone()
+    }]))
+    .is_err());
     config.tools_enabled = false;
     assert!(build(config).is_err());
 }
