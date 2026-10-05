@@ -65,7 +65,7 @@ async fn written(file: &std::path::Path) {
 /// An inspector on an empty live set, on `clock`.
 fn inspector(clock: Arc<dyn nessa_sdk::infrastructure::clock::Clock>) -> McpServerInspector {
     let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
-    let launches = LaunchSettings::new(&[], std::env::temp_dir(), BTreeMap::new());
+    let launches = LaunchSettings::new(&[], false, std::env::temp_dir(), BTreeMap::new());
     McpServerInspector::new(servers, launches, clock)
 }
 
@@ -181,7 +181,7 @@ async fn an_inspection_once_the_servers_stop_is_refused_as_stopping_and_starts_n
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("pid");
     let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
-    let launches = LaunchSettings::new(&[], std::env::temp_dir(), BTreeMap::new());
+    let launches = LaunchSettings::new(&[], false, std::env::temp_dir(), BTreeMap::new());
     let inspector =
         McpServerInspector::new(servers.clone(), launches, Arc::new(RuntimeClock::new()));
     servers.stop().await;

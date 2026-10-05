@@ -196,10 +196,16 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     let socket = namespace.path().join("mcp").join("relay.sock");
     let configured = server("mcptest", &["/s.mjs"]);
     let mut config = agents(vec![configured.clone()]);
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
-        .await
-        .unwrap()
-        .expect("composed");
+    let composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("composed");
     assert_eq!(
         composed.servers.configured(),
         launches(std::slice::from_ref(&configured))
@@ -222,9 +228,15 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     let started = std::time::Instant::now();
     loop {
         let mut again = agents(vec![configured.clone()]);
-        let composed = compose(&mut again, &socket, Path::new("/nessa"), BTreeMap::new())
-            .await
-            .unwrap();
+        let composed = compose(
+            &mut again,
+            &socket,
+            Path::new("/nessa"),
+            BTreeMap::new(),
+            false,
+        )
+        .await
+        .unwrap();
         if composed.is_some() {
             break;
         }
@@ -278,10 +290,16 @@ async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
     let socket = namespace.path().join("mcp").join("relay.sock");
     let configured = server("mcptest", &["/s.mjs"]);
     let mut config = agents(vec![configured.clone()]);
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
-        .await
-        .unwrap()
-        .expect("composed");
+    let composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("composed");
     // An open of a conversation's session, as its provider makes it.
     let (opened, grant) = config
         .stand_ins
@@ -335,9 +353,15 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
         std::io::ErrorKind::AlreadyExists
     );
     let mut config = agents(vec![server("mcptest", &[])]);
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
-        .await
-        .unwrap();
+    let composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap();
     assert!(composed.is_none());
     // Off, not handed over directly.
     assert!(opened(&config).is_empty());
@@ -345,12 +369,16 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
     // A path past the platform's socket limit is the same.
     let deep = namespace.path().join("d".repeat(120)).join("relay.sock");
     let mut config = agents(vec![server("mcptest", &[])]);
-    assert!(
-        compose(&mut config, &deep, Path::new("/nessa"), BTreeMap::new())
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(compose(
+        &mut config,
+        &deep,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false
+    )
+    .await
+    .unwrap()
+    .is_none());
     assert!(opened(&config).is_empty());
 }
 
@@ -378,6 +406,7 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming
             &std::env::temp_dir(),
             Path::new("/nessa"),
             BTreeMap::new(),
+            false,
         )
         .await;
         match refused {
@@ -428,10 +457,16 @@ async fn s18_with_no_server_configured_the_relay_exists_and_a_server_added_reach
     let namespace = tempfile::tempdir().unwrap();
     let socket = namespace.path().join("mcp").join("relay.sock");
     let mut config = agents(Vec::new());
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
-        .await
-        .unwrap()
-        .expect("the relay is composed with no server configured");
+    let composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("the relay is composed with no server configured");
     assert!(opened(&config).is_empty());
     let added = server("mcptest", &["/s.mjs"]);
     let (_grant, token) = token(&config);
@@ -459,10 +494,16 @@ async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_r
     let socket = namespace.path().join("mcp").join("relay.sock");
     let original = server("mcptest", &["/s.mjs"]);
     let mut config = agents(vec![original.clone()]);
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
-        .await
-        .unwrap()
-        .expect("composed");
+    let composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("composed");
     let (_grant, token) = token(&config);
     let before = handed_digest(&config, "mcptest");
     // S11: edited.
@@ -557,10 +598,16 @@ async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_laun
     let namespace = tempfile::tempdir().unwrap();
     let socket = namespace.path().join("mcp").join("relay.sock");
     config.stand_ins = Default::default();
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
-        .await
-        .unwrap()
-        .expect("composed");
+    let composed = compose(
+        &mut config,
+        &socket,
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("composed");
     let live: Vec<_> = composed
         .servers
         .configured()
@@ -600,6 +647,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         &namespace.join("mcp").join("relay.sock"),
         Path::new("/nessa"),
         BTreeMap::new(),
+        true,
     )
     .await
     .unwrap()
@@ -794,6 +842,7 @@ async fn composed_in(
         &namespace.join("mcp").join("relay.sock"),
         Path::new("/nessa"),
         BTreeMap::new(),
+        false,
     )
     .await
     .unwrap()

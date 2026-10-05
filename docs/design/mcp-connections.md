@@ -506,6 +506,17 @@ the startup configuration into `LaunchSettings`, lists it `managed`, and
 refuses every save or remove naming it (`mcp_servers_reserved_name`). A write
 edits the file, not the composed configuration, so the file never gains it.
 
+The desktop drops a stored `nessa` from its startup copy only; the file can
+still hold one, perhaps with a stale executable and variables that are
+secrets. On the desktop it is never used: never launched, inspected or
+listed, since the bundled one stands in its place. So the next applied
+change, a save or a remove of any other server, drops it from the file. The
+outcome's `before` names it and its `after` does not
+(`a_desktop_change_drops_a_stored_nessa_and_its_audit_says_so`). A refused or
+failed change writes nothing, and leaves it there. Composition says which
+gateway this is: the desktop's `bundle` (`packaged_agents`) reaches
+`LaunchSettings`, and the settings read it as `LiveServerSet::bundled`.
+
 On a gateway without the desktop, a `nessa` stored at startup is the managed
 server, whether it is on or off: one rule, the stored-server rule, applied to
 it. It is listed once, `managed`, with its own `enabled` and variable names;
@@ -725,6 +736,9 @@ meet the stand-in and forwarded-result rows above.
 | — | `replace` lands between a hello's admission and its open | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |
 | — | A variable's value | Never in the wire, `list`, the audit, or a `Debug`; nor in a stand-in's arguments or the revision, raw or as an unkeyed hash | `a_launch_prints_its_environment_names_never_its_values`, `a_configured_server_prints_its_variable_names_never_their_values`, `launch_settings_print_names_never_values`, `the_list_names_each_variable_and_marks_the_managed_server`, `a_stand_ins_arguments_reveal_nothing_about_a_variables_value`, `the_revision_is_keyed_and_changes_with_a_variables_value` |
 | — | A stored `nessa` on a gateway without the desktop, on or off | The managed server: listed once with its `enabled` and variable names, counted, launched only when on | `a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off` |
+| — | A stored `nessa` on a gateway without the desktop, then a save or remove of another server | Kept in the file with its variables; the outcome names it before and after | `a_headless_change_keeps_the_stored_nessa` |
+| — | A stored `nessa` on the desktop, then a save or remove of another server | Never listed; dropped from the file, its variables with it; the outcome names it before, not after | `a_desktop_change_drops_a_stored_nessa_and_its_audit_says_so` |
+| — | No stored `nessa` on the desktop, then a save or remove | The file holds exactly the edited list | `a_desktop_change_with_no_stored_nessa_drops_nothing_else` |
 | — | A server saved while an agent with tools off is composed | That agent is given no MCP servers or grants; its opens and deletes go ahead | `a_tools_disabled_agent_opens_and_deletes_with_a_server_saved` |
 | — | A server name starting or ending with `_` | `invalid` (`name`): `mcp__<server>__<tool>` would not say where the server ends | `a_server_name_may_not_start_or_end_with_an_underscore` |
 | — | The digest | Changes with the command, each argument, each variable's name and value, and the key | `the_digest_changes_with_the_command_each_argument_each_variable_and_their_boundaries`, `each_server_is_handed_over_as_a_relay_under_its_own_name` |

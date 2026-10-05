@@ -331,22 +331,27 @@ pub(crate) fn inspected_over(
 }
 
 /// The settings of a gateway that started with `startup` configured — the
-/// managed server among them, or not — over `files`, on a leaping clock.
+/// managed server among them, or not; the desktop's bundled one when
+/// `bundled` — over `files`, on a leaping clock.
 #[cfg(unix)]
 pub(crate) fn settings_started_with(
     files: Arc<MemoryFiles>,
     audit: Arc<RecordingAudit>,
     startup: &[ConfiguredMcpServer],
+    bundled: bool,
 ) -> (McpServerSettings, McpServers) {
-    started_with(
+    live_through(
         files,
         audit,
         Arc::new(LeapingClock::default()),
         Arc::new(ScriptedInspector::default()),
-        startup,
+        (startup, bundled),
+        CONFIG_LIMIT,
+        |live| Arc::new(live),
     )
 }
 
+/// A desktop gateway's: started with its bundled [`managed`] server.
 fn started_with(
     files: Arc<MemoryFiles>,
     audit: Arc<RecordingAudit>,
@@ -359,7 +364,7 @@ fn started_with(
         audit,
         clock,
         inspector,
-        startup,
+        (startup, true),
         CONFIG_LIMIT,
         |live| Arc::new(live),
     )
@@ -381,7 +386,7 @@ pub(crate) fn settings_through(
         audit,
         clock,
         inspector,
-        &[managed()],
+        (&[managed()], true),
         CONFIG_LIMIT,
         live,
     )
@@ -403,7 +408,7 @@ pub(crate) fn settings_at_full_size(
         audit,
         Arc::new(LeapingClock::default()),
         Arc::new(ScriptedInspector::default()),
-        &[managed()],
+        (&[managed()], true),
         65_536,
         |live| Arc::new(live),
     )
@@ -414,7 +419,7 @@ fn live_through(
     audit: Arc<RecordingAudit>,
     clock: Arc<dyn Clock>,
     inspector: Arc<dyn ServerInspector>,
-    startup: &[ConfiguredMcpServer],
+    (startup, bundled): (&[ConfiguredMcpServer], bool),
     limit: usize,
     live: impl FnOnce(LiveMcpServers) -> Arc<dyn LiveServerSet>,
 ) -> (McpServerSettings, McpServers) {
@@ -434,7 +439,7 @@ fn live_through(
         clock,
         key(),
     );
-    let launches = LaunchSettings::new(startup, std::env::temp_dir(), BTreeMap::new());
+    let launches = LaunchSettings::new(startup, bundled, std::env::temp_dir(), BTreeMap::new());
     let servers = McpServers::new(
         launches.launch_set(&[]).unwrap(),
         Arc::new(RuntimeClock::new()),
