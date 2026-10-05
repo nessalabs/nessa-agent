@@ -2,6 +2,7 @@
 
 use super::{
     record_changes::RecordChanges,
+    save_batch::SaveCommits,
     save_group::{GroupProgress, Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
     snapshot,
     stream_fact::{self, FactCommitError, FactRead, FramedFact},
@@ -14,9 +15,10 @@ use crate::{
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
-use event_stream::{Cursor, EventRuntime, StreamKey};
+use event_stream::{Cursor, EventRuntime, NewEvent, StreamKey};
 use nessa_sync::replication::domain::Id;
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 pub(super) struct RecordWriter {
     id: SessionId,
@@ -200,6 +202,7 @@ impl RecordWriter {
     pub(super) async fn save<R: EventRuntime>(
         &mut self,
         runtime: &R,
+        batch: Option<&Arc<SaveCommits>>,
         original: SessionSaveGeneration,
         observed: &SessionSnapshot,
         units: &[SessionSaveUnit],
@@ -342,6 +345,10 @@ impl RecordWriter {
         if confirmed == units.len() && !self.unfinished {
             return Ok(self.receipt.clone().expect("matched completed receipt"));
         }
+        let mut framed = Vec::new();
+        let mut ranges = Vec::new();
+        let mut facts = Vec::new();
+        let mut next_offset = self.cursor.offset;
         for index in confirmed..=units.len() {
             let fact = if index == units.len() {
                 terminal.clone()
@@ -349,12 +356,28 @@ impl RecordWriter {
                 Self::encode_unit(units, &headers, index)?
                     .ok_or_else(|| corrupt("save unit disappeared from immutable plan"))?
             };
+            let start = framed.len();
+            let frames = stream_fact::frame_fact(&fact, next_offset + 1)
+                .map_err(|error| self.live_error(FactCommitError::Frame(error)))?;
+            next_offset +=
+                u64::try_from(frames.len()).map_err(|_| corrupt("save frame count exhausted"))?;
+            framed.extend(frames);
+            ranges.push(start..framed.len());
+            facts.push(fact);
+        }
+        let framed: Arc<[NewEvent]> = Arc::from(framed);
+        let _attempt = batch.map(|batch| batch.arm(self.stream.clone(), Arc::clone(&framed)));
+        for (fact, range) in facts.into_iter().zip(ranges) {
             self.unfinished = true;
             self.pending = Some(fact);
-            let pending = self.pending.as_ref().expect("installed exact bytes");
-            let cursor = stream_fact::commit_fact(runtime, &self.stream, &self.cursor, pending)
-                .await
-                .map_err(|error| self.live_error(error))?;
+            let cursor = stream_fact::commit_expected(
+                runtime,
+                &self.stream,
+                &self.cursor,
+                &framed[range.clone()],
+            )
+            .await
+            .map_err(|error| self.live_error(error))?;
             let fact = self.pending.take().expect("retained across await");
             self.accept(fact, cursor)?;
         }
@@ -505,6 +528,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 writer.readable_snapshot().unwrap().binding().clone(),
                 &first,
                 &[SessionSaveUnit::new(vec![opened]).unwrap()],
@@ -520,6 +544,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 next.clone(),
                 &second,
                 &[SessionSaveUnit::new(vec![context]).unwrap()],
