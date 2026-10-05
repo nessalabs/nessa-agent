@@ -65,13 +65,13 @@ examples.
   — any change to what a person sees or does in a UI, and
   [gate 17](CODING_STANDARDS.md#gates). The `desktop-verification` skill is
   how to run it.
+- [Adding a check to CI](CODING_STANDARDS.md#adding-a-check-to-ci) — before you
+  add a job.
 
 A desktop pull request puts its verification on the PR: screenshots of what a
 person sees, and only the short log lines that prove the check. Where those
 files go and which lines to quote is
 [Evidence on the pull request](.claude/skills/desktop-verification/SKILL.md#evidence-on-the-pull-request).
-- [Adding a check to CI](CODING_STANDARDS.md#adding-a-check-to-ci) — before you
-  add a job.
 
 ## Reviewing, locally and delegated
 
