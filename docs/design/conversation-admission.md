@@ -328,6 +328,29 @@ The terminal projection work in #121 continues to consume SDK terminal evidence.
 This design adds no gateway terminal ledger and reserves no competing projection
 authority.
 
+### A desktop stop and a submission
+
+A desktop stop (`ConversationService::stop_active_agents`) stops every live
+agent and leaves admission open. A submission holds its conversation's
+submission lock (`mode_changes`) from before its checks through the enqueue,
+so each owner's stop takes the same lock first, stops whatever agent is live
+then, and holds the lock until that stop ends. Without that order, a stop
+landing past the checks closed the agent under the submission. The closed
+lifecycle then reopened for a future attachment and admitted the message as
+waiting work that never ran. The receipt watcher kept that agent, and its
+history lease, so every later read answered `Busy` (#528). Retirement keeps
+its own order: it drains admission before it stops anything.
+
+The wait for the lock and the stop share the owner's one `stopMs` budget.
+
+| Submission when the stop comes | Stop | Message | Test |
+| --- | --- | --- | --- |
+| Before its checks | Stops the agent first | Waits, then opens the conversation again and runs there | `a_message_sent_while_a_desktop_stop_runs_waits_and_runs_on_a_new_agent` |
+| Lock held by a command that let the owner go | Stops what is live when it takes the lock | — | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
+| Past its checks, before or in the enqueue | Waits for the enqueue, then stops the agent | Settles there: completed, or cancelled by the close | `a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks`, `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` |
+| Enqueued | Stops the agent | Settles there | `a_desktop_stop_after_the_enqueue_settles_the_message` |
+| Holds the lock past the budget | Not stopped: over budget, reported as a deadline; the agent stays owned | Runs; a later stop stops it | `a_desktop_stop_that_cannot_take_the_lock_within_its_budget_leaves_the_agent_running`, `the_wait_for_the_lock_and_the_stop_share_one_budget` |
+
 ## Enforcers and affected ownership
 
 | Contract | Enforcer | Primary modules |

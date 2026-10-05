@@ -3273,7 +3273,10 @@ impl ConversationService {
         // stays open, so the count is bumped and nothing is fenced — a
         // conversation stopped this way can be opened again.
         self.inner.stops.send_modify(|count| *count += 1);
-        self.close_agents(&actor).await
+        // Admission stays open, so a submission can be between its last check
+        // and its enqueue when this pass comes: each owner's stop waits for the
+        // conversation's submission lock first (#528).
+        self.close_agents(&actor, Submissions::Admitted).await
     }
 
     /// Permanently fence new operations, join admitted commands, then stop owned agents.
@@ -3309,9 +3312,13 @@ impl ConversationService {
         )
         .await;
         let retired = match admission {
-            Ok(_exclusive) => self.close_agents(actor).await,
+            Ok(_exclusive) => self.close_agents(actor, Submissions::Drained).await,
             Err(_) => {
-                let cleanup_error = self.close_agents(actor).await.err().map(Box::new);
+                let cleanup_error = self
+                    .close_agents(actor, Submissions::Drained)
+                    .await
+                    .err()
+                    .map(Box::new);
                 Err(ConversationError::RetirementAdmission { cleanup_error })
             }
         };
@@ -3372,7 +3379,11 @@ impl ConversationService {
         self.inner.retirement.get().cloned()
     }
 
-    async fn close_agents(&self, actor: &ActionContext) -> Result<(), ConversationError> {
+    async fn close_agents(
+        &self,
+        actor: &ActionContext,
+        submissions: Submissions,
+    ) -> Result<(), ConversationError> {
         let slots: Vec<_> = self
             .inner
             .conversations
@@ -3384,18 +3395,30 @@ impl ConversationService {
         // Give every owner its own bounded attempt. A stalled opening or provider
         // cannot consume another owner's cleanup opportunity.
         let attempts = slots.into_iter().map(|(id, slot)| async move {
+            let deadline = Instant::now() + self.inner.deletion_budgets.stop;
+            let stopped = match submissions {
+                Submissions::Drained => {
+                    self.stop_slot_by(&id, slot, actor, &McpAppInitiator::System, deadline)
+                        .await
+                }
+                Submissions::Admitted => {
+                    // Not held through the wait: an agent that a command ahead
+                    // of this stop lets go of must not keep its history leased
+                    // here, or the conversation opened again after it answers
+                    // `Busy` (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
+                    drop(slot);
+                    self.stop_after_submission(&id, actor, deadline).await
+                }
+            };
             // Retirement reports every stop as the agent's error: over its
             // budget is a deadline there.
-            self.stop_slot(&id, slot, actor, &McpAppInitiator::System)
-                .await
-                .err()
-                .map(|stop| {
-                    let error = match stop {
-                        StopFailure::OverBudget => AgentError::Deadline,
-                        StopFailure::Failed(error) => error,
-                    };
-                    (id.to_string(), error)
-                })
+            stopped.err().map(|stop| {
+                let error = match stop {
+                    StopFailure::OverBudget => AgentError::Deadline,
+                    StopFailure::Failed(error) => error,
+                };
+                (id.to_string(), error)
+            })
         });
         let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
         if failures.is_empty() {
@@ -3420,6 +3443,54 @@ impl ConversationService {
         slot: Arc<Slot>,
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
+    ) -> Result<(), StopFailure> {
+        let deadline = Instant::now() + self.inner.deletion_budgets.stop;
+        self.stop_slot_by(id, slot, actor, ended_by, deadline).await
+    }
+
+    /// A desktop stop of one owner, ordered with its submissions: wait for
+    /// the conversation's submission lock, then stop whatever agent it has
+    /// then, holding the lock until the stop ends. A submission past its
+    /// last check finishes its enqueue first, and the stop then ends the
+    /// agent with the message in it, so the message settles there; one that
+    /// comes after waits, and opens the conversation again (#528).
+    ///
+    /// The wait counts against the owner's one stop budget, ending at
+    /// `deadline`. A submission holding the lock past it leaves this owner
+    /// unstopped — [`StopFailure::OverBudget`], with its agent running and
+    /// still owned — rather than stopping it under that submission
+    /// (`a_desktop_stop_that_cannot_take_the_lock_within_its_budget_leaves_the_agent_running`).
+    async fn stop_after_submission(
+        &self,
+        id: &ConversationId,
+        actor: &ActionContext,
+        deadline: Instant,
+    ) -> Result<(), StopFailure> {
+        let Ok(_submissions) =
+            tokio::time::timeout_at(deadline, self.inner.mode_changes.lock(id)).await
+        else {
+            return Err(StopFailure::OverBudget);
+        };
+        // The owner the lock's last holder left: a submission may have
+        // released it or opened the conversation again while this waited.
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        match slot {
+            Some(slot) => {
+                self.stop_slot_by(id, slot, actor, &McpAppInitiator::System, deadline)
+                    .await
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// [`Self::stop_slot`], within a budget that ends at `deadline`.
+    async fn stop_slot_by(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+        ended_by: &McpAppInitiator,
+        deadline: Instant,
     ) -> Result<(), StopFailure> {
         let attempt = async {
             loop {
@@ -3448,7 +3519,7 @@ impl ConversationService {
                 ready.await;
             }
         };
-        match tokio::time::timeout(self.inner.deletion_budgets.stop, attempt).await {
+        match tokio::time::timeout_at(deadline, attempt).await {
             Ok(result) => result.map_err(StopFailure::Failed),
             Err(_) => Err(StopFailure::OverBudget),
         }
@@ -3486,6 +3557,17 @@ impl ConversationService {
             }
         }
     }
+}
+
+/// Whether a pass of stops can meet a submission still being admitted.
+#[derive(Clone, Copy)]
+enum Submissions {
+    /// Admission is open: each owner's stop is ordered with its submissions
+    /// under the submission lock ([`ConversationService::stop_after_submission`]).
+    Admitted,
+    /// Retirement fenced admission and waited for it: nothing is being
+    /// admitted, or what still is after that wait is stopped regardless.
+    Drained,
 }
 
 /// What a deletion left unfinished with `failures` is waiting for, when it is
@@ -3919,6 +4001,10 @@ mod close_release_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/retirement.rs"]
 mod retirement_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/desktop_stop.rs"]
+mod desktop_stop_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/opening_diagnostics.rs"]

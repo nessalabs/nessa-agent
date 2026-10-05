@@ -41,6 +41,13 @@ impl ConversationLocks {
             }
         }
     }
+    /// How many hold `id`'s lock or wait for it: each holder's guard and
+    /// each waiter keep the lock itself alive.
+    #[cfg(test)]
+    pub(super) fn holders_and_waiters(&self, id: &ConversationId) -> usize {
+        let locks = self.locks.lock().unwrap_or_else(PoisonError::into_inner);
+        locks.get(id).map_or(0, Weak::strong_count)
+    }
     /// How many conversations have a lock somebody holds or waits for.
     #[cfg(test)]
     pub(super) fn in_use(&self) -> usize {
