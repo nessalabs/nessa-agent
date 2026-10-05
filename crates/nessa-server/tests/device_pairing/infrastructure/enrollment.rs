@@ -20,6 +20,7 @@ use nessa_auth::{
         CredentialId, ResourceId,
     },
 };
+use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_protocol::{
     clock::Clock as ServerClock,
     pairing::{
@@ -35,9 +36,8 @@ use nessa_server::{
     device_pairing::{
         application::OwnerError,
         infrastructure::{
-            BeginPairing, CreatedInvitation, NativeClientError, NativeConnectionError,
-            NativeConnectionFailure, NativeEnrollmentClient, NativeEnrollmentConnections,
-            PairingRuntimeError,
+            BeginPairing, CreatedInvitation, NativeConnectionError, NativeConnectionFailure,
+            NativeEnrollmentConnections, PairingRuntimeError,
         },
     },
 };

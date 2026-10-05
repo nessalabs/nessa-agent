@@ -3089,6 +3089,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-client-core"
+version = "0.1.0"
+dependencies = [
+ "nessa-auth",
+ "nessa-local-database",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-sdk",
+ "nessa-sync",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tungstenite",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "nessa-gateway-endpoint"
 version = "0.1.0"
 dependencies = [
@@ -3208,6 +3229,7 @@ dependencies = [
  "libc",
  "nessa-agent-credentials",
  "nessa-auth",
+ "nessa-client-core",
  "nessa-gateway-endpoint",
  "nessa-images",
  "nessa-local-database",

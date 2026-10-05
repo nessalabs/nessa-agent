@@ -3,7 +3,7 @@
 What both ends of a Nessa gateway connection agree on, and nothing only one
 end does. The gateway (`nessa-server`) depends on this crate, and so does a
 device client; this crate depends on neither. Decided in
-[ADR 483](../../docs/adr/todo/483-protocol-and-client-core-crates.md).
+[ADR 483](../../docs/adr/done/483-protocol-and-client-core-crates.md).
 
 ```text
 nessa-server ──▶ nessa-protocol ◀── device client

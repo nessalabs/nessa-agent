@@ -1,5 +1,6 @@
 //! Native enrollment over TLS and PAKE: the gateway listener and runtime, the
-//! device client, and the bounded blocking workers they run on. A connection
+//! bounded blocking workers they run on. The device client is owned by
+//! `nessa_client_core::pairing`, consumed here only by gateway tests. A connection
 //! whose first envelope is `openProduct` becomes a protected product session,
 //! moving to the product session pool and returning its connection permit.
 //! Framing, the envelope codec, the enrollment channel and the deadline socket
@@ -7,7 +8,6 @@
 //!
 //! ```text
 //! listener --> connection --> runtime --> application (owner, read_status) --> Auth
-//! client   --> nessa_protocol::pairing (enrollment_channel, wire, socket)
 //! connection --> nessa_protocol::pairing (enrollment_channel, wire, socket)
 //! connection --> protected (async framed TLS) --> ProtectedSessions (product)
 //! runtime  --> registration (one code registration at a time)
@@ -19,7 +19,6 @@
 //! runtime holds only the volatile PAKE setup of the one open invitation.
 //! Framing offsets are IO progress, not enrollment state. `shutdown` on each
 //! owner stops admission, wakes blocked sockets, and waits for its workers.
-mod client;
 mod connection;
 mod identity;
 mod listener;
@@ -29,7 +28,6 @@ mod protected;
 mod receivers;
 mod registration;
 mod runtime;
-pub use client::{NativeClientError, NativeEnrollmentClient, NativeRetryOutcome};
 pub use connection::{NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections};
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};

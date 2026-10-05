@@ -61,3 +61,7 @@ mod fixtures;
 #[cfg(test)]
 #[path = "../../../../tests/read_only_sync/infrastructure/allocations.rs"]
 mod allocations;
+
+#[cfg(test)]
+#[path = "../../../../tests/read_only_sync/infrastructure/saved_output.rs"]
+mod saved_output_tests;
