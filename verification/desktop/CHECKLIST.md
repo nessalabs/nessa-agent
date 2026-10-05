@@ -423,8 +423,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
-  announcement and then updates under its id (Codex three frames, Claude
-  four), and the window draws it as one transcript step and one inline app
+  announcement and then updates under its id (Codex three frames, or two
+  in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app
   frame, so the app mounts once. _#418 design._ _Check:_
   `mcp-apps-gateway.mjs --agent codex --scripted` and `--agent claude
   --scripted`, `renders`: its step and frame counts (no model, no sign-in: the
