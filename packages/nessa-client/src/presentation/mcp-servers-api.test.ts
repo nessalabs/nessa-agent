@@ -265,6 +265,25 @@ describe("NessaMcpServersError narrows the refusal", () => {
     })
   })
 
+  it("types a too-large list refusal's revision", async () => {
+    const { api } = refusing("mcp_servers_config_too_large", { revision: "r7" })
+    expect((await failure(api.list())).refusal).toEqual({
+      code: "mcp_servers_config_too_large",
+      details: { revision: "r7" },
+    })
+  })
+
+  it.each([undefined, {}, { revision: 7 }, { revision: "r7", extra: 1 }])(
+    "keeps a too-large refusal and drops details %o, which are not its shape",
+    async (details) => {
+      const { api } = refusing("mcp_servers_config_too_large", details)
+      expect((await failure(api.save({} as never))).refusal).toEqual({
+        code: "mcp_servers_config_too_large",
+        details: undefined,
+      })
+    },
+  )
+
   it("reads an app URI of exactly 2048 UTF-8 bytes", async () => {
     const uri = `ui://${"€".repeat(681)}` // 5 + 2043 bytes
     const { api } = session(() => ({

@@ -67,12 +67,17 @@ type Detailed =
   | "audit_unavailable"
   | "mcp_servers_storage_unavailable"
   | "mcp_server_remote_error"
+  | "mcp_servers_config_too_large"
 
 const refusalCodes: Record<
   Exclude<McpServersErrorCode, Detailed>,
   Exclude<
     RefusalCode,
-    "invalid" | "auditUnavailable" | "storageUnavailable" | "remoteError"
+    | "invalid"
+    | "auditUnavailable"
+    | "storageUnavailable"
+    | "remoteError"
+    | "configTooLarge"
   >
 > = {
   mcp_servers_not_configured: "notConfigured",
@@ -82,7 +87,6 @@ const refusalCodes: Record<
   mcp_servers_busy: "busy",
   mcp_servers_stopping: "stopping",
   mcp_servers_config_invalid: "configInvalid",
-  mcp_servers_config_too_large: "configTooLarge",
   mcp_server_start_failed: "startFailed",
   mcp_server_timed_out: "timedOut",
   mcp_server_gone: "gone",
@@ -96,6 +100,7 @@ const causeCodes: Record<McpServersErrorCode, RefusalCode> = {
   audit_unavailable: "auditUnavailable",
   mcp_servers_storage_unavailable: "storageUnavailable",
   mcp_server_remote_error: "remoteError",
+  mcp_servers_config_too_large: "configTooLarge",
 }
 
 const problems: Record<McpServerProblemCode, Problem> = {
@@ -147,6 +152,12 @@ function refused(refusal: McpServersRefusal): Failure {
       }
     case "mcp_server_remote_error":
       return { kind: "remoteError", ...(refusal.details ?? {}) }
+    case "mcp_servers_config_too_large":
+      // A list refused so names the revision a remove by name needs (U44).
+      return {
+        kind: "configTooLarge",
+        ...(refusal.details ? { revision: refusal.details.revision } : {}),
+      }
     default:
       return { kind: refusalCodes[refusal.code] }
   }

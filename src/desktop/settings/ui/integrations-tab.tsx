@@ -11,6 +11,7 @@ import {
 import type { McpServersGateway } from "../adapters/mcp-servers-gateway"
 import {
   canInspect,
+  canRemoveByName,
   canWrite,
   editedServer,
   formReady,
@@ -113,7 +114,7 @@ function useRequests(
 
 /** A button focus may go back to: a row's, by its server's name, or Add. */
 export interface FocusTarget {
-  readonly action: "edit" | "inspect" | "remove" | "add"
+  readonly action: "edit" | "inspect" | "remove" | "add" | "removeByName"
   readonly server?: string
 }
 
@@ -138,7 +139,12 @@ export function focusAfter(
           add,
         ]
   if (previous.confirming !== null && next.confirming === null)
-    return [{ action: "remove", server: previous.confirming }, add]
+    return [
+      { action: "remove", server: previous.confirming },
+      // A list too large to show has no rows: back to the name field (U44).
+      { action: "removeByName" },
+      add,
+    ]
   if (previous.inspection && !next.inspection)
     return [{ action: "inspect", server: previous.inspection.name }, add]
   return null
@@ -151,7 +157,9 @@ function buttonFor(container: HTMLElement, target: FocusTarget) {
       : [...container.querySelectorAll("[data-mcp-server]")].find(
           (row) => row.getAttribute("data-mcp-server") === target.server,
         )
-  return scope?.querySelector<HTMLButtonElement>(`[data-mcp-action="${target.action}"]`)
+  return scope?.querySelector<HTMLButtonElement | HTMLInputElement>(
+    `[data-mcp-action="${target.action}"]`,
+  )
 }
 
 /**
@@ -209,7 +217,9 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
           ? "not-configured"
           : state.list.phase === "failed"
             ? "failed"
-            : "loading"
+            : state.list.phase === "tooLarge"
+              ? "too-large"
+              : "loading"
   return (
     <div
       ref={container}
@@ -306,6 +316,8 @@ function ServersBody({
         </div>
       </>
     )
+  if (list.phase === "tooLarge")
+    return <TooLargeBody state={state} list={list} dispatch={dispatch} />
   const writable = canWrite(state) && state.form === null
   const add = (
     <button
@@ -370,6 +382,107 @@ function ServersBody({
         />
       ))}
     </>
+  )
+}
+
+/**
+ * A list too large to show (U44): the refusal names no server, so none is
+ * drawn. A server is removed by the name typed, asked about as a row's
+ * Remove is, at the refusal's revision.
+ */
+function TooLargeBody({
+  state,
+  list,
+  dispatch,
+}: {
+  state: McpServersState
+  list: Extract<McpServersState["list"], { phase: "tooLarge" }>
+  dispatch: Dispatch
+}) {
+  const fieldId = useId()
+  const textId = useId()
+  const askId = useId()
+  const cancel = useRef<HTMLButtonElement>(null)
+  const confirming = state.confirming !== null
+  const resting = state.connection !== "connected" || state.pending !== null
+  useEffect(() => {
+    if (confirming) cancel.current?.focus()
+  }, [confirming])
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!confirming || event.key !== "Escape" || state.pending !== null) return
+    event.preventDefault()
+    event.stopPropagation()
+    dispatch({ type: "cancelRemove" })
+  }
+  return (
+    <div
+      className="settings-row settings-server"
+      data-mcp-too-large
+      onKeyDown={onKeyDown}
+    >
+      <div className="settings-row-text">
+        <p id={textId}>{sentences.listTooLarge}</p>
+        <label htmlFor={fieldId}>Server name</label>
+        <input
+          id={fieldId}
+          className="settings-input"
+          data-mcp-action="removeByName"
+          value={list.name}
+          autoComplete="off"
+          spellCheck={false}
+          aria-describedby={textId}
+          disabled={resting}
+          onChange={(event) =>
+            dispatch({ type: "changeRemoveName", name: event.target.value })
+          }
+        />
+        {state.confirming !== null ? (
+          <p id={askId} className="settings-server-confirm" data-mcp-confirm>
+            {sentences.removeAsk(state.confirming)}
+          </p>
+        ) : null}
+      </div>
+      <div className="settings-row-control settings-server-actions">
+        {confirming
+          ? [
+              <button
+                key="cancel"
+                ref={cancel}
+                type="button"
+                className="settings-button"
+                data-mcp-action="cancel"
+                aria-describedby={askId}
+                disabled={state.pending !== null}
+                onClick={() => dispatch({ type: "cancelRemove" })}
+              >
+                Cancel
+              </button>,
+              <button
+                key="confirm"
+                type="button"
+                className="settings-button settings-button-danger"
+                data-mcp-action="confirm"
+                aria-describedby={askId}
+                disabled={!canRemoveByName(state)}
+                onClick={() => dispatch({ type: "confirmRemove" })}
+              >
+                Remove
+              </button>,
+            ]
+          : [
+              <button
+                key="remove"
+                type="button"
+                className="settings-button"
+                data-mcp-action="remove"
+                disabled={!canRemoveByName(state)}
+                onClick={() => dispatch({ type: "askRemoveByName" })}
+              >
+                Remove
+              </button>,
+            ]}
+      </div>
+    </div>
   )
 }
 

@@ -3,6 +3,7 @@ import {
   McpServersErrorCode,
   type McpRemoteErrorDetails,
   type McpServersAuditUnavailableDetails,
+  type McpServersConfigTooLargeDetails,
   type McpServersInvalidDetails,
   type McpServersRevisionConflictDetails,
   type McpServersStorageUnavailableDetails,
@@ -10,6 +11,7 @@ import {
 import { mcpRemoteErrorDetails } from "../protocol/mcp-app-validate.js"
 import {
   mcpServersAuditUnavailableDetails,
+  mcpServersConfigTooLargeDetails,
   mcpServersErrorCode,
   mcpServersInvalidDetails,
   mcpServersRevisionConflictDetails,
@@ -44,6 +46,15 @@ export type McpServersRefusal =
       details: McpRemoteErrorDetails | undefined
     }
   | {
+      /**
+       * Details only on `mcpServers.list`, whose stored list would not fit one
+       * frame: the revision a remove by name needs. A save refused so, or a
+       * config.json that itself passes 64 KiB, carries none.
+       */
+      code: typeof McpServersErrorCode.McpServersConfigTooLarge
+      details: McpServersConfigTooLargeDetails | undefined
+    }
+  | {
       code: Exclude<
         McpServersErrorCode,
         | typeof McpServersErrorCode.McpServersInvalid
@@ -51,6 +62,7 @@ export type McpServersRefusal =
         | typeof McpServersErrorCode.AuditUnavailable
         | typeof McpServersErrorCode.McpServersStorageUnavailable
         | typeof McpServersErrorCode.McpServerRemoteError
+        | typeof McpServersErrorCode.McpServersConfigTooLarge
       >
       details?: undefined
     }
@@ -77,6 +89,8 @@ function refusalOf(cause: NessaRpcError): McpServersRefusal | undefined {
       return { code, details: mcpServersStorageUnavailableDetails(cause.details) }
     case McpServersErrorCode.McpServerRemoteError:
       return { code, details: mcpRemoteErrorDetails(cause.details) }
+    case McpServersErrorCode.McpServersConfigTooLarge:
+      return { code, details: mcpServersConfigTooLargeDetails(cause.details) }
     default:
       return { code }
   }

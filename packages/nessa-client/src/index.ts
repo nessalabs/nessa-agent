@@ -190,6 +190,7 @@ export type {
   McpServerInput,
   McpServerListEntry,
   McpServersAuditUnavailableDetails,
+  McpServersConfigTooLargeDetails,
   McpServersInspectResult,
   McpServersInvalidDetails,
   McpServersListResult,

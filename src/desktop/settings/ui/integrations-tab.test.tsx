@@ -4,7 +4,8 @@
  * reducer cannot see (#391 PR 3) — the pending row with no gateway (U1), no
  * request without the grant (U2), skeletons (U3), the rows (U5, U6, U27),
  * stored values (U10), and no variable value left in the DOM (U31) — the
- * argument rows, a value's line breaks, and a changed launch (U33) — and one
+ * argument rows, a value's line breaks, a changed launch (U33), a list too
+ * large to show (U44–U46) and a save too large (U48) — and one
  * request for each the reducer names, under StrictMode too.
  */
 import { act, StrictMode } from "react"
@@ -266,6 +267,75 @@ describe("Integrations", () => {
     expect(host.querySelector("[data-mcp-form]")).not.toBeNull()
     expect(value.value).toBe("kept-after-refusal")
     expect(host.innerHTML).not.toContain("kept-after-refusal")
+  })
+
+  it("U44–U46: a list too large shows no server, removes the name typed at the refusal's revision, and says when it is not stored", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", {
+      ok: false,
+      failure: { kind: "configTooLarge", revision: "r7" },
+    })
+    const panel = host.querySelector("[data-mcp-too-large]") ?? undefined
+    if (!panel) throw new Error("no too-large panel")
+    expect(
+      host.querySelector("[data-mcp-servers]")?.getAttribute("data-mcp-servers"),
+    ).toBe("too-large")
+    expect(panel?.textContent).toContain(
+      "The server list is too large to show. Removing a server fixes it: enter its name.",
+    )
+    expect(host.querySelector("[data-mcp-server]")).toBeNull()
+    expect(button("Add server…")).toBeUndefined()
+    const field = host.querySelector(
+      '[data-mcp-action="removeByName"]',
+    ) as HTMLInputElement
+    expect(button("Remove", panel)?.disabled).toBe(true)
+    await type(field, "bigg")
+    await click(button("Remove", panel))
+    // Asked as a row's Remove is, focus on the confirm's Cancel.
+    expect(panel?.querySelector("[data-mcp-confirm]")?.textContent).toBe(
+      "Remove “bigg”? New conversations stop getting it. Open ones keep it until they close.",
+    )
+    expect(document.activeElement).toBe(button("Cancel", panel))
+    await press(document.activeElement, "Escape")
+    expect(panel?.querySelector("[data-mcp-confirm]")).toBeNull()
+    expect(document.activeElement).toBe(field)
+    await click(button("Remove", panel))
+    await click(panel?.querySelector('[data-mcp-action="confirm"]') ?? undefined)
+    expect(fake.requests.at(-1)).toMatchObject({
+      method: "remove",
+      argument: { revision: "r7", name: "bigg" },
+    })
+    await answer(fake, "remove", { ok: false, failure: { kind: "notFound" } })
+    await answer(fake, "list", {
+      ok: false,
+      failure: { kind: "configTooLarge", revision: "r7" },
+    })
+    expect(host.querySelector("[data-mcp-notice]")?.textContent).toBe(
+      "No server is stored under “bigg”.",
+    )
+    expect(field.value).toBe("bigg")
+    await type(field, "big")
+    await click(button("Remove", panel))
+    await click(panel?.querySelector('[data-mcp-action="confirm"]') ?? undefined)
+    await answer(fake, "remove", { ok: true, value: undefined })
+    await answer(fake, "list", list(charts, nessa))
+    expect(host.querySelector("[data-mcp-too-large]")).toBeNull()
+    expect(row("charts")).not.toBeNull()
+  })
+
+  it("U48: a save too large is said in the form, which stays open with what was typed", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await click(button("Edit", row("charts")))
+    await click(button("Save"))
+    await answer(fake, "save", { ok: false, failure: { kind: "configTooLarge" } })
+    expect(host.querySelector('[data-mcp-problem="form"]')?.textContent).toBe(
+      "This would make the server list too large; remove a server or shorten its arguments.",
+    )
+    expect(host.querySelector("[data-mcp-form]")).not.toBeNull()
+    expect(fake.requests.filter((each) => each.method === "list")).toHaveLength(1)
   })
 
   it("a value is masked and multiline: a pasted key keeps its line breaks", async () => {

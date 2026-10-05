@@ -1,7 +1,8 @@
 /**
  * Settings › Connections › Integrations: the gateway's stored MCP servers, as
  * the window manages them (#391). One reducer, from the design's state table
- * (rows U1–U31, issue #391's PR 3 design, and U32–U43 from its review); its
+ * (rows U1–U31, issue #391's PR 3 design, U32–U43 from its review, and
+ * U44–U50 for a list too large to show, #391 comment 5986496625); its
  * tests are one row at least one test, in `mcp-servers.test.ts`.
  *
  * The window never retypes a gateway rule (gate 13). Whether a name, command,
@@ -150,9 +151,22 @@ export type Failure =
     }
   | { readonly kind: "remoteError"; readonly code?: number; readonly message?: string }
   | {
+      readonly kind: "configTooLarge"
+      /**
+       * Only on a list whose stored servers would not fit one frame: the
+       * revision a remove by name must name (U44). Absent on a save, and on
+       * a configuration file itself too large to read (U47).
+       */
+      readonly revision?: string
+    }
+  | {
       readonly kind: Exclude<
         RefusalCode,
-        "invalid" | "auditUnavailable" | "storageUnavailable" | "remoteError"
+        | "invalid"
+        | "auditUnavailable"
+        | "storageUnavailable"
+        | "remoteError"
+        | "configTooLarge"
       >
     }
 
@@ -223,6 +237,12 @@ export type ListState =
   | { readonly phase: "listed"; readonly list: ServerList }
   | { readonly phase: "notConfigured" }
   | { readonly phase: "failed" }
+  /**
+   * The stored servers would not fit one answer (U44). The refusal names no
+   * server, so none is shown: a server is removed by the name typed here, at
+   * the refusal's revision.
+   */
+  | { readonly phase: "tooLarge"; readonly revision: string; readonly name: string }
 
 export type InspectionState =
   | { readonly phase: "running"; readonly seq: number; readonly name: string }
@@ -288,6 +308,9 @@ export type McpServersEvent =
   | { readonly type: "toggle"; readonly name: string }
   | { readonly type: "askRemove"; readonly name: string }
   | { readonly type: "cancelRemove" }
+  /** The name typed to remove a server from a list too large to show (U44). */
+  | { readonly type: "changeRemoveName"; readonly name: string }
+  | { readonly type: "askRemoveByName" }
   | { readonly type: "confirmRemove" }
   | { readonly type: "inspect"; readonly name: string }
   | {
@@ -340,6 +363,16 @@ export const sentences = {
       : `${quoted(name)} is Nessa's own server, and can't be changed here.`,
   configInvalid: "The configuration file can't be read as it is, so nothing was changed.",
   configTooLarge: "The configuration would be too large, so nothing was changed.",
+  /** A list whose stored servers would not fit one answer (U44). */
+  listTooLarge:
+    "The server list is too large to show. Removing a server fixes it: enter its name.",
+  /** A list refused as too large with no revision to remove at (U47). */
+  configFileTooLarge: "The configuration file is too large to read here.",
+  /** A save whose resulting list would not fit (U48, U49). */
+  saveTooLarge:
+    "This would make the server list too large; remove a server or shorten its arguments.",
+  /** A remove by name of a name not stored (U46). */
+  noSuchServer: (name: string) => `No server is stored under ${quoted(name)}.`,
   storageUnavailable:
     "The configuration file couldn't be read or written, so nothing was changed.",
   storageUnknown:
@@ -559,6 +592,20 @@ export function canInspect(state: McpServersState): boolean {
     state.pending === null &&
     state.list.phase === "listed" &&
     state.inspection?.phase !== "running"
+  )
+}
+
+/**
+ * Whether a server may be removed by a typed name now: the list too large to
+ * show (U44), one request at a time, while reachable, a name typed.
+ */
+export function canRemoveByName(state: McpServersState): boolean {
+  return (
+    state.access === "admin" &&
+    state.connection === "connected" &&
+    state.pending === null &&
+    state.list.phase === "tooLarge" &&
+    state.list.name !== ""
   )
 }
 
@@ -826,13 +873,29 @@ function answeredList(
   if (failure.kind === "forbidden") return forbidden(state)
   if (failure.kind === "notConfigured")
     return { ...done, list: { phase: "notConfigured" }, form: null, notice: null }
+  if (failure.kind === "configTooLarge" && failure.revision !== undefined)
+    // No server can be shown, so nothing is edited or confirmed against one;
+    // a name typed before this list stays typed (U44, U46).
+    return {
+      ...done,
+      list: {
+        phase: "tooLarge",
+        revision: failure.revision,
+        name: state.list.phase === "tooLarge" ? state.list.name : "",
+      },
+      form: null,
+      confirming: null,
+      notice: state.notice?.from === "list" ? null : state.notice,
+    }
   return {
     ...done,
     list: { phase: "failed" },
     notice: said(
       failure.kind === "unanswered"
         ? sentences.listFailed
-        : writeSentence(failure, state),
+        : failure.kind === "configTooLarge"
+          ? sentences.configFileTooLarge
+          : writeSentence(failure, state),
       "list",
     ),
   }
@@ -851,6 +914,8 @@ function answeredWrite(
       notice: null,
       form: fromForm ? null : state.form,
       confirming: pending.kind === "remove" ? null : state.confirming,
+      // The name removed is not typed again for the list read next (U45).
+      list: state.list.phase === "tooLarge" ? { ...state.list, name: "" } : state.list,
     })
   const { failure } = outcome
   switch (failure.kind) {
@@ -879,6 +944,39 @@ function answeredWrite(
             },
           }
         : { ...done, notice: said(writeSentence(failure, state), "write") }
+    case "configTooLarge":
+      // Nothing was written (W1), so nothing is listed again: the form stays
+      // open with what was typed, to make smaller (U48); a switch says so (U49).
+      return fromForm && state.form
+        ? {
+            ...done,
+            notice: null,
+            form: {
+              ...state.form,
+              problem: { field: "form", text: sentences.saveTooLarge },
+            },
+          }
+        : {
+            ...done,
+            notice: said(
+              pending.kind === "save"
+                ? sentences.saveTooLarge
+                : writeSentence(failure, state),
+              "write",
+            ),
+          }
+    case "notFound":
+      // A name typed for a list too large to show was not one stored (U46).
+      return listAgain({
+        ...done,
+        notice: said(
+          state.list.phase === "tooLarge" && pending.kind === "remove"
+            ? sentences.noSuchServer(pending.request.name)
+            : sentences.notFound,
+          "write",
+        ),
+        confirming: null,
+      })
     case "busy":
     case "stopping":
     case "reservedName":
@@ -1069,9 +1167,23 @@ export function mcpServersReducer(
     case "cancelRemove":
       if (state.pending) return state
       return { ...state, confirming: null }
+    case "changeRemoveName":
+      if (state.list.phase !== "tooLarge" || state.pending) return state
+      return {
+        ...state,
+        confirming: null,
+        list: { ...state.list, name: event.name },
+      }
+    case "askRemoveByName":
+      if (state.list.phase !== "tooLarge" || !canRemoveByName(state)) return state
+      return { ...state, confirming: state.list.name, notice: null }
     case "confirmRemove": {
-      const list = listed(state)
-      if (!list || state.confirming === null || !canWrite(state)) return state
+      // At the list's revision, or the one the too-large refusal named (U45).
+      const revision =
+        state.list.phase === "tooLarge" ? state.list.revision : listed(state)?.revision
+      const may =
+        state.list.phase === "tooLarge" ? canRemoveByName(state) : canWrite(state)
+      if (revision === undefined || state.confirming === null || !may) return state
       const seq = state.seq + 1
       return {
         ...state,
@@ -1079,7 +1191,7 @@ export function mcpServersReducer(
         pending: {
           kind: "remove",
           seq,
-          request: { revision: list.revision, name: state.confirming },
+          request: { revision, name: state.confirming },
         },
       }
     }

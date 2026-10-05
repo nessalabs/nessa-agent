@@ -103,6 +103,21 @@ describe("failureOf", () => {
     })
   })
 
+  it("U50: keeps a too-large list refusal's revision, and none without its details", () => {
+    expect(
+      failureOf(refusal("mcp_servers_config_too_large", { revision: "r7" })),
+    ).toEqual({
+      kind: "configTooLarge",
+      revision: "r7",
+    })
+    expect(failureOf(refusal("mcp_servers_config_too_large"))).toEqual({
+      kind: "configTooLarge",
+    })
+    expect(failureOf(refusal("mcp_servers_config_too_large", { revision: 7 }))).toEqual({
+      kind: "configTooLarge",
+    })
+  })
+
   it("is forbidden for the session's refusal, unanswered for anything else", () => {
     expect(failureOf(refusal("forbidden"))).toEqual({ kind: "forbidden" })
     expect(failureOf(refusal("constructor"))).toEqual({ kind: "unanswered" })

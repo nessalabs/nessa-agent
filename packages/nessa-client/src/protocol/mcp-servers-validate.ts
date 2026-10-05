@@ -7,6 +7,7 @@ import {
   type McpInspectedTool,
   type McpServerListEntry,
   type McpServersAuditUnavailableDetails,
+  type McpServersConfigTooLargeDetails,
   type McpServersInspectResult,
   type McpServersInvalidDetails,
   type McpServersListResult,
@@ -168,6 +169,22 @@ export function mcpServersRevisionConflictDetails(
 ): McpServersRevisionConflictDetails | undefined {
   try {
     const item = object(details, ["revision"], "conflict details")
+    return text(item.revision) ? { revision: item.revision } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `mcp_servers_config_too_large`'s details from `mcpServers.list`, or
+ * undefined when they are not that shape. A save refused on the same code
+ * carries none, and neither does a config.json that itself passes 64 KiB.
+ */
+export function mcpServersConfigTooLargeDetails(
+  details: unknown,
+): McpServersConfigTooLargeDetails | undefined {
+  try {
+    const item = object(details, ["revision"], "too-large details")
     return text(item.revision) ? { revision: item.revision } : undefined
   } catch {
     return undefined

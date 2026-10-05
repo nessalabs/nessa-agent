@@ -1,6 +1,7 @@
 /**
  * Settings › Integrations' reducer, one row of the design's state table
- * (#391 PR 3, U1–U31, and U32–U43 from its review) at least one test, each
+ * (#391 PR 3, U1–U31, U32–U43 from its review, and U44–U49 for a list too
+ * large to show) at least one test, each
  * named for its row. Rows the
  * reducer cannot see — the pending row with no gateway (U1), skeletons (U3),
  * widths (U29, U30) and the DOM (U31) — are `integrations-tab.test.tsx`'s and
@@ -9,6 +10,7 @@
 import { describe, expect, it } from "vitest"
 import {
   canInspect,
+  canRemoveByName,
   canWrite,
   editedServer,
   formReady,
@@ -718,7 +720,6 @@ describe("refusals", () => {
 
   it.each([
     [{ kind: "configInvalid" }, sentences.configInvalid],
-    [{ kind: "configTooLarge" }, sentences.configTooLarge],
     [{ kind: "storageUnavailable", applied: false }, sentences.storageUnavailable],
   ] as [Failure, string][])(
     "U18, U37: %o says nothing changed, keeps the form and reloads",
@@ -1013,5 +1014,155 @@ describe("the connection", () => {
       { type: "connected", mayManage: true },
     )
     expect(state.pending?.kind).toBe("save")
+  })
+})
+
+describe("a list too large to show (U44–U49)", () => {
+  const tooLarge = (revision?: string): Failure =>
+    revision === undefined
+      ? { kind: "configTooLarge" }
+      : { kind: "configTooLarge", revision }
+
+  /** Connected, the list refused as too large at `revision`. */
+  function refused(revision = "r7") {
+    return answer(
+      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      no(tooLarge(revision)),
+    )
+  }
+
+  it("U44: a list refused with its revision shows no server, keeps the revision, and offers removal by name", () => {
+    const state = refused()
+    expect(state.list).toEqual({ phase: "tooLarge", revision: "r7", name: "" })
+    expect(state.notice).toBeNull()
+    expect(canWrite(state)).toBe(false)
+    expect(canInspect(state)).toBe(false)
+    expect(run(state, { type: "add" }).form).toBeNull()
+    expect(canRemoveByName(state)).toBe(false)
+    expect(canRemoveByName(run(state, { type: "changeRemoveName", name: "big" }))).toBe(
+      true,
+    )
+    expect(sentences.listTooLarge).toBe(
+      "The server list is too large to show. Removing a server fixes it: enter its name.",
+    )
+  })
+
+  it("U44: a list read after a write that comes back too large closes the form", () => {
+    // A switch saved, then the form opened while the list is read again.
+    let state = answer(run(listed(), { type: "toggle", name: "charts" }), ok(undefined))
+    state = { ...state, form: run(listed(), { type: "edit", name: "charts" }).form }
+    expect(state.form?.editing).toBe("charts")
+    state = answer(state, no(tooLarge("r8")))
+    expect(state.list).toEqual({ phase: "tooLarge", revision: "r8", name: "" })
+    expect(state.form).toBeNull()
+    expect(state.confirming).toBeNull()
+  })
+
+  it("U45: confirmed, the name typed is removed at the refusal's revision, and the list read again", () => {
+    let state = run(
+      refused(),
+      { type: "changeRemoveName", name: "big" },
+      { type: "askRemoveByName" },
+    )
+    expect(state.confirming).toBe("big")
+    expect(state.pending).toBeNull()
+    state = run(state, { type: "confirmRemove" })
+    expect(state.pending).toMatchObject({
+      kind: "remove",
+      request: { revision: "r7", name: "big" },
+    })
+    state = answer(state, ok(undefined))
+    expect(state.confirming).toBeNull()
+    expect(state.pending?.kind).toBe("list")
+    expect(state.list.phase === "tooLarge" && state.list.name).toBe("")
+    const fits = answer(state, ok(listOf(charts, nessa)))
+    expect(fits.list.phase).toBe("listed")
+    const still = answer(state, no(tooLarge("r9")))
+    expect(still.list).toEqual({ phase: "tooLarge", revision: "r9", name: "" })
+  })
+
+  it("U45: nothing is asked or sent without a name, or while a request is in flight", () => {
+    const empty = run(refused(), { type: "askRemoveByName" }, { type: "confirmRemove" })
+    expect(empty.confirming).toBeNull()
+    expect(empty.pending).toBeNull()
+    const typed = run(refused(), { type: "changeRemoveName", name: "big" })
+    const away = run(typed, { type: "unreachable" }, { type: "askRemoveByName" })
+    expect(away.confirming).toBeNull()
+    // Retyping the name withdraws the question about the old one.
+    const retyped = run(
+      typed,
+      { type: "askRemoveByName" },
+      { type: "changeRemoveName", name: "other" },
+    )
+    expect(retyped.confirming).toBeNull()
+  })
+
+  it("U46: a name not stored says so, keeps the name typed, and lists again", () => {
+    let state = run(
+      refused(),
+      { type: "changeRemoveName", name: "bigg" },
+      { type: "askRemoveByName" },
+      { type: "confirmRemove" },
+    )
+    state = answer(state, no({ kind: "notFound" }))
+    expect(state.notice?.text).toBe("No server is stored under “bigg”.")
+    expect(state.confirming).toBeNull()
+    expect(state.pending?.kind).toBe("list")
+    state = answer(state, no(tooLarge("r7")))
+    expect(state.list).toEqual({ phase: "tooLarge", revision: "r7", name: "bigg" })
+    // The write's notice stands over the list read after it.
+    expect(state.notice?.text).toBe("No server is stored under “bigg”.")
+  })
+
+  it("U46: a row's removal of a server gone keeps its own sentence", () => {
+    let state = run(
+      listed(),
+      { type: "askRemove", name: "charts" },
+      { type: "confirmRemove" },
+    )
+    state = answer(state, no({ kind: "notFound" }))
+    expect(state.notice?.text).toBe(sentences.notFound)
+    expect(state.pending?.kind).toBe("list")
+  })
+
+  it("U47: a list refused without a revision fails, says the file is too large, and offers no removal", () => {
+    const failed = answer(
+      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      no(tooLarge()),
+    )
+    expect(failed.list).toEqual({ phase: "failed" })
+    expect(failed.notice?.text).toBe("The configuration file is too large to read here.")
+    expect(canRemoveByName(failed)).toBe(false)
+    expect(run(failed, { type: "retry" }).pending?.kind).toBe("list")
+  })
+
+  it("U48: a form's save refused as too large keeps the form, says why in it, and lists nothing again", () => {
+    let state = run(listed(), { type: "edit", name: "charts" })
+    state = typedArgs(state, "x".repeat(100))
+    state = run(state, {
+      type: "changeVariable",
+      key: keyOf(state, "TOKEN"),
+      patch: { value: "v" },
+    })
+    state = run(state, { type: "save" })
+    expect(state.pending?.kind).toBe("save")
+    state = answer(state, no(tooLarge()))
+    expect(state.pending).toBeNull()
+    expect(state.form?.editing).toBe("charts")
+    expect(state.form?.args.at(-1)?.value).toBe("x".repeat(100))
+    expect(state.form?.problem).toEqual({
+      field: "form",
+      text: "This would make the server list too large; remove a server or shorten its arguments.",
+    })
+    expect(state.notice).toBeNull()
+    expect(state.list.phase).toBe("listed")
+  })
+
+  it("U49: a switch refused as too large says so and lists nothing again", () => {
+    let state = run(listed(), { type: "toggle", name: "charts" })
+    state = answer(state, no(tooLarge()))
+    expect(state.pending).toBeNull()
+    expect(state.notice?.text).toBe(sentences.saveTooLarge)
+    expect(canWrite(state)).toBe(true)
   })
 })
