@@ -90,13 +90,13 @@ pub(super) async fn dispatch(
             }
             "conversation.read" => {
                 let params = params!(ConversationReadParams);
-                let view = service
-                    .read(
-                        conversation_id(&params.conversation_id)?,
-                        caller(frame.id.clone()),
-                    )
-                    .await?;
-                Ok(success(&frame.id, &wire_view(state, view)?))
+                let id = conversation_id(&params.conversation_id)?;
+                let read = service.read(id.clone(), caller(frame.id.clone())).await;
+                // After the service answers, so a refusal keeps the error it
+                // returned. The subscriber is the gateway log; nothing here
+                // changes the frame the caller is sent.
+                trace_conversation_read(&id, read.as_ref().err());
+                Ok(success(&frame.id, &wire_view(state, read?)?))
             }
             "conversation.setApprovalMode" => {
                 let params = params!(ConversationSetApprovalModeParams);
@@ -127,8 +127,11 @@ pub(super) async fn dispatch(
                 let ConversationListParams { archived } = params!(ConversationListParams);
                 let listed = service
                     .list(caller(frame.id.clone()), archived.unwrap_or(false))
-                    .await?;
-                Ok(success(&frame.id, &list_result(listed)))
+                    .await;
+                // The desktop's index is this list. The same trace as a read,
+                // with the subject that tells the two apart.
+                trace_conversation_index(listed.as_ref().err());
+                Ok(success(&frame.id, &list_result(listed?)))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = params!(ConversationSendParams);
@@ -678,6 +681,84 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
     }
 }
 
+/// A `conversation.read` on the process tracing subscriber.
+///
+/// The ask is a debug event on a `conversation.read` span. A watched
+/// conversation is read every poll, so the ask stays out of the default
+/// gateway log; the span is info, and a refusal is a warning on it, so that
+/// log keeps the conversation, the wire code, and a hint the code collapses
+/// — busy, a socket — and never the error's text.
+fn trace_conversation_read(id: &ConversationId, error: Option<&ConversationError>) {
+    let span = tracing::info_span!(
+        "conversation.read",
+        conversation_id = %id,
+        method = "conversation.read",
+        subject = "conversation",
+    );
+    let _entered = span.enter();
+    tracing::debug!("conversation read asked");
+    let Some(error) = error else {
+        return;
+    };
+    tracing::warn!(
+        conversation_id = %id,
+        method = "conversation.read",
+        subject = "conversation",
+        code = error_code(error).as_str(),
+        hint = read_refusal_hint(error),
+        "conversation read refused",
+    );
+}
+
+/// A `conversation.list` — the desktop's index — on the same subscriber.
+fn trace_conversation_index(error: Option<&ConversationError>) {
+    let span = tracing::info_span!(
+        "conversation.list",
+        method = "conversation.list",
+        subject = "index",
+    );
+    let _entered = span.enter();
+    tracing::debug!("conversation index asked");
+    let Some(error) = error else {
+        return;
+    };
+    tracing::warn!(
+        method = "conversation.list",
+        subject = "index",
+        code = error_code(error).as_str(),
+        hint = read_refusal_hint(error),
+        "conversation index refused",
+    );
+}
+
+/// A static hint already on the error, where the wire code collapses several
+/// causes into one. Absent when the code itself is the whole story. Never a
+/// `Display` string: those carry transport text.
+fn read_refusal_hint(error: &ConversationError) -> Option<&'static str> {
+    match error {
+        ConversationError::Unavailable => Some("unavailable"),
+        ConversationError::TurnRunning => Some("turn-running"),
+        ConversationError::Capacity => Some("capacity"),
+        ConversationError::Agent(error) => agent_read_hint(error),
+        _ => None,
+    }
+}
+
+fn agent_read_hint(error: &AgentError) -> Option<&'static str> {
+    match error {
+        AgentError::Busy => Some("busy"),
+        AgentError::Transport(_) => Some("socket"),
+        AgentError::Closed => Some("closed"),
+        AgentError::Deadline | AgentError::StartupDeadline(_) => Some("deadline"),
+        AgentError::Backpressure => Some("backpressure"),
+        AgentError::AttachmentUnavailable(_) => Some("attachment"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/conversation/read_trace.rs"]
+mod read_trace;
 #[cfg(test)]
 #[path = "../../tests/conversation/wire_errors.rs"]
 mod tests;
