@@ -1,23 +1,27 @@
-//! An MCP App's wire commands (#348): `mcp.callTool`, `mcp.readResource`
-//! and `mcp.releaseApp`, translated into the conversation service's app
-//! calls. The socket has already checked current access and the
-//! `conversation.write` grant, and admitted the two calls onto the app lane.
+//! An MCP App's wire commands (#348, #390): `mcp.callTool`,
+//! `mcp.readResource`, `mcp.sendMessage`, `mcp.updateModelContext` and
+//! `mcp.releaseApp`, translated into the conversation service's app calls.
+//! The socket has already checked current access and the
+//! `conversation.write` grant, and admitted all but the release onto the app
+//! lane.
 use super::{
-    conversation::{caller, conversation_id, error_code},
+    conversation::{caller, conversation_id},
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    ConversationError, McpAppCall, McpAppError, McpAppRead, McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
+    error_code, ConversationError, McpAppCall, McpAppContextUpdate, McpAppError, McpAppMessage,
+    McpAppRead, McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
     ConversationMutationResult, McpAppReference, McpCallToolParams, McpCallToolResult,
     McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams, McpRemoteErrorDetails,
-    McpUiCsp, McpUiPermissions,
+    McpSendMessageParams, McpSendMessageResult, McpUiCsp, McpUiPermissions,
+    McpUpdateModelContextParams, MAX_MCP_CONTEXT_BYTES, MIN_MCP_MESSAGE_CHARACTERS,
 };
-use nessa_protocol::product_contract::generated::ConversationErrorCode;
+use nessa_protocol::product_contract::generated::{ConversationErrorCode, MAX_MCP_MESSAGE_BYTES};
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, MAX_UI_URI_BYTES};
@@ -99,6 +103,71 @@ pub(super) async fn dispatch(
                         permissions: ui_permissions(resource.permissions),
                         domain: resource.domain,
                         prefers_border: resource.prefers_border,
+                    },
+                ))
+            }
+            "mcp.sendMessage" => {
+                let params = params!(McpSendMessageParams);
+                name(&params.server)?;
+                // Outside the schema's own bounds — empty, or past its bytes:
+                // a request no gateway takes, refused here with nothing
+                // recorded, as every schema bound of both methods is (rows M3,
+                // M4). Within them, the conversation's own rules — blank
+                // text, its input bound — are the app's to be told of, on
+                // record.
+                if params.text.chars().take(MIN_MCP_MESSAGE_CHARACTERS).count()
+                    < MIN_MCP_MESSAGE_CHARACTERS
+                    || params.text.len() > MAX_MCP_MESSAGE_BYTES
+                {
+                    return Err(ConversationError::InvalidInput);
+                }
+                let execution_id = service
+                    .send_app_message(
+                        conversation_id(&params.conversation_id)?,
+                        caller(session, params.request_id),
+                        McpAppMessage {
+                            app: app(params.app)?,
+                            server: params.server,
+                            text: params.text,
+                        },
+                    )
+                    .await?;
+                Ok(success(&frame.id, &McpSendMessageResult { execution_id }))
+            }
+            "mcp.updateModelContext" => {
+                let params = params!(McpUpdateModelContextParams);
+                name(&params.server)?;
+                // Each part past the schema's own bound is refused here, with
+                // nothing recorded; both together past what one context may
+                // hold is the service's, on record (`mcp_request_too_large`).
+                let parts = [
+                    params.text.as_deref(),
+                    params.structured_content_json.as_deref(),
+                ];
+                if parts
+                    .into_iter()
+                    .flatten()
+                    .any(|part| part.len() > MAX_MCP_CONTEXT_BYTES)
+                {
+                    return Err(ConversationError::InvalidInput);
+                }
+                service
+                    .update_app_model_context(
+                        conversation_id(&params.conversation_id)?,
+                        caller(session, params.request_id.clone()),
+                        McpAppContextUpdate {
+                            app: app(params.app)?,
+                            server: params.server,
+                            text: params.text,
+                            structured_content_json: params.structured_content_json,
+                        },
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied: true,
                     },
                 ))
             }

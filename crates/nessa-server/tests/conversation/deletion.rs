@@ -4517,7 +4517,7 @@ async fn a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting() {
     // The panicking ask's delete happened — its tombstone is written — so it
     // answers unfinished, a failure of its ask, not of the command.
     // (`DeletionIncomplete`, which the wire answers
-    // `conversation_erasure_incomplete`: `wire_errors.rs`).
+    // `conversation_erasure_incomplete`: `error_code.rs`).
     let failures = incomplete(holding.next().unwrap().await.unwrap());
     assert!(matches!(
         failures.provider,

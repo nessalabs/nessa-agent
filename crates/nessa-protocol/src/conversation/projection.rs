@@ -3,8 +3,8 @@ use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
-    ConversationPending, ConversationPendingMode, ConversationPermission,
+    ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
+    ConversationPart, ConversationPending, ConversationPendingMode, ConversationPermission,
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
     MAX_STRUCTURED_CONTENT_BYTES,
@@ -404,6 +404,7 @@ impl Projection {
                             .iter()
                             .map(Into::into)
                             .collect(),
+                        app: ConversationMessageApp::of(&record.request.user_message),
                         mode,
                     });
                 } else {
@@ -514,10 +515,12 @@ impl Projection {
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
+            retained_text: 0,
             execution_id: id.into(),
             user_text: String::new(),
             attachments: Vec::new(),
             files: Vec::new(),
+            app: None,
             steering_target: None,
             status: ConversationMessageStatus::Running,
             error: None,
@@ -755,11 +758,7 @@ impl Projection {
             .retain(|pending| pending.execution_id != id);
         let offset = self.view.messages[index].event_count;
         self.view.messages[index].event_count += 1;
-        let retained_text = self.view.messages[index]
-            .parts
-            .iter()
-            .map(|part| part.text.len())
-            .sum::<usize>();
+        let retained_text = self.view.messages[index].retained_text;
         let available = (MAX_TEXT * 2).saturating_sub(retained_text);
         if matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().len() > available)
         {
@@ -811,7 +810,9 @@ impl Projection {
                     if bounded.len() != text.len() {
                         self.view.truncated = true;
                     }
+                    let next = bounded.len();
                     self.view.messages[index].parts[position].text = bounded;
+                    self.view.messages[index].retained_text = retained_text - previous + next;
                     None
                 } else {
                     let bounded = clipped(&text, available);
@@ -832,15 +833,9 @@ impl Projection {
         };
         if let Some(part) = part {
             let message = &mut self.view.messages[index];
-            if message.parts.len() < 512
-                && message
-                    .parts
-                    .iter()
-                    .map(|part| part.text.len())
-                    .sum::<usize>()
-                    + part.text.len()
-                    <= MAX_TEXT * 2
+            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
             {
+                message.retained_text += part.text.len();
                 if part.kind == "tool" {
                     self.tool_parts
                         .entry(id.to_owned())
@@ -997,7 +992,9 @@ impl Projection {
             .iter()
             .map(Into::into)
             .collect();
+        self.view.messages[index].app = ConversationMessageApp::of(&record.request.user_message);
         self.view.messages[index].parts.clear();
+        self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);
         self.view.messages[index].event_count = 0;
         self.view.messages[index].steering_offset = record.target_event_offset;
@@ -1143,7 +1140,12 @@ pub fn bound_view_within(
             .first()
             .is_some_and(|message| !message.parts.is_empty())
         {
-            view.messages[0].parts.pop();
+            // The length leaves with the part. A returned view otherwise claims
+            // bytes for text it no longer contains.
+            // `the_text_budget_keeps_a_running_total`.
+            if let Some(removed) = view.messages[0].parts.pop() {
+                view.messages[0].retained_text -= removed.text.len();
+            }
         } else if let Some(message) = view
             .messages
             .first_mut()

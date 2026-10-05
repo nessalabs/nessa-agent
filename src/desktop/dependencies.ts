@@ -25,6 +25,11 @@
  */
 import type { McpAppsApi } from "@nessa/client"
 import {
+  mcpServersGateway,
+  type McpServersClient,
+  type McpServersGateway,
+} from "./settings"
+import {
   createWidgetRegistry,
   fixtureAppPlugin,
   gatewayApps,
@@ -53,6 +58,8 @@ import {
 export interface DesktopDependencies extends WorkspaceDependencies {
   /** The widget plugins, native ones registered here (ADR 326); provided to the tree by `main.tsx`. */
   readonly widgets: DesktopWidgetRegistry
+  /** The gateway's stored MCP servers, for Settings; absent without a gateway. Provided by `main.tsx`. */
+  readonly mcpServers: McpServersGateway | undefined
 }
 
 export function createDesktopDependencies(
@@ -91,13 +98,18 @@ export function createDesktopDependencies(
   // The fixture app only beside the sample workspace, never beside a gateway,
   // whose servers' apps it could otherwise stand in for.
   const widgets = widgetRegistry(options.widgets, sample, apps, after)
-  const workspace =
-    options.workspace ??
-    (gateway
+  // The servers are managed on the gateway's own source's client, beside
+  // its conversations; a source composition names has no client to give.
+  const source =
+    options.workspace === undefined && gateway
       ? gatewayWorkspace(gateway, { now, after }, widgets, apps)
-      : inMemorySource({ now, after }))
+      : undefined
+  const workspace = options.workspace ?? source ?? inMemorySource({ now, after })
   return {
     workspace,
+    mcpServers: source
+      ? mcpServersGateway({ connected: () => source.connected(), after })
+      : undefined,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.
@@ -108,8 +120,9 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations and draw apps through. */
-type WindowGatewayClient = GatewayClient & { readonly mcpApps: McpAppsApi }
+/** A gateway client the window can show conversations, draw apps, and manage MCP servers through. */
+type WindowGatewayClient = GatewayClient &
+  McpServersClient & { readonly mcpApps: McpAppsApi }
 
 /**
  * The gateway's workspace, and — where apps are drawn — its servers' apps:
@@ -123,7 +136,7 @@ function gatewayWorkspace(
   clock: { now: () => number; after: Timers["after"] },
   registry: DesktopWidgetRegistry,
   apps: AppsOptions | undefined,
-): WorkspaceSource {
+): GatewaySource<WindowGatewayClient> {
   if (!apps) return gatewaySource({ connect, clock })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)

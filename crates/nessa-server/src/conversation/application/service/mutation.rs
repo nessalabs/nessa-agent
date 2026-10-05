@@ -59,7 +59,11 @@ impl ConversationService {
         let delivery = Arc::new(Mutex::new(None));
         let captured = delivery.clone();
         let progress = tokio::spawn(async move {
-            let _admission = service.admit().await.map_err(MutationFailure::Target)?;
+            let _admission = service
+                .admit()
+                .await
+                .map_err(ConversationError::from)
+                .map_err(MutationFailure::Target)?;
             let target = Arc::new(SubmitTarget {
                 service: service.clone(),
                 id,
@@ -139,7 +143,11 @@ impl ConversationService {
             .map_err(MutationFailure::Target)?;
         let service = self.clone();
         tokio::spawn(async move {
-            let _admission = service.admit().await.map_err(MutationFailure::Target)?;
+            let _admission = service
+                .admit()
+                .await
+                .map_err(ConversationError::from)
+                .map_err(MutationFailure::Target)?;
             let target = Arc::new(StopTarget {
                 service: service.clone(),
                 id,

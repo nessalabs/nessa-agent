@@ -1,9 +1,12 @@
 //! An MCP App's calls (#348): `mcp.callTool`, `mcp.readResource` and
-//! `mcp.releaseApp`, through the conversation's own MCP sessions. The rules
-//! are `mcp_servers::domain::app_call`'s; this is their flow — every step
-//! audited before its effect is reported, a destructive call held on a
-//! review the person answers, and each refusal one protocol code
-//! (`docs/design/mcp-app-calls.md`).
+//! `mcp.releaseApp`, through the conversation's own MCP sessions; and its
+//! messages and model context (#390): `mcp.sendMessage`, submitted as the
+//! person's turn written by the app, and `mcp.updateModelContext`, held for
+//! the next message admitted while the conversation is idle. The rules are
+//! `mcp_servers::domain::app_call`'s and the SDK's; this is their flow —
+//! every step audited before its effect is reported, a destructive call and
+//! every message held on a review the person answers, and each refusal one
+//! protocol code (`docs/design/mcp-app-calls.md`).
 //!
 //! Each call runs on a task of its own, so that a caller going away cannot
 //! leave a step unrecorded: a call already sent finishes and is recorded, and
@@ -12,14 +15,21 @@
 //! conversation's [`AppReviews`](super::super::app_reviews::AppReviews) lock
 //! decides it.
 use super::super::app_reviews::{
-    new_review_id, AppReviews, ReviewAnswerer, ReviewEnd, ReviewRefusal, APP_REVIEW_DEADLINE,
+    new_review_id, AppReviews, ContextRefusal, ReviewAnswerer, ReviewAsk, ReviewEnd, ReviewRefusal,
+    APP_REVIEW_DEADLINE,
 };
 use super::super::mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppError, McpAppFailure,
-    McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal, TicketRefusal,
+    ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord,
+    McpAppError, McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    McpAppWithdrawal, TicketRefusal,
 };
 use super::super::session_key::conversation_session;
-use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
+use super::super::SubmittedMessage;
+use super::{
+    blank_text, ConversationCaller, ConversationError, ConversationService, LiveConversation,
+    Reach, SubmissionMode, SubmitFailure, Writer,
+};
+use crate::conversation::application::error_code;
 use crate::mcp_servers::domain::{
     admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
     MAX_APP_RESULT_BYTES,
@@ -29,8 +39,13 @@ use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MA
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationTranscriptState, ConversationView,
 };
-use nessa_protocol::product_contract::generated::ConversationErrorCode;
-use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
+use nessa_sdk::domain::agent_execution::{
+    executions::ExecutionId,
+    prompts::{AppModelContext, McpAppSource},
+    sessions::SessionId,
+    tools::{McpTool, ToolCallId},
+    ExecutionError,
+};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResourceUri};
 use serde_json::Value;
@@ -63,6 +78,26 @@ pub struct McpAppRead {
     pub app: McpAppRef,
     pub server: String,
     pub uri: String,
+}
+
+/// An app's `mcp.sendMessage` (`ui/message`): text for its conversation, as
+/// the person.
+#[derive(Clone, Debug)]
+pub struct McpAppMessage {
+    pub app: McpAppRef,
+    pub server: String,
+    pub text: String,
+}
+
+/// An app's `mcp.updateModelContext` (`ui/update-model-context`): what it
+/// gives the model now. Neither part is no context: what it held is cleared.
+#[derive(Clone, Debug)]
+pub struct McpAppContextUpdate {
+    pub app: McpAppRef,
+    pub server: String,
+    pub text: Option<String>,
+    /// One JSON object, encoded.
+    pub structured_content_json: Option<String>,
 }
 
 /// A resource read for an app: what its bytes are, and the ticket that
@@ -135,10 +170,56 @@ impl ConversationService {
         .map_err(|_| ConversationError::Unavailable)?
     }
 
+    /// Send `message.text` into the conversation as the person's turn,
+    /// written by the app: the identity of the turn it became. Each message
+    /// waits for the person to allow it, unless it is a retry of a turn the
+    /// agent has already; one while a turn runs or input waits is refused
+    /// `turn_running`.
+    pub async fn send_app_message(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        message: McpAppMessage,
+    ) -> Result<String, ConversationError> {
+        let running = self.app_call_permit()?;
+        // Dropped with this future: the caller went.
+        let (_present, gone) = oneshot::channel::<()>();
+        let service = self.clone();
+        tokio::spawn(async move {
+            let _running = running;
+            service.app_message(id, caller, message, gone).await
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+    }
+
+    /// Hold what the app gives the model now, in place of what it gave
+    /// before, until the next message admitted while the conversation is
+    /// idle carries it; or clear it.
+    pub async fn update_app_model_context(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        update: McpAppContextUpdate,
+    ) -> Result<(), ConversationError> {
+        let running = self.app_call_permit()?;
+        let service = self.clone();
+        tokio::spawn(async move {
+            let _running = running;
+            service.app_model_context(id, caller, update).await
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+    }
+
     /// The caller tore the mount `app` down: withdraw its open reviews
     /// (their calls answer `mcp_cancelled`), let go of what was held for it,
     /// and open or issue nothing for it again — each recorded as the
-    /// caller's. Idempotent; it never opens the conversation.
+    /// caller's. Idempotent; it never opens the conversation. Its context
+    /// still held is dropped, and the drop reported as the caller's
+    /// ([`AppReviews::release_app`]); the release answers its own result, not
+    /// the drop's record, which the drop recorder writes or logs
+    /// (`c14_a_release_whose_drop_cannot_be_recorded_completes`).
     pub async fn release_app(
         &self,
         id: ConversationId,
@@ -160,22 +241,53 @@ impl ConversationService {
         Ok(())
     }
 
-    /// The conversation `id`'s apps, kept for it until it is deleted.
+    /// Whether the conversation `id`, live now, has the turn `execution`
+    /// already. Nothing is opened to answer it; a conversation not live
+    /// answers no, and its message is asked about. (The app's call may have
+    /// opened the conversation already, as #348's calls do; M10 holds only
+    /// that a message admitted in one opening is not sent into another.)
+    async fn holds_turn(&self, id: &ConversationId, execution: &str) -> bool {
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        let Some(Ok(live)) = slot.as_ref().and_then(|slot| slot.value.get()) else {
+            return false;
+        };
+        live.agent
+            .session_manager()
+            .snapshot()
+            .await
+            .is_some_and(|snapshot| {
+                snapshot
+                    .invocations
+                    .iter()
+                    .any(|record| record.request.execution_id.as_str() == execution)
+            })
+    }
+
+    /// The conversation `id`'s apps, kept for it until it is deleted. They
+    /// report each context they drop to the drop recorder; with no MCP
+    /// servers there is no app to hold one, and a drop is only logged.
     pub(super) fn apps_of(&self, id: &ConversationId) -> Arc<AppReviews> {
         self.inner
             .apps
             .lock()
             .expect("conversations' apps")
             .entry(id.clone())
-            .or_default()
+            .or_insert_with(|| {
+                let dropped = self.inner.mcp_apps.as_ref().map_or_else(
+                    || Arc::new(NoAppsToDrop) as _,
+                    |ports| ports.dropped.clone(),
+                );
+                Arc::new(AppReviews::new(dropped))
+            })
             .clone()
     }
 
-    /// The conversation `id` was deleted by `by`, and its agent's stop tried:
+    /// `by` deleted the conversation `id`, and its agent's stop was tried:
     /// its apps take no more work, ever, and keep nothing. Kept as that —
     /// made so if it had none in this run — not removed, so that a release
     /// or an opening racing the delete finds them deleted, and cannot build
-    /// them afresh. Reviews still open, and tickets still held, end as `by`.
+    /// them afresh. Reviews still open, tickets still held, and contexts
+    /// still held end as `by`.
     pub(super) fn close_apps_for_good(&self, id: &ConversationId, by: &McpAppInitiator) {
         self.apps_of(id).delete(by, || {
             if let Some(ports) = &self.inner.mcp_apps {
@@ -185,8 +297,10 @@ impl ConversationService {
     }
 
     /// `by` ended `live`'s conversation: withdraw its apps' reviews, let go
-    /// of what was held for them, and open or issue nothing for them again.
-    /// Idempotent.
+    /// of what was held for them, drop the contexts they still hold, and
+    /// open or issue nothing for them again. Idempotent. Every drop is
+    /// reported before this returns ([`AppReviews::end`]): a caller that
+    /// then awaits a stop cannot lose one, however that await ends.
     pub(super) fn end_apps(
         &self,
         id: &ConversationId,
@@ -248,14 +362,7 @@ impl ConversationService {
         let arguments = match arguments_text.map(serde_json::from_str::<Value>) {
             None => None,
             Some(Ok(value @ Value::Object(_))) => Some(value),
-            Some(_) => {
-                return Err(step
-                    .refuse_as(
-                        ConversationErrorCode::InvalidRequest,
-                        ConversationError::InvalidInput,
-                    )
-                    .await)
-            }
+            Some(_) => return Err(step.refuse_as(ConversationError::InvalidInput).await),
         };
         match admission {
             AppCallAdmission::Send => step.record(McpAppAuditPhase::Admitted, None).await?,
@@ -266,8 +373,14 @@ impl ConversationService {
                 let shown = arguments
                     .as_ref()
                     .map_or_else(|| "{}".to_owned(), Value::to_string);
-                self.approved(&opening, &step, &call, &shown, &mut gone)
-                    .await?;
+                let asked = Asked {
+                    ask: ReviewAsk::RunTool,
+                    app: &call.app,
+                    server: &call.server,
+                    tool: &call.tool,
+                    shown: &shown,
+                };
+                self.approved(&opening, &step, asked, &mut gone).await?;
                 // Allowed: the tool must still be what the person allowed.
                 match admitted(&ports, &session, facts.as_ref(), &call, arguments_text) {
                     Ok(AppCallAdmission::Approve) => {}
@@ -323,17 +436,17 @@ impl ConversationService {
         &self,
         opening: &Opening,
         step: &Step,
-        call: &McpAppCall,
-        arguments_json: &str,
+        asked: Asked<'_>,
         gone: &mut oneshot::Receiver<()>,
     ) -> Result<(), ConversationError> {
         let permission_id = new_review_id();
         if !super::super::app_reviews::fits(
             &permission_id,
-            &call.app,
-            &call.server,
-            &call.tool,
-            arguments_json,
+            asked.ask,
+            asked.app,
+            asked.server,
+            asked.tool,
+            asked.shown,
         ) {
             return Err(step.refuse(McpAppError::RequestTooLarge).await);
         }
@@ -347,10 +460,11 @@ impl ConversationService {
         let waiting = match opening.apps.open(
             opening.epoch,
             permission_id.clone(),
-            &call.app,
-            &call.server,
-            &call.tool,
-            arguments_json,
+            asked.ask,
+            asked.app,
+            asked.server,
+            asked.tool,
+            asked.shown,
         ) {
             Ok(waiting) => waiting,
             Err(refusal) => {
@@ -420,6 +534,249 @@ impl ConversationService {
         error.map_or(Ok(()), |error| Err(ConversationError::McpApp(error)))
     }
 
+    async fn app_message(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        message: McpAppMessage,
+        mut gone: oneshot::Receiver<()>,
+    ) -> Result<String, ConversationError> {
+        let (opening, seen, ports) = self.app_in_conversation(&id, &caller, &message.app).await?;
+        let step = Step::new(
+            &ports,
+            &id,
+            &caller,
+            &message.app,
+            McpAppAsk::SendMessage {
+                server: message.server.clone(),
+            },
+        );
+        if let Err(refusal) = admit_app(seen.as_ref().map(|(facts, _)| facts), &message.server) {
+            return Err(step.refuse(refusal.into()).await);
+        }
+        let Some((_, tool)) = seen else {
+            return Err(step.refuse(McpAppError::AppUnknown).await);
+        };
+        // The conversation's own rules for what a message says, asked here
+        // so that the app is told on record before anyone is asked: blank,
+        // or past the input bound (rows M3, M4).
+        if blank_text(&message.text) {
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
+        }
+        if self.inner.limits.past_input_bound(&message.text) {
+            return Err(step.refuse(McpAppError::RequestTooLarge).await);
+        }
+        let Ok(sender) = app_source(&message.app, tool) else {
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
+        };
+        // The same request again is the same turn: one the agent has already
+        // is the agent's to settle, and nobody is asked again to send it — a
+        // denial now could not take it back
+        // (`m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_again`).
+        let execution_id = message_execution(&id, &message.app, &caller.action_id);
+        if opening.admit(&message.app).is_err() {
+            return Err(step.refuse_by_system(McpAppError::Cancelled).await);
+        }
+        // One request at a time: while the same one is in review or being
+        // sent, it is not asked about twice
+        // (`m6b_the_same_request_while_it_is_in_flight_is_refused`). Free again
+        // however this call ends.
+        let Some(_in_flight) = opening.apps.start_message(&execution_id) else {
+            let error = ConversationError::Unavailable;
+            return Err(step
+                .ended(
+                    McpAppAuditPhase::Refused(error_code(&error)),
+                    Some(McpAppInitiator::System),
+                    error,
+                )
+                .await);
+        };
+        if self.holds_turn(&id, &execution_id).await {
+            step.record(McpAppAuditPhase::Admitted, None).await?;
+        } else {
+            // Every message asks
+            // (`m7_every_message_asks_and_allowing_one_allows_no_other`).
+            // What the person is shown is what is sent
+            // (`m7_m8_m12_a_message_asks_and_allowed_lands_as_the_persons_turn_written_by_the_app`).
+            let shown = serde_json::json!({ "text": message.text }).to_string();
+            let asked = Asked {
+                ask: ReviewAsk::SendMessage,
+                app: &message.app,
+                server: &message.server,
+                tool: sender.tool().tool(),
+                shown: &shown,
+            };
+            self.approved(&opening, &step, asked, &mut gone).await?;
+        }
+        // Checked once more under the conversation's submission lock, just
+        // before it is enqueued (`submit_as`): a close or a delete that took
+        // the lock first, a release, another opening, or the gateway stopping
+        // refuses it there.
+        let submitted = self
+            .submit_as(
+                id,
+                caller,
+                execution_id.clone(),
+                SubmittedMessage {
+                    text: message.text,
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                SubmissionMode::Queue,
+                Writer::App {
+                    sender,
+                    apps: opening.apps.clone(),
+                    epoch: opening.epoch,
+                    mount: message.app.clone(),
+                },
+            )
+            .await;
+        let sent = |code| McpAppAuditPhase::MessageSent {
+            execution_id: execution_id.clone(),
+            code,
+        };
+        let not_sent = |error: &ConversationError| McpAppAuditPhase::MessageNotSent {
+            execution_id: execution_id.clone(),
+            code: error_code(error),
+        };
+        let unresolved = |error: &ConversationError| McpAppAuditPhase::MessageUnresolved {
+            execution_id: execution_id.clone(),
+            code: error_code(error),
+        };
+        let failure = match submitted {
+            Ok(_) => {
+                step.record(sent(None), None).await?;
+                return Ok(execution_id);
+            }
+            Err(failure) => failure,
+        };
+        match failure {
+            SubmitFailure::NotAsked(ConversationError::TurnRunning) => {
+                return Err(step.refuse_as(ConversationError::TurnRunning).await)
+            }
+            // Released, ended, deleted, reopened, or the gateway retiring,
+            // before the agent was asked to take it: by that other command,
+            // so the system's; nothing was sent (row M10). An opening that
+            // failed is not one of these: it is the conversation's refusal
+            // (M13), whatever it answers.
+            SubmitFailure::Retired
+            | SubmitFailure::NotAsked(
+                ConversationError::McpApp(McpAppError::Cancelled) | ConversationError::Deleted,
+            ) => return Err(step.refuse_by_system(McpAppError::Cancelled).await),
+            _ => {}
+        }
+        // A task that failed is nobody's command: the system's.
+        let by =
+            matches!(failure, SubmitFailure::TaskFailed { .. }).then_some(McpAppInitiator::System);
+        let reach = failure.reach();
+        let error = failure.into_error();
+        match reach {
+            // Refused, or failed, before the agent was asked, or refused by
+            // it: nothing reached it, and the answer says why (row M13).
+            Reach::NotTaken => Err(step.ended(not_sent(&error), by, error).await),
+            // Whether the agent has it is not known: it could not say, or the
+            // submission's own task failed once it was asked. Said so, not
+            // guessed (row M15).
+            Reach::Unknown => Err(step.ended(unresolved(&error), by, error).await),
+            // The agent has it; what failed is its evidence, which the record
+            // and the answer say — unless its own record cannot be written
+            // either, when the answer is that, and the evidence's failure is
+            // kept in the log rather than lost (row M14).
+            Reach::Taken => match step.record(sent(Some(error_code(&error))), by).await {
+                Ok(()) => Err(error),
+                Err(audit) => {
+                    tracing::error!(
+                        ?error,
+                        "an app's message was taken without its evidence, and its own record could not be written"
+                    );
+                    Err(audit)
+                }
+            },
+        }
+    }
+
+    async fn app_model_context(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        update: McpAppContextUpdate,
+    ) -> Result<(), ConversationError> {
+        let (opening, seen, ports) = self.app_in_conversation(&id, &caller, &update.app).await?;
+        let step = Step::new(
+            &ports,
+            &id,
+            &caller,
+            &update.app,
+            McpAppAsk::UpdateModelContext {
+                server: update.server.clone(),
+            },
+        );
+        if let Err(refusal) = admit_app(seen.as_ref().map(|(facts, _)| facts), &update.server) {
+            return Err(step.refuse(refusal.into()).await);
+        }
+        let Some((_, tool)) = seen else {
+            return Err(step.refuse(McpAppError::AppUnknown).await);
+        };
+        // Held as given: the context itself is the one judge of what may be
+        // held — one JSON object, within its bound, something at all.
+        let structured = update.structured_content_json;
+        let Ok(source) = app_source(&update.app, tool) else {
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
+        };
+        // `None`: neither part, so what the mount held is cleared.
+        let context = match AppModelContext::new(source, step.call_id(), update.text, structured) {
+            Ok(context) => context,
+            Err(ExecutionError::ValueTooLong { .. }) => {
+                return Err(step.refuse(McpAppError::RequestTooLarge).await)
+            }
+            Err(_) => return Err(step.refuse_as(ConversationError::InvalidInput).await),
+        };
+        // One update of the conversation at a time, from its room to its
+        // hold: so the order they are recorded in is the order they are held
+        // in, and nothing takes the room this one was given
+        // (`c8_two_updates_at_once_are_recorded_in_the_order_they_are_held`).
+        let _one = opening.apps.one_update().await;
+        match opening
+            .apps
+            .room(opening.epoch, &update.app, context.is_some())
+        {
+            Ok(()) => {}
+            Err(ContextRefusal::Full) => {
+                return Err(step.refuse_as(ConversationError::Unavailable).await)
+            }
+            Err(ContextRefusal::Gone(_)) => {
+                return Err(step.refuse_by_system(McpAppError::Cancelled).await)
+            }
+        }
+        let phase = match &context {
+            Some(context) => McpAppAuditPhase::ContextHeld {
+                bytes: context.content_bytes(),
+            },
+            None => McpAppAuditPhase::ContextCleared,
+        };
+        // On record before it is held: a context nobody can account for
+        // never reaches the model, and one that could not be recorded
+        // changes nothing (`c16_an_update_that_cannot_be_recorded_changes_nothing`).
+        step.record(phase, None).await?;
+        // A release or an end since came after it, and it is not held: that
+        // is on record too, as the other command's
+        // (`c17_a_release_between_the_record_and_the_hold_holds_nothing`).
+        if opening
+            .apps
+            .hold(opening.epoch, &update.app, context, &step.record)
+            .is_err()
+        {
+            step.record(
+                McpAppAuditPhase::ContextDropped {
+                    cause: ContextDrop::NotHeld,
+                },
+                Some(McpAppInitiator::System),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn app_resource_read(
         &self,
         id: ConversationId,
@@ -442,12 +799,7 @@ impl ConversationService {
             return Err(step.refuse(refusal.into()).await);
         }
         let Ok(uri) = UiResourceUri::new(read.uri.as_str()) else {
-            return Err(step
-                .refuse_as(
-                    ConversationErrorCode::InvalidRequest,
-                    ConversationError::InvalidInput,
-                )
-                .await);
+            return Err(step.refuse_as(ConversationError::InvalidInput).await);
         };
         if opening.admit(&read.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
@@ -464,9 +816,7 @@ impl ConversationService {
             Err(McpAppFailure::Busy) => return Err(step.refuse(McpAppError::Busy).await),
             Err(failure) => {
                 let error = McpAppError::from(failure);
-                return Err(step
-                    .fail(error.code(), ConversationError::McpApp(error))
-                    .await);
+                return Err(step.fail(ConversationError::McpApp(error)).await);
             }
         };
         // What the answer carries of the resource besides its ticket — its
@@ -482,9 +832,7 @@ impl ConversationService {
         .map_or(usize::MAX, |carried| carried.len());
         if carried > MAX_RESOURCE_META_BYTES {
             let error = McpAppError::ResultTooLarge;
-            return Err(step
-                .fail(error.code(), ConversationError::McpApp(error))
-                .await);
+            return Err(step.fail(ConversationError::McpApp(error)).await);
         }
         let bytes: Arc<[u8]> = Arc::from(resource.html().as_bytes());
         let size = bytes.len();
@@ -502,12 +850,7 @@ impl ConversationService {
         {
             Ok(Ok(ticket)) => ticket,
             Ok(Err(TicketRefusal::Capacity | TicketRefusal::Unavailable)) => {
-                return Err(step
-                    .fail(
-                        ConversationErrorCode::TemporarilyUnavailable,
-                        ConversationError::Unavailable,
-                    )
-                    .await);
+                return Err(step.fail(ConversationError::Unavailable).await);
             }
             // The mount released or the opening ended while it was read: by
             // that other command, so the system's.
@@ -586,6 +929,18 @@ impl ConversationService {
         caller: &ConversationCaller,
         app: &McpAppRef,
     ) -> Result<(Opening, Option<AppFacts>, McpAppPorts), ConversationError> {
+        let (opening, facts, ports) = self.app_in_conversation(id, caller, app).await?;
+        Ok((opening, facts.map(|(facts, _)| facts), ports))
+    }
+
+    /// [`Self::app_opening`], with the MCP tool the app's tool call was to,
+    /// for what speaks in the conversation as the app.
+    async fn app_in_conversation(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        app: &McpAppRef,
+    ) -> Result<(Opening, Option<(AppFacts, McpTool)>, McpAppPorts), ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         let live = self.resolve(id, caller).await?;
@@ -604,13 +959,14 @@ impl ConversationService {
     }
 
     /// What the conversation's view says of the tool call `app` names as
-    /// itself: its MCP server, and whether its tool declared a UI.
+    /// itself: its MCP server, and whether its tool declared a UI; and the
+    /// MCP tool it was to.
     async fn app_facts(
         &self,
         live: &LiveConversation,
         app: &McpAppRef,
         conversation: &ConversationId,
-    ) -> Option<AppFacts> {
+    ) -> Option<(AppFacts, McpTool)> {
         let projection = live.projection.lock().await;
         let tool =
             projection.view.tools.iter().find(|tool| {
@@ -618,14 +974,37 @@ impl ConversationService {
             })?;
         let mcp = tool.mcp.as_ref()?;
         let call = McpTool::new(mcp.server.as_str(), mcp.tool.as_str()).ok()?;
-        Some(AppFacts {
+        let facts = AppFacts {
             server: mcp.server.clone(),
             has_ui: self
                 .inner
                 .tool_uis
                 .resource_uri(conversation, &call)
                 .is_some(),
-        })
+        };
+        Some((facts, call))
+    }
+}
+
+/// What a review asks the person, and what it shows them.
+struct Asked<'a> {
+    ask: ReviewAsk,
+    app: &'a McpAppRef,
+    server: &'a str,
+    tool: &'a str,
+    shown: &'a str,
+}
+
+/// Where a gateway with no MCP servers reports a context's drop: it has no
+/// app to hold one, so a drop is a fault, logged.
+struct NoAppsToDrop;
+impl DroppedContexts for NoAppsToDrop {
+    fn context_dropped(&self, record: McpAppAuditRecord) {
+        tracing::error!(
+            conversation_id = %record.conversation_id,
+            call_id = %record.call_id,
+            "an MCP App context was dropped on a gateway with no MCP servers; nothing records it"
+        );
     }
 }
 
@@ -641,6 +1020,35 @@ impl Opening {
     fn admit(&self, app: &McpAppRef) -> Result<(), ReviewRefusal> {
         self.apps.admit(self.epoch, app)
     }
+}
+
+/// The app `app` names, as the conversation's transcript keeps it: its tool
+/// call, and the MCP tool that call was to.
+fn app_source(app: &McpAppRef, tool: McpTool) -> Result<McpAppSource, ExecutionError> {
+    McpAppSource::new(
+        ExecutionId::new(app.execution_id.as_str())?,
+        ToolCallId::new(app.tool_id.as_str())?,
+        tool,
+    )
+}
+
+/// The turn an app's message from the mount `app` becomes, for its request
+/// `request_id` in conversation `id`: the same request again is the same
+/// turn, and no two mounts' or conversations' requests share one. A digest,
+/// length-prefixed, so no two inputs spell the same one.
+fn message_execution(id: &ConversationId, app: &McpAppRef, request_id: &str) -> String {
+    let mut digest = Sha256::new();
+    for part in [
+        id.to_string().as_str(),
+        app.execution_id.as_str(),
+        app.tool_id.as_str(),
+        app.instance_id.as_str(),
+        request_id,
+    ] {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    format!("app-{}", &hex_of(digest)[..32])
 }
 
 /// The policy's answer for `call` as the session lists its tool now.
@@ -665,7 +1073,7 @@ fn admitted(
 }
 
 /// A person, by an explicit command of theirs.
-fn person(by: &ReviewAnswerer) -> McpAppInitiator {
+pub(super) fn person(by: &ReviewAnswerer) -> McpAppInitiator {
     McpAppInitiator::Person {
         principal_id: by.principal_id.clone(),
         surface_id: by.surface_id.clone(),
@@ -704,6 +1112,11 @@ impl Step {
         }
     }
 
+    /// The gateway's identity for this one call, which its records carry.
+    fn call_id(&self) -> &str {
+        &self.record.call_id
+    }
+
     /// The app, on behalf of its caller.
     fn app_initiator(&self) -> McpAppInitiator {
         let McpAppAuditRecord { initiator, .. } = &self.record;
@@ -727,38 +1140,34 @@ impl Step {
     /// Refuse the call as `error`, on record: the refusal, or the audit's own
     /// failure when the refusal could not be recorded.
     async fn refuse(&self, error: McpAppError) -> ConversationError {
-        let code = error.code();
-        self.refuse_as(code, ConversationError::McpApp(error)).await
+        self.refuse_as(ConversationError::McpApp(error)).await
     }
 
-    async fn refuse_as(
-        &self,
-        code: ConversationErrorCode,
-        error: ConversationError,
-    ) -> ConversationError {
-        self.ended(McpAppAuditPhase::Refused(code), None, error)
+    /// Refuse the call as `error`, on record under the code the wire answers
+    /// it with ([`error_code`], the one mapping), so the record and the answer
+    /// cannot name two codes.
+    async fn refuse_as(&self, error: ConversationError) -> ConversationError {
+        self.ended(McpAppAuditPhase::Refused(error_code(&error)), None, error)
             .await
     }
 
     /// Refuse the call as `error`, on record as the system's: the release or
     /// end that refuses it came first, from another command.
     async fn refuse_by_system(&self, error: McpAppError) -> ConversationError {
+        let error = ConversationError::McpApp(error);
         self.ended(
-            McpAppAuditPhase::Refused(error.code()),
+            McpAppAuditPhase::Refused(error_code(&error)),
             Some(McpAppInitiator::System),
-            ConversationError::McpApp(error),
+            error,
         )
         .await
     }
 
-    /// End the call after it reached the server, as `code`, on record.
-    async fn fail(
-        &self,
-        code: ConversationErrorCode,
-        error: ConversationError,
-    ) -> ConversationError {
+    /// End the call after it reached the server, as `error`, on record under
+    /// the code the wire answers it with ([`error_code`]).
+    async fn fail(&self, error: ConversationError) -> ConversationError {
         self.ended(
-            McpAppAuditPhase::Completed(McpAppOutcome::Failed(code)),
+            McpAppAuditPhase::Completed(McpAppOutcome::Failed(error_code(&error))),
             None,
             error,
         )
@@ -893,3 +1302,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 #[path = "../../../../tests/conversation/app_calls.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/app_messages.rs"]
+mod message_tests;

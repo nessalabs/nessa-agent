@@ -40,7 +40,11 @@ impl ConversationService {
         }
         let service = self.clone();
         tokio::spawn(async move {
-            let _admission = service.admit().await.map_err(CreationFailure::Target)?;
+            let _admission = service
+                .admit()
+                .await
+                .map_err(ConversationError::from)
+                .map_err(CreationFailure::Target)?;
             let target = Arc::new(Target {
                 service: service.clone(),
                 id,

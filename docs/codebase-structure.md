@@ -247,7 +247,11 @@ writing the full defaults on first launch is buying.
   session, a row its own summary — and the architecture check refuses a view
   that selects the whole workspace. Settings is `src/desktop/settings/`
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
-  (`ui/`). See
+  (`ui/`). Its Integrations tab manages the gateway's stored MCP servers
+  (#391): the reducer and its sentences in `model/mcp-servers.ts`, the
+  window's client read into them in `adapters/mcp-servers-gateway.ts`, and
+  the tab in `ui/integrations-tab.tsx`, given by composition
+  (`dependencies.ts`, `main.tsx`) only where the window has a gateway. See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
 - Widgets are the desktop window's vertical for what a plugin draws
   ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
@@ -737,7 +741,11 @@ a launch), `infrastructure/inspector.rs` (one server started once with
 `McpServers::open_once`, read within its bounds, then stopped; tested against
 real processes in `tests/mcp_servers/inspect.rs`) and
 `infrastructure/settings_audit.rs`
-([design](design/mcp-connections.md#managing-the-stored-servers));
+([design](design/mcp-connections.md#managing-the-stored-servers)); in
+`@nessa/client` they are `presentation/mcp-servers-api.ts`
+(`client.mcpServers`), its refusals `NessaMcpServersError`
+(`application/mcp-servers-error.ts`) and its answers checked by
+`protocol/mcp-servers-validate.ts`;
 `composition/mcp_servers.rs` takes the configured servers
 into `McpServers`, the one owner of the live set, gives every provider open
 the stand-ins for that set as it is then (`StandIns`, an
@@ -749,10 +757,14 @@ admitted (`McpServers::open_as`). The digest it compares is keyed per gateway
 process (`domain::ConfigurationKey`) over a server's command, arguments and
 environment, its fields chosen once by `infrastructure::launch_digest`. The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
-`mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
-service's (`conversation/application/service/app_calls.rs`, with the reviews
-in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
-`conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
+`mcp_servers/infrastructure/apps.rs`; the calls' flow, and an app's
+messages and model context (#390), are the conversation service's
+(`conversation/application/service/app_calls.rs`, with the reviews, held
+contexts and messages in flight in `app_reviews.rs` and the ports in
+`mcp_apps.rs`), their audit
+`conversation/infrastructure/mcp_app_audit.rs` — with every held context's
+drop written by the one recorder in `conversation/infrastructure/context_drops.rs`,
+which composition stops after the conversations — and their wire methods
 `product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
 one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
 `@nessa/client` they share `application/gateway-http.ts` (the origin, the
@@ -1540,9 +1552,12 @@ the export builds in its `wire-contract` subdirectory.
 
 `crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed
 product error/close values and their schema-derived policy. The product schema
-remains their owner. Generated product DTOs, the product socket and read-only
-sync application ports consume this publication; it contains no routing, IO or
-runtime state. Generic frame protocol types are `crates/nessa-protocol/src/protocol/`,
+remains their owner. Generated product DTOs, the product socket, read-only
+sync application ports and the gateway's conversation service consume this
+publication — the conversation's error codes are mapped once, in
+`crates/nessa-server/src/conversation/application/error_code.rs`, and both
+wire responses and MCP app audit records use that mapping. The module itself
+contains no routing, IO or runtime state. Generic frame protocol types are `crates/nessa-protocol/src/protocol/`,
 and the generated product DTOs `crates/nessa-protocol/src/product/generated.rs`.
 
 ### Record read benchmark

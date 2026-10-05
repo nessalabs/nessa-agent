@@ -247,7 +247,8 @@ let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
   "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
-// ConversationErrorCode is named by MCP app audit and by the product wire.
+// ConversationErrorCode is named by MCP app audit — a refused call, an app's
+// message answered and not sent — and by the product wire.
 // It has no payload field, so it is published here with the other outcome
 // codes an application module may import.
 const sharedOutcomes = new Set([
@@ -391,6 +392,9 @@ const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties
 const mcpResource = schema.$defs.McpReadResourceResult.properties
+const mcpMessage = schema.$defs.McpSendMessageParams.properties
+const mcpContext = schema.$defs.McpUpdateModelContextParams.properties
+const messageApp = schema.$defs.ConversationMessageApp.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const catalogueDecimalFields = [
@@ -487,6 +491,10 @@ const bounds = {
     mcpCall.server["x-utf8MaxBytes"],
     mcpCall.tool["x-utf8MaxBytes"],
     mcpRead.server["x-utf8MaxBytes"],
+    mcpMessage.server["x-utf8MaxBytes"],
+    mcpContext.server["x-utf8MaxBytes"],
+    messageApp.server["x-utf8MaxBytes"],
+    messageApp.tool["x-utf8MaxBytes"],
   ]),
   maxUiResourceUriBytes:
     schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
@@ -498,9 +506,28 @@ const bounds = {
   ]),
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
+  // An app's message is held to what the person's own may take.
+  maxMcpMessageBytes: agreeing("app message and sent message bytes", [
+    mcpMessage.text["x-utf8MaxBytes"],
+    schema.$defs.ConversationSendParams.properties.text["x-utf8MaxBytes"],
+  ]),
+  // An empty message is refused at the wire, before anything is recorded.
+  minMcpMessageCharacters: mcpMessage.text.minLength,
+  // The turn an app's message became is a turn like any other.
+  maxExecutionIdBytes: agreeing("execution identity bytes", [
+    schema.$defs.McpSendMessageResult.properties.executionId["x-utf8MaxBytes"],
+    schema.$defs.ConversationMessage.properties.executionId["x-utf8MaxBytes"],
+    messageApp.executionId["x-utf8MaxBytes"],
+  ]),
+  // An app's context: its text and its structured content, each.
+  maxMcpContextBytes: agreeing("app context bytes", [
+    mcpContext.text["x-utf8MaxBytes"],
+    mcpContext.structuredContentJson["x-utf8MaxBytes"],
+  ]),
   maxMcpResourceUriBytes: agreeing("app resource URI bytes", [
     mcpRead.uri["x-utf8MaxBytes"],
     mcpResource.uri["x-utf8MaxBytes"],
+    schema.$defs.McpInspectedUi.properties.uri["x-utf8MaxBytes"],
   ]),
   mcpAppMimeType: mcpResource.mimeType.const,
   maxMcpResourceBytes: mcpResource.size.maximum,
@@ -530,9 +557,19 @@ for (const name of [
   "maxRecordPageRecords",
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
+  // Each part of an app's context past it is refused at the wire, before
+  // anything is recorded; both together are the gateway's to bound.
+  "maxMcpContextBytes",
+  // An app's message shorter than it is refused at the wire, before anything
+  // is recorded; a blank one is the conversation's to refuse, on record.
+  "minMcpMessageCharacters",
 ]) {
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
+// An app's message past it is refused at the wire, before anything is
+// recorded; and the conversation's own input bound is never larger, which the
+// gateway's configuration holds to it — so it sits with the contract.
+contractRs += `/// Published bound from the product schema.\npub const MAX_MCP_MESSAGE_BYTES: usize = ${bounds.maxMcpMessageBytes};\n`
 for (const [name, value] of Object.entries(passiveReadTiming)) {
   rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
 }

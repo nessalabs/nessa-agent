@@ -2,7 +2,9 @@
 //! The cases that drive `ConversationService` stay in the gateway's
 //! `tests/conversation/projection.rs`.
 use crate::conversation::domain::ConversationId;
-use crate::conversation::projection::{bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES};
+use crate::conversation::projection::{
+    bound_view, bound_view_within, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
+};
 use crate::conversation::view::{ConversationPermissionOptionEffect, ConversationTranscriptState};
 use crate::conversation::{
     projection::retained_view,
@@ -34,7 +36,8 @@ use nessa_sdk::domain::agent_execution::executions::{
 use nessa_sdk::domain::agent_execution::permissions::{
     PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
     PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope, PermissionSessionId,
+    PermissionScope, PermissionSessionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
+    ReviewDeclineReason, ReviewDeclineStage,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -1674,4 +1677,218 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
                 .all(|message| message.status == ConversationMessageStatus::Completed));
         }
     }
+}
+
+fn shown(events: Vec<ExecutionEvent>) -> ConversationView {
+    let snapshot = review_snapshot(events);
+    let mut projection = projection();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+    );
+    projection.read()
+}
+
+fn refusal(tool: &str) -> ReviewDeclineObservation {
+    ReviewDeclineObservation::selected(
+        ReviewDeclineId::new("1").unwrap(),
+        ReviewDecline::new(Some(tool), ReviewDeclineReason::ToolNotReviewable),
+    )
+}
+
+fn declined(observation: ReviewDeclineObservation) -> ExecutionEvent {
+    event(ExecutionUpdate::ReviewDeclined(observation))
+}
+
+fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {
+    message.parts.iter().map(|part| part.text.len()).sum()
+}
+
+#[test]
+fn the_text_budget_keeps_a_running_total() {
+    let limit = MAX_TEXT * 2;
+    let whole = "a".repeat(limit);
+    let exact = shown(vec![event(ExecutionUpdate::Message(MessageChunk::text(
+        whole.clone(),
+    )))]);
+    assert!(!exact.truncated);
+    assert_eq!(exact.messages[0].parts[0].text, whole);
+    assert_eq!(exact.messages[0].retained_text, limit);
+    assert_eq!(
+        exact.messages[0].retained_text,
+        text_len(&exact.messages[0])
+    );
+
+    let over = shown(vec![event(ExecutionUpdate::Message(MessageChunk::text(
+        format!("{whole}b"),
+    )))]);
+    assert!(over.truncated);
+    assert_eq!(over.messages[0].parts[0].text.len(), limit);
+    assert_eq!(over.messages[0].retained_text, text_len(&over.messages[0]));
+
+    let emoji = shown(vec![
+        event(ExecutionUpdate::Message(MessageChunk::text(
+            "a".repeat(limit - 1),
+        ))),
+        event(ExecutionUpdate::Message(MessageChunk::text("😀"))),
+    ]);
+    assert!(emoji.truncated);
+    assert_eq!(emoji.messages[0].parts[1].text, "");
+    assert!(text_len(&emoji.messages[0]) <= limit);
+    assert_eq!(
+        emoji.messages[0].retained_text,
+        text_len(&emoji.messages[0])
+    );
+
+    let selected = refusal("a");
+    let selected_event = declined(selected.clone());
+    let confirmed = declined(
+        selected
+            .advance(ReviewDeclineStage::WriteConfirmed)
+            .unwrap(),
+    );
+    let selected_len = shown(vec![selected_event.clone()]).messages[0].parts[0]
+        .text
+        .len();
+    let confirmed_len = shown(vec![selected_event.clone(), confirmed.clone()]).messages[0].parts[0]
+        .text
+        .len();
+    assert!(confirmed_len < selected_len);
+    let filler = "x".repeat(limit - selected_len);
+    let shrunk = shown(vec![
+        selected_event.clone(),
+        event(ExecutionUpdate::Message(MessageChunk::text(filler))),
+        confirmed.clone(),
+    ]);
+    assert_eq!(shrunk.messages[0].parts[0].text.len(), confirmed_len);
+    assert_eq!(
+        shrunk.messages[0].retained_text,
+        limit - selected_len + confirmed_len
+    );
+    assert_eq!(
+        shrunk.messages[0].retained_text,
+        text_len(&shrunk.messages[0])
+    );
+
+    let room = 8;
+    let unconfirmed = declined(
+        selected
+            .advance(ReviewDeclineStage::WriteUnconfirmed)
+            .unwrap(),
+    );
+    let full_unconfirmed = shown(vec![selected_event.clone(), unconfirmed.clone()]).messages[0]
+        .parts[0]
+        .text
+        .len();
+    assert!(full_unconfirmed > room);
+    let clipped_notice = shown(vec![
+        event(ExecutionUpdate::Message(MessageChunk::text(
+            "y".repeat(limit - room),
+        ))),
+        selected_event.clone(),
+        unconfirmed,
+    ]);
+    assert_eq!(
+        clipped_notice.messages[0].parts[1].text.len(),
+        room,
+        "a notice longer than the room the old one held was emptied"
+    );
+    assert!(!clipped_notice.messages[0].parts[1].text.is_empty());
+    assert_eq!(clipped_notice.messages[0].retained_text, limit);
+    assert_eq!(
+        clipped_notice.messages[0].retained_text,
+        text_len(&clipped_notice.messages[0])
+    );
+
+    let events = vec![
+        selected_event,
+        event(ExecutionUpdate::Message(MessageChunk::text("kept"))),
+        confirmed,
+    ];
+    let snapshot = review_snapshot(events);
+    let restored = Projection::new(
+        "conversation".into(),
+        projection().read().capabilities,
+        Some(&snapshot),
+    );
+    let replaced_view = shown_snapshot(&snapshot);
+    assert_eq!(
+        restored.read().messages[0].parts,
+        replaced_view.messages[0].parts
+    );
+    assert_eq!(
+        restored.read().messages[0].retained_text,
+        text_len(&restored.read().messages[0])
+    );
+    assert_eq!(
+        replaced_view.messages[0].retained_text,
+        restored.read().messages[0].retained_text
+    );
+    let wire = serde_json::to_value(&restored.read().messages[0]).unwrap();
+    assert!(wire.get("retainedText").is_none());
+    assert!(wire.get("retained_text").is_none());
+
+    let mut again = projection();
+    let first = review_snapshot(vec![event(ExecutionUpdate::Message(MessageChunk::text(
+        "a".repeat(limit),
+    )))]);
+    again.record(&first.invocations[0], false);
+    let second = review_snapshot(vec![event(ExecutionUpdate::Message(MessageChunk::text(
+        "hi",
+    )))]);
+    again.record(&second.invocations[0], false);
+    let rebuilt = again.read();
+    assert_eq!(rebuilt.messages[0].parts[0].text, "hi");
+    assert_eq!(rebuilt.messages[0].retained_text, 2);
+    assert_eq!(
+        rebuilt.messages[0].retained_text,
+        text_len(&rebuilt.messages[0])
+    );
+
+    let kept = shown(vec![
+        event(ExecutionUpdate::Message(MessageChunk::text("alpha"))),
+        event(ExecutionUpdate::Message(MessageChunk::text("beta-beta"))),
+    ]);
+    assert_eq!(kept.messages.len(), 1);
+    assert_eq!(kept.messages[0].parts.len(), 2);
+    let full = serde_json::to_vec(&kept).unwrap().len();
+    let trimmed = bound_view_within(kept.clone(), full - 1, true);
+    assert!(
+        trimmed.messages[0].parts.len() < kept.messages[0].parts.len(),
+        "the display bound did not drop a part"
+    );
+    assert_eq!(
+        trimmed.messages[0].retained_text,
+        text_len(&trimmed.messages[0]),
+        "a part the display bound removed was still counted"
+    );
+    assert!(trimmed.messages[0].retained_text < kept.messages[0].retained_text);
+    assert_eq!(kept.messages[0].retained_text, text_len(&kept.messages[0]));
+
+    let mut capped_events = Vec::new();
+    for _ in 0..512 {
+        capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("x"))));
+    }
+    capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("y"))));
+    let capped = shown(capped_events);
+    assert_eq!(capped.messages[0].parts.len(), 512);
+    assert!(capped.truncated);
+    assert!(capped.messages[0].parts.iter().all(|part| part.text == "x"));
+    assert_eq!(capped.messages[0].retained_text, 512);
+    assert_eq!(
+        capped.messages[0].retained_text,
+        text_len(&capped.messages[0]),
+        "a part past the cap was still counted"
+    );
+}
+
+fn shown_snapshot(snapshot: &SessionSnapshot) -> ConversationView {
+    let mut projection = projection();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+    );
+    projection.read()
 }

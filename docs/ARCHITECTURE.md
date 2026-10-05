@@ -923,10 +923,11 @@ and so does the device client; it depends on neither
 ([ADR 483](adr/done/483-protocol-and-client-core-crates.md)).
 
 `nessa-protocol/src/product_contract/generated.rs` contains pure schema-derived
-product outcome values and close policy. Product DTOs/socket and read-only sync
-application ports consume that publication. The product schema owns its
-vocabulary; this contract contains no routing or IO and is separate from generic
-protocol frames.
+product outcome values and close policy. Product DTOs/socket, read-only sync
+application ports and the gateway's conversation service (its one mapping of
+errors to `ConversationErrorCode`, which the wire answers by and MCP app audit
+records) consume that publication. The product schema owns its vocabulary; this
+contract contains no routing or IO and is separate from generic protocol frames.
 
 **Device client core** (`crates/nessa-client-core`) — reusable Rust library and
 standalone retained-sync example. Owns device enrollment, private profile/cache,

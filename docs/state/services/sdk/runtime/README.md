@@ -24,6 +24,7 @@ diagramLinks:
   F5: "sdk-runtime-an-mcp-tool-shares-its-upstream-session-with-its-app"
   F6: "sdk-runtime-an-app-calls-a-tool-through-gateway-policy-and-review"
   F7: "sdk-runtime-read-an-app-resource-once-and-release-its-ticket"
+  F8: "sdk-runtime-an-app-sends-a-message-and-gives-the-model-context"
 ---
 
 # Runtime and tools
@@ -55,6 +56,8 @@ flowchart TB
     Feature --> F6
     F7["Read an app resource once and release its ticket"]
     Feature --> F7
+    F8["An app sends a message and gives the model context"]
+    Feature --> F8
 ```
 
 ```mermaid
@@ -67,6 +70,7 @@ flowchart TB
     Relay[MCP relay session]
     AppCall[App tool policy and review]
     Resource[One-use app resource]
+    AppMessage[App message and model context]
     Install[Install pinned runtime]
     Stop[Stop and confirm cleanup]
     Restore[Restore committed history]
@@ -78,6 +82,7 @@ flowchart TB
     Execute --> Relay
     Relay --> AppCall
     Relay --> Resource
+    AppMessage --> Execute
     Install --> Opening
     Execute --> Stop
     Restore --> Opening
@@ -89,6 +94,7 @@ flowchart TB
 - [A conversation opens its selected provider](a-conversation-opens-its-selected-provider.md)
 - [An admitted message streams through the SDK and settles](an-admitted-message-streams-through-the-sdk-and-settles.md)
 - [An app calls a tool through gateway policy and review](an-app-calls-a-tool-through-gateway-policy-and-review.md)
+- [An app sends a message and gives the model context](an-app-sends-a-message-and-gives-the-model-context.md)
 - [An authorized receiver reads physical history without opening an agent](an-authorized-receiver-reads-physical-history-without-opening-an-agent.md)
 - [An MCP tool shares its upstream session with its app](an-mcp-tool-shares-its-upstream-session-with-its-app.md)
 - [Approve, deny, withdraw, or answer an agent's review](approve-deny-withdraw-or-answer-an-agent-s-review.md)
