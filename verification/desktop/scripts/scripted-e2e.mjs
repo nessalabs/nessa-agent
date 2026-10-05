@@ -8,6 +8,7 @@
  *
  *   pnpm test:e2e:scripted
  *   pnpm test:e2e:scripted -- --mode prod --evidence /tmp/scripted-e2e
+ *   pnpm test:e2e:scripted -- --channel bundled
  *
  * `--mode prod` previews a production build for the checks that can run
  * against one. `mcp-apps-gateway` needs the dev server's sandbox meta, so a
@@ -30,6 +31,7 @@ import {
   overallVerdict,
   prSummary,
   relevantLines,
+  scriptedCheckArgs,
   verdictLine,
 } from "./lib/scripted-evidence.mjs"
 
@@ -38,14 +40,16 @@ const scripts = join(repoRoot, "verification/desktop/scripts")
 
 const help = `test:e2e:scripted — gateway-backed checks, signed out, Chromium and WebKit
 
-Usage: node verification/desktop/scripts/scripted-e2e.mjs [--mode dev|prod] [--evidence <dir>] [--agent claude|codex]
+Usage: node verification/desktop/scripts/scripted-e2e.mjs [--mode dev|prod] [--evidence <dir>] [--agent claude|codex] [--channel <name>]
 
 Builds nessa-server, then runs mcp-apps-gateway --scripted, gateway-window
 --scripted, and scripted-scenarios. stdout is one JSON verdict line. The
 summary is on stderr and in <evidence>/pr-summary.md.
 
 --mode prod skips mcp-apps-gateway (not run: dev server only) and runs the
-other two against a production preview. Exit 0 pass, 1 fail, 2 could-not-run.
+other two against a production preview. --channel is chrome (installed
+Google Chrome) or bundled (Playwright's Chromium), and is forwarded to
+each check. Exit 0 pass, 1 fail, 2 could-not-run.
 `
 
 function child(args) {
@@ -88,6 +92,7 @@ try {
       mode: { type: "string", default: "dev" },
       evidence: { type: "string" },
       agent: { type: "string", default: "claude" },
+      channel: { type: "string", default: "chrome" },
     },
     allowPositionals: false,
   }))
@@ -101,10 +106,11 @@ if (values.help) {
 }
 if (
   !["dev", "prod"].includes(values.mode) ||
-  !["claude", "codex"].includes(values.agent)
+  !["claude", "codex"].includes(values.agent) ||
+  !["chrome", "bundled"].includes(values.channel)
 ) {
   process.stderr.write(
-    "test:e2e:scripted: --mode is dev or prod, and --agent is claude or codex\n",
+    "test:e2e:scripted: --mode is dev or prod, --agent is claude or codex, and --channel is chrome or bundled\n",
   )
   process.exit(2)
 }
@@ -147,24 +153,18 @@ for (const check of checks) {
   mkdirSync(dir, { recursive: true })
   const out = join(dir, "result.json")
   process.stderr.write(`\n${check.name}\n`)
-  const status = await child([
-    join(scripts, `${check.name}.mjs`),
-    "--agent",
-    values.agent,
-    "--engine",
-    "chromium,webkit",
-    "--layout",
-    "columns",
-    "--mode",
-    values.mode,
-    "--evidence",
-    dir,
-    "--shots",
-    join(dir, "shots"),
-    "--out",
-    out,
-    ...check.args,
-  ])
+  const status = await child(
+    scriptedCheckArgs({
+      script: join(scripts, `${check.name}.mjs`),
+      agent: values.agent,
+      mode: values.mode,
+      channel: values.channel,
+      evidence: dir,
+      shots: join(dir, "shots"),
+      out,
+      extra: check.args,
+    }),
+  )
   const document = readJson(out)
   const fallback = status === 0 ? "pass" : status === 1 ? "fail" : "could-not-run"
   const found = document ? enginesFrom(document) : {}

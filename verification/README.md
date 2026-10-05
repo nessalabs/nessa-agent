@@ -97,6 +97,7 @@ pnpm verify:desktop:drag
 pnpm verify:desktop:focus
 pnpm verify:desktop:responsive --shots /tmp/desktop-shots
 pnpm test:e2e:scripted -- --evidence /tmp/scripted-e2e
+pnpm test:e2e:scripted -- --channel bundled --evidence /tmp/scripted-e2e
 pnpm test:e2e:scripted -- --mode prod --evidence /tmp/scripted-e2e-prod
 node verification/desktop/scripts/<check>.mjs --help
 ```

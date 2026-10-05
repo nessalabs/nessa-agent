@@ -18,6 +18,43 @@ export function verdictLine({ verdict, evidence, summary }) {
   return `${JSON.stringify({ verdict, evidence, summary })}\n`
 }
 
+/**
+ * Arguments one child check receives. `--channel` is forwarded so
+ * `pnpm test:e2e:scripted -- --channel bundled` reaches the browser the
+ * other checks already accept.
+ */
+export function scriptedCheckArgs({
+  script,
+  agent,
+  mode,
+  channel,
+  evidence,
+  shots,
+  out,
+  extra = [],
+}) {
+  return [
+    script,
+    "--agent",
+    agent,
+    "--engine",
+    "chromium,webkit",
+    "--layout",
+    "columns",
+    "--mode",
+    mode,
+    "--channel",
+    channel,
+    "--evidence",
+    evidence,
+    "--shots",
+    shots,
+    "--out",
+    out,
+    ...extra,
+  ]
+}
+
 /** Exit status for a verdict: 0 pass, 1 fail, 2 could not run. */
 export function exitOf(verdict) {
   if (verdict === "pass") return 0

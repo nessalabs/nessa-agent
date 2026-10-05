@@ -4,10 +4,12 @@
  * lines taken from the arrays the checks already record.
  */
 import { strict as assert } from "node:assert"
+import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { test } from "node:test"
+import { fileURLToPath } from "node:url"
 
 import {
   enginesFrom,
@@ -15,6 +17,7 @@ import {
   overallVerdict,
   prSummary,
   relevantLines,
+  scriptedCheckArgs,
   verdictLine,
   writeView,
 } from "./scripted-evidence.mjs"
@@ -146,4 +149,39 @@ test("writeView stores the view as JSON under the evidence directory", () => {
   const directory = mkdtempSync(join(tmpdir(), "scripted-evidence-"))
   const path = writeView(directory, "views/permission.json", { status: "running" })
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { status: "running" })
+})
+
+test("a bundled Chromium channel is forwarded on the child check's argv", () => {
+  const args = scriptedCheckArgs({
+    script: "gateway-window.mjs",
+    agent: "claude",
+    mode: "dev",
+    channel: "bundled",
+    evidence: "/tmp/evidence",
+    shots: "/tmp/evidence/shots",
+    out: "/tmp/evidence/result.json",
+    extra: ["--scripted"],
+  })
+  assert.equal(args[args.indexOf("--channel") + 1], "bundled")
+  assert.equal(args.at(-1), "--scripted")
+})
+
+test("the scripted command accepts --channel bundled", () => {
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../scripted-e2e.mjs")
+  const unknown = spawnSync(
+    process.execPath,
+    [script, "--channel", "bundled", "--nope"],
+    { encoding: "utf8" },
+  )
+  assert.equal(unknown.status, 2)
+  assert.match(unknown.stderr, /Unknown option '--nope'/)
+
+  const accepted = spawnSync(
+    process.execPath,
+    [script, "--channel", "bundled", "--mode", "nope"],
+    { encoding: "utf8" },
+  )
+  assert.equal(accepted.status, 2)
+  assert.doesNotMatch(accepted.stderr, /unknown option/)
+  assert.match(accepted.stderr, /--channel is chrome or bundled/)
 })
