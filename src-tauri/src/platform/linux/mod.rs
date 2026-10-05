@@ -1,6 +1,7 @@
 //! Linux host: taskbar window, CSS frost, GtkFixed pin, allocate-based resize.
 
 mod live_resize;
+mod provider_login;
 mod viewport;
 mod webkit;
 
@@ -69,3 +70,5 @@ impl Host for Linux {
         Ok(())
     }
 }
+
+pub use provider_login::LinuxProviderLogin;

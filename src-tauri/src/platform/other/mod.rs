@@ -3,6 +3,7 @@
 //! The webview fills the window. Frost is CSS. There is no native live-resize
 //! signal to forward — the page sees the resize gesture itself.
 
+mod provider_login;
 mod viewport;
 
 use tauri::WebviewWindow;
@@ -26,3 +27,5 @@ impl Host for Other {
         viewport::watch(window)
     }
 }
+
+pub use provider_login::OtherProviderLogin;

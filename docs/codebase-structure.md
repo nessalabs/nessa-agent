@@ -1593,9 +1593,12 @@ the probe client and with the example's own `watch` on two paired devices, are i
 
 `src-tauri/src/provider_authentication/` owns the trusted-window login launch
 command in `commands.rs`, the closed provider values and injected
-`ProviderLogin` port in `contracts.rs`, and the macOS terminal adapter in
-`native.rs`. Named feature tests live in
-`src-tauri/tests/provider_authentication/{commands,native}.rs`; `mod.rs` maps
+`ProviderLogin` port in `contracts.rs`. Platform-owned adapters live in
+`src-tauri/src/platform/{macos,linux,other}/provider_login.rs`; the existing
+platform selection seam re-exports the adapter injected by composition. macOS
+opens Terminal; Linux and other hosts report unavailable. Named tests live in
+`src-tauri/tests/provider_authentication/commands.rs` and
+`src-tauri/tests/platform/{macos,linux,other}/provider_login.rs`; `mod.rs` maps
 ownership and declares/re-exports these modules. The provider enum chooses each
 CLI's default login command.
 `AgentError::authentication_required` reads the explicit adapter-owned refusal;

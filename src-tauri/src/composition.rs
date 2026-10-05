@@ -237,7 +237,7 @@ impl HostDependencies {
         };
 
         Ok(Self {
-            provider_login: Arc::new(crate::provider_authentication::NativeProviderLogin),
+            provider_login: Arc::new(crate::platform::PlatformProviderLogin),
             settings,
             agent_credentials: Arc::new(LocalAgentCredentialStore::new(
                 service_configuration.credential_namespace().clone(),

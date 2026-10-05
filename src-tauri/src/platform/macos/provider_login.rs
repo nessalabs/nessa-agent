@@ -1,18 +1,17 @@
-use super::{LoginFailure, Provider, ProviderLogin};
+use crate::provider_authentication::{LoginFailure, Provider, ProviderLogin};
 
-/// The native terminal launcher; unsupported platforms refuse explicitly.
-pub struct NativeProviderLogin;
+/// Login opened in the macOS Terminal, selected by host composition.
+pub struct MacosProviderLogin;
 
-impl ProviderLogin for NativeProviderLogin {
+impl ProviderLogin for MacosProviderLogin {
     fn available(&self) -> bool {
-        cfg!(target_os = "macos")
+        true
     }
     fn open(&self, provider: Provider) -> Result<(), LoginFailure> {
         open(provider)
     }
 }
 
-#[cfg(target_os = "macos")]
 fn script(provider: Provider) -> &'static str {
     // Only this closed provider enum chooses terminal syntax, never external text.
     match provider {
@@ -25,7 +24,6 @@ fn script(provider: Provider) -> &'static str {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn open(provider: Provider) -> Result<(), LoginFailure> {
     use std::{
         process::{Command, Stdio},
@@ -62,11 +60,6 @@ fn open(provider: Provider) -> Result<(), LoginFailure> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn open(_: Provider) -> Result<(), LoginFailure> {
-    Err(LoginFailure::Unavailable)
-}
-
-#[cfg(all(test, target_os = "macos"))]
-#[path = "../../tests/provider_authentication/native.rs"]
+#[cfg(test)]
+#[path = "../../../tests/platform/macos/provider_login.rs"]
 mod tests;
