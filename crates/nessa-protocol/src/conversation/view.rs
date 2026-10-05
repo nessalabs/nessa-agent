@@ -153,6 +153,10 @@ pub struct ConversationMessage {
     pub steering_offset: Option<usize>,
     #[serde(skip)]
     pub event_count: usize,
+    /// Byte length of `parts[*].text`, updated when that text is set, replaced, or removed.
+    /// `the_text_budget_keeps_a_running_total`.
+    #[serde(skip)]
+    pub retained_text: usize,
     pub execution_id: String,
     pub user_text: String,
     pub attachments: Vec<ConversationAttachment>,
