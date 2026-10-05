@@ -260,7 +260,10 @@ impl ConfigFiles for OsConfigFiles {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         }
-        let file = nessa_local_storage::open(&self.path, nessa_local_storage::OpenMode::Read)?;
+        // Non-blocking: a FIFO swapped in after the check above is refused
+        // by the open's own regular-file check rather than blocking the read.
+        let file =
+            nessa_local_storage::open(&self.path, nessa_local_storage::OpenMode::ReadNonblocking)?;
         let mut bytes = Vec::new();
         file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
         Ok(Some(bytes))

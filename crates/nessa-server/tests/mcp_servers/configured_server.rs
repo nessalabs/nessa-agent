@@ -154,3 +154,37 @@ fn a_repeated_name_is_said_before_a_missing_value() {
         })
     );
 }
+
+/// A kept value stays with its launch: a save that changes the command or the
+/// arguments, renamed or not, must give every value again. Otherwise a new
+/// command could be pointed at a secret it was never given, and read it back
+/// through an inspection (#480 adversarial review).
+#[test]
+fn a_kept_value_is_refused_when_the_command_or_arguments_change() {
+    let list = vec![stored("a", &[("TOKEN", "secret")])];
+    let relaunched = |previous: Option<&str>, command: &str, args: Vec<String>| {
+        ServerEdit::Save(ServerSave {
+            previous_name: previous.map(str::to_owned),
+            server: StdioServer::new("a", command, args),
+            env: vec![("TOKEN".into(), None)],
+            enabled: true,
+        })
+    };
+    for edit in [
+        relaunched(None, "/usr/bin/python3", vec![]),
+        relaunched(None, "/bin/server", vec!["-c".into()]),
+        relaunched(Some("a"), "/usr/bin/python3", vec![]),
+    ] {
+        assert_eq!(
+            edit.apply(&list),
+            Err(EditRefusal::EnvironmentValueMissing {
+                name: "TOKEN".into()
+            })
+        );
+    }
+    // The same launch keeps it.
+    let kept = relaunched(None, "/bin/server", vec![])
+        .apply(&list)
+        .unwrap();
+    assert_eq!(kept[0].env_names(), ["TOKEN"]);
+}

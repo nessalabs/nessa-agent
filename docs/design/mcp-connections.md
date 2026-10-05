@@ -488,7 +488,8 @@ params are read.
   command, args, env: [{name, value | null}], enabled}}` → `{revision}`. The
   server's `env` is exactly the names listed; `value: null` keeps the value
   stored for that name on the server being saved (the one under
-  `previousName`, else under `name`).
+  `previousName`, else under `name`), when the save keeps that server's
+  command and arguments ([LS17](#the-live-server-set-391)).
 - `mcpServers.remove {revision, name}` → `{revision}`.
 
 The revision is a digest of the stored block (`[]` when there is none),
@@ -672,7 +673,7 @@ meet the stand-in and forwarded-result rows above.
 | LS14 | `replace` once stopping, or contending with the real `stop` for the lock | Once stopping: refused `Stopped`, the set kept, nothing launched; contending, its answer agrees with the set whichever takes the lock first. A `save` or `remove` that publishes then answers success, outcome `liveSetReplaced: false` | `a_replacement_once_stopping_is_refused_and_launches_nothing`, `a_replacement_contending_with_the_real_stop_agrees_with_the_set`, `a_publish_during_stop_answers_success_and_leaves_the_live_set` |
 | LS15 | Rename (`previousName`) | One write: the old name gone, the new one in its place; unknown `previousName` → `not_found` | `s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found` |
 | LS16 | Remove an unknown name | `not_found`; nothing written | `s16_removing_an_unknown_name_is_not_found` |
-| LS17 | `save` keeps a variable with `value: null` | The stored value is kept; a null for a name with no stored value → `invalid` (`environment_value_missing`); an entry with no `value` at all → `invalid_request`; a name given twice → `environment_name_repeated`, said before a missing value | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`, `a_repeated_name_is_said_before_a_missing_value` |
+| LS17 | `save` keeps a variable with `value: null` | The stored value is kept when the save keeps the server's command and arguments; a save that changes either must give every value again (`environment_value_missing`), so a new command is never pointed at a secret it was not given; a null for a name with no stored value → `invalid` (`environment_value_missing`); an entry with no `value` at all → `invalid_request`; a name given twice → `environment_name_repeated`, said before a missing value | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `a_kept_value_is_refused_when_the_command_or_arguments_change`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`, `a_repeated_name_is_said_before_a_missing_value` |
 | LS18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
 | — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |
 | — | `replace` lands between a hello's admission and its open | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |

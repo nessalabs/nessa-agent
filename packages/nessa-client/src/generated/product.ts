@@ -937,7 +937,7 @@ export interface McpServersListResult {
 export interface McpServerEnvEntry {
   /** The variable's name: ASCII letters, digits and _, 1 to x-mcpServerRules.environmentNameMaxBytes bytes, not starting with a digit. NESSA_MCP_SESSION is reserved. */
   name: string
-  /** Its value, or null to keep the value stored for this name on the server being saved. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
+  /** Its value, or null to keep the value stored for this name on the server being saved, when the save keeps that server's command and arguments; a save that changes either must give every value again. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
   value: string | null
 }
 /** A server as mcpServers.save stores it. */
