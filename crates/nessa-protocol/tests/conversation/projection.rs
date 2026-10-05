@@ -2,7 +2,9 @@
 //! The cases that drive `ConversationService` stay in the gateway's
 //! `tests/conversation/projection.rs`.
 use crate::conversation::domain::ConversationId;
-use crate::conversation::projection::{bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES};
+use crate::conversation::projection::{
+    bound_view, bound_view_within, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
+};
 use crate::conversation::view::{ConversationPermissionOptionEffect, ConversationTranscriptState};
 use crate::conversation::{
     projection::retained_view,
@@ -1842,6 +1844,42 @@ fn the_text_budget_keeps_a_running_total() {
     assert_eq!(
         rebuilt.messages[0].retained_text,
         text_len(&rebuilt.messages[0])
+    );
+
+    let kept = shown(vec![
+        event(ExecutionUpdate::Message(MessageChunk::text("alpha"))),
+        event(ExecutionUpdate::Message(MessageChunk::text("beta-beta"))),
+    ]);
+    assert_eq!(kept.messages.len(), 1);
+    assert_eq!(kept.messages[0].parts.len(), 2);
+    let full = serde_json::to_vec(&kept).unwrap().len();
+    let trimmed = bound_view_within(kept.clone(), full - 1, true);
+    assert!(
+        trimmed.messages[0].parts.len() < kept.messages[0].parts.len(),
+        "the display bound did not drop a part"
+    );
+    assert_eq!(
+        trimmed.messages[0].retained_text,
+        text_len(&trimmed.messages[0]),
+        "a part the display bound removed was still counted"
+    );
+    assert!(trimmed.messages[0].retained_text < kept.messages[0].retained_text);
+    assert_eq!(kept.messages[0].retained_text, text_len(&kept.messages[0]));
+
+    let mut capped_events = Vec::new();
+    for _ in 0..512 {
+        capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("x"))));
+    }
+    capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("y"))));
+    let capped = shown(capped_events);
+    assert_eq!(capped.messages[0].parts.len(), 512);
+    assert!(capped.truncated);
+    assert!(capped.messages[0].parts.iter().all(|part| part.text == "x"));
+    assert_eq!(capped.messages[0].retained_text, 512);
+    assert_eq!(
+        capped.messages[0].retained_text,
+        text_len(&capped.messages[0]),
+        "a part past the cap was still counted"
     );
 }
 

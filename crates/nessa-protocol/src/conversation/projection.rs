@@ -1137,7 +1137,12 @@ pub fn bound_view_within(
             .first()
             .is_some_and(|message| !message.parts.is_empty())
         {
-            view.messages[0].parts.pop();
+            // The length leaves with the part. A returned view otherwise claims
+            // bytes for text it no longer contains.
+            // `the_text_budget_keeps_a_running_total`.
+            if let Some(removed) = view.messages[0].parts.pop() {
+                view.messages[0].retained_text -= removed.text.len();
+            }
         } else if let Some(message) = view
             .messages
             .first_mut()
