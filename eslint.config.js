@@ -88,6 +88,17 @@ export default tseslint.config(
     },
   },
   {
+    // Inlined into the load fallback and the dev-server status page. The
+    // entry is `wireStartupActions`, which those scripts call after the paste.
+    files: ["src/host/startup-actions.js"],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": "off",
+    },
+  },
+  {
     files: ["src/host/window.ts"],
     rules: {
       "no-restricted-imports": "off",
