@@ -127,6 +127,12 @@ await main(
                 window.__providerSignIn.recover()
               })
               await card.waitFor({ state: "detached" })
+              if (surface === "panel") {
+                const historical = page.locator("[data-slot=transcript-divider]")
+                await historical.waitFor()
+                if (!(await historical.textContent()).includes("failed"))
+                  throw new Error("retired recovery erased the historical failed status")
+              }
               target.searchParams.set("login", "unsupported")
               await page.goto(target.href)
               await page.locator(selectors.card).waitFor()

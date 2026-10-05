@@ -176,6 +176,11 @@ pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
     id: u64,
     binding: Mutex<(WorkGeneration, ProviderGeneration)>,
+    /// The usable attachment's provider generation when this permit was
+    /// granted, or `None` when nothing was attached. Close can detach that
+    /// attachment before the admission record is written; this stays the
+    /// generation that accepted the work.
+    live_generation: Option<u64>,
     stop: watch::Receiver<()>,
     cancellation: watch::Receiver<Option<InvocationCancellationEvent>>,
 }
@@ -190,6 +195,10 @@ pub(super) struct AttachmentStart {
 impl WorkPermit {
     pub(super) fn provider_generation(&self) -> u64 {
         self.provider_generation_value().0
+    }
+    /// The usable attachment when this permit was granted.
+    pub(super) fn live_generation(&self) -> Option<u64> {
+        self.live_generation
     }
     fn provider_generation_value(&self) -> ProviderGeneration {
         self.binding.lock().expect("work binding").1
@@ -244,6 +253,15 @@ impl Drop for WorkPermit {
         self.owner.changed.send_replace(());
     }
 }
+fn usable_provider_generation(state: &State) -> Option<u64> {
+    match &state.attachment {
+        AttachmentState::Attached { .. } if state.provider_ready => {
+            Some(state.provider_generation.0)
+        }
+        _ => None,
+    }
+}
+
 impl SessionLifecycle {
     pub(super) fn new(
         attachment: Arc<AttachmentLease>,
@@ -325,12 +343,7 @@ impl SessionLifecycle {
     /// replacement attachment always has a later one.
     pub(super) fn attached_generation(&self) -> Option<u64> {
         let state = self.state.lock().expect("session lifecycle");
-        match &state.attachment {
-            AttachmentState::Attached { .. } if state.provider_ready => {
-                Some(state.provider_generation.0)
-            }
-            _ => None,
-        }
+        usable_provider_generation(&state)
     }
     pub(super) fn operation_capabilities(&self) -> OperationCapabilities {
         let state = self.state.lock().expect("session lifecycle");
@@ -864,9 +877,11 @@ impl SessionLifecycle {
                 cancellation,
             },
         );
+        let live_generation = usable_provider_generation(&state);
         Ok(WorkPermit {
             owner: self.clone(),
             id,
+            live_generation,
             binding: Mutex::new((work_generation, state.provider_generation)),
             stop: self.stop.subscribe(),
             cancellation: cancellation_notice,

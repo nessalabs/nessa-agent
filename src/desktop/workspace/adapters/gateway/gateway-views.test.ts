@@ -425,3 +425,11 @@ it("recovery follows the latest mapped input across pending and dispatched turns
   })
   expect(transcriptFrom(source, 5, at).authenticationRequired).toBe(false)
 })
+
+it("retains an unknown Codex runtime agent independently of catalogue fallback", () => {
+  const source = view("auth")
+  source.runtime = { ...source.runtime!, agent: "codex", model: "unknown-codex-model" }
+  source.messages = [turn({ status: "failed", authenticationRequired: true })]
+  expect(runningModel(source)).toBeUndefined()
+  expect(transcriptFrom(source, 1, at).agent).toBe("codex")
+})

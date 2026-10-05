@@ -15,9 +15,8 @@ use super::super::app_reviews::{
     new_review_id, AppReviews, ReviewAnswerer, ReviewEnd, ReviewRefusal, APP_REVIEW_DEADLINE,
 };
 use super::super::mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppCode, McpAppError,
-    McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
-    TicketRefusal,
+    HeldResource, McpAppAsk, McpAppAuditPhase, McpAppAuditRecord, McpAppError, McpAppFailure,
+    McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal, TicketRefusal,
 };
 use super::super::session_key::conversation_session;
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
@@ -30,6 +29,7 @@ use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MA
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationTranscriptState, ConversationView,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResourceUri};
@@ -250,7 +250,10 @@ impl ConversationService {
             Some(Ok(value @ Value::Object(_))) => Some(value),
             Some(_) => {
                 return Err(step
-                    .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                    .refuse_as(
+                        ConversationErrorCode::InvalidRequest,
+                        ConversationError::InvalidInput,
+                    )
                     .await)
             }
         };
@@ -440,7 +443,10 @@ impl ConversationService {
         }
         let Ok(uri) = UiResourceUri::new(read.uri.as_str()) else {
             return Err(step
-                .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                .refuse_as(
+                    ConversationErrorCode::InvalidRequest,
+                    ConversationError::InvalidInput,
+                )
                 .await);
         };
         if opening.admit(&read.app).is_err() {
@@ -498,7 +504,7 @@ impl ConversationService {
             Ok(Err(TicketRefusal::Capacity | TicketRefusal::Unavailable)) => {
                 return Err(step
                     .fail(
-                        McpAppCode::TemporarilyUnavailable,
+                        ConversationErrorCode::TemporarilyUnavailable,
                         ConversationError::Unavailable,
                     )
                     .await);
@@ -725,7 +731,11 @@ impl Step {
         self.refuse_as(code, ConversationError::McpApp(error)).await
     }
 
-    async fn refuse_as(&self, code: McpAppCode, error: ConversationError) -> ConversationError {
+    async fn refuse_as(
+        &self,
+        code: ConversationErrorCode,
+        error: ConversationError,
+    ) -> ConversationError {
         self.ended(McpAppAuditPhase::Refused(code), None, error)
             .await
     }
@@ -742,7 +752,11 @@ impl Step {
     }
 
     /// End the call after it reached the server, as `code`, on record.
-    async fn fail(&self, code: McpAppCode, error: ConversationError) -> ConversationError {
+    async fn fail(
+        &self,
+        code: ConversationErrorCode,
+        error: ConversationError,
+    ) -> ConversationError {
         self.ended(
             McpAppAuditPhase::Completed(McpAppOutcome::Failed(code)),
             None,

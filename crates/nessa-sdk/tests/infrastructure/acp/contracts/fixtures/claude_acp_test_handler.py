@@ -440,6 +440,52 @@ for line in sys.stdin:
                 "sessionId": session, "mode": "form",
                 "message": "Which environment should I deploy to?",
                 "requestedSchema": {"type": "object", "properties": properties}}})
+        elif mode == "websearch-nonobject-then-sparse":
+            # A permission whose rawInput is not an object is declined. The
+            # next sparse permission for that same call must not be offered
+            # the query from the earlier update.
+            query = "Rust programming language official website"
+            call_id = "search-1"
+            update({"sessionUpdate": "tool_call", "toolCallId": call_id, "title": "Web search",
+                    "kind": "fetch", "status": "pending", "content": [],
+                    "_meta": {"claudeCode": {"toolName": "WebSearch"}}})
+            update({"sessionUpdate": "tool_call_update", "toolCallId": call_id,
+                    "title": 'Search "' + query + '"', "kind": "fetch",
+                    "rawInput": {"query": query},
+                    "_meta": {"claudeCode": {"toolName": "WebSearch"}}})
+            send({"id": "bad-review", "method": "session/request_permission", "params": {
+                "sessionId": session,
+                "toolCall": {"toolCallId": call_id, "name": "WebSearch", "status": "pending",
+                             "rawInput": "not-an-object"},
+                "options": [
+                    {"optionId": "allow-once", "kind": "allow_once", "name": "Yes"},
+                    {"optionId": "reject", "kind": "reject_once", "name": "No"}]}})
+        elif mode in ("websearch-review", "websearch-sparse-review"):
+            # Pinned Claude ACP 0.76.0: a WebSearch tool_call, then the query
+            # update, then session/request_permission. `websearch-review` repeats
+            # the name and object rawInput on the permission, which is the
+            # captured harness shape. `websearch-sparse-review` sends only the
+            # tool-call update ACP allows: the name and query already arrived.
+            query = "Rust programming language official website"
+            call_id = "search-1"
+            update({"sessionUpdate": "tool_call", "toolCallId": call_id, "title": "Web search",
+                    "kind": "fetch", "status": "pending", "content": [],
+                    "_meta": {"claudeCode": {"toolName": "WebSearch"}}})
+            update({"sessionUpdate": "tool_call_update", "toolCallId": call_id,
+                    "title": 'Search "' + query + '"', "kind": "fetch",
+                    "rawInput": {"query": query},
+                    "_meta": {"claudeCode": {"toolName": "WebSearch"}}})
+            tool_call = {"toolCallId": call_id, "status": "pending"}
+            if mode == "websearch-review":
+                tool_call = {"toolCallId": call_id, "name": "WebSearch", "kind": "fetch",
+                             "status": "pending", "title": 'Search "' + query + '"',
+                             "rawInput": {"query": query}}
+            send({"id": permission_id, "method": "session/request_permission", "params": {
+                "sessionId": session, "toolCall": tool_call, "options": [
+                    {"optionId": "allow-once", "kind": "allow_once", "name": "Yes"},
+                    {"optionId": "allow-with-updates", "kind": "allow_always",
+                     "name": "Yes, and don't ask again for WebSearch commands"},
+                    {"optionId": "reject", "kind": "reject_once", "name": "No"}]}})
         elif mode.startswith("declined-"):
             # A review this binding will not put to a host. The call is still
             # observed, the review is answered "no", and the turn finishes —
@@ -567,6 +613,22 @@ for line in sys.stdin:
         # Record exactly what the answer carried, then finish the turn.
         record("question-answer", json.dumps(msg["result"]))
         text("answered and carried on")
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
+    elif mode == "websearch-nonobject-then-sparse" and msg.get("id") == "bad-review":
+        send({"id": "sparse-review", "method": "session/request_permission", "params": {
+            "sessionId": session,
+            "toolCall": {"toolCallId": "search-1", "status": "pending"},
+            "options": [
+                {"optionId": "allow-once", "kind": "allow_once", "name": "Yes"},
+                {"optionId": "reject", "kind": "reject_once", "name": "No"}]}})
+    elif mode == "websearch-nonobject-then-sparse" and msg.get("id") == "sparse-review":
+        text("search denied")
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
+    elif mode in ("websearch-review", "websearch-sparse-review") and msg.get("id") == permission_id:
+        record("permission-outcome", json.dumps(msg["result"]["outcome"]))
+        text("search denied")
         result(pending, {"stopReason": "end_turn"})
         pending = None
     elif mode.startswith("declined-") and msg.get("id") == permission_id:

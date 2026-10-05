@@ -31,10 +31,7 @@ const source = fakeSource({
     session.id === "b"
       ? {
           ...session,
-          model:
-            provider === "claude"
-              ? { provider: "anthropic", modelId: "claude-opus-5" }
-              : { provider: "openai", modelId: "gpt-6-astra" },
+          model: { provider: "anthropic", modelId: "claude-opus-5" },
         }
       : session,
   ),
@@ -43,6 +40,15 @@ source.transcripts.set(
   "b",
   transcriptFrom(
     view("b", {
+      runtime: {
+        agent: provider,
+        model: "unknown-catalogue-model",
+        modelName: "Unknown",
+        provider,
+        workspace: "/tmp",
+        contextWindowTokens: 200000,
+        reasoning: true,
+      },
       messages: [
         {
           executionId: "refused",
@@ -76,6 +82,15 @@ function publishRetry(phase: "queued" | "running" | "completed") {
     kind: "transcript",
     transcript: transcriptFrom(
       view("b", {
+        runtime: {
+          agent: provider,
+          model: "unknown-catalogue-model",
+          modelName: "Unknown",
+          provider,
+          workspace: "/tmp",
+          contextWindowTokens: 200000,
+          reasoning: true,
+        },
         messages: [
           {
             executionId: "refused",

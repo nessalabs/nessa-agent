@@ -648,6 +648,143 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
     assert_gone(&root, "pid");
 }
 
+/// WebSearch stays a host review when the permission frame is only an update.
+///
+/// The pinned harness announces the call, then the query, then
+/// `session/request_permission`. One mode repeats the name and query on that
+/// request. The other omits both, which is legal for a tool-call update and
+/// used to be declined as an unnamed unreadable request. Both publish the exact
+/// query and the once-only choices, then take an explicit denial.
+#[tokio::test]
+async fn websearch_permission_is_reviewed_and_can_be_denied() {
+    let _process_slot = process_test_slot().await;
+    let query = serde_json::json!({"query": "Rust programming language official website"});
+    for mode in ["websearch-review", "websearch-sparse-review"] {
+        let (root, binding) = test_acp_binding(mode, 16);
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let active = start(&opened, "search").await;
+        assert!(
+            matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)),
+            "{mode}: missing WebSearch announcement"
+        );
+        let ExecutionUpdate::Tool(query_update) = next(&mut opened).await else {
+            panic!("{mode}: missing query update")
+        };
+        assert_eq!(
+            query_update.title().as_ref().map(String::as_str),
+            Some("Search \"Rust programming language official website\""),
+            "{mode}"
+        );
+        let ExecutionUpdate::PermissionRequested {
+            id, input, options, ..
+        } = next(&mut opened).await
+        else {
+            panic!("{mode}: expected a WebSearch permission, not a declined review")
+        };
+        assert_eq!(input.name, "WebSearch", "{mode}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&input.arguments_json).unwrap(),
+            query,
+            "{mode}"
+        );
+        assert_eq!(options.choices().len(), 2, "{mode}");
+        let deny = options
+            .choices()
+            .iter()
+            .find(|option| {
+                option.decision()
+                    == &PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request())
+            })
+            .unwrap();
+        let allow = options
+            .choices()
+            .iter()
+            .find(|option| {
+                option.decision()
+                    == &PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request())
+            })
+            .unwrap();
+        assert_eq!(deny.id().as_str(), "reject", "{mode}");
+        assert_eq!(allow.id().as_str(), "allow-once", "{mode}");
+        opened
+            .session
+            .answer_permission(PermissionAnswer {
+                attribution: attribution(),
+                execution_id: ExecutionId::new("search").unwrap(),
+                id,
+                option_id: deny.id().clone(),
+            })
+            .await
+            .map_err(|failure| failure.into_error())
+            .unwrap();
+        let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
+            panic!("{mode}: expected the turn to continue after the denial")
+        };
+        assert_eq!(chunk.as_str(), "search denied", "{mode}");
+        assert_eq!(
+            timeout(Duration::from_secs(3), active)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(ExecutionOutcome::Completed),
+            "{mode}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({"outcome":"selected","optionId":"reject"}),
+            "{mode}"
+        );
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+    }
+}
+
+/// A non-object permission must not leave the previous query approvable.
+#[tokio::test]
+async fn a_non_object_permission_does_not_leave_the_cached_query_reviewable() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("websearch-nonobject-then-sparse", 16);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "search").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let (_, first, _) = declined_updates(&mut opened).await;
+    assert_eq!(first.reason(), ReviewDeclineReason::UnreadableRequest);
+    let (_, second, _) = declined_updates(&mut opened).await;
+    assert_eq!(second.reason(), ReviewDeclineReason::UnreadableRequest);
+    let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
+        panic!("expected the turn to continue after the second decline");
+    };
+    assert_eq!(chunk.as_str(), "search denied");
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    drop(root);
+}
+
 /// A review this binding will not put to a host costs that tool, not the turn.
 ///
 /// This is the shape of the bug that started it: a tool the adapter would not

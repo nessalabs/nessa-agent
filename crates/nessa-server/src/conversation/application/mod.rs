@@ -109,10 +109,10 @@ pub use catalogue_read::{
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppCode,
-    McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts,
-    McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
-    MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppError,
+    McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal, MAX_HELD_RESOURCE_BYTES,
+    MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, ReceiverAuthority};

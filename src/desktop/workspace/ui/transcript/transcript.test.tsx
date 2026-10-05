@@ -341,9 +341,11 @@ describe("provider recovery ownership", () => {
       ...emptyTranscript("b"),
       revision: 1,
       authenticationRequired: true,
+      agent: "codex",
       messages: [conversation.messages[0]],
     })
     expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+    expect(host.querySelector(".provider-sign-in button")?.textContent).toContain("Codex")
     let sent: Promise<unknown> | undefined
     await act(async () => {
       sent = store.dispatch(
@@ -422,3 +424,17 @@ describe("provider recovery ownership", () => {
     }
   })
 })
+
+it.each([undefined, "unknown-provider"])(
+  "does not infer login from the model when runtime agent is %s",
+  async (agent) => {
+    await shown(fakeSource(), {
+      ...emptyTranscript("b"),
+      revision: 1,
+      authenticationRequired: true,
+      agent,
+      messages: [conversation.messages[0]],
+    })
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+  },
+)

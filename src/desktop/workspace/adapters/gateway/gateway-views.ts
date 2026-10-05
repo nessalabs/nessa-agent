@@ -291,6 +291,7 @@ export function transcriptFrom(
     activity,
     approval,
     revision,
+    agent: view.runtime?.agent,
     authenticationRequired:
       latestTurn?.authenticationRequired === true &&
       latestInput === inputId(latestTurn.executionId),

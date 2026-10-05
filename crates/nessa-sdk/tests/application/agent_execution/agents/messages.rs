@@ -132,18 +132,8 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                 "operation {operation}"
             );
             assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
-            if operation != 3 {
-                assert_eq!(storage.0.lock().unwrap().writes, writes);
-                assert!(storage.snapshot().invocations.is_empty());
-            } else {
-                let snapshot = storage.snapshot();
-                assert_eq!(snapshot.invocations.len(), 1, "operation {operation}");
-                assert_eq!(
-                    snapshot.invocations[0].result,
-                    Some(result),
-                    "operation {operation}"
-                );
-            }
+            assert_eq!(storage.0.lock().unwrap().writes, writes);
+            assert!(storage.snapshot().invocations.is_empty());
             agent.close(actor()).await.unwrap();
         }
     }
@@ -435,7 +425,7 @@ async fn every_entry(
         let executions = provider.executions.load(Ordering::SeqCst);
         if expected.is_err() {
             assert_eq!(executions, 0, "operation {operation}");
-            if refusal_is_durably_admitted || operation == 3 {
+            if refusal_is_durably_admitted {
                 let snapshot = storage.snapshot();
                 assert_eq!(snapshot.invocations.len(), 1, "operation {operation}");
                 assert_eq!(
@@ -770,12 +760,6 @@ async fn an_image_message_carrying_a_context_is_refused_by_a_model_without_text_
         assert_eq!(outcomes[0], outcomes[1], "operation {operation}");
         let (_, executions, writes, saved) = &outcomes[1];
         assert_eq!(*executions, 0, "operation {operation}");
-        if operation == 3 {
-            // `steer` saves the message before the model's check, and
-            // settles it as refused: #477, for text and contexts alike.
-            assert_eq!(*saved, 2, "operation {operation}");
-        } else {
-            assert_eq!((*writes, *saved), (0, 1), "operation {operation}");
-        }
+        assert_eq!((*writes, *saved), (0, 1), "operation {operation}");
     }
 }

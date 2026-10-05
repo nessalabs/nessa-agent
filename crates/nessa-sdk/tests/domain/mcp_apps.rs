@@ -121,6 +121,22 @@ fn the_ui_for_a_call_is_the_one_named_tools_or_none() {
     );
 }
 
+#[test]
+fn a_side_is_included_only_when_every_declaration_includes_it() {
+    let both = UiVisibility::BOTH;
+    let app = UiVisibility::new(false, true);
+    let model = UiVisibility::new(true, false);
+    let nobody = UiVisibility::new(false, false);
+    assert_eq!(both.every(app), app);
+    assert_eq!(app.every(both), app);
+    assert_eq!(both.every(model), model);
+    assert_eq!(model.every(both), model);
+    assert_eq!(app.every(model), nobody);
+    assert_eq!(model.every(app), nobody);
+    assert_eq!(nobody.every(both), nobody);
+    assert_eq!(both.every(nobody), nobody);
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }

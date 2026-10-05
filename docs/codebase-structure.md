@@ -4,6 +4,10 @@ The repository rules live in [AGENTS.md](../AGENTS.md) and the
 [coding standards](../CODING_STANDARDS.md). This guide maps those dependency and
 ownership rules to Nessa's current modules and changes as the codebase grows.
 
+The [system state atlas](state/README.md) organizes lifecycle reading models by
+system, service, feature, and flow. Its Markdown lives in this repository;
+the local website that renders it is a separate service.
+
 ## Organization applies to every change
 
 The [organization standards](../CODING_STANDARDS.md#organization-across-the-repository)

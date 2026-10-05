@@ -690,6 +690,9 @@ it("replaces only the typed authentication error divider with provider sign-in",
       ],
     })
     expect(container.querySelector(".provider-sign-in")).toBeNull()
+    expect(
+      container.querySelector("[data-slot=transcript-divider]")?.textContent,
+    ).toContain("failed")
   }
   await render({
     ...typed,

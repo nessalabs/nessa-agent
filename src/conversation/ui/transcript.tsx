@@ -165,6 +165,7 @@ export function Transcript({
                     </React.Fragment>
                   ))}
                   {(provider === "claude" || provider === "codex") &&
+                  latestTurn?.id === row.sourceTurnId &&
                   conversation.turns.some(
                     (turn) =>
                       turn.id === row.sourceTurnId &&
@@ -172,13 +173,11 @@ export function Transcript({
                       turn.authenticationRequired,
                   ) ? (
                     <React.Fragment key={`${row.key}:auth`}>
-                      {latestTurn?.id === row.sourceTurnId ? (
-                        <ProviderSignInCard
-                          provider={provider}
-                          onSignIn={onProviderSignIn}
-                          canSignIn={canSignInToProvider}
-                        />
-                      ) : null}
+                      <ProviderSignInCard
+                        provider={provider}
+                        onSignIn={onProviderSignIn}
+                        canSignIn={canSignInToProvider}
+                      />
                       {row.status !== "failed" ? (
                         <TurnStatus status={row.status} />
                       ) : null}

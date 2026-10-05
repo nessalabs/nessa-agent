@@ -79,6 +79,8 @@ export interface Transcript {
   readonly approval: Approval | null
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRequired?: boolean
+  /** Authoritative runtime agent; never inferred from the model catalogue. */
+  readonly agent?: string
   /** The source's count of changes to this conversation; see `revision.ts`. */
   readonly revision: number
 }
