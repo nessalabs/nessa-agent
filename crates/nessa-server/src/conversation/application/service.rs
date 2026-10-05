@@ -431,6 +431,12 @@ struct Slot {
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
     ready: Notify,
     started: AtomicBool,
+    /// Set when a stop of this owner begins, before anything of the stop is
+    /// awaited, and never cleared: a slot is not reused. From then on a
+    /// submission hands its agent no message
+    /// (`an_owner_marked_as_stopping_is_handed_no_message`). A person's
+    /// close needs none: it holds the submission lock until its slot is let go.
+    stopping: AtomicBool,
 }
 struct Inner {
     workspace: Option<String>,
@@ -935,6 +941,7 @@ impl ConversationService {
                             value: OnceCell::new(),
                             ready: Notify::new(),
                             started: AtomicBool::new(false),
+                            stopping: AtomicBool::new(false),
                         });
                         entry.insert(slot.clone());
                         service.start_slot(id.clone(), slot.clone(), actor.clone());
@@ -980,6 +987,15 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
+        self.resolve_owner(id, caller).await.map(|(_, live)| live)
+    }
+    /// [`Self::resolve`], with the slot the agent was found in: what a
+    /// submission asks whether the agent still takes work ([`Slot::stopping`]).
+    async fn resolve_owner(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(Arc<Slot>, Arc<LiveConversation>), ConversationError> {
         if self.inner.metadata.pending_mode_change(id).await?.is_some() {
             return Err(ConversationError::ApprovalModeUncertain);
         }
@@ -989,7 +1005,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
-    ) -> Result<Arc<LiveConversation>, ConversationError> {
+    ) -> Result<(Arc<Slot>, Arc<LiveConversation>), ConversationError> {
         let actor = caller.actor()?;
         let record = self
             .inner
@@ -1013,13 +1029,15 @@ impl ConversationService {
                     value: OnceCell::new(),
                     ready: Notify::new(),
                     started: AtomicBool::new(false),
+                    stopping: AtomicBool::new(false),
                 });
                 owners.insert(id.clone(), slot.clone());
                 self.start_slot(id.clone(), slot.clone(), actor);
                 slot
             }
         };
-        self.wait_for_slot(id, slot).await
+        let live = self.wait_for_slot(id, slot.clone()).await?;
+        Ok((slot, live))
     }
     fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, actor: ActionContext) {
         let service = self.clone();
@@ -1290,7 +1308,7 @@ impl ConversationService {
         // The ownership row still carries the prior committed mode. Opening a
         // fresh Agent from that row re-applies it at session startup; no
         // requested-mode mutation is replayed.
-        let live = self.resolve_unchecked(id, caller).await?;
+        let (_, live) = self.resolve_unchecked(id, caller).await?;
         live.join_attachment_owner().await;
         // The newly attached provider was constructed from the committed row.
         // Verify that choice rather than sending a second mutation: fixed-mode
@@ -1752,7 +1770,13 @@ impl ConversationService {
                 .collect::<Result<Vec<_>, _>>()?;
             let message = UserMessage::new(prompt, images, files)
                 .map_err(|_| ConversationError::InvalidInput)?;
-            let live = service.resolve(&id, &caller).await?;
+            let (owner, live) = service.resolve_owner(&id, &caller).await?;
+            // Asked under the submission lock, which a desktop stop takes to
+            // mark the owner: an owner being stopped is handed no message
+            // (`an_owner_marked_as_stopping_is_handed_no_message`, #528).
+            if owner.stopping.load(Ordering::SeqCst) {
+                return Err(ConversationError::Agent(AgentError::Closed));
+            }
             let non_default_mode = live
                 .projection
                 .lock()
@@ -3406,7 +3430,7 @@ impl ConversationService {
                     // here, or the conversation opened again after it answers
                     // `Busy` (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
                     drop(slot);
-                    self.stop_after_submission(&id, actor).await
+                    self.stop_after_submissions(&id, actor).await
                 }
             };
             // Retirement reports every stop as the agent's error: over its
@@ -3445,7 +3469,7 @@ impl ConversationService {
     ) -> Result<(), StopFailure> {
         match tokio::time::timeout(
             self.inner.deletion_budgets.stop,
-            self.stopping(id, slot, actor, ended_by),
+            self.stopping(id, slot, None, actor, ended_by),
         )
         .await
         {
@@ -3454,67 +3478,76 @@ impl ConversationService {
         }
     }
 
-    /// A desktop stop of one owner, ordered with its submissions: wait for
-    /// the conversation's submission lock, then stop whatever agent it has
-    /// then, holding the lock until the stop ends. A submission past its
-    /// last check finishes its enqueue first, and the stop then ends the
-    /// agent with the message in it, so the message settles there; one that
-    /// comes after waits, and opens the conversation again (#528).
+    /// A desktop stop of one owner, ordered with its submissions: take the
+    /// conversation's submission lock just long enough to mark the owner it
+    /// has then as stopping, then stop that owner. A submission between its
+    /// checks and its enqueue holds the lock, so it finishes its enqueue
+    /// first and the message settles on the stopped agent; one that takes
+    /// the lock after the mark is refused (#528). Nothing waits for the lock
+    /// while the agent closes.
     ///
-    /// The wait and the stop share the owner's one stop budget. A
-    /// submission holding the lock past it leaves this owner unstopped —
-    /// [`StopFailure::OverBudget`], with its agent running and still owned —
-    /// rather than stopping it under that submission
-    /// (`a_desktop_stop_that_cannot_take_the_lock_within_its_budget_leaves_the_agent_running`).
-    /// A stop that has the lock runs to its end on a task of its own, still
-    /// holding it: the agent's close goes on whether or not anyone waits for
-    /// it, and its slot has to be let go of before a submission can find the
-    /// closed agent there. Past the budget this answers `OverBudget` and the
-    /// stop carries on (`a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go`).
-    async fn stop_after_submission(
+    /// The wait for the lock and the stop run on a task of their own, and
+    /// share the owner's one stop budget
+    /// (`the_wait_for_the_lock_and_the_stop_share_one_budget`). Past it this
+    /// answers [`StopFailure::OverBudget`], and the task carries on: it
+    /// marks and stops the owner once the lock is free, and lets its slot go
+    /// once the close is confirmed
+    /// (`a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on`,
+    /// `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go`).
+    async fn stop_after_submissions(
         &self,
         id: &ConversationId,
         actor: &ActionContext,
     ) -> Result<(), StopFailure> {
-        let deadline = Instant::now() + self.inner.deletion_budgets.stop;
-        let Ok(submissions) =
-            tokio::time::timeout_at(deadline, self.inner.mode_changes.lock(id)).await
-        else {
-            return Err(StopFailure::OverBudget);
-        };
-        // The owner the lock's last holder left: a submission may have
-        // released it or opened the conversation again while this waited.
-        let Some(slot) = self.inner.conversations.lock().await.get(id).cloned() else {
-            return Ok(());
-        };
         let service = self.clone();
         let id = id.clone();
         let actor = actor.clone();
         let stop = tokio::spawn(async move {
-            let stopped = service
-                .stopping(&id, slot, &actor, &McpAppInitiator::System)
-                .await;
-            drop(submissions);
-            stopped
+            let submissions = service.inner.mode_changes.lock(&id).await;
+            // The owner the lock's last holder left: a submission may have
+            // released it or opened the conversation again.
+            let Some(slot) = service.inner.conversations.lock().await.get(&id).cloned() else {
+                return Ok(());
+            };
+            service
+                .stopping(
+                    &id,
+                    slot,
+                    Some(submissions),
+                    &actor,
+                    &McpAppInitiator::System,
+                )
+                .await
         });
-        match tokio::time::timeout_at(deadline, stop).await {
+        match tokio::time::timeout(self.inner.deletion_budgets.stop, stop).await {
             Ok(Ok(stopped)) => stopped.map_err(StopFailure::Failed),
-            // Whatever it had done is unknown, so its cleanup is too.
-            Ok(Err(_panicked)) => Err(StopFailure::Failed(AgentError::CleanupUncertain)),
+            // A panic, or the runtime ending it: what it had done is unknown,
+            // so its cleanup is too.
+            Ok(Err(_ended)) => Err(StopFailure::Failed(AgentError::CleanupUncertain)),
             Err(_) => Err(StopFailure::OverBudget),
         }
     }
 
-    /// Stop the agent of `slot`, however long that takes: wait for it to
-    /// finish opening if it has not, end its apps by `ended_by`, close it,
-    /// and release its slot once the close is confirmed.
+    /// Stop the agent of `slot`, however long that takes: mark it as
+    /// stopping, so it takes no more work, wait for it to finish opening if
+    /// it has not, end its apps by `ended_by`, close it, and release its slot
+    /// once the close is confirmed.
+    ///
+    /// `submissions` is the conversation's submission lock when the caller
+    /// took it to order this stop with them. It is let go of once the owner
+    /// is marked, and not held while the agent closes, so nothing else on
+    /// the conversation waits for the close
+    /// (`a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`).
     async fn stopping(
         &self,
         id: &ConversationId,
         slot: Arc<Slot>,
+        submissions: Option<OwnedMutexGuard<()>>,
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
     ) -> Result<(), AgentError> {
+        slot.stopping.store(true, Ordering::SeqCst);
+        drop(submissions);
         loop {
             let ready = slot.ready.notified();
             tokio::pin!(ready);
@@ -3580,7 +3613,7 @@ impl ConversationService {
 #[derive(Clone, Copy)]
 enum Submissions {
     /// Admission is open: each owner's stop is ordered with its submissions
-    /// under the submission lock ([`ConversationService::stop_after_submission`]).
+    /// under the submission lock ([`ConversationService::stop_after_submissions`]).
     Admitted,
     /// Retirement fenced admission and waited for it: nothing is being
     /// admitted, or what still is after that wait is stopped regardless.
