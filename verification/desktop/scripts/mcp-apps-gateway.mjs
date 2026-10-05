@@ -85,8 +85,8 @@ Usage: node verification/desktop/scripts/mcp-apps-gateway.mjs [options]
 Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA),
 the agent's harness installed (crates/nessa-sdk/harnesses/<agent>-acp, or
 MCP_LIVE_HARNESSES), and the agent signed in on this machine — or, with
---scripted, neither. It starts its own gateway and dev server; --url and
---mode are not used.
+--scripted, neither. It starts its own gateway and dev server. --url is
+not used. --mode prod cannot run: MCP Apps need the dev server's sandbox.
 
 Options:
   --agent claude|codex  the agent the gateway runs, and asks to call the app
@@ -126,10 +126,7 @@ the gateway shows its review first.`,
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
 async function startStack(options) {
-  if (options.mode === "prod")
-    throw new CannotRun(
-      "not run: dev server only (MCP Apps need the dev server's sandbox)",
-    )
+  if (options.mode === "prod") throw new CannotRun("not run: dev server only")
   const stack = await startGatewayStack({ ...options, mode: "dev" }, "mcp-apps-gateway", {
     scripted: options.scripted ? APP_TOOL : undefined,
     evidence: options.scripted ? options.evidence : undefined,

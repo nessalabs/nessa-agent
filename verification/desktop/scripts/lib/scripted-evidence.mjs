@@ -76,6 +76,22 @@ export function overallVerdict(checks) {
   return "pass"
 }
 
+/**
+ * Chromium and WebKit cells for one check. With no document, both cells
+ * follow the process status. With a document, an engine it does not name
+ * did not run: that cell is could-not-run, not the process status. A result
+ * with no engine does not change either cell.
+ */
+export function reportedEngines(document, status) {
+  const fallback = status === 0 ? "pass" : status === 1 ? "fail" : "could-not-run"
+  if (!document) return { chromium: fallback, webkit: fallback }
+  const found = enginesFrom(document)
+  return {
+    chromium: found.chromium ?? "could-not-run",
+    webkit: found.webkit ?? "could-not-run",
+  }
+}
+
 /** Per-engine status from one check's JSON: pass, fail, or could-not-run. */
 export function enginesFrom(document) {
   const rank = { pass: 0, "could-not-run": 1, fail: 2 }

@@ -714,8 +714,9 @@ says why where the conversations would be.
   assertions' to judge (`renders` in `mcp-apps-gateway.mjs` for
   `/mcp-resources`; the conversation loading at all for `/browser/check`).
   Harmless lines of either kind are kept in the JSON as `harmless` by
-  `smoke.mjs`, `mcp-apps-gateway.mjs` and `gateway-window.mjs`; the other
-  scripts that open a page do not keep them yet (#494). Vite's
+  `smoke.mjs`, `mcp-apps-gateway.mjs`, `gateway-window.mjs` and
+  `scripted-scenarios.mjs`; the other scripts that open a page do not keep
+  them yet (#494). Vite's
   `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
   by another edit landing on the dev server mid-run is not a finding —
   re-run.

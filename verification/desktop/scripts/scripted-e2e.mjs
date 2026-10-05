@@ -26,11 +26,11 @@ import { parseArgs } from "node:util"
 import { fileURLToPath } from "node:url"
 
 import {
-  enginesFrom,
   exitOf,
   overallVerdict,
   prSummary,
   relevantLines,
+  reportedEngines,
   scriptedCheckArgs,
   verdictLine,
 } from "./lib/scripted-evidence.mjs"
@@ -51,6 +51,14 @@ other two against a production preview. --channel is chrome (installed
 Google Chrome) or bundled (Playwright's Chromium), and is forwarded to
 each check. Exit 0 pass, 1 fail, 2 could-not-run.
 `
+
+function refuse(message) {
+  process.stderr.write(`test:e2e:scripted: ${message}\n`)
+  process.stdout.write(
+    verdictLine({ verdict: "could-not-run", evidence: "", summary: "" }),
+  )
+  process.exit(2)
+}
 
 function child(args) {
   return new Promise((resolve) => {
@@ -97,8 +105,7 @@ try {
     allowPositionals: false,
   }))
 } catch (error) {
-  process.stderr.write(`test:e2e:scripted: ${error.message}\n`)
-  process.exit(2)
+  refuse(error.message)
 }
 if (values.help) {
   process.stdout.write(help)
@@ -109,10 +116,9 @@ if (
   !["claude", "codex"].includes(values.agent) ||
   !["chrome", "bundled"].includes(values.channel)
 ) {
-  process.stderr.write(
-    "test:e2e:scripted: --mode is dev or prod, --agent is claude or codex, and --channel is chrome or bundled\n",
+  refuse(
+    "--mode is dev or prod, --agent is claude or codex, and --channel is chrome or bundled",
   )
-  process.exit(2)
 }
 
 const evidence =
@@ -166,12 +172,7 @@ for (const check of checks) {
     }),
   )
   const document = readJson(out)
-  const fallback = status === 0 ? "pass" : status === 1 ? "fail" : "could-not-run"
-  const found = document ? enginesFrom(document) : {}
-  const engines = {
-    chromium: found.chromium ?? fallback,
-    webkit: found.webkit ?? fallback,
-  }
+  const engines = reportedEngines(document, status)
   const gatewayLog = existsSync(join(dir, "gateway.log"))
     ? readFileSync(join(dir, "gateway.log"), "utf8")
     : ""

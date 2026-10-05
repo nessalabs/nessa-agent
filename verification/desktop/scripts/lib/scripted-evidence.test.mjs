@@ -17,6 +17,7 @@ import {
   overallVerdict,
   prSummary,
   relevantLines,
+  reportedEngines,
   scriptedCheckArgs,
   verdictLine,
   writeView,
@@ -184,4 +185,32 @@ test("the scripted command accepts --channel bundled", () => {
   assert.equal(accepted.status, 2)
   assert.doesNotMatch(accepted.stderr, /unknown option/)
   assert.match(accepted.stderr, /--channel is chrome or bundled/)
+  assert.deepEqual(JSON.parse(accepted.stdout), {
+    verdict: "could-not-run",
+    evidence: "",
+    summary: "",
+  })
+})
+
+test("an engine the document does not name is not the process status", () => {
+  const document = {
+    results: [
+      { name: "permission", engine: "chromium", ok: true },
+      { name: "close", error: "browser.close failed" },
+    ],
+  }
+  assert.deepEqual(reportedEngines(document, 1), {
+    chromium: "pass",
+    webkit: "could-not-run",
+  })
+  assert.deepEqual(reportedEngines(null, 1), { chromium: "fail", webkit: "fail" })
+  assert.equal(
+    overallVerdict([{ status: 1, engines: reportedEngines(document, 1) }]),
+    "fail",
+  )
+  assert.match(
+    relevantLines({ results: document.results, verdict: "fail" }).join("\n"),
+    /close: browser.close failed/,
+  )
+  assert.equal(enginesFrom(document).webkit, undefined)
 })
