@@ -35,10 +35,12 @@ import {
 import type { TooltipAttributes } from "../../../ui/tooltip"
 import type {
   Approval,
+  ApprovalAsk,
   ApprovalChoice,
   ApprovalOption,
   ApprovalOrigin,
 } from "../../model/transcript"
+import { named, type Said } from "./said"
 import "./approval-card.css"
 
 /**
@@ -46,39 +48,35 @@ import "./approval-card.css"
  * server, so that a review an app opened is not put in the agent's mouth
  * (`transcript.test.tsx` O1/O2, `overview.test.tsx` O3, on #436). The one
  * place the asker is worded: the card's head (`approvalHead`) and the
- * overview's row both read it; each says what is asked in its own way.
+ * overview's row both read it; each says what is asked in its own way. An
+ * app's server is a name the window did not choose, isolated wherever it is
+ * shown (`said.tsx`).
  */
-export function approvalAsker(origin: ApprovalOrigin, agent: string): string {
+export function approvalAsker(origin: ApprovalOrigin, agent: string): Said {
   switch (origin.kind) {
     case "agent":
-      return agent
+      return [agent]
     case "app":
-      return `The ${origin.server} app`
+      return ["The ", named(origin.server), " app"]
   }
 }
 
 /**
- * The card's head: who asks, and what — to run a command, or the tool an app
- * named, or to send a message as the person. Total over who asks and what is
- * asked (`transcript.test.tsx` D19, on #390).
+ * The card's head: who asks, and what — the agent to run a command; an app
+ * to run the tool it named, or to send a message as the person. The agent
+ * asks only to run tools: the client refuses a view that says otherwise
+ * (`conversation-validate.ts`, D19 on #390).
  */
 export function approvalHead(
   approval: Pick<Approval, "origin" | "ask">,
   agent: string,
-): string {
-  const { origin, ask } = approval
+): Said {
+  const { origin } = approval
   const asker = approvalAsker(origin, agent)
-  switch (ask) {
-    case "message":
-      return `${asker} wants to send a message as you`
-    case "tool":
-      switch (origin.kind) {
-        case "agent":
-          return `${asker} wants to run a command`
-        case "app":
-          return `${asker} wants to run ${origin.tool}`
-      }
-  }
+  if (origin.kind === "agent") return [...asker, " wants to run a command"]
+  return approval.ask === "message"
+    ? [...asker, " wants to send a message as you"]
+    : [...asker, " wants to run ", named(origin.tool)]
 }
 
 /**
@@ -89,13 +87,22 @@ export function approvalHead(
 export function approvalRequest(
   approval: Pick<Approval, "origin" | "ask" | "command">,
   agent: string,
-): string {
-  switch (approval.ask) {
-    case "message":
-      return approvalHead(approval, agent)
-    case "tool":
-      return `${approvalAsker(approval.origin, agent)} wants to run ${approval.command}`
-  }
+): Said {
+  return approval.ask === "message"
+    ? approvalHead(approval, agent)
+    : [...approvalAsker(approval.origin, agent), ` wants to run ${approval.command}`]
+}
+
+/**
+ * What Deny and Allow Once do, as their tooltips say it, by what is asked: a
+ * message is sent, not run (D19 on #390). Read by the overview's row and its
+ * peek (`overview.test.tsx` D19).
+ */
+export const answerTips: Readonly<
+  Record<ApprovalAsk, { readonly deny: string; readonly once: string }>
+> = {
+  tool: { deny: "Don’t run it", once: "Run it once" },
+  message: { deny: "Don’t send it", once: "Send it once" },
 }
 
 /** The first word of a label, shown when the card is too narrow for the whole. */

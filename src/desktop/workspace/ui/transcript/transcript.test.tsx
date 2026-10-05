@@ -25,6 +25,7 @@ import {
 import { fakeSource, settle, testStore } from "../../testing"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { approvalHead } from "./approval-request"
+import { spoken } from "./said"
 import { Transcript } from "./transcript"
 
 class Observer {
@@ -235,8 +236,13 @@ describe("a transcript", () => {
       "Sent by show, from charts",
     ])
     const [author] = authors
-    expect(author?.getAttribute("title")).toBe("Sent by show, from charts")
-    expect(author?.dataset.messageApp).toBe("show")
+    // Whole on the page, wrapped where it must be: nothing repeats it in a title.
+    expect(author?.hasAttribute("title")).toBe(false)
+    expect(author?.dataset.messageApp).toBe("charts/show")
+    // Each name isolated from the words around it, and from the other.
+    expect(
+      [...(author?.querySelectorAll("bdi") ?? [])].map((name) => name.textContent),
+    ).toEqual(["show", "charts"])
     const message = author?.closest<HTMLElement>(".workspace-message")
     expect(message?.dataset.role).toBe("user")
     // Plain text in reading order: the label, then the bubble it names.
@@ -421,6 +427,12 @@ describe("a transcript", () => {
     })
     expect(head()).toBe("The mcptest app wants to run app_delete_row")
     expect(head()).not.toContain(agent)
+    // The names an app chose are isolated from the words around them (E1-8).
+    expect(
+      [...(host.querySelectorAll(".workspace-approval-head bdi") ?? [])].map(
+        (name) => name.textContent,
+      ),
+    ).toEqual(["mcptest", "app_delete_row"])
     expect(card()?.dataset.origin).toBe("app")
   })
 
@@ -453,20 +465,20 @@ describe("a transcript", () => {
     ).toEqual([["approve", "b", "app-ap", "once", "person", "allow"]])
   })
 
-  it("D19 (#390): says what is asked — an app's message is not a tool to run — total over who asks and what", async () => {
+  it("D19 (#390): says what is asked — an app's message is not a tool to run — over every combination the client lets through", async () => {
     const app = { kind: "app", server: "mcptest", tool: "show_rows" } as const
-    expect(approvalHead({ origin: app, ask: "message" }, "Claude")).toBe(
-      "The mcptest app wants to send a message as you",
+    expect(approvalHead({ origin: app, ask: "message" }, "Claude")).toEqual([
+      "The ",
+      { name: "mcptest" },
+      " app",
+      " wants to send a message as you",
+    ])
+    expect(spoken(approvalHead({ origin: app, ask: "tool" }, "Claude"))).toBe(
+      "The \u2068mcptest\u2069 app wants to run \u2068show_rows\u2069",
     )
-    expect(approvalHead({ origin: app, ask: "tool" }, "Claude")).toBe(
-      "The mcptest app wants to run show_rows",
-    )
-    expect(approvalHead({ origin: { kind: "agent" }, ask: "message" }, "Claude")).toBe(
-      "Claude wants to send a message as you",
-    )
-    expect(approvalHead({ origin: { kind: "agent" }, ask: "tool" }, "Claude")).toBe(
-      "Claude wants to run a command",
-    )
+    expect(
+      spoken(approvalHead({ origin: { kind: "agent" }, ask: "tool" }, "Claude")),
+    ).toBe("Claude wants to run a command")
     await shown(fakeSource(), {
       ...conversation,
       approval: {
@@ -484,6 +496,9 @@ describe("a transcript", () => {
     const card = host.querySelector<HTMLElement>(".workspace-approval")
     expect(card?.querySelector(".workspace-approval-head")?.textContent).toBe(
       "The mcptest app wants to send a message as you",
+    )
+    expect(card?.querySelector(".workspace-approval-head bdi")?.textContent).toBe(
+      "mcptest",
     )
     expect(card?.dataset.origin).toBe("app")
     expect(card?.dataset.ask).toBe("message")

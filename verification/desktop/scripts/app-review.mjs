@@ -66,7 +66,15 @@ Checks, per engine and layout (--only <names> to pick):
              (scrolled to, it is what the page hits at its centre)
   message-overview
              (#390) the overview row's accessible name says the app wants to
-             send a message as you`,
+             send a message as you, the server's name isolated (FSI…PDI)
+  message-label
+             (#390) a landed message's label, with the app's names short and
+             each as long as the gateway allows: in a message column of
+             280/340/420/600/900 px, then in an 800×480 window (the desktop's
+             least), it is whole — no ellipsis, no title, nothing cut or past
+             the column — wrapped onto more lines where it must, each name in
+             its own <bdi>, data-message-app server/tool, above its bubble at
+             its right edge`,
 }
 
 // What page.evaluate is handed: plain strings (`css` holds functions, #441).
@@ -146,6 +154,69 @@ const rect = (locator) =>
     const r = e.getBoundingClientRect()
     return { x: r.left, y: r.top, w: r.width, h: r.height }
   })
+
+/** The names a label isolates, each in its own `<bdi>`. */
+const labelNames = (author) =>
+  author
+    .evaluate((e) => [...e.querySelectorAll("bdi")].map((name) => name.textContent))
+    .catch(() => [])
+
+/**
+ * A landed message's label against its column: whether it is whole — every
+ * character laid out inside it, none cut by an ellipsis or past its box — on
+ * how many lines, and where it sits by its bubble.
+ */
+const labelFits = (author) =>
+  author.evaluate((e) => {
+    const message = e.parentElement
+    const bubble = message.querySelector(".workspace-bubble")
+    const box = e.getBoundingClientRect()
+    const column = message.getBoundingClientRect()
+    const under = bubble.getBoundingClientRect()
+    const style = getComputedStyle(e)
+    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2
+    // Every character's own box, inside the label's.
+    const range = document.createRange()
+    range.selectNodeContents(e)
+    const glyphs = [...range.getClientRects()]
+    const outside = glyphs.filter(
+      (r) => r.left < box.left - 0.5 || r.right > box.right + 0.5,
+    ).length
+    return {
+      label: Math.round(box.width),
+      column: Math.round(column.width),
+      lines: Math.round(box.height / line),
+      cut: style.textOverflow === "ellipsis" || style.whiteSpace === "nowrap",
+      overflow: e.scrollWidth > e.clientWidth + 1,
+      outside,
+      pastColumn: Math.max(
+        0,
+        Math.round(box.right - column.right),
+        Math.round(column.left - box.left),
+      ),
+      above: box.bottom <= under.top + 0.5,
+      rightEdgeApart: Math.round(Math.abs(box.right - under.right)),
+      title: e.getAttribute("title"),
+      app: e.dataset.messageApp ?? null,
+    }
+  })
+
+/** Sets the person's message column's width, as a pane that wide would. */
+async function columnWidth(page, width) {
+  await page.evaluate((width) => {
+    let style = document.getElementById("__verify_column")
+    if (!style) {
+      style = document.createElement("style")
+      style.id = "__verify_column"
+      document.head.append(style)
+    }
+    style.textContent =
+      width === null
+        ? ""
+        : `.workspace-message[data-role="user"] { width: ${width}px; box-sizing: border-box; }`
+  }, width)
+  await frames(page, 2)
+}
 
 /** What the card says: who asked, by its origin and its head. */
 const cardSays = (page) =>
@@ -482,6 +553,12 @@ Object.assign(checks, {
         const author = authors.first()
         const label = (await author.textContent().catch(() => null)) ?? ""
         const expectedLabel = names.sentBy(appReview.appTool, appReview.server)
+        const isolated = await labelNames(author)
+        if (
+          JSON.stringify(isolated) !==
+          JSON.stringify([appReview.appTool, appReview.server])
+        )
+          failures.push(`the label isolates ${JSON.stringify(isolated)}`)
         if (label !== expectedLabel)
           failures.push(`the label says "${label}", not "${expectedLabel}"`)
         const message = author.locator("xpath=..")
@@ -626,6 +703,91 @@ Object.assign(checks, {
     } finally {
       await opened.close()
     }
+  },
+
+  async "message-label"({ browser, url, layout, engine, options }) {
+    const failures = []
+    const seen = []
+    for (const long of [false, true]) {
+      const opened = await onConversation(browser, url, layout)
+      const { page } = opened
+      try {
+        const name = long
+          ? await page.evaluate(() => window.__appReview.longestTool)
+          : null
+        const labelled = long
+          ? { server: name, tool: name }
+          : { server: appReview.server, tool: appReview.appTool }
+        await page.evaluate((names) => window.__appReview.labelAs(names), labelled)
+        const tag = long ? "long names" : "short names"
+        if (!(await messaged(page, appReview.message))) {
+          failures.push(`${tag}: ${notDrawn}`)
+          continue
+        }
+        await page
+          .getByRole("button", { name: names.allowOnce, exact: true })
+          .first()
+          .click()
+        const author = page.locator(css.messageAuthor).first()
+        await author.waitFor({ timeout: 5000 }).catch(() => {})
+        if (!(await page.locator(css.messageAuthor).count())) {
+          failures.push(`${tag}: no label once the message was allowed`)
+          continue
+        }
+        const expected = names.sentBy(labelled.tool, labelled.server)
+        const text = (await author.textContent().catch(() => null)) ?? ""
+        if (text !== expected) failures.push(`${tag}: the label says "${text}"`)
+        const isolated = await labelNames(author)
+        if (JSON.stringify(isolated) !== JSON.stringify([labelled.tool, labelled.server]))
+          failures.push(`${tag}: the label isolates ${JSON.stringify(isolated)}`)
+        const sizes = [
+          ...[280, 340, 420, 600, 900].map((width) => ({ width, window: null })),
+          { width: null, window: { width: 800, height: 480 } },
+        ]
+        for (const size of sizes) {
+          if (size.window) await page.setViewportSize(size.window)
+          await columnWidth(page, size.width)
+          await settled(page)
+          const r = await labelFits(author)
+          const at = size.window
+            ? `${size.window.width}×${size.window.height} window`
+            : `${size.width}px column`
+          seen.push({ at, long, ...r })
+          const where = `${tag}, ${at}`
+          if (r.cut) failures.push(`${where}: the label is cut to one line`)
+          if (r.overflow) failures.push(`${where}: the label overflows its box`)
+          if (r.outside)
+            failures.push(`${where}: ${r.outside} glyph boxes outside the label`)
+          if (r.pastColumn)
+            failures.push(`${where}: the label runs ${r.pastColumn}px past its column`)
+          if (!r.above) failures.push(`${where}: the label is not above the bubble`)
+          if (r.rightEdgeApart > 6)
+            failures.push(
+              `${where}: the label is ${r.rightEdgeApart}px off the bubble's right edge`,
+            )
+          if (r.title !== null) failures.push(`${where}: the label has a title`)
+          if (r.app !== `${labelled.server}/${labelled.tool}`)
+            failures.push(`${where}: data-message-app is ${r.app}`)
+          if (long && size.width === 280 && r.lines < 2)
+            failures.push(`${where}: the long label is on ${r.lines} line, not wrapped`)
+          if (!long && r.lines !== 1)
+            failures.push(`${where}: the short label is on ${r.lines} lines, not 1`)
+          if (options.shots) {
+            mkdirSync(options.shots, { recursive: true })
+            await author.locator("xpath=..").screenshot({
+              path: join(
+                options.shots,
+                `app-review-label-${engine}-${layout}-${long ? "long" : "short"}-${size.width ?? "window"}.png`,
+              ),
+            })
+          }
+        }
+      } finally {
+        failures.push(...opened.errors)
+        await opened.close()
+      }
+    }
+    return { widths: seen, failures }
   },
 })
 

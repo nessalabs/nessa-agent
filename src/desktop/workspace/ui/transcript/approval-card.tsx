@@ -8,6 +8,7 @@ import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import type { Approval } from "../../model/transcript"
 import { failureCopy } from "../failure-copy"
 import { ApprovalActions, ApprovalCommand, approvalHead } from "./approval-request"
+import { Saying } from "./said"
 
 /**
  * The one warm thing on the page: a command the agent — or an MCP App, which
@@ -40,7 +41,7 @@ export const ApprovalCard = memo(function ApprovalCard({
       <div className="workspace-approval-head">
         <DesktopIcon name="needsYou" />
         <span className="workspace-approval-head-words">
-          {approvalHead(approval, agentName(agentOf(model)))}
+          <Saying said={approvalHead(approval, agentName(agentOf(model)))} />
         </span>
       </div>
       <ApprovalCommand command={approval.command} />

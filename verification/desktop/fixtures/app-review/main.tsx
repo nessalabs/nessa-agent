@@ -109,6 +109,10 @@ const ended: ConversationMessage = {
 // app sent that the person allowed.
 const turns: ConversationMessage[] = [ended]
 
+// The names an allowed message's turn is labelled with: the app's own, or
+// what a check asks for (`labelAs`) — the longest a gateway allows, say.
+let labelled = { server, tool: appTool }
+
 /** The conversation's view at `revision`, with the app's review when one is open. */
 function viewWith(revision: number, review?: ConversationPermission): ConversationView {
   const value = view(conversation, {
@@ -280,8 +284,7 @@ const mcpApps = {
               app: {
                 executionId: app.executionId,
                 toolId: app.toolId,
-                server,
-                tool: appTool,
+                ...labelled,
               },
             })
           },
@@ -345,6 +348,7 @@ Object.assign(window, {
         .updateModelContext(
           { sessionId: conversation, server, app },
           { content: [{ type: "text", text }] },
+          new AbortController().signal,
         )
         .then((outcome) => {
           settled = outcome.kind
@@ -368,6 +372,10 @@ Object.assign(window, {
           })) ?? [],
         contexts,
       }
+    },
+    /** The server and tool the next allowed message's turn is labelled with. */
+    labelAs(names: { server: string; tool: string }) {
+      labelled = { ...names }
     },
     /** A tool's name with no break in it, as long as the gateway allows. */
     longestTool: "x".repeat(bounds.maxMcpNameBytes),

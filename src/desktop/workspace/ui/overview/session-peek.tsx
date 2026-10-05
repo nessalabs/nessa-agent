@@ -25,7 +25,11 @@ import { agentName, agentOf, modelName, nowLine } from "../../model/workspace-in
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { failureCopy, readFailureCopy } from "../failure-copy"
-import { ApprovalActions, ApprovalCommand } from "../transcript/approval-request"
+import {
+  answerTips,
+  ApprovalActions,
+  ApprovalCommand,
+} from "../transcript/approval-request"
 import { LiveRow } from "../transcript/live-row"
 import { Message } from "../transcript/message"
 import "../transcript/transcript.css"
@@ -200,13 +204,13 @@ export const SessionPeek = memo(function SessionPeek({
               options={approval.options}
               disabled={!answerable}
               tips={{
-                deny: tooltip("Don’t run it", {
+                deny: tooltip(answerTips[approval.ask].deny, {
                   shortcut: labelOf(overviewKeys, "deny"),
                 }),
                 always: tooltip("Allow it now, and whenever it’s asked again", {
                   shortcut: labelOf(overviewKeys, "always"),
                 }),
-                once: tooltip("Run it once", {
+                once: tooltip(answerTips[approval.ask].once, {
                   shortcut: labelOf(overviewKeys, "once"),
                 }),
               }}

@@ -584,8 +584,12 @@ export const appReview = {
   sessionId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
   /** The card's head: the app by its server, and the tool it named. */
   head: (tool) => names.appAsks("mcptest", tool),
-  /** The overview row's accessible name: the title, then the app asking. */
-  row: (tool) => `Clean up the stale rows. ${names.appAsks("mcptest", tool)} {}.`,
+  /**
+   * The overview row's accessible name: the title, then the app asking, its
+   * server isolated between FSI and PDI (`spoken` in `said.tsx`, #390).
+   */
+  row: (tool) =>
+    `Clean up the stale rows. ${names.appAsks("\u2068mcptest\u2069", tool)} {}.`,
   tool: "app_delete_row",
   /** The app's own tool and server, as its message's review and label name them (#390). */
   appTool: "show_rows",
@@ -595,7 +599,7 @@ export const appReview = {
   /** A message's review card's head (#390). */
   messageHead: names.appAsksToMessage("mcptest"),
   /** A message's overview row's accessible name. */
-  messageRow: `Clean up the stale rows. ${names.appAsksToMessage("mcptest")}.`,
+  messageRow: `Clean up the stale rows. ${names.appAsksToMessage("\u2068mcptest\u2069")}.`,
   /** The fixture page's title, by which the script knows it is served. */
   title: "Nessa: an app's review",
 }

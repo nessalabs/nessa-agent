@@ -388,7 +388,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   [`docs/design/mcp-app-calls.md`](../../docs/design/mcp-app-calls.md#an-app-in-its-conversation-the-desktop-390)):
   `ui/message` is answered `{}`, and the transcript gains exactly one message
   of the person's with the app's words, labelled "Sent by show_fixture, from
-  nessa-fixture" (and its `title` the same) above its bubble, over the
+  nessa-fixture" — wrapped, never cut, so with no `title`; each name in its
+  own `<bdi>`; `data-message-app` `server/tool` — above its bubble, over the
   bubble's right edge (within 6 px) and inside the column; the person's own
   messages carry none; another while the sample's reply runs is refused
   (`isError: true`) and adds nothing; `ui/update-model-context` is refused
@@ -495,11 +496,16 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   420, 600 and 900 px, the head stays inside the card, the card does not
   overflow, and Allow Once stays reachable (scrolled to, it is what the page
   hits at its centre). The overview row is named "<title>. The <server> app
-  wants to send a message as you.". (`ask` from the gateway's `ReviewAsk`;
+  wants to send a message as you.", the server's name between FSI and PDI,
+  and its tooltips say "Don’t send it" and "Send it once". The label, with
+  the app's names short and each as long as the gateway allows, is whole in
+  a message column of 280–900 px and in an 800×480 window: no ellipsis, no
+  title, no glyph outside it nor past its column, wrapped onto more lines at
+  280 px, each name in its own `<bdi>`. (`ask` from the gateway's `ReviewAsk`;
   `approvalHead` and `approvalRequest` in `approval-request.tsx`; the
   `sendMessage` routing in `dependencies.ts`.) The real gateway's message
   path in a browser is #550.
-  _Check:_ `app-review.mjs --only message,message-card,message-overview --shots <dir>`.
+  _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.

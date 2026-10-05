@@ -10,22 +10,26 @@ import {
   type MessageApp,
 } from "../../model/transcript"
 import { RichText } from "./rich-text"
+import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { failureCopy } from "../failure-copy"
 
 /**
- * One message. The person's is a bubble, saying so when it has not reached
- * the agent, and saying above it which MCP App wrote it when one did
- * (`messageAuthor`, #390); the agent's is prose, steps, code, lists and widgets, each a
- * card its plugin draws (`InlineWidget`). Memoised on the
- * message itself, so a reply streaming in renders only the message it grows.
+ * Who wrote a message of the person's on their behalf: the app's tool, from
+ * its server, each name isolated from the words around it (`said.tsx`).
  */
-/** Who wrote a message of the person's on their behalf: the app's tool, from its server. */
-export function messageAuthor(app: MessageApp): string {
-  return `Sent by ${app.tool}, from ${app.server}`
+export function messageAuthor(app: MessageApp): Said {
+  return ["Sent by ", named(app.tool), ", from ", named(app.server)]
 }
 
+/**
+ * One message. The person's is a bubble, saying so when it has not reached
+ * the agent, and saying above it which MCP App wrote it when one did
+ * (`messageAuthor`, #390); the agent's is prose, steps, code, lists and
+ * widgets, each a card its plugin draws (`InlineWidget`). Memoised on the
+ * message itself, so a reply streaming in renders only the message it grows.
+ */
 export const Message = memo(function Message({
   sessionId,
   message,
@@ -48,11 +52,9 @@ export const Message = memo(function Message({
         {message.app ? (
           <p
             className="workspace-message-author"
-            data-message-app={message.app.tool}
-            // The whole of it, where the line is too narrow to show it.
-            title={messageAuthor(message.app)}
+            data-message-app={`${message.app.server}/${message.app.tool}`}
           >
-            {messageAuthor(message.app)}
+            <Saying said={messageAuthor(message.app)} />
           </p>
         ) : null}
         <div className="workspace-bubble">

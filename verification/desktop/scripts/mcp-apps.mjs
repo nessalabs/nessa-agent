@@ -46,7 +46,9 @@ Checks, per engine and layout (--only <names> to pick):
   tools-call   tools/call answered for the allowed tool, refused for the hidden one
   message      ui/message answered {} and landing in the transcript as one message
                of the person's with the app's words, labelled "Sent by
-               show_fixture, from nessa-fixture" above its bubble, over the
+               show_fixture, from nessa-fixture" — wrapped, not cut, so with no
+               title; each name in a <bdi>; data-message-app server/tool —
+               above its bubble, over the
                bubble's right edge (within 6 px), inside the column, and no label
                on the person's own; another while the sample's reply runs is
                isError and adds nothing; ui/update-model-context is refused, the
@@ -773,8 +775,28 @@ const checks = {
     const label = (await author.textContent().catch(() => null)) ?? ""
     const expected = names.sentBy(names.fixtureTool, names.fixtureServer)
     if (label !== expected) failures.push(`the label says "${label}", not "${expected}"`)
+    // Whole on the page, wrapped where it must be: no title repeats it.
     const title = await author.getAttribute("title").catch(() => null)
-    if (title !== expected) failures.push(`the label's title is "${title}"`)
+    if (title !== null) failures.push(`the label has a title, "${title}"`)
+    const writer = await author.getAttribute("data-message-app").catch(() => null)
+    if (writer !== `${names.fixtureServer}/${names.fixtureTool}`)
+      failures.push(`the label's data-message-app is "${writer}"`)
+    // Each name isolated from the words around it (#390, E1-8).
+    const isolated = await author
+      .evaluate((e) => [...e.querySelectorAll("bdi")].map((name) => name.textContent))
+      .catch(() => [])
+    if (
+      JSON.stringify(isolated) !==
+      JSON.stringify([names.fixtureTool, names.fixtureServer])
+    )
+      failures.push(`the label isolates ${JSON.stringify(isolated)}`)
+    const wraps = await author
+      .evaluate((e) => {
+        const style = getComputedStyle(e)
+        return style.whiteSpace !== "nowrap" && style.textOverflow !== "ellipsis"
+      })
+      .catch(() => false)
+    if (!wraps) failures.push("the label is cut to one line, not wrapped")
     // The label sits over its own message: the person's, with the app's words.
     const message = author.locator("xpath=..")
     const bubble = message.locator(css.bubble)

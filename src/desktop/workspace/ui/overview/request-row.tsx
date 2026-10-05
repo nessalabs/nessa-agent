@@ -23,7 +23,8 @@ import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { offersChoice, optionOf } from "../../model/transcript"
-import { approvalRequest } from "../transcript/approval-request"
+import { answerTips, approvalRequest } from "../transcript/approval-request"
+import { spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
@@ -152,7 +153,7 @@ export const RequestRow = memo(function RequestRow({
         data-answer={settling?.choice}
         role="group"
         tabIndex={current ? 0 : -1}
-        aria-label={`${summary.title}. ${approval ? approvalRequest(approval, agent) : `${agent} is waiting for you`}.`}
+        aria-label={`${summary.title}. ${approval ? spoken(approvalRequest(approval, agent)) : `${agent} is waiting for you`}.`}
         data-offers-always={
           approval && offersChoice(approval, "always") ? true : undefined
         }
@@ -211,7 +212,7 @@ export const RequestRow = memo(function RequestRow({
                   data-answer={option.choice}
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
-                  {...tooltip("Don’t run it", {
+                  {...tooltip(answerTips[approval.ask].deny, {
                     shortcut: labelOf(overviewKeys, "deny"),
                   })}
                   onClick={(event) => {
@@ -232,8 +233,8 @@ export const RequestRow = memo(function RequestRow({
                   disabled={!answerable}
                   {...tooltip(
                     foldedAlways && option === onceOptions[0]
-                      ? "Run it once. Hold ⌥ to always allow it"
-                      : option.label,
+                      ? `${answerTips[approval.ask].once}. Hold ⌥ to always allow it`
+                      : answerTips[approval.ask].once,
                     { shortcut: labelOf(overviewKeys, "once") },
                   )}
                   onClick={(event) => {

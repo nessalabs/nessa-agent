@@ -315,8 +315,9 @@ describe("the agents overview", () => {
       label("first"),
     )?.[1]
     expect(agent).toBeTruthy()
+    // The app's server isolated from the words around it, as on the card.
     expect(label("second")).toMatch(
-      /\. The mcptest app wants to run app_delete_row \{\}\.$/,
+      /\. The \u2068mcptest\u2069 app wants to run app_delete_row \{\}\.$/,
     )
     expect(label("second")).not.toContain(`${agent} wants`)
   })
@@ -328,11 +329,46 @@ describe("the agents overview", () => {
     })
     await open()
     expect(card("second")?.getAttribute("aria-label")).toMatch(
-      /\. The mcptest app wants to send a message as you\.$/,
+      /\. The \u2068mcptest\u2069 app wants to send a message as you\.$/,
     )
     expect(card("first")?.getAttribute("aria-label")).toMatch(
       / wants to run security import build\.p12\.$/,
     )
+  })
+
+  it("D19 (#390): a message's answers say it is sent, not run, in the row and in its peek; a tool's say it is run", async () => {
+    await mount({
+      secondAsker: { kind: "app", server: "mcptest", tool: "show_rows" },
+      secondAsks: "message",
+    })
+    await open()
+    const tips = (scope: Element | null | undefined) =>
+      [...(scope?.querySelectorAll<HTMLElement>("button[data-tooltip]") ?? [])]
+        .map((each) => each.dataset.tooltip ?? "")
+        .filter((tip) => / it/.test(tip))
+    expect(tips(card("second"))).toEqual([
+      "Don’t send it",
+      "Send it once. Hold ⌥ to always allow it",
+    ])
+    expect(tips(card("first"))).toEqual([
+      "Don’t run it",
+      "Run it once. Hold ⌥ to always allow it",
+    ])
+    await act(async () => card("second")?.click())
+    await act(async () => settle(10))
+    const peek = host.querySelector(".agents-inline-peek .agents-peek-ask")
+    expect(tips(peek)).toEqual([
+      "Don’t send it",
+      "Allow it now, and whenever it’s asked again",
+      "Send it once",
+    ])
+    await act(async () => card("first")?.click())
+    await act(async () => settle(10))
+    expect(tips(host.querySelector(".agents-inline-peek .agents-peek-ask"))).toEqual([
+      "Don’t run it",
+      "Allow it now, and whenever it’s asked again",
+      "Run it once",
+    ])
   })
 
   it("answers from the keyboard as the person, and moves on to the next request", async () => {

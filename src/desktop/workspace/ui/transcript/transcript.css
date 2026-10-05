@@ -169,15 +169,16 @@
 }
 
 /* Which MCP App wrote the person's message, on their behalf: said above it,
-   over its right edge, on one line (#390). */
+   over its right edge, as wide as the bubble may be, and wrapped rather than
+   cut, so both names are always whole on the page (#390). A name with no
+   break in it breaks anywhere rather than overflow the pane. */
 .workspace-message-author {
   max-width: min(84%, 540px);
   margin: 0 4px 4px 0;
-  overflow: hidden;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: end;
+  overflow-wrap: anywhere;
 }
 
 .workspace-message-failed {
