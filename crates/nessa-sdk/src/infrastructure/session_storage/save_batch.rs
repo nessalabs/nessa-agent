@@ -132,12 +132,11 @@ impl SaveCommits {
         }
     }
 
-    fn prepare(&self, event_id: &event_stream::EventId) -> Prepared {
+    fn prepare(&self, stream: &StreamKey, event_id: &event_stream::EventId) -> Prepared {
         let mut attempts = self.lock();
-        let Some(attempt) = attempts
-            .iter_mut()
-            .find(|attempt| attempt.events.iter().any(|event| event.id == *event_id))
-        else {
+        let Some(attempt) = attempts.iter_mut().find(|attempt| {
+            &attempt.stream == stream && attempt.events.iter().any(|event| event.id == *event_id)
+        }) else {
             return Prepared::Passthrough;
         };
         let index = attempt
@@ -305,7 +304,7 @@ impl EventStore for RecordStore {
     }
 
     async fn append_atomic(&self, stream: &StreamKey, event: NewEvent) -> Result<AppendReceipt> {
-        match self.saves.prepare(&event.id) {
+        match self.saves.prepare(stream, &event.id) {
             Prepared::Passthrough => self.sqlite.append_atomic(stream, event).await,
             Prepared::Cached(receipt) => Ok(receipt),
             Prepared::Lead { id, from, batch } => {

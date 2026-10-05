@@ -872,6 +872,60 @@ async fn save_commits_its_physical_events_in_one_transaction() {
 }
 
 #[tokio::test]
+async fn concurrent_opening_saves_on_two_sessions_both_publish() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+    let left_id = SessionId::new("left").unwrap();
+    let right_id = SessionId::new("right").unwrap();
+    let left = storage.open(left_id.clone()).await.unwrap();
+    let right = storage.open(right_id.clone()).await.unwrap();
+    let (left_change, left_snapshot) = opened(&left_id);
+    let (right_change, right_snapshot) = opened(&right_id);
+    let (left_saved, right_saved) = tokio::join!(
+        left.save_changes(
+            left.load().await.unwrap().binding().clone(),
+            left_snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![left_change]).unwrap()],
+        ),
+        right.save_changes(
+            right.load().await.unwrap().binding().clone(),
+            right_snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![right_change]).unwrap()],
+        ),
+    );
+    left_saved.unwrap();
+    right_saved.unwrap();
+    assert_eq!(
+        left.load().await.unwrap().state(),
+        SessionLoadState::Published
+    );
+    assert_eq!(
+        right.load().await.unwrap().state(),
+        SessionLoadState::Published
+    );
+    let left_follow = SessionChange::InputAccepted(Box::new(input_record("left-follow", 16)));
+    let right_follow = SessionChange::InputAccepted(Box::new(input_record("right-follow", 16)));
+    left.save_changes(
+        left.load().await.unwrap().binding().clone(),
+        with_input(&left_snapshot, &left_follow),
+        vec![SessionSaveUnit::new(vec![left_follow]).unwrap()],
+    )
+    .await
+    .unwrap();
+    right
+        .save_changes(
+            right.load().await.unwrap().binding().clone(),
+            with_input(&right_snapshot, &right_follow),
+            vec![SessionSaveUnit::new(vec![right_follow]).unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(left);
+    drop(right);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn save_commit_latency_sample() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("sessions");
