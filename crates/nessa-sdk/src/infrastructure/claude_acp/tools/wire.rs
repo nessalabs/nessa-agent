@@ -182,7 +182,14 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
     // Validate the complete representation before retaining provider name state.
     let mut update = acp_tool_call(value)?;
     let id = identifier(value, "toolCallId")?.to_owned();
-    let cached = cache_input(names, &id, supplied_input(value));
+    // A finished call will not be reviewed. Dropping its input keeps the
+    // execution budget for calls that are still active. Pending and running
+    // updates, and updates that omit status, still go through `cache_input`.
+    let cached = if call_finished(value) {
+        CachedInput::Cleared
+    } else {
+        cache_input(names, &id, supplied_input(value))
+    };
     if let Some(name) = frame_tool_name(value)? {
         // Names are bounded before retention; together with 256-byte IDs and
         // 4,096 entries, this bounds the map's string payload independently of
@@ -273,6 +280,17 @@ enum SuppliedInput<'a> {
     Object(&'a Value),
     /// A value was supplied and it is not an object, so it is not the cached query.
     Unusable,
+}
+
+/// Whether this update says the call has finished.
+///
+/// `completed` and `failed` are the terminal ACP statuses. Any other status,
+/// including one the frame omits, leaves the call active.
+fn call_finished(value: &Value) -> bool {
+    matches!(
+        value.get("status").and_then(Value::as_str),
+        Some("completed" | "failed")
+    )
 }
 
 /// `rawInput` as the cache sees it. Null is absence, matching a permission

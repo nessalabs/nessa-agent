@@ -870,6 +870,64 @@ fn a_non_object_input_clears_the_cached_query() {
     }
 }
 
+/// A finished call no longer offers its query. An active update still does.
+///
+/// The terminal frame repeats an object. Ignoring the status and keeping that
+/// object would leave the old query approvable after the call has finished.
+#[test]
+fn a_finished_call_drops_its_cached_input() {
+    let old = json!({"query": "old"});
+    let repeated = json!({"query": "old again"});
+    for status in ["completed", "failed"] {
+        for named in [true, false] {
+            let label = format!("status={status} named={named}");
+            let mut names = HashMap::new();
+            tool_call(
+                &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+                &mut names,
+            )
+            .unwrap();
+            for active in ["pending", "in_progress"] {
+                let update = if named {
+                    json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+                        "status":active})
+                } else {
+                    json!({"toolCallId":"search-1","status":active})
+                };
+                tool_call(&update, &mut names).unwrap();
+                assert_cached_query(&names, &old, &format!("{label} {active}"));
+            }
+            let mut finished = query_update(named, repeated.clone());
+            finished
+                .as_object_mut()
+                .unwrap()
+                .insert("status".into(), json!(status));
+            tool_call(&finished, &mut names).unwrap();
+            assert_no_cached_query(&names, &label);
+            let review =
+                permission(&names, json!({"toolCallId":"search-1","rawInput":old})).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+                old,
+                "{label}: the permission frame's object"
+            );
+        }
+    }
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(tool_call(
+        &json!({"toolCallId":"search-1","name":"WebFetch","status":"completed",
+            "rawInput":{"url":"https://example.com"}}),
+        &mut names
+    )
+    .is_err());
+    assert_cached_query(&names, &old, "rejected finished rename");
+}
+
 /// A rejected identity change is not an accepted input update.
 #[test]
 fn a_rejected_identity_change_keeps_the_cached_query() {
