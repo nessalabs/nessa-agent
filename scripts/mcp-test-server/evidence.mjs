@@ -4,6 +4,14 @@
  * the check's verdicts are tested without a gateway or an agent.
  */
 
+/**
+ * Whether a turn in the gateway's view has ended. `unresolved` has not: a
+ * live turn reads so for a moment, as it becomes live and before its result
+ * is committed (#449); a turn really interrupted stays so, and runs out the
+ * caller's wait.
+ */
+export const turnEnded = (status) => ["completed", "failed", "cancelled"].includes(status)
+
 /** Parsed recorder lines, skipping any that are not JSON. */
 export function parseRecording(text) {
   return text
@@ -93,9 +101,13 @@ export function allowOnce(view, permission, server) {
   return permission.options.find((option) => /^allow[-_]once$/i.test(option.id)) ?? null
 }
 
+/** A pending permission's identity in a view. */
+export const permissionKey = ({ executionId, permissionId }) =>
+  `${executionId}:${permissionId}`
+
 /**
  * What to do about the view's open permissions, given those already answered
- * (keys `executionId:permissionId`, never answered twice): the ones to allow,
+ * (keys `permissionKey`, never answered twice): the ones to allow,
  * each with its allow-once option, and the ones declined because they are not
  * a call to `server`'s tools — which the run reports rather than answers.
  */
@@ -103,7 +115,7 @@ export function permissionDecisions(view, answered, server) {
   const allow = []
   const declined = []
   for (const permission of view?.permissions ?? []) {
-    const key = `${permission.executionId}:${permission.permissionId}`
+    const key = permissionKey(permission)
     if (answered.has(key)) continue
     const option = allowOnce(view, permission, server)
     if (option) allow.push({ key, permission, option })

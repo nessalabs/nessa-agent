@@ -1,11 +1,13 @@
 use super::{
-    attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, MessageCommitClock, ProviderContext, QueueHistoryRecord,
-    SessionChange, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage,
-    SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    app_sources, attachment::AttachmentLease, steering_position::SteeringPosition,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, MessageCommitClock,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
+    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
+    caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
         limits::{reserve_observation_slot, ObservationUsage},
         ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode,
@@ -216,8 +218,17 @@ impl SessionManager {
     }
     /// Last snapshot acknowledged by storage. None until Agent initialization.
     /// Failed writes never appear here as committed evidence.
+    ///
+    /// Waiting for the evidence lock registers the polling task's `Waker`
+    /// with it; a panic from that waker when a save releases the lock is
+    /// logged and does not fail the save. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn snapshot(&self) -> Option<SessionSnapshot> {
-        self.evidence.lock().await.committed.clone()
+        let waiter = CallerWaiter::CommittedSnapshot(self.id.clone());
+        contain_caller_wake(waiter, async {
+            self.evidence.lock().await.committed.clone()
+        })
+        .await
     }
     #[cfg(test)]
     pub(crate) async fn pending_message_deadline(
@@ -267,9 +278,17 @@ impl SessionManager {
             .await
             .map_err(StorageError::bounded)
             .map_err(AgentError::Storage)?;
-        let (saved, mut save_generation) = saved
-            .into_published(&self.id)
-            .map_err(AgentError::Storage)?;
+        // Initialization derives its plan only from the prior publication and
+        // the provider identity, so a plan this method left unfinished — its
+        // Unit durable, its completion refused or never written — is derived
+        // again here and retried exactly. The writer refuses the retry when
+        // its durable units differ from this plan, and that refusal is reported
+        // as unresolved. It cannot compare units that never became durable, so
+        // a longer plan whose durable prefix is exactly this one would be
+        // completed as this plan (design row O12).
+        let unfinished = saved.state() == SessionLoadState::Unfinished;
+        let (saved, mut save_generation) =
+            saved.into_checked(&self.id).map_err(AgentError::Storage)?;
         let compacted = saved.as_ref().cloned();
         drop(saved);
         let identity = provider.identity();
@@ -310,6 +329,9 @@ impl SessionManager {
                     .clone(),
             ));
         }
+        if unfinished && changes.is_empty() {
+            return Err(AgentError::Storage(StorageError::Unresolved));
+        }
         if !changes.is_empty() {
             let unit = SessionSaveUnit::new(changes).map_err(AgentError::Storage)?;
             let receipt = catch_storage_operation(|| {
@@ -321,6 +343,15 @@ impl SessionManager {
             })
             .await
             .map_err(StorageError::bounded)
+            .map_err(|error| match error {
+                // The writer refuses a plan that differs from the unfinished
+                // one before appending anything. It has no separate variant for
+                // that refusal, so every corruption refusal of this retry is
+                // reported as unresolved, including a physical conflict or a
+                // store error.
+                StorageError::Corrupt(_) if unfinished => StorageError::Unresolved,
+                error => error,
+            })
             .map_err(AgentError::Storage)?;
             save_generation = receipt
                 .next_for(&save_generation, 1)
@@ -617,17 +648,36 @@ impl SessionManager {
                     "session retained invocation limit reached".into(),
                 ));
             }
+            // Asked of the turns saved so far, under the lock that admits
+            // the next: an app it names was drawn before it.
+            app_sources::validate_against(&request.user_message, |execution| {
+                snapshot
+                    .invocations
+                    .iter()
+                    .find(|record| &record.request.execution_id == execution)
+            })
+            .map_err(AgentError::UnknownApp)?;
             let mut next = snapshot.clone();
+            // A steered message's offset is its target's saved event count.
+            // A target not saved has none: a defensive refusal of an
+            // invariant, since no `Agent` entry reaches it (a native steer
+            // targets the running turn, saved at its own admission). The SDK
+            // has no internal-error variant, so it is `InvalidInput`, saving
+            // nothing rather than half a position
+            // (`admission_saves_a_steering_target_with_its_offset_or_refuses_it`).
             let target_event_offset = scheduling
                 .first()
                 .and_then(|edge| edge.target.as_ref())
-                .and_then(|target| {
-                    snapshot
-                        .invocations
-                        .iter()
-                        .find(|record| &record.request.execution_id == target)
+                .map(|target| {
+                    SteeringPosition::at_admission(target, &snapshot.invocations)
+                        .map(SteeringPosition::offset)
+                        .ok_or_else(|| {
+                            AgentError::InvalidInput(
+                                "steering target is not a saved invocation".into(),
+                            )
+                        })
                 })
-                .map(|record| record.events.len());
+                .transpose()?;
             next.invocations.push(InvocationRecord {
                 target_event_offset,
                 submission,

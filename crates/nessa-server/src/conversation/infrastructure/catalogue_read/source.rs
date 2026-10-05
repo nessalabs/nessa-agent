@@ -3,12 +3,13 @@
 //! Trusted scope is checked before metadata I/O. Each outer worker owns one
 //! admitted lease and joins the #259 source before returning it to the writer.
 
-use super::super::read_workers::{ReadWorkerError, ReadWorkers};
 use super::operation;
 use crate::conversation::application::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
-    CatalogueReadScope, CatalogueReadSource, ConversationCatalogue, RecordReadLease,
+    CatalogueReadSource, ConversationCatalogue, RecordReadLease,
 };
+use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
+use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::Id;
 use std::sync::Arc;
 

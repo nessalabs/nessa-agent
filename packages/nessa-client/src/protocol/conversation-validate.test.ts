@@ -240,6 +240,21 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("accepts a tool call as one part and rejects a second part for it", () => {
+    const value = view()
+    expect(conversationView(value, "conversation").messages[1]!.parts).toHaveLength(1)
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "tool",
+      text: "",
+      toolId: "tool",
+      noticeId: "",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a tool call part",
+    )
+  })
+
   it("rejects a local notice identity outside the SDK sequence range", () => {
     const value = view()
     value.messages[1]!.parts.push({
@@ -309,7 +324,7 @@ describe("conversation view agreement", () => {
             toolName: "delete_rows",
             argumentsJson: "{}",
             origin,
-            options: [{ id: "allow", label: "Allow" }],
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
           },
         ],
       })
@@ -343,10 +358,83 @@ describe("conversation view agreement", () => {
       { kind: "plugin" },
       { kind: "app" },
       { kind: "app", server: "charts" },
+      { kind: "app", tool: "delete_rows" },
+      { kind: "app", server: "", tool: "delete_rows" },
+      { kind: "app", server: "charts", tool: "" },
       { kind: "harness", tool: "delete_rows" },
       { kind: "app", server: "charts", tool: "delete_rows", extra: true },
     ])
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
+  })
+
+  it("refuses an app's review that names a tool other than the one it reviews", () => {
+    const withTools = (tool: string, toolName: string) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName,
+            argumentsJson: "{}",
+            origin: { kind: "app", server: "charts", tool },
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    expect(() =>
+      conversationView(withTools("app_delete_rows", "app_delete_rows"), "conversation"),
+    ).not.toThrow()
+    for (const [tool, toolName] of [
+      ["app_delete_row", "app_delete_rows"],
+      ["App_Delete_Rows", "app_delete_rows"],
+    ])
+      expect(() => conversationView(withTools(tool, toolName), "conversation")).toThrow(
+        "An app's review names a tool other than the one it reviews",
+      )
+  })
+
+  it("reads what each permission option decides, and refuses an option that does not say", () => {
+    const withOptions = (options: unknown[]) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName: "write_file",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            options,
+          },
+        ],
+      })
+      return value
+    }
+    const read = conversationView(
+      withOptions([
+        { id: "a", label: "Allow", effect: "allow" },
+        { id: "d", label: "Deny", effect: "deny" },
+      ]),
+      "conversation",
+    )
+    expect(read.permissions[0]!.options.map((option) => option.effect)).toEqual([
+      "allow",
+      "deny",
+    ])
+    for (const option of [
+      { id: "a", label: "Allow" },
+      { id: "a", label: "Allow", effect: "always" },
+      { id: "a", label: "Allow", effect: "" },
+      { id: "a", label: "Allow", effect: true },
+    ])
+      expect(() => conversationView(withOptions([option]), "conversation")).toThrow()
   })
 
   it("rejects unknown fields at the view and nested schema boundaries", () => {
@@ -375,7 +463,7 @@ describe("conversation view agreement", () => {
           toolName: "write_file",
           argumentsJson: "{}",
           origin: { kind: "harness" },
-          options: [{ id: "allow", label: "Allow", extra: true }],
+          options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],
         },
       ],
     })

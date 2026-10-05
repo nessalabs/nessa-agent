@@ -1,26 +1,23 @@
 //! Authenticated owner catalogue transport with bounded source-through-send ownership.
 //!
-//! `wire` maps generated DTOs. `ReadCatalogue` owns admission ordering; source
+//! `nessa_protocol::product::catalogue_read` maps generated DTOs. `ReadCatalogue` owns admission ordering; source
 //! workers own physical I/O and sync-engine validates finite passes and values.
 
-use super::super::{
-    generated::{
-        ConversationCatalogueHeadParams, ConversationCatalogueManifestParams,
-        ConversationCatalogueResolveParams,
-    },
-    passive_read::wire::{decode_epoch, ReadEncodeError},
-    state::ProductRouteState,
-};
-use super::wire;
-use crate::product_contract::generated::CatalogueReadErrorCode;
-use crate::{
-    conversation::application::{
-        AdmitPassiveRead, CatalogueReadError, CatalogueReadOperation, CatalogueReadValue,
-        ReadCatalogue, ReadRefusal, RecordReadLease,
-    },
-    protocol::RequestFrame,
+use super::super::state::ProductRouteState;
+use crate::conversation::application::{
+    AdmitPassiveRead, CatalogueReadError, CatalogueReadOperation, CatalogueReadValue,
+    ReadCatalogue, RecordReadLease,
 };
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
+use nessa_protocol::product::catalogue_read;
+use nessa_protocol::product::generated::{
+    ConversationCatalogueHeadParams, ConversationCatalogueManifestParams,
+    ConversationCatalogueResolveParams,
+};
+use nessa_protocol::product::passive_read::{decode_epoch, ReadEncodeError};
+use nessa_protocol::product_contract::generated::CatalogueReadErrorCode;
+use nessa_protocol::protocol::RequestFrame;
 
 pub(in crate::product) async fn dispatch(
     state: &ProductRouteState,
@@ -42,7 +39,7 @@ pub(in crate::product) async fn dispatch(
         "conversation.catalogueManifest" => {
             let params: ConversationCatalogueManifestParams = serde_json::from_value(frame.params)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
-            let request = wire::decode_manifest(&params.request)
+            let request = catalogue_read::decode_manifest(&params.request)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
             let epoch = decode_epoch(&params.access_epoch)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
@@ -56,11 +53,11 @@ pub(in crate::product) async fn dispatch(
             let params: ConversationCatalogueResolveParams =
                 serde_json::from_value(frame.params)
                     .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
-            let pass = wire::decode_pass(&params.pass)
+            let pass = catalogue_read::decode_pass(&params.pass)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
             let epoch = decode_epoch(&params.access_epoch)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
-            let descriptor = wire::decode_descriptor(&params.descriptor)
+            let descriptor = catalogue_read::decode_descriptor(&params.descriptor)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
             let max_payload_bytes = usize::try_from(params.max_payload_bytes)
                 .map_err(|_| CatalogueReadErrorCode::InvalidRequest)?;
@@ -114,10 +111,10 @@ pub(super) fn encode_value(
 ) -> Result<String, CatalogueReadErrorCode> {
     match (requested, value) {
         (CatalogueReadOperation::Head, CatalogueReadValue::Head { scope, head }) => {
-            wire::encode_head(request_id, &scope, head)
+            catalogue_read::encode_head(request_id, &scope, head)
         }
         (CatalogueReadOperation::Manifest(request), CatalogueReadValue::Manifest(page)) => {
-            wire::encode_manifest(request_id, &request, page)
+            catalogue_read::encode_manifest(request_id, &request, page)
         }
         (
             CatalogueReadOperation::Resolve {
@@ -126,7 +123,13 @@ pub(super) fn encode_value(
                 max_payload_bytes,
             },
             CatalogueReadValue::Resolve(resolved),
-        ) => wire::encode_resolved(request_id, &pass, &descriptor, max_payload_bytes, resolved),
+        ) => catalogue_read::encode_resolved(
+            request_id,
+            &pass,
+            &descriptor,
+            max_payload_bytes,
+            resolved,
+        ),
         _ => return Err(CatalogueReadErrorCode::Unverifiable),
     }
     .map_err(|error| match error {
@@ -156,3 +159,7 @@ fn error_code(error: CatalogueReadError) -> CatalogueReadErrorCode {
         CatalogueReadError::OversizedEntry => CatalogueReadErrorCode::OversizedEntry,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/product/catalogue_read/dispatch.rs"]
+mod tests;

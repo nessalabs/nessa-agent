@@ -1,21 +1,20 @@
 import { createHash } from "node:crypto"
-import { expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { NessaConversationControlError } from "../application/conversation-mutation-error.js"
 import type { RequestTimer } from "../application/gateway-http.js"
-import {
-  MCP_APP_CALL_DEADLINE_MS,
-  NessaMcpAppError,
-} from "../application/mcp-app-call.js"
+import { NessaMcpAppError } from "../application/mcp-app-call.js"
 import {
   NessaMcpResourceError,
-  RESOURCE_DEADLINE_MS,
   type McpResourceReply,
   type McpResourceTransport,
 } from "../application/mcp-resource-fetch.js"
+import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
-import { createMcpAppsApi } from "./mcp-apps-api.js"
+import { mcpAppCallTiming } from "../generated/product.js"
+import { mcpAppRequestProblem } from "../protocol/mcp-app-validate.js"
+import { createMcpAppsApi, mcpAppDeadlines } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 const app = {
@@ -94,10 +93,15 @@ it("calls the app's tool with exactly its arguments, and waits as long as a revi
       tool: "delete_rows",
       argumentsJson: '{"rows":[1]}',
     },
-    { atLeastMs: MCP_APP_CALL_DEADLINE_MS },
+    { atLeastMs: mcpAppDeadlines.callToolMs },
   )
-  // Five minutes of review, a minute of call, and a margin.
-  expect(MCP_APP_CALL_DEADLINE_MS).toBe(370_000)
+  // The review, the call, and the client's allowance, as the protocol
+  // publishes them.
+  expect(mcpAppDeadlines.callToolMs).toBe(
+    mcpAppCallTiming.reviewDeadlineMs +
+      mcpAppCallTiming.callTimeoutMs +
+      mcpAppCallTiming.clientAllowanceMs,
+  )
 })
 
 it("leaves out arguments that were not given, rather than sending them as nothing", async () => {
@@ -146,6 +150,12 @@ it.each([
   ["arguments past 32 KiB", { argumentsJson: `{"a":"${over(32761)}"}` }],
   // Counted in UTF-8 bytes: 16,392 characters and 32,776 bytes.
   ["arguments past 32 KiB of UTF-8", { argumentsJson: `{"a":"${"é".repeat(16384)}"}` }],
+  // A lone surrogate is not Unicode. This client refuses it before send.
+  ["a tool with a lone surrogate", { tool: "get\ud800" }],
+  // The same refusal when the surrogate is written into the arguments text.
+  ["arguments holding a lone surrogate", { argumentsJson: '{"a":"\ud800"}' }],
+  ["a tool that is no string", { tool: 7 as unknown as string }],
+  ["arguments that are no string", { argumentsJson: {} as unknown as string }],
 ] as const)(
   "refuses to call a tool with %s before asking the gateway",
   async (_name, change) => {
@@ -217,7 +227,7 @@ function viewWithAppReview(argumentsJson: string) {
         toolName: "delete_rows",
         argumentsJson,
         origin: { kind: "app", server: "charts", tool: "delete_rows" },
-        options: [{ id: "allow", label: "Allow" }],
+        options: [{ id: "allow", label: "Allow", effect: "allow" }],
       },
     ],
     questions: [],
@@ -422,13 +432,20 @@ it("reads a resource and returns what the gateway holds, ticket and all", async 
   const answer = await api(request).readResource(conversationId, app, "charts", uri, {
     requestId: "read",
   })
-  expect(request).toHaveBeenCalledExactlyOnceWith("mcp.readResource", {
-    conversationId,
-    requestId: "read",
-    app,
-    server: "charts",
-    uri,
-  })
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "mcp.readResource",
+    {
+      conversationId,
+      requestId: "read",
+      app,
+      server: "charts",
+      uri,
+    },
+    // The gateway may open the conversation first: no shorter wait than a
+    // call's.
+    { atLeastMs: mcpAppDeadlines.readResourceMs },
+  )
+  expect(mcpAppDeadlines.readResourceMs).toBe(mcpAppDeadlines.callToolMs)
   expect(answer).toEqual({ ...resource, domain: "app.example", prefersBorder: false })
   // Absent is absent: neither is invented when the app did not say.
   const plain = await api(async () => resource).readResource(
@@ -584,7 +601,9 @@ it("fetches the described bytes by ticket and hands them back once they match", 
     signal: expect.any(AbortSignal),
   })
   // An answered fetch leaves no deadline running behind it.
-  expect(clock.pending).toMatchObject([{ ms: RESOURCE_DEADLINE_MS, cancelled: true }])
+  expect(clock.pending).toMatchObject([
+    { ms: mcpAppDeadlines.fetchResourceMs, cancelled: true },
+  ])
   // An empty resource is still a resource.
   const empty = createHash("sha256").update(new Uint8Array()).digest("hex")
   expect(
@@ -667,7 +686,9 @@ it("gives up on a fetch that never answers when its deadline elapses, and aborts
   const pending = failure(
     fetches(get, clock).fetchResource(ticket, { size: html.byteLength, sha256 }),
   )
-  expect(clock.pending).toMatchObject([{ ms: RESOURCE_DEADLINE_MS, cancelled: false }])
+  expect(clock.pending).toMatchObject([
+    { ms: mcpAppDeadlines.fetchResourceMs, cancelled: false },
+  ])
   clock.pending[0]!.elapsed()
   expect(await pending).toMatchObject({ code: "timeout", status: undefined })
   expect(requestSignal?.aborted).toBe(true)
@@ -707,6 +728,21 @@ it("reports the caller's own abort as aborted, and sends nothing when already ab
     ),
   ).rejects.toMatchObject({ code: "aborted" })
   expect(unsent).not.toHaveBeenCalled()
+})
+
+it("reports a transport's own AbortError, the caller's signal still live, as unreachable — aborted is only ever the caller's", async () => {
+  const caller = new AbortController()
+  const cause = new DOMException("The operation was aborted.", "AbortError")
+  const error = await failure(
+    fetches(() => Promise.reject(cause)).fetchResource(
+      ticket,
+      { size: html.byteLength, sha256 },
+      { signal: caller.signal },
+    ),
+  )
+  expect(caller.signal.aborted).toBe(false)
+  expect(error).toBeInstanceOf(NessaMcpResourceError)
+  expect(error).toMatchObject({ code: "unreachable", cause, status: undefined })
 })
 
 it.each([
@@ -788,4 +824,60 @@ it("reports a refused release as certain and a lost one as uncertain", async () 
     api(request).releaseApp(conversationId, { ...app, instanceId: "" }),
   ).rejects.toBeInstanceOf(TypeError)
   expect(request).not.toHaveBeenCalled()
+})
+
+describe("what an app may send its server (mcpAppRequestProblem)", () => {
+  it("answers nothing for a request within bounds, and in Unicode", () => {
+    expect(mcpAppRequestProblem.tool("é".repeat(64))).toBeUndefined()
+    expect(mcpAppRequestProblem.tool("chart\ud83d\udcc8")).toBeUndefined()
+    expect(mcpAppRequestProblem.uri("ui://w/app.html")).toBeUndefined()
+    expect(
+      mcpAppRequestProblem.argumentsJson('{"a":["\\ud83d\\udcc8",{"b":1}]}'),
+    ).toBeUndefined()
+    // Not JSON: whether the arguments are an object is the gateway's to say.
+    expect(mcpAppRequestProblem.argumentsJson("[")).toBeUndefined()
+    // Escaped, a lone surrogate is ASCII in the frame: what it decodes to is
+    // the gateway's to judge, and it answers `invalid_request`.
+    expect(
+      mcpAppRequestProblem.argumentsJson(JSON.stringify({ a: "\ud800" })),
+    ).toBeUndefined()
+  })
+
+  it.each([
+    ["tool", ""],
+    ["tool", "é".repeat(65)],
+    ["tool", "\ud800"],
+    ["tool", "a\udc00b"],
+    ["uri", ""],
+    ["uri", `ui://${"x".repeat(2044)}`],
+    ["uri", "ui://w/\udfff"],
+    ["argumentsJson", `{"a":"${"x".repeat(32761)}"}`],
+    ["argumentsJson", '{"a":"\ud800"}'],
+    ["argumentsJson", '{"\udc00":1}'],
+  ] as const)("says what is wrong with a %s of %j", (kind, value) => {
+    expect(mcpAppRequestProblem[kind](value)).toEqual(expect.any(String))
+  })
+})
+
+it("refuses to read a URI that is no string, or not Unicode, before asking the gateway", async () => {
+  const request = vi.fn()
+  for (const uri of [7 as unknown as string, "ui://w/\ud800"])
+    await expect(
+      api(request).readResource(conversationId, app, "charts", uri),
+    ).rejects.toBeInstanceOf(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("is certain nothing reached the gateway for a request too large to send", async () => {
+  const cause = new NessaRequestTooLargeError("mcp.callTool", 70_000)
+  const error = await failure(
+    api(async () => Promise.reject(cause)).callTool(
+      conversationId,
+      app,
+      "charts",
+      "list",
+    ),
+  )
+  expect(error).toBeInstanceOf(NessaMcpAppError)
+  expect(error).toMatchObject({ code: undefined, uncertain: false, cause })
 })

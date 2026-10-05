@@ -3,7 +3,11 @@ use super::agent::AgentsConfig;
 use crate::{core::RunError, product::SessionSettings};
 use nessa_auth::adapters::local::LocalStoreConfig;
 use serde::Deserialize;
-use std::{io::Read, path::Path, time::Duration};
+use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
+
+/// The most bytes `config.json` may have: what startup reads and what a
+/// change to the stored MCP servers may write (`mcp_servers::settings`).
+pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
 
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
@@ -11,6 +15,16 @@ pub(super) struct RuntimeConfig {
     pub registry: LocalStoreConfig,
     pub session: SessionConfig,
     pub agents: Option<AgentsConfig>,
+    /// Native device pairing; absent or `null` keeps it off (design rows S1, S2).
+    pub native: Option<NativeConfig>,
+}
+
+/// Where the native enrollment listener binds. The address is numeric: serde's
+/// standard `SocketAddr` parser, so no hostname is ever looked up.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct NativeConfig {
+    pub listen_address: SocketAddr,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,31 +47,34 @@ impl RuntimeConfig {
     /// Optional config.json beside auth/, scoped to the same stage and instance.
     /// Invalid existing files fail startup; only a missing file selects defaults.
     pub fn load(auth_directory: &Path) -> Result<Self, RunError> {
-        let path = auth_directory
-            .parent()
-            .ok_or_else(|| invalid("invalid data directory"))?
-            .join("config.json");
+        let path = config_path(
+            auth_directory
+                .parent()
+                .ok_or_else(|| invalid("invalid data directory"))?,
+        );
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => return Err(invalid("config.json must be a regular file")),
+            Ok(_) => return Err(refused("config.json must be a regular file")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default())
             }
             Err(error) => return Err(invalid(error)),
         }
-        let file = nessa_local_storage::open(&path, nessa_local_storage::OpenMode::Read)
+        let file = nessa_local_storage::open(&path, nessa_local_storage::OpenMode::ReadNonblocking)
             .map_err(invalid)?;
         let mut bytes = Vec::new();
-        file.take(65_537).read_to_end(&mut bytes).map_err(invalid)?;
-        if bytes.len() > 65_536 {
-            return Err(invalid("config.json exceeds 64 KiB"));
+        file.take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(invalid)?;
+        if bytes.len() > MAX_CONFIG_BYTES {
+            return Err(refused("config.json exceeds 64 KiB"));
         }
         Self::parse(&bytes)
     }
 
-    fn parse(bytes: &[u8]) -> Result<Self, RunError> {
-        let config: Self = serde_json::from_slice(bytes).map_err(invalid)?;
-        config.registry.validate().map_err(invalid)?;
+    pub(super) fn parse(bytes: &[u8]) -> Result<Self, RunError> {
+        let config: Self = serde_json::from_slice(bytes).map_err(refused)?;
+        config.registry.validate().map_err(refused)?;
         config.session()?;
         Ok(config)
     }
@@ -70,11 +87,23 @@ impl RuntimeConfig {
             Duration::from_millis(self.session.write_timeout_ms),
             Duration::from_millis(self.session.current_state_interval_ms),
         )
-        .map_err(invalid)
+        .map_err(refused)
     }
 }
+/// Where the namespace at `namespace` keeps `config.json`.
+pub(super) fn config_path(namespace: &Path) -> std::path::PathBuf {
+    namespace.join("config.json")
+}
+
+/// `config.json` could not be read: the file system can change before the next
+/// start, so this stays a retried setup failure.
 fn invalid(error: impl std::fmt::Display) -> RunError {
     RunError::Authentication(format!("invalid runtime config: {error}"))
+}
+/// `config.json` was read and its contents refused. Reading the same file
+/// again refuses it the same way (design row S2).
+fn refused(error: impl std::fmt::Display) -> RunError {
+    RunError::RuntimeConfig(error.to_string())
 }
 
 #[cfg(test)]
@@ -134,6 +163,24 @@ mod tests {
         assert_eq!(b.registry.max_credentials, 1000);
         assert_eq!(b.session().unwrap().write_timeout(), Duration::from_secs(5));
     }
+    /// Design row S2: refused contents are a configuration failure that a
+    /// restart cannot fix, whichever section they are in.
+    #[test]
+    fn refused_runtime_configuration_is_not_worth_restarting_for() {
+        for bytes in [
+            br#"{"native":{"listenAddress":"localhost:47650"}}"#.as_slice(),
+            br#"{"native":{"listenAddress":"127.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":"127.0.0.1:1","tls":true}}"#,
+            br#"{"session":{"writeTimeoutMs":0}}"#,
+            b"not json",
+        ] {
+            assert!(matches!(
+                RuntimeConfig::parse(bytes),
+                Err(RunError::RuntimeConfig(_))
+            ));
+        }
+    }
+
     #[test]
     fn invalid_settings_are_never_silently_defaulted() {
         for bytes in [
@@ -148,6 +195,52 @@ mod tests {
             assert!(RuntimeConfig::parse(bytes).is_err());
         }
     }
+    /// Design rows S1 and S2: native pairing is off unless named, and a
+    /// malformed native section refuses startup before anything is opened.
+    #[test]
+    fn native_config_refuses_before_effect() {
+        assert!(RuntimeConfig::parse(b"{}").unwrap().native.is_none());
+        assert!(RuntimeConfig::parse(br#"{"native":null}"#)
+            .unwrap()
+            .native
+            .is_none());
+        for (bytes, address) in [
+            (
+                br#"{"native":{"listenAddress":"127.0.0.1:47650"}}"#.as_slice(),
+                "127.0.0.1:47650",
+            ),
+            (br#"{"native":{"listenAddress":"[::1]:0"}}"#, "[::1]:0"),
+            (
+                br#"{"native":{"listenAddress":"0.0.0.0:47650"}}"#,
+                "0.0.0.0:47650",
+            ),
+        ] {
+            assert_eq!(
+                RuntimeConfig::parse(bytes)
+                    .unwrap()
+                    .native
+                    .unwrap()
+                    .listen_address,
+                address.parse::<SocketAddr>().unwrap()
+            );
+        }
+        for bytes in [
+            br#"{"native":{"listenAddress":"localhost:47650"}}"#.as_slice(),
+            br#"{"native":{"listenAddress":"127.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":""}}"#,
+            br#"{"native":{"listenAddress":47650}}"#,
+            br#"{"native":{}}"#,
+            br#"{"native":{"listenAddress":"127.0.0.1:1","tls":true}}"#,
+            br#"{"native":"127.0.0.1:47650"}"#,
+        ] {
+            assert!(
+                RuntimeConfig::parse(bytes).is_err(),
+                "{}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+    }
+
     #[test]
     fn a_zero_polling_interval_is_rejected_by_both_entry_paths() {
         // The file path and a caller constructing settings directly now fail on

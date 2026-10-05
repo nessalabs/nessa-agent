@@ -23,9 +23,9 @@ cargo build -p nessa-mcp
 ```
 
 Configure it as server `nessa` in the gateway's `agent.mcpServers`; see
-[gateway setup](../../docs/guides/gateway-chat.md). Restart the gateway and start a
-new conversation after changing its tool configuration. Context fingerprints
-prevent silently restoring old conversations under a different tool policy.
+[gateway setup](../../docs/guides/gateway-chat.md). Restart the gateway after
+changing its tool configuration; saved conversations reopen with the new one
+([MCP servers and the restoration identity](../../docs/design/mcp-connections.md#mcp-servers-and-the-restoration-identity)).
 
 `shell` accepts `command` and optional `timeoutSeconds` (1–3600, default 120).
 Commands run in the configured workspace using `/bin/bash --noprofile --norc -c`.

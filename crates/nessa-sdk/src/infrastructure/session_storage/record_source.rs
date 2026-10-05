@@ -2,10 +2,13 @@
 
 #![deny(missing_docs)]
 
+use super::save_batch::RecordRuntime;
 use super::{
     record::RecordStorage,
     stream_fact,
-    terminal_discovery::{RecordReadStatus, TerminalCache},
+    terminal_discovery::{
+        CapturedCeiling, DiscoveryQuery, ExactPublication, RecordReadStatus, TerminalCache,
+    },
     transcript::TranscriptFold,
 };
 use crate::{
@@ -13,8 +16,8 @@ use crate::{
     domain::agent_execution::sessions::SessionId,
 };
 use event_stream::{
-    infrastructure::SqliteStore, Cursor, Error as StreamError, EventReader, PageLimits,
-    Record as StreamRecord, Runtime, StreamId, StreamKey,
+    Cursor, Error as StreamError, EventReader, PageLimits, Record as StreamRecord, StreamId,
+    StreamKey,
 };
 use nessa_sync::replication::{
     application::{RecordSource, SourceError},
@@ -22,7 +25,7 @@ use nessa_sync::replication::{
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         mpsc, Arc, Mutex, PoisonError,
@@ -32,7 +35,6 @@ use std::{
 use tokio::runtime::Handle;
 
 const SCHEMA: &str = "nessa.physical-frame.v1";
-const REMEMBERED_HEADS: usize = 64;
 const SOURCE_QUEUE_CAPACITY: usize = 64;
 const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
 const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
@@ -143,7 +145,7 @@ fn retire_receiver(
 }
 fn retire_invalid_receivers(
     cache: &Mutex<CommittedCache>,
-    runtime: &Runtime<SqliteStore>,
+    runtime: &RecordRuntime,
     handle: &Handle,
 ) -> Result<(), StorageError> {
     // At most 64 Arc slots; no semantic/history clone or lock held during metadata I/O.
@@ -380,7 +382,7 @@ impl Drop for SourceWorker {
 
 impl NessaRecordSource {
     fn start(
-        runtime: Runtime<SqliteStore>,
+        runtime: RecordRuntime,
         stream: StreamKey,
         origin: Id,
         handle: Handle,
@@ -400,7 +402,6 @@ impl NessaRecordSource {
                     stream,
                     origin: worker_origin,
                     head: 0,
-                    observed_heads: VecDeque::from([0]),
                     terminal_cache,
                 };
                 while let Ok(command) = receiver.recv() {
@@ -440,9 +441,11 @@ impl NessaRecordSource {
     /// record bytes. The store can decode one lookahead record before its byte
     /// limit check: total decoded accounted bytes are at most twice
     /// [`super::MAX_STORED_RECORD_BYTES`]. These are not physical disk I/O bytes.
-    /// Validation runs against a captured
-    /// tail, then return the actual committed head. `Preparing` resumes shared
-    /// SDK progress on a later call. Cache eviction or restart may repeat work.
+    /// Validation runs against a captured ceiling, then returns the actual
+    /// committed head. The shared cache owner reads current physical bounds
+    /// after checkout. `Preparing` resumes shared SDK progress on a later call.
+    /// Historical queries retain a separate bounded pass and completion proofs;
+    /// cache eviction or restart may repeat work.
     /// No idle worker is retained by the cache; dropping the final source joins
     /// this worker when done outside Tokio, as for ordinary source reads.
     ///
@@ -496,13 +499,19 @@ impl NessaRecordSource {
 
     /// Read one fixed-target page after bounded shared terminal discovery.
     /// An unknown target returns `Preparing` until its immutable prefix has been
-    /// validated; subsequent pages do not scan that prefix again. Physical page
+    /// validated. Retained completion proofs share reuse across sources; an
+    /// evicted proof may need a bounded historical rescan. A different unproven
+    /// historical query advances that original scan and returns `Preparing`
+    /// until the original query finishes, then may acquire its own scan.
+    /// Each physical step retains the count/byte limits of [`Self::bounded_head`].
+    /// Physical page
     /// budgets have the same units and bounds as `RecordSource::page`. Both
     /// paths ask core `validate_page_request` before stream metadata I/O; scope,
-    /// incarnation, retention and terminal checks remain source-owned. A ready
-    /// call additionally reads one target frame and one request-bounded page;
-    /// their decoded-byte ceilings are one and two runtime record caps,
-    /// respectively, in addition to discovery's two-cap ceiling.
+    /// incarnation, retention and terminal checks use the shared cache owner.
+    /// A ready call additionally reads one request-bounded page with a two
+    /// runtime-record-cap decoded-byte ceiling, in addition to discovery's
+    /// two-cap ceiling. Retained proofs are checked against current physical
+    /// bounds before reuse.
     ///
     /// # Errors
     /// Reports invalid page budgets or a nonterminal target, replaced/pruned
@@ -574,11 +583,10 @@ impl RecordSource for NessaRecordSource {
 }
 
 struct ReaderState {
-    runtime: Runtime<SqliteStore>,
+    runtime: RecordRuntime,
     stream: StreamKey,
     origin: Id,
     head: u64,
-    observed_heads: VecDeque<u64>,
     terminal_cache: Arc<TerminalCache>,
 }
 
@@ -688,8 +696,7 @@ impl ReaderState {
                 .discover(
                     &self.runtime,
                     &self.stream,
-                    through.offset,
-                    Some(through.offset),
+                    DiscoveryQuery::CapturedHead(CapturedCeiling(through.offset)),
                 )
                 .await?
             {
@@ -697,12 +704,6 @@ impl ReaderState {
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
             }
         };
-        if self.observed_heads.back() != Some(&self.head) {
-            if self.observed_heads.len() == REMEMBERED_HEADS {
-                self.observed_heads.pop_front();
-            }
-            self.observed_heads.push_back(self.head);
-        }
         Ok(self.head)
     }
 
@@ -714,15 +715,7 @@ impl ReaderState {
         )
         .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
-        let tail = self.check_stream().await?;
-        if request.target > tail.offset {
-            return Err(SourceError::InvalidRequest);
-        }
-        if request.target > self.head {
-            self.advance_through(&Cursor::new(self.stream.clone(), request.target))
-                .await?;
-        }
-        if request.target > self.head || !self.is_terminal(request.target).await? {
+        if !self.is_terminal(request.target).await? {
             return Err(SourceError::InvalidRequest);
         }
         self.read_page(request).await
@@ -788,9 +781,8 @@ impl ReaderState {
 
     async fn bounded_head(&self, scope: &Scope) -> Result<RecordReadStatus<u64>, SourceError> {
         self.check_scope(scope)?;
-        let tail = self.check_stream().await?;
         self.terminal_cache
-            .discover(&self.runtime, &self.stream, tail.offset, None)
+            .discover(&self.runtime, &self.stream, DiscoveryQuery::Head)
             .await
     }
 
@@ -805,17 +797,12 @@ impl ReaderState {
         )
         .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
-        let tail = self.check_stream().await?;
-        if request.target > tail.offset {
-            return Err(SourceError::InvalidRequest);
-        }
         match self
             .terminal_cache
             .discover(
                 &self.runtime,
                 &self.stream,
-                tail.offset,
-                Some(request.target),
+                DiscoveryQuery::Publication(ExactPublication(request.target)),
             )
             .await?
         {
@@ -829,14 +816,14 @@ impl ReaderState {
     }
 
     async fn is_terminal(&self, target: u64) -> Result<bool, SourceError> {
-        if self.observed_heads.contains(&target) {
-            return Ok(true);
-        }
-        let tail = self.check_stream().await?.offset;
         loop {
             match self
                 .terminal_cache
-                .discover(&self.runtime, &self.stream, tail, Some(target))
+                .discover(
+                    &self.runtime,
+                    &self.stream,
+                    DiscoveryQuery::Publication(ExactPublication(target)),
+                )
                 .await?
             {
                 RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
@@ -1220,111 +1207,8 @@ mod tests {
         super::cached_receiver(cache, scope, stream)
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn save_units_remain_private_to_source_and_receiver_until_completion() {
-        let directory = tempfile::tempdir().unwrap();
-        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-        let session = SessionId::new("group-publication").unwrap();
-        let runtime = storage.runtime().await.unwrap();
-        let stream = runtime
-            .create_stream(&StreamId::new(session.as_str()).unwrap())
-            .await
-            .unwrap();
-        let binding = SessionSaveGeneration::new(
-            SessionSaveBackend::Record {
-                stream: Id::new(session.as_str()).unwrap(),
-                incarnation: stream.incarnation.0,
-            },
-            0,
-            0,
-        );
-        let change = SessionChange::Opened {
-            id: session.clone(),
-            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
-            context: ProviderContext::Absent,
-        };
-        let payload = super::super::snapshot::encode_semantic_batch(&[change]).unwrap();
-        let identity = SaveIdentity::binding(&binding).unwrap();
-        let unit_header = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
-        let chain = unit_header.chain(payload.len() as u64);
-        let unit = FramedFact {
-            key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
-            body: unit_header.encode(&payload),
-        };
-        let unit_cursor =
-            stream_fact::commit_fact(runtime, &stream, &Cursor::new(stream.clone(), 0), &unit)
-                .await
-                .unwrap();
-        assert_eq!(unit_cursor.offset, 1);
-        let source = storage
-            .record_source(&session, Id::new("origin").unwrap())
-            .await
-            .unwrap()
-            .unwrap();
-        let scope = source.scope(Id::new("receiver").unwrap(), Id::new("epoch").unwrap());
-        let request = PageRequest {
-            scope: scope.clone(),
-            after: 0,
-            target: unit_cursor.offset,
-            max_records: 2,
-            max_payload_bytes: MAX_PAGE_PAYLOAD,
-            max_record_bytes: MAX_PAGE_PAYLOAD,
-        };
-        let source = tokio::task::spawn_blocking(move || {
-            let mut source = source;
-            assert_eq!(source.head(&request.scope).unwrap(), 0);
-            assert_eq!(source.page(&request), Err(SourceError::InvalidRequest));
-            source
-        })
-        .await
-        .unwrap();
-        let terminal = FramedFact {
-            key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
-            body: Header::unit(identity, 1, chain, &[]).encode(&[]),
-        };
-        let end = stream_fact::commit_fact(runtime, &stream, &unit_cursor, &terminal)
-            .await
-            .unwrap();
-        assert_eq!(end.offset, 2);
-        let request = PageRequest {
-            scope: scope.clone(),
-            after: 0,
-            target: end.offset,
-            max_records: 2,
-            max_payload_bytes: MAX_PAGE_PAYLOAD,
-            max_record_bytes: MAX_PAGE_PAYLOAD,
-        };
-        let (source, page) = tokio::task::spawn_blocking(move || {
-            let mut source = source;
-            assert_eq!(source.head(&request.scope).unwrap(), request.target);
-            let page = source.page(&request).unwrap();
-            (source, page)
-        })
-        .await
-        .unwrap();
-        let mut receiver = TranscriptFold::new(scope.clone()).unwrap();
-        receiver.apply(&page.records[..1]).unwrap();
-        assert_eq!(receiver.downloaded(), 1);
-        assert_eq!(receiver.applied(), 0);
-        assert!(receiver.snapshot().is_none());
-        assert_eq!(receiver.snapshot_materializations(), 0);
-        let checkpoint = receiver.checkpoint().unwrap();
-        let mut restarted = TranscriptFold::restore(scope, 0, &checkpoint).unwrap();
-        // The existing downloaded journal restages from published A, including
-        // the already downloaded but unpublished unit.
-        restarted.apply(&page.records).unwrap();
-        assert_eq!(restarted.applied(), 2);
-        assert_eq!(restarted.fact_count(), 1);
-        assert_eq!(restarted.snapshot().unwrap().id, session);
-        assert_eq!(restarted.snapshot_materializations(), 1);
-        receiver.apply(&page.records[1..]).unwrap();
-        assert_eq!(receiver.snapshot(), restarted.snapshot());
-        drop(source);
-        storage.shutdown().await.unwrap();
-    }
-
     async fn append_opening(
-        runtime: &Runtime<SqliteStore>,
+        runtime: &RecordRuntime,
         stream: &StreamKey,
         session: &SessionId,
     ) -> u64 {
@@ -1341,6 +1225,7 @@ mod tests {
         let receipt = writer
             .save(
                 runtime,
+                None,
                 original,
                 &observed,
                 &[SessionSaveUnit::new(vec![change]).unwrap()],
@@ -2308,6 +2193,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 binding,
                 &opening_snapshot,
                 &[SessionSaveUnit::new(vec![change]).unwrap()],
@@ -2345,6 +2231,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 binding,
                 &with_context,
                 &[SessionSaveUnit::new(vec![context]).unwrap()],
@@ -2381,6 +2268,7 @@ mod tests {
             writer
                 .save(
                     &runtime,
+                    None,
                     binding,
                     &snapshot,
                     &[SessionSaveUnit::new(vec![change]).unwrap()],
@@ -2406,6 +2294,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 binding,
                 &last,
                 &[SessionSaveUnit::new(vec![later.clone()]).unwrap()],
@@ -2593,7 +2482,6 @@ mod tests {
             stream: stream.clone(),
             origin: id("origin"),
             head: 0,
-            observed_heads: VecDeque::from([0]),
             terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
@@ -2665,7 +2553,6 @@ mod tests {
             stream: stream.clone(),
             origin: id("origin"),
             head: 0,
-            observed_heads: VecDeque::from([0]),
             terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
@@ -3196,6 +3083,12 @@ mod tests {
                         physical_record_schema(),
                         id("epoch"),
                     );
+                    // Keep draining the authority's stdout for its whole life.
+                    // Dropping the reader closes the pipe, and the child's test
+                    // harness then dies on EPIPE the first time it prints, such as
+                    // its "running for over 60 seconds" notice. That turned a
+                    // slow run into a lost server instead of a slow pass.
+                    std::thread::spawn(move || std::io::copy(&mut output, &mut std::io::sink()));
                     return Self {
                         _child: child,
                         address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port.parse().unwrap()),

@@ -61,6 +61,14 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     request: ProviderOpenRequest,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     let (session, restore, mut open_control) = request.into_parts();
+    // This open's MCP servers, read once and kept for as long as the provider
+    // session lives — through every restart of its process — so a harness
+    // keeps the servers it was given while a later open gets the host's
+    // current ones.
+    let config = AcpConfig {
+        mcp_servers: config.mcp_servers.opened(),
+        ..config
+    };
     config.validate().map_err(|cause| {
         // Validation runs before allocation and returns only Configuration/Unsupported.
         ProviderOpenError::no_resources(cause)
@@ -73,6 +81,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         stand_ins,
         ..config
     };
+    let profile = profile.for_open(&config);
     let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),

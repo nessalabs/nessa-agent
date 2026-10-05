@@ -1,5 +1,4 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
-use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     AttachmentRelease, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
     ConversationAgents, ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -11,10 +10,11 @@ use crate::conversation::application::{
     ConversationService, ConversationSummaries, ListedConversation, ListedConversations,
     ProviderSessionEraser, ProviderSessionErasers, UnfinishedDeletions,
 };
-use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
-};
+use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::ConversationApprovalMode;
+use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
@@ -606,6 +606,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
+    /// Return the controller's actual confirmed selection for successful corpus fixtures.
+    pub(crate) answer_succeeds: AtomicBool,
     pub(crate) answer_started: Notify,
     pub(crate) answer_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) answer_failure: Mutex<Option<(AgentError, PermissionSelectionState)>>,
@@ -782,12 +784,12 @@ impl ConversationAgentSource for ModeAgentSource {
         &'a self,
         agent: AgentId,
         model: &'a str,
-        mode: crate::conversation::domain::ConversationApprovalMode,
+        mode: ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a> {
         let mode = match mode {
-            crate::conversation::domain::ConversationApprovalMode::Ask => ApprovalMode::Ask,
-            crate::conversation::domain::ConversationApprovalMode::Auto => ApprovalMode::Auto,
-            crate::conversation::domain::ConversationApprovalMode::Full => ApprovalMode::Full,
+            ConversationApprovalMode::Ask => ApprovalMode::Ask,
+            ConversationApprovalMode::Auto => ApprovalMode::Auto,
+            ConversationApprovalMode::Full => ApprovalMode::Full,
         };
         let found = (agent == AgentId::Claude && model == "test").then(|| {
             let mode = if self.provider.force_ask_mode.load(Ordering::SeqCst) {
@@ -1188,6 +1190,20 @@ impl ProviderSessionBackend for Backend {
         answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async move {
+            if self.factory.answer_succeeds.load(Ordering::SeqCst) {
+                return self
+                    .controller
+                    .lock()
+                    .unwrap()
+                    .answer_permission(answer)
+                    .map_err(|error| {
+                        ProviderOperationFailure::permission_answer(
+                            error,
+                            ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
+                        )
+                    });
+            }
             let consume_first = self
                 .factory
                 .consume_before_answer_gate

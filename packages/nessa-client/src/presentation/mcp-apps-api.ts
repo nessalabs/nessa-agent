@@ -1,17 +1,14 @@
 import { NessaConversationControlError } from "../application/conversation-mutation-error.js"
 import { requestWithin, type RequestTimer } from "../application/gateway-http.js"
-import {
-  MCP_APP_CALL_DEADLINE_MS,
-  NessaMcpAppError,
-} from "../application/mcp-app-call.js"
+import { NessaMcpAppError } from "../application/mcp-app-call.js"
 import {
   NessaMcpResourceError,
-  RESOURCE_DEADLINE_MS,
   type McpResourceTransport,
 } from "../application/mcp-resource-fetch.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import {
   bounds,
+  mcpAppCallTiming,
   ProductMethod,
   type ConversationMutationResult,
   type McpAppReference,
@@ -24,8 +21,8 @@ import {
 } from "../protocol/conversation-validate.js"
 import {
   boundedName,
-  MAX_MCP_ARGUMENTS_BYTES,
   mcpAppReferenceProblem,
+  mcpAppRequestProblem,
   mcpCallToolResult,
   mcpReadResourceResult,
   validResourceDigest,
@@ -33,6 +30,35 @@ import {
   validResourceTicket,
 } from "../protocol/mcp-app-validate.js"
 import type { ConversationActionOptions } from "./conversation-api.js"
+
+/**
+ * The longest each of {@link McpAppsApi}'s calls can take the gateway, in
+ * milliseconds, as the protocol publishes it (`x-mcpAppCallTiming`, and the
+ * ticket's lifetime); nothing else spells them. A host that bounds an app's
+ * request by these never drops an answer the gateway is still bound to send.
+ */
+export const mcpAppDeadlines = Object.freeze({
+  /**
+   * `callTool`: a destructive tool's review waits for the person, then the
+   * call has its budget, and the client's allowance covers audit writes, the
+   * response and scheduling. The client waits at least this long — longer
+   * when it is configured for longer — since giving up sooner would drop an
+   * answer the gateway still sends, and would not withdraw the review: only
+   * `releaseApp`, or the socket closing, does.
+   */
+  callToolMs: mcpAppCallTiming.callDeadlineMs,
+  /**
+   * `readResource`: as long as a call. The gateway may open the conversation
+   * first, and records each step; a read never outlasts a call. The client
+   * waits at least this long, as for `callTool`.
+   */
+  readResourceMs: mcpAppCallTiming.callDeadlineMs,
+  /**
+   * `fetchResource`: the ticket's own lifetime. The client gives up on the
+   * request after this long; checking the bytes' SHA-256 follows.
+   */
+  fetchResourceMs: bounds.mcpResourceTicketMs,
+})
 
 /** What `mcp.readResource` said the bytes are: the size and SHA-256 `fetchResource` holds them to. */
 export type McpResourceDescription = Pick<McpReadResourceResult, "size" | "sha256">
@@ -62,8 +88,9 @@ export type McpAppsApi = {
    * `destructiveHint` is not false, so a tool with no annotations is — waits
    * first for the person's approval, as a review in the conversation's
    * `permissions` with `origin: {kind: "app", server, tool}`. The call is
-   * answered when they answer, when the review expires after 5 minutes, or
-   * when it is withdrawn; this client waits that long for it. At most 4 app
+   * answered when they answer, when the review expires
+   * (`x-mcpAppCallTiming.reviewDeadlineMs`), or when it is withdrawn; this client waits
+   * for it (`mcpAppDeadlines.callToolMs`). At most 4 app
    * calls run at once per socket; past that they are refused
    * `temporarily_unavailable`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
@@ -77,7 +104,9 @@ export type McpAppsApi = {
    * @returns The server's `CallToolResult`, encoded, exactly as it answered.
    * `isError: true` inside it is a result for the app, not a refusal.
    * @throws TypeError for arguments outside the schema's bounds, before
-   * anything is sent; otherwise {@link NessaMcpAppError}. Its `uncertain` is
+   * anything is sent — for the tool and the arguments, what
+   * {@link mcpAppRequestProblem} says, which a host may ask first; otherwise
+   * {@link NessaMcpAppError}. Its `uncertain` is
    * false — nothing reached the server — for `mcp_app_unknown`,
    * `mcp_server_mismatch`, `mcp_tool_not_for_app`, `mcp_request_too_large`,
    * `mcp_approval_denied`, `mcp_approval_expired` and `mcp_cancelled`. The
@@ -95,7 +124,10 @@ export type McpAppsApi = {
   ) => Promise<McpCallToolResult>
   /**
    * Read a resource of the app's own server: once, held by the gateway as
-   * exactly those bytes, and described with a ticket to fetch them.
+   * exactly those bytes, and described with a ticket to fetch them. The server
+   * has `x-mcpAppCallTiming.readTimeoutMs` to answer the read, but the gateway
+   * may open the conversation first, so this client waits as long as for a
+   * call (`mcpAppDeadlines.readResourceMs`).
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
@@ -104,9 +136,10 @@ export type McpAppsApi = {
    * @returns What the bytes are — always an MCP App's HTML, at most 4 MiB —
    * with the CSP and permissions the app asked for, and a `ticket` for
    * `fetchResource`: secret, single use, and redeemable for `expiresInMs`
-   * (60 s). Never log it or put it in a URL.
+   * Never log it or put it in a URL.
    * @throws TypeError for arguments outside the schema's bounds, before
-   * anything is sent; otherwise {@link NessaMcpAppError}, with `uncertain`
+   * anything is sent — for the URI, what {@link mcpAppRequestProblem} says,
+   * which a host may ask first; otherwise {@link NessaMcpAppError}, with `uncertain`
    * false for a refusal made before anything reached the server, such as
    * `mcp_app_unknown` and `mcp_server_mismatch`. An `mcp_app_unknown` for a
    * resource that is not an app's HTML was read, which changes nothing. The
@@ -131,7 +164,8 @@ export type McpAppsApi = {
    * request; otherwise {@link NessaMcpResourceError}: `not_found` (the route's
    * one refusal: unknown, used, expired or released), `unavailable` (the
    * redemption could not be audited), `integrity` (bytes that are not the
-   * ones described), `aborted`, `timeout` (no answer within 60 s),
+   * ones described), `aborted`, `timeout` (no answer within
+   * `mcpAppDeadlines.fetchResourceMs`),
    * `unreachable`, or `unexpected_response`.
    */
   fetchResource: (
@@ -161,7 +195,8 @@ export type McpAppsApi = {
 }
 
 const utf8 = new TextEncoder()
-const callDeadline: RequestDeadline = { atLeastMs: MCP_APP_CALL_DEADLINE_MS }
+const callDeadline: RequestDeadline = { atLeastMs: mcpAppDeadlines.callToolMs }
+const readDeadline: RequestDeadline = { atLeastMs: mcpAppDeadlines.readResourceMs }
 
 function hex(digest: ArrayBuffer): string {
   return Array.from(new Uint8Array(digest), (byte) =>
@@ -224,16 +259,17 @@ export function createMcpAppsApi(
     async callTool(conversationId, app, server, tool, argumentsJson, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!boundedName(tool, bounds.maxMcpNameBytes))
-        throw new TypeError(`Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`)
-      if (
-        argumentsJson !== undefined &&
-        (typeof argumentsJson !== "string" ||
-          utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES)
-      )
-        throw new TypeError(
-          `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`,
-        )
+      const toolProblem =
+        typeof tool === "string"
+          ? mcpAppRequestProblem.tool(tool)
+          : "Tool must be a string"
+      if (toolProblem) throw new TypeError(toolProblem)
+      if (argumentsJson !== undefined) {
+        if (typeof argumentsJson !== "string")
+          throw new TypeError("Arguments must be a string")
+        const problem = mcpAppRequestProblem.argumentsJson(argumentsJson)
+        if (problem) throw new TypeError(problem)
+      }
       return call(
         ProductMethod.McpCallTool,
         {
@@ -249,12 +285,16 @@ export function createMcpAppsApi(
     async readResource(conversationId, app, server, uri, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!boundedName(uri, bounds.maxMcpResourceUriBytes))
-        throw new TypeError(
-          `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
-        )
-      return call(ProductMethod.McpReadResource, { ...command, server, uri }, (value) =>
-        mcpReadResourceResult(value, uri),
+      const uriProblem =
+        typeof uri === "string"
+          ? mcpAppRequestProblem.uri(uri)
+          : "Resource URI must be a string"
+      if (uriProblem) throw new TypeError(uriProblem)
+      return call(
+        ProductMethod.McpReadResource,
+        { ...command, server, uri },
+        (value) => mcpReadResourceResult(value, uri),
+        readDeadline,
       )
     },
     async fetchResource(ticket, expected, options = {}) {
@@ -268,7 +308,7 @@ export function createMcpAppsApi(
         (signal) => transport.get({ ticket, maxBytes: expected.size, signal }),
         options.signal,
         timer,
-        RESOURCE_DEADLINE_MS,
+        mcpAppDeadlines.fetchResourceMs,
         {
           aborted: () => new NessaMcpResourceError("aborted"),
           timeout: () => new NessaMcpResourceError("timeout"),

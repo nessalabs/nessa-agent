@@ -142,7 +142,10 @@ pub enum SessionLoadState {
 /// A lease read with its actual backend-owned save binding.
 ///
 /// Unfinished state is not permission to restore a queue or initialize a
-/// provider. The original caller must supply its full exact units to recover it.
+/// provider. The original caller must supply its full exact units to recover it;
+/// [`Agent::prepare`](crate::application::agent_execution::agents::Agent::prepare)
+/// is that caller for its own initialization save, which it derives again from
+/// the prior publication.
 #[derive(Clone, Debug)]
 pub struct SessionLoad {
     snapshot: Option<SessionSnapshot>,
@@ -191,6 +194,16 @@ impl SessionLoad {
             }
             return Err(StorageError::Unresolved);
         }
+        self.into_checked(id)
+    }
+    /// The same identity, binding and history checks as [`Self::into_published`]
+    /// without its unfinished refusal. For an unfinished load this returns the
+    /// prior publication and the original recovery binding; only an exact retry
+    /// of the original plan may use them.
+    pub(crate) fn into_checked(
+        self,
+        id: &SessionId,
+    ) -> Result<(Option<SessionSnapshot>, SessionSaveGeneration), StorageError> {
         if matches!(self.binding.backend(), SessionSaveBackend::Record { stream, .. } if stream.as_str() != id.as_str())
         {
             if let Some(snapshot) = self.snapshot {
@@ -206,7 +219,7 @@ impl SessionLoad {
                 snapshot.discard_rejected_errors();
             }
             return Err(StorageError::Corrupt(
-                "published record binding contradicts its snapshot".into(),
+                "record binding contradicts its snapshot".into(),
             ));
         }
         if let Some(snapshot) = &self.snapshot {

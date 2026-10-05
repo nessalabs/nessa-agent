@@ -454,14 +454,16 @@ fn every_mcp_server_entry_carries_the_opens_environment() {
     use crate::domain::agent_execution::sessions::SessionId;
     let (_root, mut config, _) = profile_setup();
     config.tools_enabled = true;
-    config.mcp_servers = ["a", "b"]
-        .into_iter()
-        .map(|name| StdioMcpServer {
-            name: name.into(),
-            command: "/bin/server".into(),
-            args: vec!["--x".into()],
-        })
-        .collect();
+    config.mcp_servers = super::super::sessions::McpServerList::fixed(
+        ["a", "b"]
+            .into_iter()
+            .map(|name| StdioMcpServer {
+                name: name.into(),
+                command: "/bin/server".into(),
+                args: vec!["--x".into()],
+            })
+            .collect(),
+    );
     // No grants: an empty environment.
     assert!(config
         .mcp_server_entries()
@@ -524,7 +526,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         credential_environment: BTreeMap::new(),
         workspace: root.path().to_owned(),
         tools_enabled: true,
-        mcp_servers: Vec::new(),
+        mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
         permissions: PermissionOfferPolicy::once_only(),
         launch_timeout: Duration::from_secs(10),

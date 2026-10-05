@@ -4,9 +4,16 @@
 use super::fixture::{Behaviour, CHART};
 use super::servers;
 use crate::domain::agent_execution::sessions::SessionId;
-use crate::domain::mcp_apps::UiResourceUri;
-use crate::infrastructure::mcp::{McpError, McpOwner, APP_CALL_TIMEOUT};
+use crate::domain::mcp_apps::{UiResourceUri, UiVisibility};
+use crate::infrastructure::mcp::{McpError, McpOwner};
 use serde_json::json;
+use std::time::Duration;
+
+/// The budgets these tests give a call and a read (the gateway gives the
+/// protocol's). Neither is the SDK's own `REQUEST_TIMEOUT`, so a wait on that
+/// instead of the caller's budget is told apart.
+const CALL: Duration = Duration::from_secs(60);
+const READ: Duration = Duration::from_secs(7);
 
 fn conversation(name: &str) -> SessionId {
     SessionId::new(name).unwrap()
@@ -31,6 +38,7 @@ async fn an_apps_call_reaches_its_conversations_own_session_and_no_other() {
             "fixture",
             "echo",
             Some(json!({ "x": 1 })),
+            CALL,
         )
         .await
         .unwrap();
@@ -39,7 +47,7 @@ async fn an_apps_call_reaches_its_conversations_own_session_and_no_other() {
     assert!(launcher.server(1).with_method("tools/call").is_empty());
     // A call with no arguments sends none.
     servers
-        .call_tool(&conversation("a"), "fixture", "echo", None)
+        .call_tool(&conversation("a"), "fixture", "echo", None, CALL)
         .await
         .unwrap();
     let sent = launcher.server(0).with_method("tools/call");
@@ -60,12 +68,14 @@ async fn without_a_session_of_its_own_an_app_reaches_nothing() {
         Err(McpError::NoSession)
     );
     assert_eq!(
-        servers.call_tool(&none, "fixture", "echo", None).await,
+        servers
+            .call_tool(&none, "fixture", "echo", None, CALL)
+            .await,
         Err(McpError::NoSession)
     );
     assert_eq!(
         servers
-            .read_app_resource(&none, "fixture", &UiResourceUri::new(CHART).unwrap())
+            .read_app_resource(&none, "fixture", &UiResourceUri::new(CHART).unwrap(), READ)
             .await,
         Err(McpError::NoSession)
     );
@@ -110,6 +120,53 @@ async fn a_listed_tool_is_found_by_its_exact_name_with_what_it_said_of_its_effec
 }
 
 #[tokio::test]
+async fn a_listed_tool_is_found_with_who_its_server_said_may_call_it() {
+    let (servers, _, _) = servers(Behaviour {
+        pages: vec![vec![
+            json!({ "name": "both" }),
+            json!({ "name": "app_only", "_meta": { "ui": { "visibility": ["app"] } } }),
+            // A `visibility` that cannot be read is no one's (#412): an app
+            // asking for it is told it is not for apps.
+            json!({ "name": "app_string", "_meta": { "ui": { "visibility": "app" } } }),
+            json!({ "name": "null", "_meta": { "ui": { "visibility": null } } }),
+            // A `_meta.ui` that is not an object is no one's (#424).
+            json!({ "name": "ui_string", "_meta": { "ui": "app" } }),
+            json!({ "name": "ui_array", "_meta": { "ui": ["app"] } }),
+            json!({ "name": "ui_number", "_meta": { "ui": 1 } }),
+            json!({ "name": "ui_boolean", "_meta": { "ui": true } }),
+            json!({ "name": "ui_null", "_meta": { "ui": null } }),
+        ]],
+        ..Behaviour::default()
+    });
+    let session = servers
+        .open("fixture", McpOwner::new(conversation("a")))
+        .await
+        .unwrap();
+    session.list_tools().await.unwrap();
+    let a = conversation("a");
+    let visibility = |name: &str| {
+        servers
+            .listed_tool(&a, "fixture", name)
+            .unwrap()
+            .map(|tool| tool.ui().visibility())
+    };
+    let nobody = UiVisibility::new(false, false);
+    assert_eq!(visibility("both"), Some(UiVisibility::BOTH));
+    assert_eq!(visibility("app_only"), Some(UiVisibility::new(false, true)));
+    assert_eq!(visibility("app_string"), Some(nobody));
+    assert_eq!(visibility("null"), Some(nobody));
+    for name in [
+        "ui_string",
+        "ui_array",
+        "ui_number",
+        "ui_boolean",
+        "ui_null",
+    ] {
+        assert_eq!(visibility(name), Some(nobody), "{name}");
+    }
+}
+
+#[tokio::test]
 async fn a_calls_failures_are_the_servers_error_or_its_silence() {
     let mut behaviour = Behaviour::default();
     behaviour.silent.insert("tools/call");
@@ -121,13 +178,35 @@ async fn a_calls_failures_are_the_servers_error_or_its_silence() {
     session.list_tools().await.unwrap();
     // No answer within the budget: timed out, and cancelled upstream.
     let a = conversation("a");
-    let call = servers.call_tool(&a, "fixture", "echo", None);
-    let timed_out = clock.passing(|wait| wait.limit() == APP_CALL_TIMEOUT, call);
+    let call = servers.call_tool(&a, "fixture", "echo", None, CALL);
+    let timed_out = clock.passing(|wait| wait.limit() == CALL, call);
     assert_eq!(timed_out.await, Err(McpError::Timeout));
     launcher
         .server(0)
         .arrived("notifications/cancelled", 1)
         .await;
+}
+
+#[tokio::test]
+async fn a_read_unanswered_within_the_callers_budget_times_out() {
+    let mut behaviour = Behaviour::default();
+    behaviour.silent.insert("resources/read");
+    let (servers, _, clock) = servers(behaviour);
+    let session = servers
+        .open("fixture", McpOwner::new(conversation("a")))
+        .await
+        .unwrap();
+    session.list_tools().await.unwrap();
+    let a = conversation("a");
+    let uri = UiResourceUri::new(CHART).unwrap();
+    let read = servers.read_app_resource(&a, "fixture", &uri, READ);
+    // Only a wait of the caller's budget is let pass; a read waiting on any
+    // other never ends, which the guard reports.
+    let timed_out = clock.passing(|wait| wait.limit() == READ, read);
+    let ended = tokio::time::timeout(Duration::from_secs(5), timed_out)
+        .await
+        .expect("the read waits the caller's budget");
+    assert_eq!(ended.map(|_| ()), Err(McpError::Timeout));
 }
 
 #[tokio::test]
@@ -140,7 +219,7 @@ async fn a_servers_refusal_and_an_answer_that_is_no_result_are_typed() {
     session.list_tools().await.unwrap();
     assert!(matches!(
         servers
-            .call_tool(&conversation("a"), "fixture", "no_such_tool", None)
+            .call_tool(&conversation("a"), "fixture", "no_such_tool", None, CALL)
             .await,
         Err(McpError::Remote { code: -32602, .. })
     ));
@@ -156,7 +235,7 @@ async fn a_servers_refusal_and_an_answer_that_is_no_result_are_typed() {
     let a = conversation("a");
     let call = tokio::spawn({
         let servers = servers.clone();
-        async move { servers.call_tool(&a, "fixture", "echo", None).await }
+        async move { servers.call_tool(&a, "fixture", "echo", None, CALL).await }
     });
     let server = launcher.server(0);
     server.arrived("tools/call", 1).await;
@@ -178,6 +257,7 @@ async fn an_apps_resource_is_read_over_its_conversations_own_session() {
             &conversation("a"),
             "fixture",
             &UiResourceUri::new(CHART).unwrap(),
+            READ,
         )
         .await
         .unwrap();

@@ -28,13 +28,15 @@ const store = makeStore(dependencies)
 
 The desktop window composes its own scope the same way.
 `src/desktop/dependencies.ts` builds `WorkspaceDependencies` — the
-`WorkspaceSource` port (the in-memory source until the gateway implements it),
-the clock, and an id generator — and `src/desktop/store.ts` hands them to the
+`WorkspaceSource` port (the gateway's, `gatewaySource`, when it is given a way
+to connect, and the in-memory sample otherwise), the clock, and an id
+generator — and `src/desktop/store.ts` hands them to the
 workspace's thunks as the extra argument and to its listener effects. Tests
 make a store over a source of their own (`src/desktop/workspace/testing.ts`).
 
 ```ts
-const dependencies = createDesktopDependencies({ workspace: myWorkspaceSource })
+// The gateway's conversations; or `{ workspace: myWorkspaceSource }` in a test.
+const dependencies = createDesktopDependencies({ gateway: () => connectClient() })
 const store = makeDesktopStore(dependencies)
 ```
 
@@ -45,7 +47,8 @@ and the SDK owns connection recovery for each client instance.
 
 ## Rust server
 
-`app::ports::Clock` is an application-owned trait. `RuntimeDependencies` holds
+`nessa_protocol::clock::Clock` is the monotonic clock port, owned by the
+protocol crate because the native pairing socket both ends share reads it. `RuntimeDependencies` holds
 an `clock: Arc<dyn Clock>` and supplies the default monotonic implementation.
 `CompositionRoot` constructs the dependencies and passes them to
 `AppState::with_dependencies`. State clones share the injected clock. Separate
@@ -59,6 +62,17 @@ one server/application, not a static process-wide registry. Rust ownership/Arc
 controls adapter lifetime. Future background adapters must expose explicit
 startup/shutdown owned by composition; dropping a pointer is not a substitute
 for draining writes or stopping workers.
+
+## Rust device client
+
+`nessa-client-core::composition` composes the standalone retained-sync example:
+private profile, private enrollment state, enrollment client, protected session,
+and one cache. `composition::clock` supplies a wall clock through Auth's `Clock`
+for cache observations and a separate monotonic clock through
+`nessa_protocol::clock::Clock` for socket budgets. Device application ports
+receive these dependencies explicitly; they do not resolve gateway state.
+`composition::execute` takes input and output handles for command presentation.
+Gateway process tests call that public entry point through a dev-dependency.
 
 ## Rust desktop host
 

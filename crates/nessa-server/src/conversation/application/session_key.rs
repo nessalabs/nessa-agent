@@ -1,5 +1,5 @@
 //! Which SDK session a conversation's agent runs in: the one rule.
-use crate::conversation::domain::ConversationId;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 
 /// The SDK session a conversation's agent runs in, named by the

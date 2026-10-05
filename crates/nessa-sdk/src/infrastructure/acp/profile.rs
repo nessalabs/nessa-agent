@@ -36,6 +36,15 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     fn supports_questions(&self) -> bool {
         false
     }
+    /// This profile for one provider open, whose configuration — its MCP
+    /// servers read for that open — is `config`. A profile that keeps nothing
+    /// of the open's configuration returns itself.
+    fn for_open(self, _config: &AcpConfig) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError>;
     fn new_session_params(&self, config: &AcpConfig, capabilities: &EffectiveCapabilities)
         -> Value;
@@ -123,4 +132,10 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// see only part of the request would have to review an action it cannot
     /// fully describe. The shared runtime does not interpret the request.
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError>;
+    /// Apply this frame's input rule when the review will be declined.
+    ///
+    /// The shared runtime declines without treating the frame as a tool
+    /// update. A profile that retains input for a later sparse review applies
+    /// that rule here, and only for a call it has already observed.
+    fn note_declined_permission(&mut self, _request: &Value) {}
 }

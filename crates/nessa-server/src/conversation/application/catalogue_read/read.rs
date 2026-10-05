@@ -3,12 +3,11 @@
 //! Admission owns credential, receiver, owner, and epoch. The injected source
 //! owns physical catalogue identity and I/O; sync-engine owns pass validation.
 
-use crate::conversation::application::{
-    passive_read_selector, validate_passive_read_selector, AdmitPassiveRead, CatalogueReadScope,
-    ReadRefusal, RecordReadLease,
-};
-use crate::conversation::domain::conversation_catalogue_stream;
+use crate::conversation::application::{AdmitPassiveRead, RecordReadLease};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::conversation::read_scope::{
+    passive_read_selector, validate_catalogue_selector, CatalogueReadScope, ReadRefusal,
+};
 use nessa_sync::replication::{
     catalogue::{
         validate_catalogue_pass, validate_manifest_request, CataloguePass, ManifestEntry,
@@ -126,16 +125,4 @@ impl ReadCatalogue<'_> {
         validate_catalogue_selector(&admitted, scope).map_err(CatalogueReadError::Admission)?;
         Ok(response)
     }
-}
-
-pub(crate) fn validate_catalogue_selector(
-    admitted: &CatalogueReadScope,
-    scope: &Scope,
-) -> Result<(), ReadRefusal> {
-    if scope.stream()
-        != &conversation_catalogue_stream(&admitted.organization_id, &admitted.owner_id)
-    {
-        return Err(ReadRefusal::WrongOwner);
-    }
-    validate_passive_read_selector(&admitted.receiver_id, admitted.access_epoch, scope)
 }

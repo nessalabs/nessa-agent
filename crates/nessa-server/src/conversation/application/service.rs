@@ -3,10 +3,31 @@ use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
-    mcp_apps::McpAppPorts,
-    projection::{bound_view, clipped, Projection, MAX_TEXT},
+    mcp_apps::{McpAppInitiator, McpAppPorts},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
+    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+};
+use crate::conversation::domain::{
+    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
+};
+use futures_util::{future::join_all, FutureExt};
+use nessa_auth::application::ports::Clock;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+};
+use nessa_protocol::conversation::{
+    projection::{bound_view, clipped, Projection, MAX_TEXT},
+    tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
@@ -16,23 +37,7 @@ use super::{
         ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
         SubmissionReceipt,
     },
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
-    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    McpToolUis, NoMcpToolUis, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-    ConversationModelId, ConversationSummary, ProviderSessionErasure, ProviderSessionLink,
-};
-use futures_util::{future::join_all, FutureExt};
-use nessa_auth::application::ports::Clock;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
     agents::{
         AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,
@@ -131,6 +136,9 @@ const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// waiting beyond its own bound
 /// (`agents_asked_at_once_never_exceed_the_bound_and_the_rest_are_left_unfinished`).
 const MAX_AGENTS_ASKED_AT_ONCE: usize = 2;
+/// How long a stopping gateway waits for every MCP App call to record its
+/// last step.
+const APP_CALLS_SETTLE: Duration = Duration::from_secs(10);
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
 #[derive(Clone)]
@@ -393,8 +401,10 @@ struct LiveConversation {
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
     attachment_owner: Mutex<AttachmentOwner>,
-    /// The reviews its MCP Apps' destructive calls wait on.
+    /// Its MCP Apps' state — the conversation's, kept by the service — and
+    /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
+    app_epoch: u64,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -500,6 +510,10 @@ struct Inner {
     tool_uis: Arc<dyn McpToolUis>,
     /// What an MCP App's calls go through; `None` with no MCP servers.
     mcp_apps: Option<McpAppPorts>,
+    /// Each conversation's MCP Apps, kept for the conversation rather than
+    /// its live agent: a release is kept across openings and before one.
+    /// Let go of when the conversation is deleted.
+    apps: std::sync::Mutex<HashMap<ConversationId, Arc<AppReviews>>>,
     /// MCP App calls running, across every caller: each holds one of these
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
@@ -746,6 +760,7 @@ impl ConversationService {
                 retries: Arc::new(DeletionRetries::default()),
                 tool_uis,
                 mcp_apps,
+                apps: std::sync::Mutex::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
             }),
         })
@@ -1153,6 +1168,8 @@ impl ConversationService {
                                     workspace: workspace.clone(),
                                 });
                             }
+                            let app_reviews = service.apps_of(&id);
+                            let app_epoch = app_reviews.begin();
                             let attachment = agent.clone();
                             let attachment_id = id.clone();
                             let attachment_service = service.clone();
@@ -1185,7 +1202,8 @@ impl ConversationService {
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(AttachmentOwner::Running(owner)),
-                                app_reviews: Arc::default(),
+                                app_reviews,
+                                app_epoch,
                             });
                             Ok(live)
                         };
@@ -1251,7 +1269,7 @@ impl ConversationService {
         .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         if let Some(slot) = slot {
-            self.stop_slot(id, slot, &actor)
+            self.stop_slot(id, slot, &actor, &McpAppInitiator::System)
                 .await
                 .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         }
@@ -1581,10 +1599,11 @@ impl ConversationService {
                 _ => false,
             }
         });
-        let mut view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         view.title = self.title(&id).await;
+        // Bounded there, before its app reviews are added beside it.
+        let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         self.check_view_access(&id, &caller).await?;
-        Ok(bound_view(view))
+        Ok(view)
     }
     async fn read_pending_mode_change(
         &self,
@@ -2386,7 +2405,7 @@ impl ConversationService {
                 match slot {
                     Some(slot) => {
                         let stopped = service
-                            .stop_slot(&id, slot, &actor)
+                            .stop_slot(&id, slot, &actor, &initiator_of(&actor))
                             .await
                             .map_err(|_| ConversationError::ApprovalModeUncertain);
                         let may_release = stopped.is_ok();
@@ -2397,6 +2416,7 @@ impl ConversationService {
             } else {
                 match service.resolve(&id, &caller).await {
                     Ok(live) => {
+                        service.end_apps(&id, &live, &initiator_of(&actor));
                         let result = live.agent.close(actor).await;
                         if result.is_ok() {
                             let _ = live.join_attachment_owner().await;
@@ -2553,7 +2573,20 @@ impl ConversationService {
                     )))
                 }
             };
-            match service.finish_deletion(record).await {
+            // The same person the deletion record names, for the records
+            // this delete still causes after the agent's stop — or instead
+            // of it, when this run holds no slot to stop.
+            let by = record
+                .deletion()
+                .and_then(|deletion| deletion_actor(deletion).ok())
+                .map(|actor| initiator_of(&actor))
+                .unwrap_or(McpAppInitiator::System);
+            let finished = service.finish_deletion(record).await;
+            // Its agent stopped — its apps ended by the deleter — or not:
+            // either way nothing names it again, and its apps take no more,
+            // ended as that same person.
+            service.close_apps_for_good(&id, &by);
+            match finished {
                 Ok(()) => {
                     // Nothing is left for the worker to carry
                     // (`a_person_s_delete_that_finishes_leaves_nothing_waiting`).
@@ -2867,20 +2900,16 @@ impl ConversationService {
         if deletion.erased() {
             return Ok(());
         }
-        let actor = ActionContext::new(
-            deletion.initiator().as_str(),
-            deletion.surface(),
-            deletion.request(),
-        )
-        .map_err(|_| ConversationError::Metadata)?;
+        let actor = deletion_actor(&deletion)?;
         let slot = self.inner.conversations.lock().await.get(&id).cloned();
         if let Some(slot) = slot {
             // Retirement stops this agent itself, and must not wait here for
             // this delete to do it first. Answered as every step after the
             // tombstone is: the delete happened and did not finish
             // (`a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished`).
+            let ended_by = initiator_of(&actor);
             let stopped = tokio::select! {
-                stopped = self.stop_slot(&id, slot, &actor) => stopped,
+                stopped = self.stop_slot(&id, slot, &actor, &ended_by) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
             };
             if let Err(stop) = stopped {
@@ -3306,6 +3335,13 @@ impl ConversationService {
                 Err(ConversationError::RetirementAdmission { cleanup_error })
             }
         };
+        // Each app call runs on a task of its own, and records its last step
+        // there: a review withdrawn as its conversation ended, a call sent
+        // that its server's stop ended. The runtime that ends after this
+        // would cut those records short.
+        if !self.app_calls_finished(APP_CALLS_SETTLE).await {
+            tracing::warn!("MCP App calls were still running when the gateway stopped");
+        }
         // Deletions whose agents were being asked when retirement ended them
         // are still stopping those agents on tasks of their own; the runtime
         // that ends after this would cut them short and leave what they made
@@ -3370,13 +3406,16 @@ impl ConversationService {
         let attempts = slots.into_iter().map(|(id, slot)| async move {
             // Retirement reports every stop as the agent's error: over its
             // budget is a deadline there.
-            self.stop_slot(&id, slot, actor).await.err().map(|stop| {
-                let error = match stop {
-                    StopFailure::OverBudget => AgentError::Deadline,
-                    StopFailure::Failed(error) => error,
-                };
-                (id.to_string(), error)
-            })
+            self.stop_slot(&id, slot, actor, &McpAppInitiator::System)
+                .await
+                .err()
+                .map(|stop| {
+                    let error = match stop {
+                        StopFailure::OverBudget => AgentError::Deadline,
+                        StopFailure::Failed(error) => error,
+                    };
+                    (id.to_string(), error)
+                })
         });
         let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
         if failures.is_empty() {
@@ -3393,11 +3432,14 @@ impl ConversationService {
     /// error, which means only that cleanup is unconfirmed; the slot and
     /// supervised SDK work remain owned
     /// (`a_close_that_fails_with_a_deadline_of_its_own_is_not_the_stop_budget`).
+    /// Stop the agent of `slot`, its apps ended first by `ended_by` — so
+    /// they end, and on record, even when the stop does not.
     async fn stop_slot(
         &self,
         id: &ConversationId,
         slot: Arc<Slot>,
         actor: &ActionContext,
+        ended_by: &McpAppInitiator,
     ) -> Result<(), StopFailure> {
         let attempt = async {
             loop {
@@ -3406,14 +3448,17 @@ impl ConversationService {
                 ready.as_mut().enable();
                 if let Some(value) = slot.value.get() {
                     return match value {
-                        Ok(live) => match live.agent.close(actor.clone()).await {
-                            Ok(_) => {
-                                let _ = live.join_attachment_owner().await;
-                                self.release_slot(id, &slot).await;
-                                Ok(())
+                        Ok(live) => {
+                            self.end_apps(id, live, ended_by);
+                            match live.agent.close(actor.clone()).await {
+                                Ok(_) => {
+                                    let _ = live.join_attachment_owner().await;
+                                    self.release_slot(id, &slot).await;
+                                    Ok(())
+                                }
+                                Err(error) => Err(error),
                             }
-                            Err(error) => Err(error),
-                        },
+                        }
                         // One rule for a failed opening: while it may still hold
                         // what it launched, its stop cannot be confirmed.
                         Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
@@ -3453,13 +3498,11 @@ impl ConversationService {
             owned
         };
         if released {
-            // The conversation ended, however it ended: its apps' waiting
-            // calls are withdrawn, and what was held for them let go.
+            // Ended, however it ended: its apps too. Every stop ends them
+            // first, by whoever stopped it; this is for any other way out,
+            // and does nothing to apps already ended.
             if let Some(Ok(live)) = slot.value.get() {
-                live.app_reviews.end();
-            }
-            if let Some(apps) = &self.inner.mcp_apps {
-                apps.tickets.release_conversation(id);
+                self.end_apps(id, live, &McpAppInitiator::System);
             }
         }
     }
@@ -3483,6 +3526,29 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
     }
     let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
     (still_stopping || failures.history_leased_elsewhere).then_some(Waiting::ForRelease)
+}
+
+/// The caller recorded on a deletion, as the command that decided it.
+fn deletion_actor(deletion: &ConversationDeletion) -> Result<ActionContext, ConversationError> {
+    ActionContext::new(
+        deletion.initiator().as_str(),
+        deletion.surface(),
+        deletion.request(),
+    )
+    .map_err(|_| ConversationError::Metadata)
+}
+
+/// Who ended a conversation's apps, by the command `actor` took: the
+/// gateway's own actor is the system, anyone else a person.
+fn initiator_of(actor: &ActionContext) -> McpAppInitiator {
+    match nessa_auth::domain::PrincipalId::new(actor.principal_id()) {
+        Ok(principal_id) if actor.principal_id() != "gateway" => McpAppInitiator::Person {
+            principal_id,
+            surface_id: actor.surface_id().to_owned(),
+            request_id: actor.request_id().to_owned(),
+        },
+        _ => McpAppInitiator::System,
+    }
 }
 
 /// Who answered an app's review: the caller of `conversation.answer`.
@@ -3862,7 +3928,9 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
 }
 
 mod app_calls;
-pub use app_calls::{McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS};
+pub use app_calls::{
+    McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS, MAX_RESOURCE_META_BYTES,
+};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/close_release.rs"]

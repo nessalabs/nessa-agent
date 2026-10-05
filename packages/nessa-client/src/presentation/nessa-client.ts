@@ -1,3 +1,4 @@
+import { createChangeWatchApi, type ChangeWatchApi } from "./change-watch-api.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
 import type { ManagedSession, ConnectionState } from "../application/managed-session.js"
 import type { EventHandler, NessaClientEvents } from "../application/events.js"
@@ -61,6 +62,8 @@ export class NessaClient {
   readonly records: RecordReadApi
   /** Finite owner catalogue reads under current receiver authority. */
   readonly catalogue: CatalogueReadApi
+  /** Connection-local advisory notices; callers own registration, recheck and fallback. */
+  readonly watches: ChangeWatchApi
   /** Configured agents, models, and provider-specific approval choices. */
   readonly agents: AgentsApi
   /** Stage files into a conversation so a message can refer to them by digest. */
@@ -85,6 +88,7 @@ export class NessaClient {
     this.conversation = createConversationApi(wire, newRequestId)
     this.records = createRecordReadApi(wire)
     this.catalogue = createCatalogueReadApi(wire)
+    this.watches = createChangeWatchApi(wire)
     this.agents = createAgentsApi(wire)
     this.attachments = createAttachmentApi(wire, upload, newRequestId, httpTimer)
     this.mcpApps = createMcpAppsApi(wire, resources, newRequestId, httpTimer)

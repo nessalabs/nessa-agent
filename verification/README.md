@@ -26,6 +26,7 @@ verification/
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
+      app-review/           real window over a fake gateway whose app's call asks for a review
     scripts/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
@@ -35,21 +36,35 @@ verification/
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
       safe-area.mjs         nothing painted under the window controls, per frame
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
+      gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
+      gateway-window.mjs    the desktop app's window over a real gateway (#419): its handshake, a conversation, a live turn (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for the text-reply scenario and none)
+      scripted-scenarios.mjs  a scenario through the gateway and the window (#510): permission, a mid-turn failure, cancel (signed out; `--mode prod` previews a production build)
+      scripted-e2e.mjs      one signed-out command: the gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
+      app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
+      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
         cli.mjs             options, stderr diagnostics, JSON result, exit status
-        server.mjs          reuse/start the dev server, or build + preview production
+        server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors
-        workspace.mjs       open panes, read pane rects and focus, lift a pane
+        workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
+        apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
+        apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
+        gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
+        scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
+        fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
+        gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened, what a text-only turn said
+        gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
+        browser.test.mjs    browser.mjs's recording of a failed request, no browser: harmless or an error (#485's F1′, F2–F4), and the favicon
 ```
 
 When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a
@@ -65,7 +80,8 @@ asserts that something does not happen, its window is named and explained.
 - `pnpm install` (brings the pinned `playwright` devDependency).
 - Google Chrome installed (the default Chromium channel; it has Long Animation
   Frame timing). Or pass `--channel bundled` after `pnpm exec playwright install chromium`.
-- WebKit for Playwright: `pnpm exec playwright install webkit`.
+- WebKit for Playwright: `pnpm exec playwright install webkit`. On Linux, WebKit's system libraries: `pnpm exec playwright install-deps webkit`.
+- `pnpm test:e2e:scripted` also needs a Rust toolchain (`cargo build -p nessa-server`, which the command runs) and the Playwright browsers above. It does not need a harness's `node_modules` or an owner credential: the gateway runs the scripted agent signed out. `scripts/remote/prepare.sh` from #358, on the parked branch `claude/358-remote-builds` and not on `main`, is what installs harnesses for the live agents; this command does not run it.
 - Nothing else running on 127.0.0.1:1438 except, optionally, `pnpm desktop:dev`
   (a running dev server is reused; otherwise one is started and stopped).
 
@@ -80,6 +96,9 @@ pnpm verify:desktop:safe-area --engine webkit --sizes 1000x700
 pnpm verify:desktop:drag
 pnpm verify:desktop:focus
 pnpm verify:desktop:responsive --shots /tmp/desktop-shots
+pnpm test:e2e:scripted -- --evidence /tmp/scripted-e2e
+pnpm test:e2e:scripted -- --channel bundled --evidence /tmp/scripted-e2e
+pnpm test:e2e:scripted -- --mode prod --evidence /tmp/scripted-e2e-prod
 node verification/desktop/scripts/<check>.mjs --help
 ```
 
@@ -114,6 +133,7 @@ ends each step once its motion has, not after a fixed wait.
   something could not run (the server did not start, a browser is missing,
   what a step needs to begin was not on the page, an option or `--only` name
   the check does not have). `run-all` sums its checks by the same rule.
-- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser).
+- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser). CI
+  runs them in the frontend job, through `pnpm frontend:check`.
 
 Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-command-output).

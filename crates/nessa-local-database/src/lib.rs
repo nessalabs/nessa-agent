@@ -169,17 +169,32 @@ fn accepted(connection: &Connection, schema: &Schema) -> Result<Accepted, OpenEr
 /// Open the database at `path`, creating it privately and giving it `schema`
 /// when it is absent or empty.
 pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
+    open_mode(path, schema, nessa_local_storage::OpenMode::OpenOrCreate)
+}
+
+/// Open the database at `path` only when that file is already there.
+///
+/// A missing file is [`OpenError::File`] with [`io::ErrorKind::NotFound`], and
+/// nothing is created. An empty file that is already there is given `schema`,
+/// the same way [`open`] does.
+pub fn open_existing(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
+    open_mode(path, schema, nessa_local_storage::OpenMode::ReadWrite)
+}
+
+fn open_mode(
+    path: &Path,
+    schema: &Schema,
+    mode: nessa_local_storage::OpenMode,
+) -> Result<Connection, OpenError> {
     let directory = path
         .parent()
         .ok_or_else(|| OpenError::Directory(io::ErrorKind::NotFound.into()))?;
     nessa_local_storage::verify_directory(directory).map_err(OpenError::Directory)?;
     // Private before SQLite opens it, and never through a link. SQLite is
     // then not allowed to create it, so a file removed in between is an error
-    // rather than a new one made with the process's own mode.
-    drop(
-        nessa_local_storage::open(path, nessa_local_storage::OpenMode::OpenOrCreate)
-            .map_err(OpenError::File)?,
-    );
+    // rather than a new one made with the process's own mode. `ReadWrite`
+    // does not create a file that was already absent.
+    drop(nessa_local_storage::open(path, mode).map_err(OpenError::File)?);
     let mut connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,

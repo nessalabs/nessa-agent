@@ -10,6 +10,8 @@
 //! live in `tests/infrastructure/json_rpc/transport.rs`, included as private tests.
 //! Parsing charges each value and key against one frame item budget before
 //! allocation; `decoding_budget.rs` tests exact limits and ignored metadata.
+//! `json_fits` measures a value's JSON text against a byte bound before it is
+//! written out, for adapters that keep bounded JSON.
 mod envelope;
 mod transport;
 pub(crate) use envelope::{
@@ -17,4 +19,6 @@ pub(crate) use envelope::{
 };
 pub(crate) use transport::{encode, large_frame_allowance, send_encoded, write_allowance, Reader};
 mod error;
+mod size;
 pub(crate) use error::protocol;
+pub(crate) use size::json_fits;

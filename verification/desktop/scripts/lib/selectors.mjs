@@ -50,6 +50,7 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
+  message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user or agent
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
@@ -74,6 +75,9 @@ export const css = {
   widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
+  workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
+  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
+  workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
@@ -91,6 +95,10 @@ export const css = {
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
   fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
+  // The test MCP server's review app (scripts/mcp-test-server/server.mjs), as a real server serves it
+  reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
+  reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
+  reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -104,8 +112,13 @@ export const css = {
 
   // Approval card (arranged by its own width)
   approvalCard: ".workspace-approval", // class
+  appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
+  agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
+  approvalReason: ".workspace-approval-reason", // class: why the review is asking
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
+  approvalHead: ".workspace-approval-head", // class: who asks, and what
+  approvalHeadWords: ".workspace-approval-head-words", // class: the head's words, without its icon
 
   // Agents overview (always offered: the sidebar's entry and ⌘0)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
@@ -206,6 +219,8 @@ export const safeAreaTokens = {
  */
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
+  /** The gateway source's poll and reconnect timing (`defaultGatewayTiming`). */
+  gatewaySource: "/src/desktop/workspace/adapters/gateway/gateway-source.ts",
   /** What a widget host says in each case (`hostLines`). */
   hostTable: "/src/desktop/widgets/model/host-table.ts",
 }
@@ -289,6 +304,8 @@ export const zoneSaid = {
 /** Accessible names, for getByRole / getByText. */
 export const names = {
   agentsEntry: "Agents",
+  /** An app's review card's head: the app by its server, and the tool it asked to run (`approvalHead`). */
+  appAsks: (server, tool) => `The ${server} app wants to run ${tool}`,
   /** A pane's "…" menu: the header picture's two choices (issue #320). */
   chooseHeaderPicture: "Choose Header Picture…",
   useNightScene: "Use Night Scene",
@@ -322,6 +339,15 @@ export const names = {
   appSession: "An MCP App, in its sandbox",
   /** What the fixture server refuses its hidden tool with (`fixture-plugin.ts`). */
   hiddenToolRefused: "fixture_secret is not available to apps",
+  /**
+   * What an app is told of a refused call to a real server through the
+   * gateway (`widgets/app/adapters/gateway/mcp-app-server.ts`), by why.
+   */
+  gatewayRefused: {
+    notForApp: "This app may not use that tool",
+    declined: "The person declined this action",
+    withdrawn: "The request was withdrawn",
+  },
   /** What the fixture app says on its body (`fixture-app.ts`), by the field it says it in. */
   fixtureSays: {
     state: "data-fixture-state",
@@ -395,4 +421,24 @@ export const readinessVerification = {
   retryButton: "Check again",
   readyObservation: "false:ready",
   buttons: "button",
+}
+
+/**
+ * The app-review fixture (`fixtures/app-review/`, #436): the window over a
+ * fake gateway whose one conversation holds an MCP App's call, which asks for
+ * a review when the page calls a tool (`__appReview.call`). The longest
+ * tool's name is the page's (`__appReview.longestTool`), from the client's
+ * own bound.
+ */
+export const appReview = {
+  page: "verification/desktop/fixtures/app-review/index.html",
+  session: "Clean up the stale rows",
+  sessionId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+  /** The card's head: the app by its server, and the tool it named. */
+  head: (tool) => names.appAsks("mcptest", tool),
+  /** The overview row's accessible name: the title, then the app asking. */
+  row: (tool) => `Clean up the stale rows. ${names.appAsks("mcptest", tool)} {}.`,
+  tool: "app_delete_row",
+  /** The fixture page's title, by which the script knows it is served. */
+  title: "Nessa: an app's review",
 }

@@ -1,17 +1,13 @@
 //! Passive read admission against the local ownership adapter.
 
-use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     AdmitPassiveRead, CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation,
-    CatalogueReadResponse, CatalogueReadScope, CatalogueReadSource, CatalogueReadValue,
-    ConversationRepository, ReadCatalogue, ReadRecords, ReadRefusal, ReceiverAuthority,
-    ReceiverBinding, ReceiverReadScope, RecordHead, RecordReadError, RecordReadFuture,
-    RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
+    CatalogueReadResponse, CatalogueReadSource, CatalogueReadValue, ConversationRepository,
+    ReadCatalogue, ReadRecords, ReceiverAuthority, ReceiverBinding, RecordHead, RecordReadError,
+    RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
+    RecordReadValue,
 };
-use crate::conversation::domain::{
-    conversation_catalogue_stream, Conversation, ConversationApprovalMode, ConversationId,
-    ConversationModelId,
-};
+use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::LocalConversationStore;
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::application::authorization::AuthorizeAction;
@@ -23,6 +19,13 @@ use nessa_auth::application::session::AuthenticateSession;
 use nessa_auth::domain::{
     Action, AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
     MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    conversation_catalogue_stream, ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::read_scope::{
+    CatalogueReadScope, ReadRefusal, ReceiverReadScope,
 };
 use nessa_sync::replication::catalogue::{
     CataloguePass, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
@@ -315,6 +318,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     for (error, expected) in [
+        (AccessError::Denied, ReadRefusal::Forbidden),
         (AccessError::StaleRevision, ReadRefusal::Unverifiable),
         (AccessError::Unavailable, ReadRefusal::Unverifiable),
         (AccessError::Unsupported, ReadRefusal::Unverifiable),

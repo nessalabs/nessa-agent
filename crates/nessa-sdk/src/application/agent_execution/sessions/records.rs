@@ -4,6 +4,7 @@ pub(crate) mod continuation;
 
 use super::{
     queue_validation::QueueReplayUndo,
+    steering_position::SteeringPosition,
     validation::{InvocationContinuation, InvocationObservationUndo},
     SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
@@ -113,34 +114,28 @@ fn apply_history<T>(
     Ok(result)
 }
 
-/// Admission captures the exact target output prefix. A later injection may
-/// observe more output, but neither fact can borrow evidence from the future.
+/// A steered message names a prior turn that can take steering. At admission
+/// its offset is exactly the target's events so far, so it borrows no output
+/// from the future
+/// (`a_steering_offset_is_bounded_by_the_target_history_each_path_holds`). A
+/// later injection takes no offset bound of its own; why is stated once, in
+/// `docs/design/mcp-app-calls.md` ("The app a message names").
 fn validate_target_prefix(
     snapshot: &SessionSnapshot,
     positions: &HashMap<ExecutionId, usize>,
     histories: &HashMap<ExecutionId, InvocationHistory>,
-    target: Option<&ExecutionId>,
-    offset: Option<usize>,
-    exact: bool,
+    steering: Option<SteeringPosition<'_>>,
+    at_admission: bool,
 ) -> Result<(), StorageError> {
-    let Some(target) = target else {
-        return offset
-            .is_none()
-            .then_some(())
-            .ok_or_else(|| corrupt("targetless input has a steering offset"));
+    let Some(steering) = steering else {
+        return Ok(());
     };
+    let target = steering.target();
     let record = positions
         .get(target)
         .and_then(|index| snapshot.invocations.get(*index))
         .ok_or_else(|| corrupt("steering target is not a prior invocation"))?;
-    let count = record.events.len();
-    if offset.is_none_or(|offset| {
-        if exact {
-            offset != count
-        } else {
-            offset > count
-        }
-    }) {
+    if at_admission && steering.offset() != record.events.len() {
         return Err(corrupt(
             "steering offset is outside the prior target history",
         ));
@@ -163,11 +158,14 @@ pub(super) struct ProviderEvidence {
 }
 
 impl ProviderEvidence {
-    fn from_snapshot(snapshot: Option<&SessionSnapshot>) -> Self {
+    /// # Errors
+    ///
+    /// `Corrupt` for a half-saved steering position (`SteeringPosition::saved`).
+    fn from_snapshot(snapshot: Option<&SessionSnapshot>) -> Result<Self, StorageError> {
         let Some(snapshot) = snapshot else {
-            return Self::default();
+            return Ok(Self::default());
         };
-        Self {
+        Ok(Self {
             observations: snapshot
                 .invocations
                 .iter()
@@ -184,15 +182,12 @@ impl ProviderEvidence {
                     )
                 })
             }),
-            correlation: snapshot.invocations.iter().any(|record| {
-                record.target_event_offset.is_some()
-                    || record.scheduling.iter().any(|event| event.target.is_some())
-            }),
+            correlation: SteeringPosition::any_saved(&snapshot.invocations)?,
             selected: snapshot
                 .queue_history
                 .iter()
                 .any(|record| matches!(record.mutation, QueueMutation::Selected { .. })),
-        }
+        })
     }
 
     fn validate(self, context: &ProviderContext) -> Result<(), StorageError> {
@@ -369,23 +364,26 @@ impl continuation::Continuation {
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("input precedes session open"))?;
-                validate_target_prefix(
-                    snapshot,
-                    positions,
-                    histories,
-                    record
-                        .scheduling
-                        .first()
-                        .and_then(|event| event.target.as_ref()),
-                    record.target_event_offset,
-                    true,
-                )?;
+                let steering = SteeringPosition::saved(record)?;
+                validate_target_prefix(snapshot, positions, histories, steering, true)?;
                 if snapshot.invocations.len() >= SessionSnapshot::MAX_INVOCATIONS {
                     return Err(corrupt("too many retained invocations"));
                 }
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
+                // The target's observations end at the offset here
+                // (`validate_target_prefix`), as they stood at admission.
+                super::app_sources::validate_saved(
+                    &record.request.user_message,
+                    steering,
+                    |execution, tool| {
+                        positions.get(execution).and_then(|&index| {
+                            invocations[index].mcp_tool(&snapshot.invocations[index], tool)
+                        })
+                    },
+                )
+                .map_err(corrupt)?;
                 if !record.events.is_empty()
                     || record.provider_report.is_some()
                     || record.local_cancellation.is_some()
@@ -397,8 +395,8 @@ impl continuation::Continuation {
                     return Err(corrupt("new input carries later evidence"));
                 }
                 let mut next_evidence = *provider_evidence;
-                next_evidence.correlation |= record.target_event_offset.is_some()
-                    || record.scheduling.iter().any(|event| event.target.is_some());
+                // New input carries one scheduling edge at most (above).
+                next_evidence.correlation |= steering.is_some();
                 next_evidence.dispatched |= record.scheduling.iter().any(|event| {
                     matches!(
                         event.stage,
@@ -453,12 +451,15 @@ impl continuation::Continuation {
                         .get(execution_id)
                         .and_then(|index| snapshot.invocations.get(*index))
                         .ok_or_else(|| corrupt("semantic fact has no accepted input"))?;
+                    // The admitted position still holds
+                    // (`docs/design/mcp-app-calls.md`, "The app a message
+                    // names"): an injection naming another target is refused
+                    // below by `InvocationHistory::schedule`.
                     validate_target_prefix(
                         snapshot,
                         positions,
                         histories,
-                        event.target.as_ref(),
-                        record.target_event_offset,
+                        SteeringPosition::saved(record)?,
                         false,
                     )?;
                 }
@@ -793,31 +794,6 @@ impl continuation::Continuation {
             ChangeUndo::Context(context) => {
                 self.snapshot.as_mut().expect("open").provider_context = context
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn current_unit_key_retains_ordinal_and_refuses_foreign_execution_scope() {
-        let first = FactKey::new(FactKind::SaveUnit, None, 0).unwrap();
-        assert_eq!(first, FactKey::new(FactKind::SaveUnit, None, 0).unwrap());
-        assert_ne!(first, FactKey::new(FactKind::SaveUnit, None, 1).unwrap());
-        assert_ne!(
-            first,
-            FactKey::new(FactKind::SaveComplete, None, 0).unwrap()
-        );
-        assert!(FactKey::new(
-            FactKind::SaveUnit,
-            Some(ExecutionId::new("execution").unwrap()),
-            0
-        )
-        .is_none());
-        for old_code in 1..=11 {
-            assert!(FactKind::from_code(old_code).is_none());
         }
     }
 }

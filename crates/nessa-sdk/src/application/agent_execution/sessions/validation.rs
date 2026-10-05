@@ -1,6 +1,8 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
 mod observations;
+use super::app_sources;
 use super::retention::{Witness, WitnessUndo};
+use super::steering_position::SteeringPosition;
 use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     SessionSnapshot, StorageError, SubmissionAcknowledgement,
@@ -11,8 +13,11 @@ use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionUpdate,
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
-use crate::domain::agent_execution::executions::{
-    ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+use crate::domain::agent_execution::{
+    executions::{
+        ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+    },
+    tools::{McpTool, ToolCallId},
 };
 use observations::{ObservationUndo, Observations};
 use std::{collections::HashMap, fmt::Display};
@@ -133,6 +138,18 @@ impl InvocationContinuation {
         self.observations.restore(undo.observation);
         self.usage = undo.usage;
     }
+    /// The MCP tool `tool_id` was observed calling in `record`, the
+    /// invocation this continuation is of, with the index of the event that
+    /// first observed it so.
+    pub(super) fn mcp_tool<'a>(
+        &self,
+        record: &'a InvocationRecord,
+        tool_id: &ToolCallId,
+    ) -> Option<(usize, &'a McpTool)> {
+        self.observations.mcp_tool_call(tool_id).and_then(|index| {
+            app_sources::mcp_tool_call(record.events[index].update()).map(|(_, tool)| (index, tool))
+        })
+    }
     pub(super) fn retained_bytes(&self) -> usize {
         self.observations
             .retained_bytes()
@@ -175,13 +192,7 @@ pub(super) fn continuation(
                     )
                 })
             }),
-            snapshot.invocations.iter().any(|invocation| {
-                invocation.target_event_offset.is_some()
-                    || invocation
-                        .scheduling
-                        .iter()
-                        .any(|event| event.target.is_some())
-            }),
+            SteeringPosition::any_saved(&snapshot.invocations)?,
             snapshot
                 .queue_history
                 .iter()
@@ -191,17 +202,33 @@ pub(super) fn continuation(
     let mut states = Vec::with_capacity(snapshot.invocations.len());
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
     let mut event_counts = HashMap::new();
+    // The invocations already walked, by identity: a message is asked
+    // against those before it, through each one's observation index.
+    let mut positions = HashMap::with_capacity(snapshot.invocations.len());
     for invocation in &snapshot.invocations {
-        if let Some(offset) = invocation.target_event_offset {
-            let target = invocation
-                .scheduling
-                .first()
-                .and_then(|edge| edge.target.as_ref());
+        // The snapshot holds a steered message's target whole, so the offset
+        // bounds which of its calls came before the message.
+        let steered = SteeringPosition::saved(invocation)?;
+        app_sources::validate_saved(
+            &invocation.request.user_message,
+            steered,
+            |execution, tool| {
+                positions.get(execution).and_then(|&index: &usize| {
+                    InvocationContinuation::mcp_tool(
+                        &states[index],
+                        &snapshot.invocations[index],
+                        tool,
+                    )
+                })
+            },
+        )
+        .map_err(corrupt)?;
+        if let Some(position) = steered {
             // A target with no preceding history at all fails the same way an
             // offset past that history does: neither can be a position in it.
-            if target
-                .and_then(|target| event_counts.get(target))
-                .is_none_or(|count| offset > *count)
+            if event_counts
+                .get(position.target())
+                .is_none_or(|count| position.offset() > *count)
             {
                 return Err(corrupt(
                     "steering offset is outside the preceding target history",
@@ -227,15 +254,16 @@ pub(super) fn continuation(
         }
         if let Some(first) = invocation.scheduling.first() {
             validate_admission_actor(invocation, first)?;
-            if let Some(target) = &first.target {
-                if target == &invocation.request.execution_id || !identities.contains_key(target) {
-                    return Err(corrupt("steering target is not a prior invocation"));
-                }
-                if identities.get(target) != Some(&true) {
-                    return Err(corrupt("steering target was never dispatched"));
-                }
+        }
+        if let Some(target) = steered.map(SteeringPosition::target) {
+            if target == &invocation.request.execution_id || !identities.contains_key(target) {
+                return Err(corrupt("steering target is not a prior invocation"));
+            }
+            if identities.get(target) != Some(&true) {
+                return Err(corrupt("steering target was never dispatched"));
             }
         }
+        positions.insert(&invocation.request.execution_id, states.len());
         states.push(state);
     }
     Ok(states)

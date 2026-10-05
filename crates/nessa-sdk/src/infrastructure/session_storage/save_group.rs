@@ -154,9 +154,7 @@ impl Header {
 
 #[derive(Clone)]
 struct Extent {
-    identity: SaveIdentity,
-    count: u64,
-    chain: [u8; 32],
+    group: GroupCheckpoint,
     complete: bool,
 }
 checkpoint_metadata! {
@@ -164,6 +162,22 @@ checkpoint_metadata! {
         identity: SaveIdentity,
         count: u64,
         chain: [u8; 32],
+        unit_previous: [u8; 32],
+        unit_payload: [u8; 32],
+        unit_length: u64,
+    }
+}
+impl GroupCheckpoint {
+    fn agrees_with_original_unit(&self) -> bool {
+        // Restore has already admitted the nonzero completed Unit count.
+        Header {
+            identity: self.identity.clone(),
+            ordinal: self.count - 1,
+            previous: self.unit_previous,
+            payload: self.unit_payload,
+        }
+        .chain(self.unit_length)
+            == self.chain
     }
 }
 
@@ -208,13 +222,12 @@ impl GroupProgress {
                 || (checkpoint.identity.generation == 0 && checkpoint.count != facts)
                 || checkpoint.identity.base >= published
                 || !checkpoint.identity.matches_scope(stream, incarnation)
+                || !checkpoint.agrees_with_original_unit()
             {
                 return Err(invalid());
             }
             progress.extent = Some(Extent {
-                identity: checkpoint.identity.clone(),
-                count: checkpoint.count,
-                chain: checkpoint.chain,
+                group: checkpoint.clone(),
                 complete: true,
             });
             progress.checkpoint = Some(checkpoint);
@@ -259,17 +272,17 @@ impl GroupProgress {
         let same = self
             .extent
             .as_ref()
-            .is_some_and(|extent| extent.identity == header.identity);
+            .is_some_and(|extent| extent.group.identity == header.identity);
         if !same
             && (self.is_unfinished()
                 || header.identity.base != self.published
                 || self.extent.as_ref().map_or(
                     self.published == 0 && header.identity.generation != 0,
                     |extent| {
-                        extent.identity.generation.checked_add(1)
+                        extent.group.identity.generation.checked_add(1)
                             != Some(header.identity.generation)
-                            || extent.identity.stream != header.identity.stream
-                            || extent.identity.incarnation != header.identity.incarnation
+                            || extent.group.identity.stream != header.identity.stream
+                            || extent.group.identity.incarnation != header.identity.incarnation
                     },
                 ))
         {
@@ -277,7 +290,7 @@ impl GroupProgress {
         }
         let (count, chain) = if same {
             let extent = self.extent.as_ref().expect("matched extent");
-            (extent.count, extent.chain)
+            (extent.group.count, extent.group.chain)
         } else {
             (0, EMPTY_CHAIN)
         };
@@ -287,9 +300,14 @@ impl GroupProgress {
         match key.kind() {
             FactKind::SaveUnit if self.payload_length != 0 => {
                 self.extent = Some(Extent {
-                    identity: header.identity.clone(),
-                    count: count.checked_add(1).ok_or_else(invalid)?,
-                    chain: header.chain(self.payload_length),
+                    group: GroupCheckpoint {
+                        identity: header.identity.clone(),
+                        count: count.checked_add(1).ok_or_else(invalid)?,
+                        chain: header.chain(self.payload_length),
+                        unit_previous: header.previous,
+                        unit_payload: header.payload,
+                        unit_length: self.payload_length,
+                    },
                     complete: false,
                 });
             }
@@ -297,18 +315,18 @@ impl GroupProgress {
                 if self.payload_length == 0
                     && self.extent.as_ref().is_some_and(|extent| !extent.complete) =>
             {
+                let group = self
+                    .extent
+                    .as_ref()
+                    .expect("original unfinished Unit")
+                    .group
+                    .clone();
                 self.extent = Some(Extent {
-                    identity: header.identity.clone(),
-                    count,
-                    chain,
+                    group: group.clone(),
                     complete: true,
                 });
                 self.published = position;
-                self.checkpoint = Some(GroupCheckpoint {
-                    identity: header.identity.clone(),
-                    count,
-                    chain,
-                });
+                self.checkpoint = Some(group);
             }
             _ => return Err(invalid()),
         }
@@ -319,7 +337,3 @@ impl GroupProgress {
 fn invalid() -> StorageError {
     StorageError::Corrupt("semantic save envelope disagrees with its lineage".into())
 }
-
-#[cfg(test)]
-#[path = "../../../tests/infrastructure/session_storage/save_group.rs"]
-mod tests;

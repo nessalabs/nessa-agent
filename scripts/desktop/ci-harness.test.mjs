@@ -42,7 +42,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -50,13 +50,20 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(workflow, /node --test scripts\/architecture\/\*\.test\.mjs/)
   assert.match(workflow, /node scripts\/check-architecture\.mjs/)
+  // A deadlocked test fails the step in minutes, not at the job's six-hour
+  // limit (#366).
   assert.match(
     workflow,
-    /cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
+  )
+  // The coverage gate runs the same SDK tests again, instrumented.
+  assert.match(
+    workflow,
+    /run: bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.
@@ -316,7 +323,7 @@ test("the disposable user manager proves the same session bus and cleans its exa
   assert.equal(script.match(/print_manager_diagnostics/g)?.length, 5)
 })
 
-test("the frontend job owns top-level script tests and their just dependency", () => {
+test("the frontend job owns top-level script and verification-script tests, and their just dependency", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const gatewayStart = workflow.indexOf("  gateway-contract:")
@@ -333,6 +340,13 @@ test("the frontend job owns top-level script tests and their just dependency", (
     "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs",
   )
   assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
+  // Every verification-script test under verification/desktop/scripts/lib,
+  // #384's design table among them.
+  assert.equal(
+    root.scripts["verify:desktop:test"],
+    "node --test verification/desktop/scripts/lib/*.test.mjs",
+  )
+  assert.ok(root.scripts["frontend:check"].includes("pnpm verify:desktop:test"))
   assert.doesNotMatch(workflow, /run: node --test scripts\/\*\.test\.mjs/)
   assert.doesNotMatch(gateway, /node --test scripts\/\*\.test\.mjs/)
   assert.doesNotMatch(gateway, /install-action@just/)

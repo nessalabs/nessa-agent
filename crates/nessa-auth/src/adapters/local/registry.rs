@@ -1,4 +1,4 @@
-//! Durable local credential registry and bearer-token verifier.
+//! Durable local credential registry and credential proof verification.
 //!
 //! The registry stores only SHA-256 verifiers for 256-bit random secrets. SHA-256
 //! is appropriate here because secrets are uniformly random, not user passwords;
@@ -26,14 +26,16 @@ use crate::{
             MembershipInputDto, MembershipRoleDto, MembershipStateDto, OrganizationInputDto,
             PrincipalInputDto, PrincipalKindDto, ResourceDto, TransitionCauseDto,
         },
+        pairing::StageGate,
         ports::{
             AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
             PortFuture, VerifiedCredential,
         },
     },
     domain::{
+        pairing::{validate_pairing_collection, InvitationId, PairingError},
         AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
-        IssuanceCause, Membership, PrincipalId, Supersession,
+        IssuanceCause, Membership, PrincipalId, Supersession, TransitionCause,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -48,10 +50,15 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Mutex, MutexGuard, RwLock,
+        mpsc, Arc, Mutex, MutexGuard, RwLock,
     },
 };
 use subtle::ConstantTimeEq;
+
+mod pairing;
+
+pub use pairing::DeviceCredentialVerifier;
+use pairing::StoredPairing;
 
 /// Schema 2 added the `transitions` list. Earlier files are not read; the
 /// project is pre-alpha and carries no registry compatibility.
@@ -75,6 +82,14 @@ impl Default for LocalStoreConfig {
     }
 }
 impl LocalStoreConfig {
+    fn validate_pairing_count(&self, count: usize) -> Result<(), PairingError> {
+        if count > self.max_receipts {
+            Err(PairingError::Capacity)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn validate(&self) -> Result<(), LocalStoreError> {
         if self.max_registry_bytes == 0
             || self.max_registry_bytes >= usize::MAX as u64
@@ -197,7 +212,23 @@ pub struct LocalIdentity {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StoredCredential {
     metadata: CredentialMetadataDto,
-    verifier: String,
+    verifier: StoredProof,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredProof {
+    Bearer(String),
+    Device(DeviceProofBinding),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum DeviceProofBinding {
+    DevicePairing {
+        invitation: [u8; 16],
+        generation: u64,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -228,6 +259,8 @@ struct Registry {
     principals: Vec<PrincipalInputDto>,
     memberships: Vec<MembershipInputDto>,
     credentials: Vec<StoredCredential>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pairings: Vec<StoredPairing>,
     issue_receipts: Vec<IssueReceipt>,
     revoke_receipts: Vec<RevokeReceipt>,
     /// Append-only lifecycle evidence, committed with the state it describes.
@@ -262,6 +295,7 @@ pub struct LocalCredentialStore {
     published: RwLock<Option<Registry>>,
     subscribers: Mutex<Vec<mpsc::Sender<u64>>>,
     healthy: AtomicBool,
+    stage_gates: Mutex<HashMap<InvitationId, Arc<StageGate>>>,
     #[cfg(test)]
     fail_directory_sync: AtomicBool,
     #[cfg(test)]
@@ -364,6 +398,7 @@ impl LocalCredentialStore {
             published: RwLock::new(registry),
             subscribers: Mutex::new(Vec::new()),
             healthy: AtomicBool::new(true),
+            stage_gates: Mutex::new(HashMap::new()),
             #[cfg(test)]
             fail_directory_sync: AtomicBool::new(false),
             #[cfg(test)]
@@ -440,8 +475,9 @@ impl LocalCredentialStore {
             memberships: vec![request.membership],
             credentials: vec![StoredCredential {
                 metadata: metadata.clone(),
-                verifier,
+                verifier: StoredProof::Bearer(verifier),
             }],
+            pairings: vec![],
             issue_receipts: vec![],
             revoke_receipts: vec![],
             transitions: vec![],
@@ -452,7 +488,7 @@ impl LocalCredentialStore {
                 .issued(IssuanceCause::Bootstrap, Initiator::LocalOperator)
                 .map_err(|_| LocalStoreError::Corrupt)?,
             None,
-        );
+        )?;
         let transitions = registry.transitions.clone();
         self.persist(&registry)?;
         *slot = Some(registry.clone());
@@ -573,7 +609,7 @@ impl LocalCredentialStore {
                 .issued(cause, initiator)
                 .map_err(|_| LocalStoreError::Corrupt)?,
             Some(&request.request_id),
-        );
+        )?;
         if !next.principals.iter().any(|p| p.id == request.principal.id) {
             next.principals.push(request.principal);
         }
@@ -588,7 +624,7 @@ impl LocalCredentialStore {
         }
         next.credentials.push(StoredCredential {
             metadata: metadata.clone(),
-            verifier,
+            verifier: StoredProof::Bearer(verifier),
         });
         next.issue_receipts.push(IssueReceipt {
             issuer_principal_id: request.issuer_principal_id,
@@ -682,12 +718,24 @@ impl LocalCredentialStore {
 
     /// Replace local owner credentials while holding the offline registry lock.
     /// Existing owner credentials are revoked in the same durable commit.
+    ///
+    /// The new credential carries exactly `actions` on this gateway, for the
+    /// same owner principal, membership and organization. The owner's grant set
+    /// is the caller's (composition's) to choose, so recovery also brings an
+    /// owner credential issued under an earlier set to the current one.
     pub fn recover_owner(
         &self,
         credential_id: String,
+        actions: &[&str],
         issued_at: u64,
         expires_at: Option<u64>,
     ) -> Result<BootstrapOutcome, LocalStoreError> {
+        // The replacement must itself be an owner credential: one without
+        // `credential.manage` would leave no manager, and a later recovery,
+        // which selects by that action, could not replace it.
+        if !actions.contains(&"credential.manage") {
+            return Err(LocalStoreError::Conflict);
+        }
         let mut slot = self.slot()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
         if current.credentials.len() >= self.config.max_credentials {
@@ -700,22 +748,30 @@ impl LocalCredentialStore {
             .ok_or(LocalStoreError::Corrupt)?;
         // Recovery replaces the owner credential itself, not everything the
         // owner principal holds: only credentials in the owner's organization
-        // that carry `credential.manage`. The same scope selects the grants to
-        // carry forward and the credentials to end.
+        // that carry `credential.manage`. That scope selects the credentials to
+        // end; an initialized registry always has one.
         let replaces = Replaces {
             principal_id: &membership.principal_id,
             organization_id: &membership.organization_id,
             requiring_action: Some("credential.manage"),
         };
-        let grants = current
+        if !current
             .credentials
             .iter()
-            .rev()
-            .find(|entry| replaces.matches(&entry.metadata))
-            .ok_or(LocalStoreError::Corrupt)?
-            .metadata
-            .grants
-            .clone();
+            .any(|entry| replaces.matches(&entry.metadata))
+        {
+            return Err(LocalStoreError::Corrupt);
+        }
+        let grants = actions
+            .iter()
+            .map(|action| CredentialGrantDto {
+                action: (*action).to_owned(),
+                resource: ResourceDto {
+                    organization_id: membership.organization_id.clone(),
+                    id: current.gateway_id.clone(),
+                },
+            })
+            .collect();
         let metadata = CredentialMetadataDto {
             id: credential_id,
             principal_id: membership.principal_id.clone(),
@@ -728,10 +784,8 @@ impl LocalCredentialStore {
         };
         let credential = domain_credential(&metadata)?;
         validate_grants(&metadata, &current.gateway_id, true)?;
-        if current
-            .credentials
-            .iter()
-            .any(|entry| entry.metadata.id == metadata.id)
+        if !credential_identity_available(current, &metadata.id, None)
+            .map_err(|_| LocalStoreError::Corrupt)?
         {
             return Err(LocalStoreError::Conflict);
         }
@@ -757,10 +811,10 @@ impl LocalCredentialStore {
                 .issued(IssuanceCause::OwnerRecovery, Initiator::LocalOperator)
                 .map_err(|_| LocalStoreError::Corrupt)?,
             None,
-        );
+        )?;
         next.credentials.push(StoredCredential {
             metadata: metadata.clone(),
-            verifier,
+            verifier: StoredProof::Bearer(verifier),
         });
         let transitions = next.transitions[first_transition..].to_vec();
         self.persist(&next)?;
@@ -875,7 +929,7 @@ impl LocalCredentialStore {
         };
         entry.metadata.revoked_at = credential.revoked_at();
         if let Some(transition) = &transition {
-            record_transition(&mut next, transition, Some(&request.request_id));
+            record_transition(&mut next, transition, Some(&request.request_id))?;
         }
         next.revoke_receipts.push(RevokeReceipt {
             issuer_principal_id: request.issuer_principal_id,
@@ -912,6 +966,23 @@ impl LocalCredentialStore {
             return Err(LocalStoreError::NotInitialized);
         }
         Ok(guard)
+    }
+
+    fn with_published_registry<T>(
+        &self,
+        read: impl FnOnce(&Registry) -> Result<T, AccessError>,
+    ) -> Result<T, AccessError> {
+        if !self.healthy.load(Ordering::Acquire) {
+            return Err(AccessError::Unavailable);
+        }
+        let published = self
+            .published
+            .read()
+            .map_err(|_| AccessError::Unavailable)?;
+        if !self.healthy.load(Ordering::Acquire) {
+            return Err(AccessError::Unavailable);
+        }
+        read(published.as_ref().ok_or(AccessError::Unavailable)?)
     }
 
     fn persist(&self, registry: &Registry) -> Result<(), LocalStoreError> {
@@ -997,35 +1068,33 @@ impl CredentialVerifier for LocalCredentialStore {
     ) -> PortFuture<'a, VerifiedCredential> {
         Box::pin(async move {
             let (credential_id, secret) = parse_token(evidence.expose_bytes())?;
-            if !self.healthy.load(Ordering::Acquire) {
-                return Err(AccessError::Unavailable);
-            }
-            let registry = self
-                .published
-                .read()
-                .map_err(|_| AccessError::Unavailable)?;
-            let registry = registry.as_ref().ok_or(AccessError::Unavailable)?;
-            let stored = registry
-                .credentials
-                .iter()
-                .find(|entry| entry.metadata.id == credential_id)
-                .ok_or(AccessError::InvalidCredential)?;
-            if stored.metadata.audience_id != audience.as_str()
-                || stored.metadata.revoked_at.is_some()
-            {
-                return Err(AccessError::InvalidCredential);
-            }
-            let expected = URL_SAFE_NO_PAD
-                .decode(&stored.verifier)
-                .map_err(|_| AccessError::Unavailable)?;
-            let actual = Sha256::digest(&secret);
-            if expected.len() != actual.len() || !bool::from(expected.ct_eq(actual.as_slice())) {
-                return Err(AccessError::InvalidCredential);
-            }
-            Ok(VerifiedCredential {
-                credential_id: CredentialId::new(credential_id)
-                    .map_err(|_| AccessError::Unavailable)?,
-                expires_at: stored.metadata.expires_at,
+            self.with_published_registry(|registry| {
+                let stored = registry
+                    .credentials
+                    .iter()
+                    .find(|entry| entry.metadata.id == credential_id)
+                    .ok_or(AccessError::InvalidCredential)?;
+                if stored.metadata.audience_id != audience.as_str()
+                    || stored.metadata.revoked_at.is_some()
+                {
+                    return Err(AccessError::InvalidCredential);
+                }
+                let StoredProof::Bearer(verifier) = &stored.verifier else {
+                    return Err(AccessError::InvalidCredential);
+                };
+                let expected = URL_SAFE_NO_PAD
+                    .decode(verifier)
+                    .map_err(|_| AccessError::Unavailable)?;
+                let actual = Sha256::digest(&secret);
+                if expected.len() != actual.len() || !bool::from(expected.ct_eq(actual.as_slice()))
+                {
+                    return Err(AccessError::InvalidCredential);
+                }
+                Ok(VerifiedCredential {
+                    credential_id: CredentialId::new(credential_id)
+                        .map_err(|_| AccessError::Unavailable)?,
+                    expires_at: stored.metadata.expires_at,
+                })
             })
         })
     }
@@ -1034,35 +1103,29 @@ impl CredentialVerifier for LocalCredentialStore {
 impl AccessReader for LocalCredentialStore {
     fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
         Box::pin(async move {
-            if !self.healthy.load(Ordering::Acquire) {
-                return Err(AccessError::Unavailable);
-            }
-            let registry = self
-                .published
-                .read()
-                .map_err(|_| AccessError::Unavailable)?;
-            let registry = registry.as_ref().ok_or(AccessError::Unavailable)?;
-            let stored = registry
-                .credentials
-                .iter()
-                .find(|entry| entry.metadata.id == id.as_str())
-                .ok_or(AccessError::InvalidCredential)?;
-            let credential = Credential::try_from(stored.metadata.clone())
-                .map_err(|_| AccessError::Unavailable)?;
-            let membership = registry
-                .memberships
-                .iter()
-                .find(|membership| {
-                    membership.principal_id == stored.metadata.principal_id
-                        && membership.organization_id == stored.metadata.organization_id
+            self.with_published_registry(|registry| {
+                let stored = registry
+                    .credentials
+                    .iter()
+                    .find(|entry| entry.metadata.id == id.as_str())
+                    .ok_or(AccessError::InvalidCredential)?;
+                let credential = Credential::try_from(stored.metadata.clone())
+                    .map_err(|_| AccessError::Unavailable)?;
+                let membership = registry
+                    .memberships
+                    .iter()
+                    .find(|membership| {
+                        membership.principal_id == stored.metadata.principal_id
+                            && membership.organization_id == stored.metadata.organization_id
+                    })
+                    .cloned()
+                    .ok_or(AccessError::IdentityMismatch)?;
+                Ok(AccessSnapshot {
+                    credential,
+                    membership: Membership::try_from(membership)
+                        .map_err(|_| AccessError::Unavailable)?,
+                    revision: registry.revision,
                 })
-                .cloned()
-                .ok_or(AccessError::IdentityMismatch)?;
-            Ok(AccessSnapshot {
-                credential,
-                membership: Membership::try_from(membership)
-                    .map_err(|_| AccessError::Unavailable)?,
-                revision: registry.revision,
             })
         })
     }
@@ -1106,15 +1169,7 @@ impl CredentialTransitionReader for LocalCredentialStore {
 
 impl AuthRevisionSource for LocalCredentialStore {
     fn revision(&self) -> Result<u64, AccessError> {
-        if !self.healthy.load(Ordering::Acquire) {
-            return Err(AccessError::Unavailable);
-        }
-        self.published
-            .read()
-            .map_err(|_| AccessError::Unavailable)?
-            .as_ref()
-            .map(|registry| registry.revision)
-            .ok_or(AccessError::Unavailable)
+        self.with_published_registry(|registry| Ok(registry.revision))
     }
 
     fn subscribe(&self) -> Result<mpsc::Receiver<u64>, AccessError> {
@@ -1238,7 +1293,7 @@ fn record_transition(
     registry: &mut Registry,
     transition: &CredentialTransition,
     correlation: Option<&str>,
-) {
+) -> Result<(), LocalStoreError> {
     let sequence = registry.transitions.len() as u64 + 1;
     registry.transitions.push(CredentialTransitionDto::record(
         transition,
@@ -1246,6 +1301,14 @@ fn record_transition(
         registry.revision,
         correlation.map(str::to_owned),
     ));
+    if matches!(transition.cause(), TransitionCause::Revoked(_)) {
+        for pairing in &mut registry.pairings {
+            pairing
+                .consume_revocation(transition, &registry.transitions)
+                .map_err(|_| LocalStoreError::Corrupt)?;
+        }
+    }
+    Ok(())
 }
 
 /// Retire every credential `retire` selects (see [`Replaces`]) in favour of
@@ -1275,7 +1338,7 @@ fn supersede_matching(
         }
     }
     for transition in &transitions {
-        record_transition(registry, transition, correlation);
+        record_transition(registry, transition, correlation)?;
     }
     Ok(())
 }
@@ -1428,6 +1491,9 @@ fn validate_registry(
     if registry.credentials.len() > config.max_credentials
         || registry.issue_receipts.len() > config.max_receipts
         || registry.revoke_receipts.len() > config.max_receipts
+        || config
+            .validate_pairing_count(registry.pairings.len())
+            .is_err()
     {
         return Err(CredentialRegistryFault::InvalidState(
             RegistryInvariant::Capacity,
@@ -1485,6 +1551,43 @@ fn validate_registry(
             ));
         }
     }
+    let pairings = registry
+        .pairings
+        .iter()
+        .map(|pairing| pairing.restore(&registry.transitions))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialBinding))?;
+    validate_pairing_collection(&pairings)
+        .map_err(|_| CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialBinding))?;
+    let mut reserved = HashSet::new();
+    for (stored, record) in registry.pairings.iter().zip(&pairings) {
+        if let Some(identity) = record.credential() {
+            if !reserved.insert(identity) {
+                return Err(CredentialRegistryFault::InvalidState(
+                    RegistryInvariant::CredentialBinding,
+                ));
+            }
+            let issued = registry
+                .credentials
+                .iter()
+                .find(|entry| entry.metadata.id == identity.as_str());
+            let agreement = if stored.was_activated() {
+                issued.is_some_and(|credential| {
+                    matches!(&credential.verifier,
+                        StoredProof::Device(DeviceProofBinding::DevicePairing { invitation, generation })
+                        if invitation == stored.id().bytes()
+                            && stored.credential_binding_matches(&credential.metadata, *generation, &registry.transitions))
+                })
+            } else {
+                issued.is_none()
+            };
+            if !agreement {
+                return Err(CredentialRegistryFault::InvalidState(
+                    RegistryInvariant::CredentialBinding,
+                ));
+            }
+        }
+    }
     for credential in &registry.credentials {
         validate_metadata(&credential.metadata).map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
@@ -1504,10 +1607,26 @@ fn validate_registry(
                 RegistryInvariant::CredentialBinding,
             ));
         }
-        let verifier = URL_SAFE_NO_PAD.decode(&credential.verifier).map_err(|_| {
-            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialVerifier)
-        })?;
-        if verifier.len() != 32 {
+        let valid_proof = match &credential.verifier {
+            StoredProof::Bearer(verifier) => URL_SAFE_NO_PAD
+                .decode(verifier)
+                .is_ok_and(|bytes| bytes.len() == 32),
+            StoredProof::Device(DeviceProofBinding::DevicePairing {
+                invitation,
+                generation,
+            }) => registry
+                .pairings
+                .iter()
+                .find(|entry| entry.id().bytes() == invitation)
+                .is_some_and(|entry| {
+                    entry.credential_binding_matches(
+                        &credential.metadata,
+                        *generation,
+                        &registry.transitions,
+                    )
+                }),
+        };
+        if !valid_proof {
             return Err(CredentialRegistryFault::InvalidState(
                 RegistryInvariant::CredentialVerifier,
             ));
@@ -1541,6 +1660,33 @@ fn validate_registry(
     Ok(())
 }
 
+/// The retained registry histories own the one credential identity namespace.
+/// A terminal Stage keeps its identity until an explicit history-removal contract exists.
+fn credential_identity_available(
+    registry: &Registry,
+    credential: &str,
+    own_pairing: Option<InvitationId>,
+) -> Result<bool, PairingError> {
+    if registry
+        .credentials
+        .iter()
+        .any(|entry| entry.metadata.id == credential)
+    {
+        return Ok(false);
+    }
+    for entry in &registry.pairings {
+        if Some(entry.id()) != own_pairing
+            && entry
+                .restore(&registry.transitions)?
+                .credential()
+                .is_some_and(|id| id.as_str() == credential)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn validate_issue(
     registry: &Registry,
     request: &IssueCredentialRequest,
@@ -1565,10 +1711,8 @@ fn validate_issue(
             .grants
             .iter()
             .any(|grant| grant.resource.organization_id != request.membership.organization_id)
-        || registry
-            .credentials
-            .iter()
-            .any(|entry| entry.metadata.id == request.credential_id)
+        || !credential_identity_available(registry, &request.credential_id, None)
+            .map_err(|_| LocalStoreError::Corrupt)?
     {
         return Err(LocalStoreError::Conflict);
     }
@@ -1699,7 +1843,21 @@ fn sync_directory_beneath(root: &Path, path: &Path) -> Result<(), LocalStoreErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::MembershipRole;
+    use crate::{
+        adapters::cedar::CedarPolicyEvaluator,
+        application::{
+            pairing::{AuthorizePairing, OwnerDecision, PairingStore, PairingStoreError},
+            ports::Clock,
+            session::AuthenticateSession,
+        },
+        domain::{
+            pairing::{
+                ConsentIntent, ConsentIntentId, InvitationId, PairingPhase, PairingPolicy,
+                PairingRecord,
+            },
+            MembershipId, MembershipRole, OrganizationId, Resource, ResourceId,
+        },
+    };
     use crate::{
         application::dto::{
             CredentialGrantDto, CredentialLifecycleDto, IssuanceCauseDto, PrincipalKindDto,
@@ -1713,7 +1871,7 @@ mod tests {
         task::{Context, Poll, Waker},
     };
 
-    fn ready<T>(future: impl Future<Output = T>) -> T {
+    pub(super) fn ready<T>(future: impl Future<Output = T>) -> T {
         let waker = Waker::noop();
         match std::pin::pin!(future).poll(&mut Context::from_waker(waker)) {
             Poll::Ready(value) => value,
@@ -1729,7 +1887,9 @@ mod tests {
         (root, path.strip_prefix(root).unwrap())
     }
 
-    fn open_store(path: impl AsRef<Path>) -> Result<LocalCredentialStore, LocalStoreError> {
+    pub(super) fn open_store(
+        path: impl AsRef<Path>,
+    ) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
         LocalCredentialStore::open(root, relative)
@@ -1755,7 +1915,7 @@ mod tests {
         assert!(LocalCredentialStore::open(&trusted, "credentials.v1.json").is_ok());
     }
 
-    fn grant(org: &str, action: &str) -> CredentialGrantDto {
+    pub(super) fn grant(org: &str, action: &str) -> CredentialGrantDto {
         CredentialGrantDto {
             action: action.into(),
             resource: ResourceDto {
@@ -1765,7 +1925,7 @@ mod tests {
         }
     }
 
-    fn bootstrap() -> BootstrapRequest {
+    pub(super) fn bootstrap() -> BootstrapRequest {
         BootstrapRequest {
             gateway_id: "gateway-1".into(),
             organization: OrganizationInputDto { id: "org-1".into() },
@@ -1788,6 +1948,82 @@ mod tests {
     }
 
     #[test]
+    fn pairing_commit_is_revision_conditional_and_preserves_bearer_identity() {
+        struct Time(u64);
+        impl Clock for Time {
+            fn unix_milliseconds(&self) -> u64 {
+                self.0
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pairing/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        let mut request = bootstrap();
+        request.grants.push(grant("org-1", "conversation.read"));
+        let bootstrap = store.bootstrap(request).unwrap();
+        let clock = Time(110_000);
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let session = ready(
+            AuthenticateSession {
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            }
+            .execute(&bootstrap.evidence, &audience),
+        )
+        .unwrap();
+        let gateway = Resource::new(
+            OrganizationId::new("org-1").unwrap(),
+            ResourceId::new("gateway-1").unwrap(),
+        );
+        let intent = ConsentIntent::new(
+            ConsentIntentId::new([2; 16]),
+            1,
+            audience.clone(),
+            PrincipalId::new("owner").unwrap(),
+            MembershipId::new("owner-membership").unwrap(),
+            gateway.clone(),
+        )
+        .unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let authorize = AuthorizePairing {
+            access: &store,
+            policy: &policy,
+            clock: &clock,
+        };
+        let admission = ready(authorize.execute(&session, &intent, &gateway)).unwrap();
+        let record = PairingRecord::new(
+            InvitationId::new([1; 16]),
+            intent.clone(),
+            110_000,
+            PairingPolicy::initial(),
+        )
+        .unwrap();
+        assert_eq!(
+            ready(store.create_pairing(&record, &admission, &clock)).unwrap(),
+            record
+        );
+        assert_eq!(
+            ready(store.decide_pairing(record.id(), OwnerDecision::Cancel, &admission, &clock))
+                .unwrap_err(),
+            PairingStoreError::StaleRevision
+        );
+        let admission = ready(authorize.execute(&session, &intent, &gateway)).unwrap();
+        let terminal =
+            ready(store.decide_pairing(record.id(), OwnerDecision::Cancel, &admission, &clock))
+                .unwrap();
+        assert_eq!(terminal.phase(), PairingPhase::Terminal);
+        assert!(ready(store.verify(&bootstrap.evidence, &audience)).is_ok());
+        drop(store);
+        let reopened = open_store(&path).unwrap();
+        assert_eq!(reopened.read_pairing(record.id()).unwrap(), terminal);
+        assert!(ready(reopened.verify(&bootstrap.evidence, &audience)).is_ok());
+        let bytes: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(bytes["credentials"][0]["verifier"].is_string());
+        assert_eq!(bytes["schemaVersion"], SCHEMA_VERSION);
+    }
+
+    #[test]
     fn configured_limits_apply_to_mutations_reopen_and_independent_stores() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("limited/credentials.v1.json");
@@ -1802,18 +2038,22 @@ mod tests {
         let store = open_store_with_config(&path, small).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         assert!(matches!(
-            store.recover_owner("next".into(), 110, None),
+            store.recover_owner("next".into(), &["credential.manage"], 110, None),
             Err(LocalStoreError::Capacity)
         ));
         drop(store);
         let store = open_store_with_config(&path, larger).unwrap();
-        store.recover_owner("next".into(), 110, None).unwrap();
+        store
+            .recover_owner("next".into(), &["credential.manage"], 110, None)
+            .unwrap();
         drop(store);
         assert!(open_store_with_config(&path, small).is_err());
         assert!(open_store_with_config(&path, larger).is_ok());
         let independent = open_store(root.path().join("other/credentials.v1.json")).unwrap();
         independent.bootstrap(bootstrap()).unwrap();
-        independent.recover_owner("next".into(), 110, None).unwrap();
+        independent
+            .recover_owner("next".into(), &["credential.manage"], 110, None)
+            .unwrap();
         let tiny = LocalStoreConfig {
             max_registry_bytes: 16,
             ..LocalStoreConfig::default()
@@ -2057,7 +2297,12 @@ mod tests {
 
         let identity = store.identity().unwrap();
         let recovered = store
-            .recover_owner("replacement-owner".into(), 150, Some(250))
+            .recover_owner(
+                "replacement-owner".into(),
+                &["credential.manage"],
+                150,
+                Some(250),
+            )
             .unwrap();
         assert_eq!(recovered.metadata.principal_id, "owner");
         assert_eq!(store.identity().unwrap().gateway_id, identity.gateway_id);
@@ -2071,6 +2316,88 @@ mod tests {
             Err(AccessError::InvalidCredential)
         );
         assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+    }
+
+    /// Design row S18: recovery issues exactly the owner grants it is given, for
+    /// the same owner, and revokes the earlier owner credential, so an owner
+    /// credential from an earlier grant set is brought to the current one.
+    #[test]
+    fn recovery_issues_the_given_owner_grants_and_revokes_the_old_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("owner/credentials.v1.json")).unwrap();
+        let mut earlier = bootstrap();
+        earlier.grants = ["server.read", "conversation.write", "credential.manage"]
+            .into_iter()
+            .map(|action| grant("org-1", action))
+            .collect();
+        earlier.expires_at = None;
+        let original = store.bootstrap(earlier).unwrap();
+        let identity = store.identity().unwrap();
+        let current = [
+            "server.read",
+            "conversation.read",
+            "conversation.write",
+            "credential.manage",
+        ];
+        let recovered = store
+            .recover_owner("owner-current".into(), &current, 150, None)
+            .unwrap();
+        assert_eq!(
+            recovered
+                .metadata
+                .grants
+                .iter()
+                .map(|grant| (
+                    grant.action.as_str(),
+                    grant.resource.organization_id.as_str(),
+                    grant.resource.id.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            current
+                .iter()
+                .map(|action| (*action, "org-1", "gateway-1"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(recovered.metadata.principal_id, "owner");
+        assert_eq!(recovered.metadata.organization_id, "org-1");
+        assert_eq!(store.identity().unwrap().gateway_id, identity.gateway_id);
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert_eq!(
+            ready(store.verify(&original.evidence, &audience)),
+            Err(AccessError::InvalidCredential)
+        );
+        assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+        // The earlier owner's revocation is recorded, not erased.
+        assert!(recovered
+            .transitions
+            .iter()
+            .any(|transition| transition.credential_id == "owner-credential"
+                && transition.after.revoked_at == Some(150)));
+    }
+
+    /// Design row S18: an owner set that cannot manage credentials is refused
+    /// before anything changes; the original owner still authenticates.
+    #[test]
+    fn recovery_refuses_an_owner_set_that_cannot_manage_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("owner/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        let mut request = bootstrap();
+        request.expires_at = None;
+        let original = store.bootstrap(request).unwrap();
+        let before = fs::read(&path).unwrap();
+        for actions in [
+            &["server.read", "conversation.read", "conversation.write"][..],
+            &[],
+        ] {
+            assert!(matches!(
+                store.recover_owner("owner-narrow".into(), actions, 150, None),
+                Err(LocalStoreError::Conflict)
+            ));
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert!(ready(store.verify(&original.evidence, &audience)).is_ok());
     }
 
     /// Give `principal_id` a `server.read` credential in a second organization.
@@ -2115,9 +2442,12 @@ mod tests {
                 .issued(IssuanceCause::AdminIssue, Initiator::LocalOperator)
                 .unwrap(),
             None,
-        );
-        next.credentials
-            .push(StoredCredential { metadata, verifier });
+        )
+        .unwrap();
+        next.credentials.push(StoredCredential {
+            metadata,
+            verifier: StoredProof::Bearer(verifier),
+        });
         store.persist(&next).unwrap();
         let revision = next.revision;
         *slot = Some(next.clone());
@@ -2173,7 +2503,12 @@ mod tests {
         let elsewhere = seed_credential_in_second_organization(&store, "owner");
 
         let recovered = store
-            .recover_owner("replacement-owner".into(), 150, Some(250))
+            .recover_owner(
+                "replacement-owner".into(),
+                &["credential.manage"],
+                150,
+                Some(250),
+            )
             .unwrap();
 
         let audience = AudienceId::new("gateway-1").unwrap();
@@ -2675,7 +3010,9 @@ mod tests {
         let revoked = store
             .revoke_sync(revoke("revoke-reader", "reader-credential", 150))
             .unwrap();
-        let recovered = store.recover_owner("owner-2".into(), 160, None).unwrap();
+        let recovered = store
+            .recover_owner("owner-2".into(), &["credential.manage"], 160, None)
+            .unwrap();
 
         let all = transitions(&store);
         assert_eq!(

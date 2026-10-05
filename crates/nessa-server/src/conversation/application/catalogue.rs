@@ -1,12 +1,10 @@
 //! Owner-scoped current conversation metadata for bounded linked readers.
 //! The repository owns revisions; this port exposes no receiver progress.
 
-mod metadata;
-pub use metadata::{CatalogueMetadata, CatalogueMetadataError};
-
 use super::ConversationFuture;
-use crate::conversation::domain::{Conversation, ConversationId, ConversationSummary};
+use crate::conversation::domain::Conversation;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sync::replication::catalogue::ManifestRequest;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

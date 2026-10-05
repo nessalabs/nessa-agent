@@ -2,30 +2,59 @@ use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
     BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
     NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
-    ReleaseEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets,
-    UploadBody, UploadError, UploadRejection,
+    ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
+    TicketSecrets, UploadBody, UploadError, UploadRejection,
 };
-use crate::{
-    attachments::domain::{
-        Attachment, Caller, Hold, MediaType, Redemption, TicketBook, TicketLifetime, TicketLimits,
-        UploadMismatch, UploadTicket,
-    },
-    conversation::domain::ConversationId,
+use crate::attachments::domain::{
+    Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
+    TicketLimits, UploadMismatch, UploadTicket,
 };
+use futures_util::future::FutureExt;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use nessa_auth::{
     application::ports::Clock,
     domain::{OrganizationId, PrincipalId},
 };
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{
+    any::Any,
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+#[cfg(test)]
+use tokio::sync::Notify;
 use tokio::{
-    sync::Semaphore,
-    time::{timeout, Instant},
+    sync::{oneshot, Semaphore},
+    task::JoinHandle,
+    time::timeout,
 };
+
+/// How many bulk records were acknowledged while the caller was still waiting.
+/// `stop` freezes the count; a later `acknowledge` does not move it.
+struct DeliveryTally {
+    waiting: bool,
+    acknowledged: usize,
+}
+impl DeliveryTally {
+    fn new() -> Self {
+        Self {
+            waiting: true,
+            acknowledged: 0,
+        }
+    }
+    fn acknowledge(&mut self) {
+        if self.waiting {
+            self.acknowledged += 1;
+        }
+    }
+    fn stop(&mut self) -> usize {
+        self.waiting = false;
+        self.acknowledged
+    }
+}
 
 /// A close is admitted by the conversation context and then has to be written
 /// down here, so the two bounds on a caller's identifiers are one rule. The
@@ -96,13 +125,17 @@ pub struct AttachmentLimits {
     /// How long one audit record may take to be acknowledged. Every record
     /// gets this much; one slow record does not spend another's time.
     pub audit_deadline: Duration,
-    /// How long all the records of one phase may take together: a release's
-    /// withdrawals, releases and removals, or one sweep of expired tickets.
-    /// Those lists are as long as a conversation has holds or the book has
-    /// tickets, so a phase without a budget would wait for as many deadlines
-    /// as it found records. Records the budget does not reach are reported as
-    /// unrecorded, and the cleanup they describe still happens.
+    /// How long the caller of one bulk phase waits to learn which records were
+    /// acknowledged. A release's withdrawals, hold releases and removals, or
+    /// one sweep of expired tickets, can be as long as a conversation's holds
+    /// or the book's tickets. The caller stops waiting here. Delivery does not:
+    /// a record the budget did not see acknowledged is still handed to the sink
+    /// for [`Self::audit_deadline`].
     pub audit_budget: Duration,
+    /// How many bulk sink calls may be in flight at once, across every phase
+    /// this service is delivering. The next record waits for a slot; that wait
+    /// is not taken out of its deadline.
+    pub audit_admission: usize,
 }
 impl Default for AttachmentLimits {
     fn default() -> Self {
@@ -117,6 +150,7 @@ impl Default for AttachmentLimits {
             upload_deadline: Duration::from_secs(120),
             audit_deadline: Duration::from_secs(5),
             audit_budget: Duration::from_secs(30),
+            audit_admission: 1,
         }
     }
 }
@@ -142,6 +176,32 @@ struct Inner {
     book: Mutex<TicketBook>,
     uploads: Arc<Semaphore>,
     normalizations: Semaphore,
+    /// Bulk delivery shares these slots. Single-record writes do not.
+    /// This is [`AttachmentLimits::audit_admission`], and at least one.
+    audit_admission: usize,
+    audit_slots: Arc<Semaphore>,
+    /// One task per bulk phase still delivering. The caller does not own it:
+    /// returning, or being dropped, leaves the task here until it finishes.
+    audit_tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Panic payloads already taken from a finished task and not yet resumed.
+    /// Resuming one must not drop the rest.
+    audit_panics: Mutex<Vec<Box<dyn Any + Send>>>,
+    /// The next reap waits here, so a test can accept a record during that
+    /// wait. The caller's count is already frozen. Production leaves this empty.
+    #[cfg(test)]
+    reap_hold: Mutex<Option<oneshot::Receiver<()>>>,
+    /// Signalled when a test's reap hold is entered.
+    #[cfg(test)]
+    reap_reached: Notify,
+}
+
+/// Whether this phase resumes a bulk delivery task that already panicked.
+enum ParkedPanic {
+    /// `release` and `begin` surface it to their caller.
+    Resume,
+    /// An upload sweep leaves it parked. Awaiting it here would either reject
+    /// a ticket the panic did not use, or drop the panic.
+    LeaveParked,
 }
 
 /// Issues tickets, receives uploads under them, and releases holds. Clones
@@ -162,6 +222,9 @@ impl AttachmentService {
             normalizer,
             clock,
         } = dependencies;
+        // A phase with no slot would report every record lost and never hand
+        // one over. One is the smallest admission that can attempt.
+        let audit_admission = limits.audit_admission.max(1);
         Self {
             inner: Arc::new(Inner {
                 store,
@@ -170,10 +233,18 @@ impl AttachmentService {
                 secrets,
                 normalizer,
                 clock,
-                limits,
                 book: Mutex::new(TicketBook::new(limits.tickets)),
                 uploads: Arc::new(Semaphore::new(limits.max_uploads)),
                 normalizations: Semaphore::new(limits.max_normalizations),
+                audit_admission,
+                audit_slots: Arc::new(Semaphore::new(audit_admission)),
+                audit_tasks: Mutex::new(Vec::new()),
+                audit_panics: Mutex::new(Vec::new()),
+                #[cfg(test)]
+                reap_hold: Mutex::new(None),
+                #[cfg(test)]
+                reap_reached: Notify::new(),
+                limits,
             }),
         }
     }
@@ -187,9 +258,10 @@ impl AttachmentService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Give one record its own bounded delivery attempt. The sink owns the
-    /// write once started, so running out of time here abandons the wait, not
-    /// the record.
+    /// Give one record its own bounded delivery attempt. This is not a bulk
+    /// phase, so it does not take an admission slot. Running out of time here
+    /// abandons the wait. A durable write already started still finishes, and
+    /// that write is outside the bulk cap.
     async fn audit(&self, record: AttachmentAuditRecord) -> AuditDelivery {
         match timeout(
             self.inner.limits.audit_deadline,
@@ -202,54 +274,269 @@ impl AttachmentService {
         }
     }
 
-    /// Hand one phase's records to the sink, one at a time, inside one budget
-    /// for the whole phase. Each record still gets its own attempt, shortened
-    /// by whatever the budget has left. Returns how many were not acknowledged,
-    /// the ones the budget did not reach included: those are reported as lost
-    /// evidence rather than presented as recorded.
-    async fn audit_all(&self, records: Vec<AttachmentAuditRecord>) -> usize {
-        let limits = self.inner.limits;
-        let closes_at = Instant::now() + limits.audit_budget;
-        let mut unrecorded = 0_usize;
-        for record in records {
-            let left = closes_at.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                unrecorded += 1;
-                continue;
+    /// Hand one phase's records to the sink. Each gets [`AttachmentLimits::audit_deadline`],
+    /// taken only once a delivery slot is free. The service holds that permit
+    /// until the deadline drops the wait and does not hand it to the sink, so a
+    /// durable write that keeps running cannot take the next record's attempt.
+    /// The caller waits at most [`AttachmentLimits::audit_budget`] and then
+    /// returns how many were not yet acknowledged. The attempts keep going: an
+    /// earlier timeout does not spend a later record's deadline, and the caller
+    /// stopping — or being dropped — does not cancel them. A sink that answers
+    /// after the caller has returned does not change the count. A refusal or a
+    /// deadline is logged from the delivery task, so it stays visible when the
+    /// caller is already gone. One record panicking does not skip the rest of
+    /// the phase. `parked` says whether this caller resumes a delivery task
+    /// that already panicked. `release` and `begin` do. An upload's sweep does
+    /// not: `receive` would record that panic as an unresolved upload. The
+    /// order is the bulk-audit table in `docs/design/artifact-sync.md`.
+    async fn audit_all(&self, records: Vec<AttachmentAuditRecord>, parked: ParkedPanic) -> usize {
+        let total = records.len();
+        if total == 0 {
+            // An earlier phase may have panicked after its caller left. Surface
+            // that here too, when this phase has nothing of its own to hand over.
+            // An upload sweep does not: receive would spend a ticket the panic
+            // did not use, and awaiting the task would drop the panic.
+            if matches!(parked, ParkedPanic::Resume) {
+                self.reap_audit_tasks().await;
             }
-            let attempt = timeout(
-                limits.audit_deadline.min(left),
-                self.inner.audit.record(record),
-            );
-            if !matches!(attempt.await, Ok(Ok(()))) {
-                unrecorded += 1;
-            }
-        }
-        unrecorded
-    }
-
-    /// Remove every ticket whose time has passed and record each expiry. They
-    /// are gone whether or not that can be recorded. Returns how many could not.
-    async fn sweep_expired(&self, now_ms: u64) -> usize {
-        let expired = self.book().expire(now_ms);
-        if expired.is_empty() {
             return 0;
         }
-        let unrecorded = self
+        let tally = Arc::new(Mutex::new(DeliveryTally::new()));
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let audit = Arc::clone(&self.inner.audit);
+        let slots = Arc::clone(&self.inner.audit_slots);
+        let deadline = self.inner.limits.audit_deadline;
+        let budget = self.inner.limits.audit_budget;
+        let admission = self.inner.audit_admission;
+        let tally_task = Arc::clone(&tally);
+        let supervisor = tokio::spawn(async move {
+            let mut pending = records.into_iter();
+            let mut in_flight = FuturesUnordered::new();
+            let mut panic_payload = None;
+            loop {
+                // Within this phase only. The semaphore is the cap shared with
+                // other phases. Admitting the rest here would queue one blocked
+                // future per record, which this task is not.
+                while in_flight.len() < admission {
+                    let Some(record) = pending.next() else {
+                        break;
+                    };
+                    let audit = Arc::clone(&audit);
+                    let slots = Arc::clone(&slots);
+                    let tally_task = Arc::clone(&tally_task);
+                    in_flight.push(
+                        AssertUnwindSafe(async move {
+                            // A closed semaphore has no slot to give. Do not call
+                            // the sink: a call with no slot would be another write
+                            // past the admission cap. The record stays unacknowledged.
+                            let Ok(permit) = slots.acquire_owned().await else {
+                                tracing::error!(
+                                    "attachment bulk audit admission is closed; the record was not handed to the sink"
+                                );
+                                return;
+                            };
+                            // Held here, not by the sink. Dropping this wait at
+                            // the deadline frees the permit while a write the
+                            // sink already started can still finish.
+                            let _admission = permit;
+                            match timeout(deadline, audit.record(record)).await
+                            {
+                                Ok(Ok(())) => {
+                                    tally_task
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                        .acknowledge();
+                                }
+                                Ok(Err(_)) => {
+                                    tracing::error!("attachment audit record was refused");
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        "attachment audit record was not acknowledged before its deadline"
+                                    );
+                                }
+                            }
+                        })
+                        .catch_unwind(),
+                    );
+                }
+                match in_flight.next().await {
+                    None => break,
+                    Some(Ok(())) => {}
+                    Some(Err(payload)) => {
+                        if panic_payload.is_none() {
+                            panic_payload = Some(payload);
+                        }
+                    }
+                }
+            }
+            if let Some(payload) = panic_payload {
+                std::panic::resume_unwind(payload);
+            }
+            let _ = finished_tx.send(());
+        });
+        // The task owns this phase's records before an older panic is resumed,
+        // so that panic cannot drop them on the way out. An upload leaves the
+        // older task parked: awaiting it here is what receive would turn into
+        // an unresolved rejection.
+        self.park_audit_task(supervisor);
+        if matches!(parked, ParkedPanic::Resume) {
+            self.reap_audit_tasks().await;
+        }
+        // Waiting on the signal, not the task. Dropping this wait — the budget,
+        // or the caller — leaves the task parked on the service.
+        let _ = timeout(budget, finished_rx).await;
+        // Taken under the same lock as acknowledge, before anything else here
+        // can await. An accept that lands after the caller has stopped does not
+        // change the count.
+        let unacknowledged = total
+            - tally
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .stop();
+        if matches!(parked, ParkedPanic::Resume) {
+            self.reap_audit_tasks().await;
+        }
+        unacknowledged
+    }
+
+    /// Test-only: close bulk admission so a release can prove a closed
+    /// semaphore is not a reason to call the sink.
+    #[cfg(test)]
+    pub(crate) fn close_bulk_admission_for_test(&self) {
+        self.inner.audit_slots.close();
+    }
+
+    /// Test-only: the next reap waits until the sender fires. The count is
+    /// taken before that wait, so an accept during it must not move the count.
+    #[cfg(test)]
+    pub(crate) fn hold_the_next_reap_for_test(&self) -> oneshot::Sender<()> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .inner
+            .reap_hold
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(receiver);
+        sender
+    }
+
+    /// Test-only: fired once the reap hold above is entered.
+    #[cfg(test)]
+    pub(crate) fn reap_reached(&self) -> &Notify {
+        &self.inner.reap_reached
+    }
+
+    fn park_audit_task(&self, task: JoinHandle<()>) {
+        self.audit_tasks().push(task);
+    }
+
+    fn audit_tasks(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
+        self.inner
+            .audit_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn audit_panics(&self) -> MutexGuard<'_, Vec<Box<dyn Any + Send>>> {
+        self.inner
+            .audit_panics
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Surface one parked panic. Any other finished panic stays parked for the
+    /// next `release` or `begin`. Dropping that payload would lose it: the
+    /// unwind never returns to the rest of this loop. A task still handing
+    /// records over stays parked.
+    async fn reap_audit_tasks(&self) {
+        // After the caller's count is frozen. A test holds this so an accept
+        // can land during the reap; that accept must not change the count.
+        #[cfg(test)]
+        {
+            let hold = self
+                .inner
+                .reap_hold
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(hold) = hold {
+                self.inner.reap_reached.notify_one();
+                let _ = hold.await;
+            }
+        }
+        let finished = {
+            let mut tasks = self.audit_tasks();
+            let mut running = Vec::new();
+            let mut finished = Vec::new();
+            for task in tasks.drain(..) {
+                if task.is_finished() {
+                    finished.push(task);
+                } else {
+                    running.push(task);
+                }
+            }
+            *tasks = running;
+            finished
+        };
+        let mut payloads = std::mem::take(&mut *self.audit_panics());
+        for task in finished {
+            if let Err(error) = task.await {
+                if error.is_panic() {
+                    payloads.push(error.into_panic());
+                }
+            }
+        }
+        if payloads.is_empty() {
+            return;
+        }
+        let first = payloads.remove(0);
+        if !payloads.is_empty() {
+            self.audit_panics().extend(payloads);
+        }
+        std::panic::resume_unwind(first);
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .audit_tasks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        for task in tasks {
+            task.abort();
+        }
+    }
+}
+
+impl AttachmentService {
+    /// Remove every ticket whose time has passed and hand each expiry to the
+    /// sink. The tickets are gone either way. Returns how many were not yet
+    /// acknowledged when the caller stopped waiting. A later accept still
+    /// writes the original record and does not change this count.
+    async fn sweep_expired(&self, now_ms: u64, parked: ParkedPanic) -> usize {
+        let expired = self.book().expire(now_ms);
+        if expired.is_empty() {
+            return self.audit_all(Vec::new(), parked).await;
+        }
+        let unacknowledged = self
             .audit_all(
                 expired
                     .into_iter()
                     .map(|ticket| AttachmentAuditRecord::TicketExpired { ticket })
                     .collect(),
+                parked,
             )
             .await;
-        if unrecorded != 0 {
+        if unacknowledged != 0 {
             tracing::error!(
-                unrecorded,
-                "expired upload tickets were removed without audit evidence"
+                unacknowledged,
+                "expired upload tickets were removed before their audit records were acknowledged"
             );
         }
-        unrecorded
+        unacknowledged
     }
 
     /// Answer `attachment.begin`: either the conversation already has this
@@ -266,12 +553,12 @@ impl AttachmentService {
     ) -> Result<BeginOutcome, BeginError> {
         // Tickets whose time has passed leave the book first, on every begin,
         // whoever asks and whether or not the rest of the request is any good:
-        // stale tickets must not be what fills the book. An expiry that could
-        // not be recorded fails this request visibly.
+        // stale tickets must not be what fills the book. An expiry that was
+        // not yet acknowledged fails this request visibly.
         let now_ms = self.inner.clock.unix_milliseconds();
-        let unrecorded = self.sweep_expired(now_ms).await;
+        let unacknowledged = self.sweep_expired(now_ms, ParkedPanic::Resume).await;
         let upload = describe_upload(&caller, &request)?;
-        if unrecorded != 0 {
+        if unacknowledged != 0 {
             return Err(BeginError::Audit);
         }
         match self.owns(&caller, &upload.conversation_id).await? {
@@ -415,7 +702,7 @@ impl AttachmentService {
     }
 
     /// The work of one upload stopped without an answer. What it had already
-    /// done is still this gateway's to account for: a hold it left pending is
+    /// done is still this gateway's to account for: a pending or kept hold it left is
     /// taken back by its own claim and no other, and the ticket it used up is
     /// recorded as used without a hold, for the reason that actually applies.
     async fn unresolved(
@@ -461,10 +748,13 @@ impl AttachmentService {
             Redemption::Usable(_) | Redemption::Unknown => None,
         };
         // Every upload also clears out the tickets nobody came back for, so
-        // stale tickets cannot fill the book while nobody begins anything. A
-        // sweep that could not be recorded is logged, and does not fail an
-        // upload that had nothing to do with those tickets.
-        self.sweep_expired(now_ms).await;
+        // stale tickets cannot fill the book while nobody begins anything. The
+        // sweep's count is how many expiries were not yet acknowledged. It is
+        // logged and does not fail an upload that had nothing to do with those
+        // tickets. This upload's own record does not take a bulk slot. The
+        // sweep also does not resume a parked bulk panic: this task is what
+        // receive turns into an unresolved rejection when it panics.
+        self.sweep_expired(now_ms, ParkedPanic::LeaveParked).await;
         let ticket = match (redemption, expired) {
             (Redemption::Usable(ticket), _) => ticket,
             (_, Some(evidence)) => return Err(UploadError::TicketExpired { evidence }),
@@ -566,6 +856,7 @@ impl AttachmentService {
                 let reverted = AttachmentAuditRecord::HoldReverted {
                     hold,
                     cause: RevertCause::RemovedBeforeUsable,
+                    was: RetiredFrom::Pending,
                 };
                 if self.audit(reverted).await == AuditDelivery::Unavailable {
                     tracing::error!("a hold removed before it was usable went unrecorded");
@@ -584,11 +875,15 @@ impl AttachmentService {
             .take_back(hold, claim, RevertCause::ConfirmationFailed)
             .await
         {
-            TakenBack::Removed => UploadError::Rejected {
+            TakenBack::Retired => UploadError::Rejected {
                 reason: UploadRejection::StorageUnavailable,
                 evidence: AuditDelivery::Recorded,
             },
-            TakenBack::RemovedUnrecorded | TakenBack::Stranded => UploadError::Rejected {
+            TakenBack::CleanupIncomplete(evidence) => UploadError::Rejected {
+                reason: UploadRejection::StorageUnavailable,
+                evidence,
+            },
+            TakenBack::RetiredUnrecorded | TakenBack::Stranded => UploadError::Rejected {
                 reason: UploadRejection::StorageUnavailable,
                 evidence: AuditDelivery::Unavailable,
             },
@@ -599,26 +894,31 @@ impl AttachmentService {
         }
     }
 
-    /// Take back this claim's pending hold and say what became of it. Each
+    /// Take back this claim's pending or kept hold and say what became of it. Each
     /// answer is a different thing to say about the hold, and none of them is
     /// evidence that some other upload's record reached the sink.
     async fn take_back(&self, hold: &Hold, claim: &HoldClaim, cause: RevertCause) -> TakenBack {
-        match self.inner.store.discard(hold, claim).await {
-            Ok(Discard::Discarded) => {
+        match self.inner.store.discard(hold, claim, cause).await {
+            Ok(outcome @ (Discard::Discarded { was } | Discard::CleanupIncomplete { was })) => {
                 // Attempted with its own bound even when the sink just failed:
                 // that failure may have been a late success.
                 let reverted = AttachmentAuditRecord::HoldReverted {
                     hold: hold.clone(),
                     cause,
+                    was,
                 };
-                if self.audit(reverted).await == AuditDelivery::Recorded {
-                    TakenBack::Removed
+                let evidence = self.audit(reverted).await;
+                if matches!(outcome, Discard::CleanupIncomplete { .. }) {
+                    tracing::error!(stored = %hold.stored().digest(), ?evidence, "hold retired but blob cleanup did not complete");
+                    TakenBack::CleanupIncomplete(evidence)
+                } else if evidence == AuditDelivery::Recorded {
+                    TakenBack::Retired
                 } else {
                     tracing::error!(
                         stored = %hold.stored().digest(),
                         "a hold was taken back without audit evidence"
                     );
-                    TakenBack::RemovedUnrecorded
+                    TakenBack::RetiredUnrecorded
                 }
             }
             // Another upload owns the hold now, or a release removed it; each
@@ -796,9 +1096,12 @@ impl AttachmentService {
         let report = self
             .inner
             .store
-            .release(&request.organization_id, &request.conversation_id)
+            .release(&request.organization_id, &request.conversation_id, &release)
             .await
-            .ok();
+            .ok()
+            .filter(|report| {
+                report.agrees_with(&request.organization_id, &request.conversation_id)
+            });
         let storage_failures = report.as_ref().map_or(1, |report| report.failures);
         let mut records: Vec<_> = withdrawn
             .into_iter()
@@ -808,24 +1111,29 @@ impl AttachmentService {
             })
             .collect();
         if let Some(report) = report {
-            records.extend(report.released.into_iter().map(|released| {
-                AttachmentAuditRecord::HoldReleased {
-                    hold: released.hold,
-                    was: released.was,
-                    release: release.clone(),
+            records.extend(report.retired.into_iter().map(|retired| {
+                let (hold, was, evidence) = retired.into_parts();
+                match evidence {
+                    RetirementEvidence::Release(release) => AttachmentAuditRecord::HoldReleased {
+                        hold,
+                        was: was.into(),
+                        release,
+                    },
+                    RetirementEvidence::RevertedUpload { cause, .. } => {
+                        AttachmentAuditRecord::HoldReverted { hold, was, cause }
+                    }
                 }
             }));
-            records.extend(report.removed.into_iter().map(|hold| {
-                AttachmentAuditRecord::BlobRemoved {
-                    hold,
-                    release: release.clone(),
-                }
-            }));
+            records.extend(
+                report
+                    .removed
+                    .into_iter()
+                    .map(|removed| AttachmentAuditRecord::BlobRemoved { removed }),
+            );
         }
-        // One budget for the whole release: a conversation's holds are not
-        // bounded, and a sink that answers slowly must not keep a close open
-        // for one deadline per hold. Cleanup is already done by this point.
-        let audit_failures = self.audit_all(records).await;
+        // Cleanup is already done. The caller waits at most the phase budget;
+        // every record is still attempted for its own deadline.
+        let audit_failures = self.audit_all(records, ParkedPanic::Resume).await;
         if storage_failures == 0 && audit_failures == 0 {
             return Ok(());
         }
@@ -859,19 +1167,20 @@ fn written_hold(pending: &PendingHold) -> Option<(Hold, HoldClaim)> {
     lock(pending).take()
 }
 
-/// What became of a pending hold its own upload tried to take back.
+/// What became of a pending or kept hold its own upload tried to take back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TakenBack {
-    /// Removed by this upload, and the removal is on record.
-    Removed,
-    /// Removed by this upload; the removal itself was not acknowledged.
-    RemovedUnrecorded,
+    /// Retired by this upload, with cleanup completed and evidence recorded.
+    Retired,
+    /// Retired by this upload; its audit write was not acknowledged.
+    RetiredUnrecorded,
+    /// Retirement succeeded; cleanup did not. Keep the independent audit result.
+    CleanupIncomplete(AuditDelivery),
     /// Nothing of this claim was left: another upload of the same file owns
     /// the hold now, or a release removed it. Each of those records itself,
     /// and this upload wrote nothing that is missing from the trail.
     NothingLeft,
-    /// The hold could not be removed. It stays pending, which nothing can use,
-    /// and goes when its conversation lets go of its files.
+    /// Retirement was not confirmed. No successful state or byte cleanup is inferred.
     Stranded,
 }
 
@@ -904,4 +1213,24 @@ fn describe_upload(
         )
         .map_err(|_| BeginError::InvalidRequest)?,
     })
+}
+
+#[cfg(test)]
+mod delivery_tally_tests {
+    use super::DeliveryTally;
+
+    #[test]
+    fn an_accept_while_the_caller_is_waiting_is_counted() {
+        let mut tally = DeliveryTally::new();
+        tally.acknowledge();
+        assert_eq!(tally.stop(), 1);
+    }
+
+    #[test]
+    fn a_late_accept_after_the_caller_stops_does_not_change_the_count() {
+        let mut tally = DeliveryTally::new();
+        assert_eq!(tally.stop(), 0);
+        tally.acknowledge();
+        assert_eq!(tally.stop(), 0);
+    }
 }

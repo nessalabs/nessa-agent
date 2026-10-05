@@ -1,24 +1,17 @@
-#[cfg(test)]
-use super::generated::wire_shape_product_session_ready;
-use super::generated::{
-    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
-    PRODUCT_VERSION,
+use super::change_watch::{
+    ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::record_read::refusal_code;
 use super::state::ProductRouteState;
-use super::wire::*;
+use super::wire::ready_frame;
 use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
-use crate::conversation::application::{ReadRefusal, RecordReadLease};
+use crate::conversation::application::{access_refusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
-use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
-use crate::protocol::{
-    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
-    ResponseFrame, MAX_PAYLOAD_BYTES,
-};
 use axum::extract::ws::{CloseFrame, Message};
 use axum::Error;
 use futures_util::stream::{FuturesUnordered, SplitSink};
@@ -32,12 +25,27 @@ use nessa_auth::application::dto::{
     CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto,
 };
 use nessa_auth::application::ports::{
-    AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence,
+    AccessError, AccessSnapshot, CredentialEvidence, CredentialVerifier, Decision, PortFuture,
+    SessionEvidence, VerifiedCredential,
 };
 use nessa_auth::application::session::{
     AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
 };
-use nessa_auth::domain::{Action, CredentialId};
+use nessa_auth::domain::{Action, AudienceId, CredentialId};
+#[cfg(test)]
+use nessa_protocol::product::generated::wire_shape_product_session_ready;
+use nessa_protocol::product::generated::{
+    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
+    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination, MAX_RECORD_RESPONSE_BYTES,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
+};
+use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
+use nessa_protocol::product_contract::generated::SessionCloseReason;
+use nessa_protocol::protocol::{
+    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
+    ResponseFrame, MAX_PAYLOAD_BYTES,
+};
 use serde_json::json;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -49,10 +57,56 @@ use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
 
+/// How credential evidence presented on one kind of connection is checked.
+/// It is the only thing that differs between the browser socket and a native
+/// device connection; authentication itself stays with `AuthenticateSession`
+/// and every later admission with this socket (design row PR1).
+pub(crate) trait SessionProof<S>: Send + Sync {
+    /// The verifier for evidence presented on `socket`. It may borrow what the
+    /// socket proved, but holds nothing of the socket across authentication.
+    fn verifier<'a>(
+        &'a self,
+        socket: &'a S,
+        state: &'a ProductRouteState,
+    ) -> Box<dyn CredentialVerifier + 'a>;
+}
+
+/// The browser socket's proof: the opaque bearer secret, checked by the
+/// composed `state.verifier`.
+struct BearerProof;
+impl<S> SessionProof<S> for BearerProof {
+    fn verifier<'a>(
+        &'a self,
+        _: &'a S,
+        state: &'a ProductRouteState,
+    ) -> Box<dyn CredentialVerifier + 'a> {
+        Box::new(Composed(state.verifier.as_ref()))
+    }
+}
+struct Composed<'a>(&'a dyn CredentialVerifier);
+impl CredentialVerifier for Composed<'_> {
+    fn verify<'a>(
+        &'a self,
+        evidence: &'a CredentialEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, VerifiedCredential> {
+        self.0.verify(evidence, audience)
+    }
+}
+
 /// Run one mandatory-authentication product session.
-pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
+pub async fn handle_socket<S>(socket: S, state: ProductRouteState)
 where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
+{
+    serve_session(socket, state, &BearerProof).await
+}
+
+/// Run one product session whose credential evidence `proof` checks.
+pub(crate) async fn serve_session<S, P>(mut socket: S, state: ProductRouteState, proof: &P)
+where
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
+    P: SessionProof<S>,
 {
     let deadline = Instant::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
@@ -70,15 +124,16 @@ where
         nonce: nonce.clone(),
         expires_at: challenge_expires_at,
     };
-    let challenge = match EventFrame::push("session.challenge", &challenge, 1, 0) {
-        Ok(frame) => OutgoingMessage::Event(frame),
-        Err(_) => return,
-    };
+    let challenge =
+        match EventFrame::push("session.challenge", &challenge, CHALLENGE_EVENT_SEQUENCE, 0) {
+            Ok(frame) => OutgoingMessage::Event(frame),
+            Err(_) => return,
+        };
     let authenticated = timeout_at(deadline, async {
         send(state.settings.write_timeout(), &mut socket, challenge)
             .await
             .map_err(|_| (String::new(), "temporarily_unavailable"))?;
-        receive_authentication(&mut socket, &state, &nonce, deadline).await
+        receive_authentication(&mut socket, &state, &nonce, deadline, proof).await
     })
     .await;
     let (request_id, session) = match authenticated {
@@ -135,14 +190,16 @@ where
     run_authenticated(socket, state, session).await;
 }
 
-async fn receive_authentication<S>(
+async fn receive_authentication<S, P>(
     socket: &mut S,
     state: &ProductRouteState,
     nonce: &str,
     deadline: Instant,
+    proof: &P,
 ) -> Result<(String, AuthenticatedSession), (String, &'static str)>
 where
     S: Stream<Item = Result<Message, Error>> + Unpin,
+    P: SessionProof<S>,
 {
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err((String::new(), "unauthorized"));
@@ -163,7 +220,7 @@ where
     }
     let params: SessionAuthenticateParams =
         serde_json::from_value(frame.params).map_err(|_| (frame.id.clone(), "unauthorized"))?;
-    if !params.supports_v1() {
+    if !supports_product_version(params.min_version, params.max_version) {
         return Err((frame.id, "protocol_incompatible"));
     }
     if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
@@ -226,8 +283,9 @@ where
     }
     let evidence = CredentialEvidence::new(params.credential.into_bytes())
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
+    let verifier = proof.verifier(socket, state);
     let session = AuthenticateSession {
-        verifier: state.verifier.as_ref(),
+        verifier: verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
     }
@@ -286,7 +344,11 @@ impl ResponseClass {
             | "conversation.reorder"
             // Releasing an app ends its held calls, so it is never behind
             // them on the app lane.
-            | "mcp.releaseApp" => Self::Control,
+            | "mcp.releaseApp"
+            // Ending an enrollment is never crowded out by ordinary requests
+            // (design row O7).
+            | "pairing.deny"
+            | "pairing.cancel" => Self::Control,
             "mcp.callTool" | "mcp.readResource" => Self::App,
             "conversation.recordsHead"
             | "conversation.recordsPage"
@@ -301,7 +363,8 @@ impl ResponseClass {
 struct QueuedResponse {
     message: WireResponse,
     _slot: Arc<OwnedSemaphorePermit>,
-    // For record replies, this remains owned through the final physical send.
+    // Record replies transfer this to QueuedRecordResponse, whose writer
+    // releases delivery ownership before sending (R64).
     // The read adapter must not return it until its non-entered source thread
     // has finished and joined the SDK worker, including after caller timeout.
     _record_work: Option<RecordReadLease>,
@@ -310,6 +373,12 @@ struct QueuedResponse {
 enum WireResponse {
     Ordinary(Box<OutgoingMessage>),
     Record { text: String },
+    Watch(Box<QueuedWatch>),
+}
+
+struct QueuedWatch {
+    message: Box<OutgoingMessage>,
+    acknowledgement: WatchAcknowledgement,
 }
 
 impl WireResponse {
@@ -365,6 +434,7 @@ enum WriterResponse {
     Record(Box<QueuedRecordResponse>),
     Queued(Box<QueuedResponse>),
     Refusal(Box<OutgoingMessage>),
+    Watch(Box<WatchFrame>),
 }
 
 async fn write_authenticated<S>(
@@ -374,6 +444,7 @@ async fn write_authenticated<S>(
     mut ordinary: Receiver<QueuedResponse>,
     mut records: Receiver<QueuedRecordResponse>,
     write_timeout: Duration,
+    watches: Arc<WatchDeliveries>,
 ) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin,
 {
@@ -382,7 +453,7 @@ async fn write_authenticated<S>(
     // docs/design/authorized-record-reads.md, R62.
     let mut pending_record: Option<QueuedRecordResponse> = None;
     loop {
-        let deadline = queued_record_deadline(&pending_record);
+        let deadline = retained_delivery_deadline(&pending_record, &watches);
         let next = tokio::select! {
             biased;
             () = wait_for_record_deadline(deadline), if deadline.is_some() => break,
@@ -398,6 +469,11 @@ async fn write_authenticated<S>(
             Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
             () = std::future::ready(()), if pending_record.is_some() =>
                 Some(Ok(WriterResponse::Record(Box::new(pending_record.take().expect("pending record selected"))))),
+            // A notice leaves WatchDeliveries only when this arm is chosen, so an
+            // unwatch that retires it before then also removes it (row U3).
+            Some(frame) = async { watches.take() }, if !watches.is_closed() =>
+                Some(Ok(WriterResponse::Watch(Box::new(frame)))),
+            () = watches.changed(), if !watches.is_closed() => continue,
             else => None,
         };
         let writing = async {
@@ -415,6 +491,23 @@ async fn write_authenticated<S>(
                     } = *response;
                     send_queued(write_timeout, &mut sink, message).await.is_ok()
                 }
+                Some(Ok(WriterResponse::Watch(frame))) => {
+                    let WatchFrame {
+                        id,
+                        message,
+                        deadline,
+                        terminal,
+                        _owner: _original_owner,
+                    } = *frame;
+                    let result =
+                        within_deadline(deadline, send(write_timeout, &mut sink, message)).await;
+                    if matches!(result, Some(Ok(()))) {
+                        watches.sent(&id, terminal);
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Some(Ok(WriterResponse::Refusal(message))) => {
                     send(write_timeout, &mut sink, *message).await.is_ok()
                 }
@@ -427,7 +520,7 @@ async fn write_authenticated<S>(
         };
         tokio::pin!(writing);
         loop {
-            let deadline = queued_record_deadline(&pending_record);
+            let deadline = retained_delivery_deadline(&pending_record, &watches);
             tokio::select! {
                 biased;
                 // Abandon this sink; a second frame must not follow a cancelled
@@ -435,6 +528,7 @@ async fn write_authenticated<S>(
                 () = wait_for_record_deadline(deadline), if deadline.is_some() => return,
                 Some(response) = records.recv(), if pending_record.is_none() =>
                     pending_record = Some(response),
+                () = watches.changed(), if !watches.is_closed() => {},
                 succeeded = &mut writing => {
                     if !succeeded { return; }
                     break;
@@ -442,6 +536,21 @@ async fn write_authenticated<S>(
             }
         }
     }
+}
+
+/// The socket's event sequence: `session.challenge` is its first event, and
+/// every event after authentication (watch notices, from `WatchDeliveries`)
+/// continues from here, so one socket never repeats a sequence number.
+pub(super) const CHALLENGE_EVENT_SEQUENCE: u64 = 1;
+
+fn retained_delivery_deadline(
+    record: &Option<QueuedRecordResponse>,
+    watches: &WatchDeliveries,
+) -> Option<Instant> {
+    [queued_record_deadline(record), watches.deadline()]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 fn queued_record_deadline(response: &Option<QueuedRecordResponse>) -> Option<Instant> {
@@ -479,15 +588,20 @@ enum AuthenticatedInput {
 }
 
 type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Send + 'a>>;
+type RefreshCheck<'a> =
+    Pin<Box<dyn Future<Output = Result<AuthenticatedSession, AccessError>> + Send + 'a>>;
 
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
     let (sink, mut incoming) = socket.split();
+    let mut watches = ConnectionWatches::new(&state);
     let (control_send, control_receive) = mpsc::channel(4);
     let (refusal_send, refusal_receive) = mpsc::channel(1);
-    let (ordinary_send, ordinary_receive) = mpsc::channel(16);
+    // Room for every ordinary slot's response and every app call's, which
+    // share it: a full queue closes the socket.
+    let (ordinary_send, ordinary_receive) = mpsc::channel(16 + APP_CALLS_PER_SOCKET);
     let (record_send, record_receive) = mpsc::channel(1);
     let mut writer = tokio::spawn(write_authenticated(
         sink,
@@ -496,6 +610,7 @@ where
         ordinary_receive,
         record_receive,
         state.settings.write_timeout(),
+        watches.deliveries.clone(),
     ));
     let control_slots = Arc::new(Semaphore::new(4));
     let ordinary_slots = Arc::new(Semaphore::new(16));
@@ -522,20 +637,34 @@ where
         }
     };
     tokio::pin!(expiry);
-    // Admission retains a response slot through the physical write, so a stalled
-    // sink does not stop this owner from receiving or dispatching controls.
+    // Admission retains a response slot through the physical write (a record's
+    // until the writer takes it to send, row R64), so a stalled sink
+    // does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
-    let mut refresh: Option<AuthorityCheck<'_>> = None;
+    let mut refresh: Option<RefreshCheck<'_>> = None;
     let mut input_check: Option<AuthorityCheck<'_>> = None;
     let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
+        watches.collect_retired();
         // Authority checks suspend only their own admission. Request completion,
         // delivery teardown and expiry retain independently polled owners (R60).
         let admitted = tokio::select! {
             _ = &mut writer => {
                 writer_finished = true;
                 break;
+            }
+            _ = state.change_watches.closed() => {
+                let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable));
+                break;
+            }
+            outcome = watches.next(&state, &session), if watches.has_pending() => {
+                match outcome {
+                    WatchOutcome::Reply(reply) => { if ordinary_send.try_send(queued_watch(*reply)).is_err() { break; } }
+                    WatchOutcome::Close(reason) => { let _ = control_send.try_send(ControlOutput::Close(reason)); break; }
+                    WatchOutcome::Progress => {},
+                }
+                None
             }
             Some(result) = requests.next(), if !requests.is_empty() => {
                 let Ok((message, class, slot, record_work)) = result else { break };
@@ -552,16 +681,22 @@ where
                 let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired));
                 break;
             }
-            error = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
+            current = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
                 refresh = None;
-                if let Some(error) = error {
-                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
-                    break;
+                match current {
+                    // The one identity check per tick also confirms each live
+                    // watch's session; the watches then re-ask only their
+                    // passive-read admission (row A3).
+                    Ok(current) => watches.recheck(&state, &current),
+                    Err(error) => {
+                        let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                        break;
+                    }
                 }
                 None
             }
             _ = current_state.tick(), if refresh.is_none() => {
-                refresh = Some(Box::pin(current_session_error(&state, &session)));
+                refresh = Some(Box::pin(current_session(&state, &session)));
                 None
             }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
@@ -639,6 +774,20 @@ where
             continue;
         };
         let slot = Arc::new(slot);
+        if ConnectionWatches::method(&frame.method) {
+            if let Some(reply) = watches.begin(
+                &state,
+                &session,
+                frame,
+                slot,
+                received_at + RECORD_SEND_TIMEOUT,
+            ) {
+                if ordinary_send.try_send(queued_watch(reply)).is_err() {
+                    break;
+                }
+            }
+            continue;
+        }
         // An app call's capacity across sockets is the conversation
         // service's, held by the call's own task until it ends: a permit held
         // here would be let go when the socket went, while the call ran on.
@@ -712,6 +861,7 @@ where
     for call in app_calls {
         call.abort();
     }
+    drop(watches);
     drop(control_send);
     drop(refusal_send);
     drop(ordinary_send);
@@ -719,6 +869,25 @@ where
     if !writer_finished {
         let _ = writer.await;
     }
+}
+
+fn queued_watch(reply: WatchReply) -> QueuedResponse {
+    let message = match reply.acknowledgement {
+        Some(acknowledgement) => WireResponse::Watch(Box::new(QueuedWatch {
+            message: Box::new(reply.message),
+            acknowledgement,
+        })),
+        None => WireResponse::ordinary(reply.message),
+    };
+    QueuedResponse {
+        message,
+        _slot: reply.slot,
+        _record_work: None,
+    }
+}
+
+pub(super) fn valid_product_request(frame: &RequestFrame) -> bool {
+    frame.kind == "req" && !frame.id.is_empty() && frame.id.len() <= 256
 }
 
 async fn dispatch_passive_read(
@@ -734,7 +903,7 @@ async fn dispatch_passive_read(
             Ok(current) => current,
             Err(error) => return (passive_access_failure(&frame.id, error), None),
         };
-        if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
+        if !valid_product_request(&frame) {
             return (
                 WireResponse::ordinary(failure(&frame.id, "invalid_request")),
                 None,
@@ -773,11 +942,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = if ReadRefusal::from(error) == ReadRefusal::Unverifiable {
-        RecordReadErrorCode::Unverifiable
-    } else {
-        RecordReadErrorCode::Unauthorized
-    };
+    let code = refusal_code(access_refusal(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -790,7 +955,7 @@ async fn dispatch(
         Ok(current) => current,
         Err(_) => return failure(&frame.id, "unauthorized"),
     };
-    if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
+    if !valid_product_request(&frame) {
         return failure(&frame.id, "invalid_request");
     }
     if frame.method == PRODUCT_HANDSHAKE_METHOD {
@@ -873,6 +1038,12 @@ async fn dispatch_authorized(
         }
         method if method.starts_with("mcp.") => {
             super::mcp_apps::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("mcpServers.") => {
+            super::mcp_servers::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("pairing.") => {
+            super::pairing::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -1058,15 +1229,32 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcp.readResource"
         | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
+        // A configured MCP server is started with the gateway's authority
+        // and given its variables, credentials among them (#391).
+        // Inspecting runs a stored server's executable with those variables.
+        "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" | "mcpServers.inspect" => {
+            Some("credential.manage")
+        }
+        // Enrolling a device creates a credential for it; Auth asks again for
+        // the exact consent inside the runtime.
+        "pairing.create"
+        | "pairing.pending"
+        | "pairing.status"
+        | "pairing.approve"
+        | "pairing.deny"
+        | "pairing.cancel" => Some("credential.manage"),
         _ => None,
     }
 }
 
-// Which request to blame for a frame that did not decode. A nested duplicate
-// still leaves one unambiguous `id`, so that frame is answered; a frame that
-// named `id` twice has no single request to answer, and the server does not pick
-// one. That frame gets no reply, as any other uncorrelatable text does, and the
-// client's own request timeout settles it.
+// Which request to blame for a frame that did not decode. Answer
+// `invalid_request` when the envelope parser reads one JSON object, no decoded
+// envelope name appears twice, `type` is `req`, and `id` is one Unicode string
+// of 1 to 256 bytes. An envelope name that is not Unicode is skipped, so two
+// of them are not a duplicate. A repeated name inside a nested value, or a
+// nested string that is not Unicode, still leaves that id. Deeper than 127
+// containers, the envelope is not read. Anything else gets no reply, and the
+// caller's own timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
     let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
@@ -1084,7 +1272,7 @@ fn session_ready(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     snapshot: &AccessSnapshot,
-) -> SessionReady {
+) -> ProductSessionReady {
     let grants = snapshot
         .credential
         .grants()
@@ -1097,7 +1285,7 @@ fn session_ready(
             },
         })
         .collect();
-    SessionReady::from_session(
+    ready_frame(
         state.gateway_id().as_str(),
         session,
         grants,
@@ -1226,6 +1414,34 @@ async fn ensure_browser_session_present(
     Ok(())
 }
 
+// Watches retain this whole adapter await in their original owner task. No
+// timeout here may detach an internal authority worker from that owner.
+pub(super) async fn watch_identity(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<AuthenticatedSession, AccessError> {
+    current_identity_inner(state, session)
+        .await
+        .map(|(current, _)| current)
+}
+
+pub(super) async fn watch_browser_present(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(), AccessError> {
+    ensure_browser_session_present(state, session).await
+}
+
+/// The connection's current session, or why it is no longer current.
+async fn current_session(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<AuthenticatedSession, AccessError> {
+    current_identity(state, session)
+        .await
+        .map(|(current, _)| current)
+}
+
 async fn current_session_error(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1264,14 +1480,19 @@ async fn send<S: Sink<Message> + Unpin>(
     socket: &mut S,
     message: OutgoingMessage,
 ) -> Result<(), ()> {
+    let text = ordinary_text(message)?;
+    timeout(write_timeout, send_text(socket, text))
+        .await
+        .map_err(|_| ())?
+}
+
+/// An ordinary message's wire text, refused past the ordinary encoded ceiling.
+fn ordinary_text(message: OutgoingMessage) -> Result<String, ()> {
     let text = message.to_wire_text().map_err(|_| ())?;
     if text.len() > MAX_PAYLOAD_BYTES as usize {
         return Err(());
     }
-    timeout(write_timeout, socket.send(Message::Text(text.into())))
-        .await
-        .map_err(|_| ())?
-        .map_err(|_| ())
+    Ok(text)
 }
 
 async fn send_queued<S: Sink<Message> + Unpin>(
@@ -1281,6 +1502,34 @@ async fn send_queued<S: Sink<Message> + Unpin>(
 ) -> Result<(), ()> {
     match message {
         WireResponse::Ordinary(message) => send(write_timeout, socket, *message).await,
+        WireResponse::Watch(response) => {
+            let QueuedWatch {
+                message,
+                acknowledgement,
+            } = *response;
+            let WatchAcknowledgement {
+                deadline,
+                completed,
+                owner: _original_owner,
+            } = acknowledgement;
+            // A reply the writer reaches after its deadline is replaced by a
+            // typed close, never a silent end (row B6). Expiry during the
+            // write abandons the socket like any cancelled write.
+            if Instant::now() >= deadline {
+                close_session(
+                    write_timeout,
+                    socket,
+                    SessionCloseReason::TemporaryUnavailable,
+                )
+                .await;
+                return Err(());
+            }
+            within_deadline(deadline, send(write_timeout, socket, *message))
+                .await
+                .ok_or(())??;
+            let _ = completed.send(());
+            Ok(())
+        }
         WireResponse::Record { text } => {
             if text.len() > MAX_RECORD_RESPONSE_BYTES {
                 return Err(());
@@ -1300,16 +1549,56 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
 ) -> Result<(), ()> {
     let QueuedRecordResponse {
         message,
-        _slot,
-        _record_work,
+        _slot: slot,
+        _record_work: record_work,
         deadline,
     } = response;
-    within_deadline(deadline, send_queued(write_timeout, socket, message))
+    // The response's slot and read lease are given back as soon as its frame
+    // is encoded and checked, before any call that can write a byte: a
+    // WebSocket can write inside `start_send` (a pong due after the peer's
+    // ping), so no flush order is relied on. After physical source completion,
+    // a client waiting for the answer finds capacity free for its next read
+    // (row R64). An encoding refusal gives delivery ownership back at once.
+    let text = match message {
+        WireResponse::Ordinary(message) => {
+            let text = ordinary_text(*message)?;
+            drop((slot, record_work));
+            return within_deadline(deadline, timeout(write_timeout, send_text(socket, text)))
+                .await
+                .ok_or(())?
+                .map_err(|_| ())?;
+        }
+        WireResponse::Record { text } => text,
+        // The record lane carries the five passive methods' answers only:
+        // watch replies go through `ConnectionWatches` on the ordinary lane, so
+        // this arm is never reached. It is still delivered as `send_queued`
+        // would, under this response's deadline, rather than dropped.
+        message @ WireResponse::Watch(_) => {
+            drop((slot, record_work));
+            return within_deadline(deadline, send_queued(write_timeout, socket, message))
+                .await
+                .ok_or(())?;
+        }
+    };
+    if text.len() > MAX_RECORD_RESPONSE_BYTES {
+        return Err(());
+    }
+    drop((slot, record_work));
+    within_deadline(deadline, send_text(socket, text))
         .await
         .ok_or(())?
 }
 
-fn close_reason(error: AccessError) -> SessionCloseReason {
+/// Send one text frame and flush it.
+async fn send_text<S: Sink<Message> + Unpin>(socket: &mut S, text: String) -> Result<(), ()> {
+    socket
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|_| ())
+}
+
+/// The one mapping from an access error to how a live connection closes.
+pub(super) fn close_reason(error: AccessError) -> SessionCloseReason {
     match error {
         AccessError::CredentialRevoked => SessionCloseReason::CredentialRevoked,
         AccessError::CredentialExpired => SessionCloseReason::CredentialExpired,
@@ -1343,29 +1632,22 @@ async fn close_session<S: Sink<Message> + Unpin>(
 }
 
 #[cfg(test)]
+pub(crate) use tests::watches::HostWatchFixture;
+
+#[cfg(test)]
 mod tests {
-    use super::super::generated::{
-        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
-        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-    };
-    use super::super::passive_read::wire::encode_response;
     use super::super::state::SessionSettings;
     use super::*;
-    use crate::agents::domain::AgentId;
     use crate::agents_test_support::StubAgentProbe;
-    use crate::app::ports::Clock as UptimeClock;
     use crate::browser_session::application::SessionStore;
     use crate::browser_session::domain::value_objects::{
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope,
-        RecordReadError, RecordReadFuture, RecordReadOperation, RecordReadResponse,
-        RecordReadSource,
+        ConversationRepository, ReceiverAuthority, ReceiverBinding, RecordReadError,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
     };
-    use crate::conversation::domain::{
-        Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-    };
+    use crate::conversation::domain::Conversation;
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -1382,6 +1664,17 @@ mod tests {
         AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
         MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
     };
+    use nessa_protocol::agents::AgentId;
+    use nessa_protocol::clock::Clock as UptimeClock;
+    use nessa_protocol::conversation::domain::{
+        ConversationApprovalMode, ConversationId, ConversationModelId,
+    };
+    use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
+    use nessa_protocol::product::generated::{
+        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_protocol::product::passive_read::encode_response;
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
         ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -1396,7 +1689,10 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use tokio::io::DuplexStream;
     use tokio::runtime::Handle;
+    use tokio_tungstenite::tungstenite::{protocol::Role, Message as Frame};
+    use tokio_tungstenite::WebSocketStream;
     use uuid::Uuid;
 
     struct RecordBinding;
@@ -1434,6 +1730,9 @@ mod tests {
     mod writer {
         include!("../../tests/product/socket/writer.rs");
     }
+    pub(super) mod watches {
+        include!("../../tests/product/socket/watches.rs");
+    }
     mod browser_sessions {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1459,12 +1758,42 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(advertised, runtime);
         for method in PRODUCT_READY_METHODS {
-            if *method == "auth.session" {
+            if *method == "auth.session" || ConnectionWatches::method(method) {
                 continue;
             }
             assert!(
                 action_for_method(method).is_some(),
                 "advertised method has no authorization/dispatch path: {method}"
+            );
+        }
+    }
+
+    /// Design row O7: ending an enrollment takes the control lane and its
+    /// capacity, so ordinary requests cannot crowd it out; the other pairing
+    /// methods are ordinary requests, and every one asks Cedar for
+    /// `credential.manage` before it is dispatched.
+    #[test]
+    fn pairing_deny_and_cancel_are_controls() {
+        for method in PRODUCT_READY_METHODS
+            .iter()
+            .filter(|method| method.starts_with("pairing."))
+        {
+            let control = matches!(*method, "pairing.deny" | "pairing.cancel");
+            assert_eq!(
+                matches!(ResponseClass::for_method(method), ResponseClass::Control),
+                control,
+                "{method}"
+            );
+            if !control {
+                assert!(
+                    matches!(ResponseClass::for_method(method), ResponseClass::Ordinary),
+                    "{method}"
+                );
+            }
+            assert_eq!(
+                action_for_method(method),
+                Some("credential.manage"),
+                "{method}"
             );
         }
     }
@@ -1967,6 +2296,769 @@ mod tests {
         assert_eq!(denied.error.unwrap().code, "forbidden");
     }
 
+    /// What the MCP server methods answer through `dispatch` on `state` for
+    /// `method` with `params`: whether it succeeded, and its payload, or its
+    /// error code and details.
+    async fn mcp_servers_call(
+        state: &ProductRouteState,
+        session: &AuthenticatedSession,
+        method: &str,
+        params: Value,
+    ) -> (bool, Value) {
+        let frame = RequestFrame {
+            params,
+            ..request("mcp", method)
+        };
+        let OutgoingMessage::Response(response) = dispatch(state, session, frame).await else {
+            panic!("response expected")
+        };
+        if response.ok {
+            (true, response.payload.unwrap())
+        } else {
+            let error = response.error.unwrap();
+            (false, json!({"code": error.code, "details": error.details}))
+        }
+    }
+
+    /// #391 S1: a caller without `credential.manage` is refused `forbidden`
+    /// by every MCP server method before its params are read, and nothing is
+    /// audited, read or written.
+    #[tokio::test]
+    async fn s1_mcp_servers_are_forbidden_without_credential_manage_before_params() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let files = MemoryFiles::holding(config(vec![]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_for(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Member);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        for method in [
+            "mcpServers.list",
+            "mcpServers.save",
+            "mcpServers.remove",
+            "mcpServers.inspect",
+        ] {
+            assert_eq!(action_for_method(method), Some("credential.manage"));
+            let (ok, answer) =
+                mcp_servers_call(&state, &session, method, json!({"not": "params"})).await;
+            assert!(!ok);
+            assert_eq!(answer["code"], "forbidden", "{method}");
+        }
+        assert!(audit.records().is_empty());
+        assert_eq!(files.locks.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(files.publishes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The MCP server methods on the wire: `kind: "stdio"`, variable names in
+    /// a list and never a value, a null value keeping the stored one, and each
+    /// refusal typed with its details; a gateway with no live set to manage
+    /// answers `mcp_servers_not_configured`.
+    #[tokio::test]
+    async fn mcp_servers_on_the_wire_carry_names_only_and_typed_refusals() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            absolute, config, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let (bare, _) = fixture(MembershipRole::Admin);
+        let session = authenticate(&bare).await;
+        assert_eq!(
+            mcp_servers_call(&bare, &session, "mcpServers.list", json!({})).await,
+            (
+                false,
+                json!({"code": "mcp_servers_not_configured", "details": null})
+            )
+        );
+        let files = MemoryFiles::holding(config(vec![]));
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_for(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let list = |state: &ProductRouteState| {
+            let state = state.clone();
+            let session = session.clone();
+            async move {
+                let (ok, listed) =
+                    mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+                assert!(ok, "{listed}");
+                listed
+            }
+        };
+        let listed = list(&state).await;
+        assert_eq!(listed["servers"][0]["kind"], "stdio");
+        assert_eq!(listed["servers"][0]["managed"], true);
+        let command = absolute("/usr/bin/python3");
+        let input = |env: Value| {
+            json!({"kind": "stdio", "name": "mcptest", "command": command,
+                "args": ["/s.py"], "env": env, "enabled": true})
+        };
+        let (ok, saved) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"],
+                "server": input(json!([{"name": "API_TOKEN", "value": "secret-value"}]))}),
+        )
+        .await;
+        assert!(ok, "{saved}");
+        assert_eq!(saved["live"], true, "{saved}");
+        let listed = list(&state).await;
+        assert_eq!(listed["revision"], saved["revision"]);
+        assert_eq!(
+            listed["servers"][0],
+            json!({"kind": "stdio", "name": "mcptest", "command": command,
+                "args": ["/s.py"], "envNames": ["API_TOKEN"], "enabled": true, "managed": false})
+        );
+        assert!(!listed.to_string().contains("secret-value"));
+        // A null keeps the stored value.
+        let (ok, kept) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"],
+                "server": input(json!([{"name": "API_TOKEN", "value": null}]))}),
+        )
+        .await;
+        assert!(ok, "{kept}");
+        assert_eq!(
+            files.document()["agents"]["mcpServers"][0]["env"],
+            json!({"API_TOKEN": "secret-value"})
+        );
+        let refusals = [
+            (
+                "mcpServers.save",
+                json!({"revision": "stale", "server": input(json!([]))}),
+                json!({"code": "mcp_servers_revision_conflict",
+                    "details": {"revision": kept["revision"]}}),
+            ),
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "NEVER", "value": null}]))}),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_value_missing", "server": "mcptest",
+                        "name": "NEVER"}}),
+            ),
+            (
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "nessa"}),
+                json!({"code": "mcp_servers_reserved_name", "details": null}),
+            ),
+            (
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "unknown"}),
+                json!({"code": "mcp_servers_not_found", "details": null}),
+            ),
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": {"kind": "remote", "name": "x", "command": "/x", "args": [],
+                        "env": [], "enabled": true}}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            (
+                "mcpServers.list",
+                json!({"extra": true}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            // A variable without `value` is refused, never read as "keep"
+            // (pass 2b, decision 6).
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "API_TOKEN"}]))}),
+                json!({"code": "invalid_request", "details": null}),
+            ),
+            // A bad variable name is named.
+            (
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "1BAD", "value": "v"}]))}),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_name", "server": "mcptest",
+                        "name": "1BAD"}}),
+            ),
+        ];
+        for (method, params, expected) in refusals {
+            assert_eq!(
+                mcp_servers_call(&state, &session, method, params.clone()).await,
+                (false, expected),
+                "{method} {params}"
+            );
+        }
+        // The configuration not published: nothing applied. Published, but
+        // its directory not synced: applied, and said so.
+        files
+            .fail_publish
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": kept["revision"], "server": input(json!([]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_storage_unavailable",
+                    "details": {"applied": false}})
+            )
+        );
+        files
+            .fail_publish
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        files
+            .fail_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": kept["revision"],
+                    "server": input(json!([{"name": "API_TOKEN", "value": null}]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_storage_unavailable",
+                    "details": {"applied": true}})
+            )
+        );
+        files
+            .fail_sync
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let kept = list(&state).await;
+        audit
+            .fail_outcome
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // A refusal whose outcome cannot be recorded carries the refusal's
+        // code (pass 2b, decision 4).
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "unknown"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "audit_unavailable",
+                    "details": {"applied": false, "code": "mcp_servers_not_found"}})
+            )
+        );
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": kept["revision"], "name": "mcptest"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "audit_unavailable", "details": {"applied": true}})
+            )
+        );
+        // An entry added to the file by hand that breaks a rule is named,
+        // whichever server the save was about.
+        let mut hand_added = files.document();
+        hand_added["agents"]["mcpServers"] = json!([
+            {"name": "hand-added", "command": "relative/server", "args": []}
+        ]);
+        *files.bytes.lock().unwrap() = Some(serde_json::to_vec(&hand_added).unwrap());
+        audit
+            .fail_outcome
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let listed = list(&state).await;
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.save",
+                json!({"revision": listed["revision"], "server": input(json!([]))}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "command", "server": "hand-added"}})
+            )
+        );
+        // Once shutdown has begun, a change is not admitted.
+        state.close_mcp_server_admission();
+        assert_eq!(
+            mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": listed["revision"], "name": "hand-added"}),
+            )
+            .await,
+            (
+                false,
+                json!({"code": "mcp_servers_stopping", "details": null})
+            )
+        );
+    }
+
+    /// `mcpServers.inspect` on the wire: the tools with their hints and each
+    /// app's CSP and permissions in `mcp.readResource`'s shapes; each failure
+    /// typed, a server's JSON-RPC error with its details; an inspection cut
+    /// by shutdown; and a stored name required.
+    #[tokio::test]
+    async fn mcp_servers_inspect_answers_typed_tools_and_typed_failures() {
+        use crate::mcp_servers::application::{
+            InspectCut, InspectFailure, InspectedTool, InspectedUi, Inspection, ServerProblem,
+        };
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, entry, inspected_over, LeapingClock, MemoryFiles, RecordingAudit,
+            ScriptedInspector,
+        };
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+        let inspector = Arc::new(ScriptedInspector::default());
+        let (settings, _) = inspected_over(
+            MemoryFiles::holding(config(vec![entry("a")])),
+            Arc::new(RecordingAudit::default()),
+            Arc::new(LeapingClock::default()),
+            inspector.clone(),
+        );
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![
+                InspectedTool {
+                    name: "chart".into(),
+                    read_only_hint: Some(true),
+                    destructive_hint: Some(false),
+                    ui: Some(InspectedUi {
+                        uri: "ui://a/chart.html".into(),
+                        csp: UiCsp::new(
+                            vec!["https://api.example.com".into()],
+                            vec![],
+                            vec![],
+                            vec![],
+                        )
+                        .unwrap(),
+                        permissions: UiPermissions {
+                            camera: true,
+                            ..UiPermissions::default()
+                        },
+                    }),
+                },
+                InspectedTool {
+                    name: "plain".into(),
+                    read_only_hint: None,
+                    destructive_hint: None,
+                    ui: None,
+                },
+            ],
+            cut: Some(InspectCut::Tools),
+        });
+        let inspect = |name: &str| {
+            let state = state.clone();
+            let session = session.clone();
+            let params = json!({"name": name});
+            async move { mcp_servers_call(&state, &session, "mcpServers.inspect", params).await }
+        };
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "tools", "tools": [
+                    {"name": "chart", "readOnlyHint": true, "destructiveHint": false,
+                        "ui": {"uri": "ui://a/chart.html",
+                            "csp": {"connectDomains": ["https://api.example.com"],
+                                "resourceDomains": [], "frameDomains": [], "baseUriDomains": []},
+                            "permissions": {"camera": true, "microphone": false,
+                                "geolocation": false, "clipboardWrite": false}}},
+                    {"name": "plain"},
+                ]})
+            )
+        );
+        for (failure, expected) in [
+            (
+                InspectFailure::StartFailed,
+                json!({"code": "mcp_server_start_failed", "details": null}),
+            ),
+            (
+                InspectFailure::TimedOut,
+                json!({"code": "mcp_server_timed_out", "details": null}),
+            ),
+            (
+                InspectFailure::Gone,
+                json!({"code": "mcp_server_gone", "details": null}),
+            ),
+            (
+                InspectFailure::Malformed,
+                json!({"code": "mcp_server_malformed", "details": null}),
+            ),
+            (
+                InspectFailure::Stopping,
+                json!({"code": "mcp_servers_stopping", "details": null}),
+            ),
+            // A stored server the SDK refuses to start: its problem, named.
+            (
+                InspectFailure::Invalid(ServerProblem::EnvironmentName {
+                    server: "a".into(),
+                    name: "1BAD".into(),
+                }),
+                json!({"code": "mcp_servers_invalid",
+                    "details": {"problem": "environment_name", "server": "a", "name": "1BAD"}}),
+            ),
+            (
+                InspectFailure::RemoteError {
+                    code: -32002,
+                    message: "no\nsuch".into(),
+                },
+                json!({"code": "mcp_server_remote_error",
+                    "details": {"code": -32002, "message": "no such"}}),
+            ),
+            (
+                InspectFailure::RemoteError {
+                    code: i64::MAX,
+                    message: "far".into(),
+                },
+                json!({"code": "mcp_server_remote_error", "details": null}),
+            ),
+        ] {
+            *inspector.answer.lock().unwrap() = Err(failure);
+            assert_eq!(inspect("a").await, (false, expected));
+        }
+        // Cut by shutdown after the server was started: incomplete, no tools.
+        *inspector.answer.lock().unwrap() = Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        });
+        assert_eq!(
+            inspect("a").await,
+            (
+                true,
+                json!({"complete": false, "cut": "stopping", "tools": []})
+            )
+        );
+        assert_eq!(
+            inspect("unknown").await,
+            (
+                false,
+                json!({"code": "mcp_servers_not_found", "details": null})
+            )
+        );
+        assert_eq!(
+            mcp_servers_call(&state, &session, "mcpServers.inspect", json!({})).await,
+            (false, json!({"code": "invalid_request", "details": null}))
+        );
+    }
+
+    /// I5: an inspection whose answer would pass the frame's 64 KiB loses
+    /// tools from the end until it fits, and says so with `cut: "bytes"` —
+    /// for the longest request id too; one already cut keeps its own cut.
+    #[tokio::test]
+    async fn i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits() {
+        use crate::mcp_servers::application::{InspectCut, InspectedTool, InspectedUi, Inspection};
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
+        let source = |n: usize| format!("https://{}.example.com", "d".repeat(400 + n % 7));
+        let tool = |n: usize| InspectedTool {
+            name: format!("tool_{n}"),
+            read_only_hint: Some(true),
+            destructive_hint: None,
+            ui: Some(InspectedUi {
+                uri: format!("ui://a/{n}.html"),
+                csp: UiCsp::new((0..8).map(source).collect(), vec![], vec![], vec![]).unwrap(),
+                permissions: UiPermissions::default(),
+            }),
+        };
+        let request_id = "\u{1}".repeat(256);
+        for (cut, said) in [(None, "bytes"), (Some(InspectCut::Ui), "ui")] {
+            let inspection = Inspection {
+                tools: (0..64).map(tool).collect(),
+                cut,
+            };
+            let message = super::super::mcp_servers::fitted(&request_id, inspection);
+            let text = message.to_wire_text().unwrap();
+            assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{}", text.len());
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            let payload = response.payload.unwrap();
+            assert_eq!(payload["complete"], false);
+            assert_eq!(payload["cut"], said);
+            let kept = payload["tools"].as_array().unwrap();
+            assert!(!kept.is_empty() && kept.len() < 64, "{}", kept.len());
+            // From the end: the first ones stay, in order.
+            for (index, each) in kept.iter().enumerate() {
+                assert_eq!(each["name"], format!("tool_{index}"));
+            }
+        }
+        // One that fits is answered whole and complete.
+        let small = Inspection {
+            tools: (0..2).map(tool).collect(),
+            cut: None,
+        };
+        let OutgoingMessage::Response(response) = super::super::mcp_servers::fitted("id", small)
+        else {
+            panic!("a response")
+        };
+        let payload = response.payload.unwrap();
+        assert_eq!(payload["complete"], true);
+        assert!(payload.get("cut").is_none());
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
+    }
+
+    /// I5 at the edge: an answer of exactly the frame's 65536 bytes is sent
+    /// whole and complete; one byte more loses its last tool and says
+    /// `cut: "bytes"`.
+    #[test]
+    fn i5_the_frame_bound_holds_at_exactly_its_edge() {
+        use crate::mcp_servers::application::{InspectedTool, Inspection};
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let tool = |name: String| InspectedTool {
+            name,
+            read_only_hint: None,
+            destructive_hint: None,
+            ui: None,
+        };
+        let answered = |padding: usize| {
+            let inspection = Inspection {
+                tools: vec![tool("first".into()), tool("p".repeat(padding))],
+                cut: None,
+            };
+            let message = super::super::mcp_servers::fitted("id", inspection);
+            let length = message.to_wire_text().unwrap().len();
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            (length, response.payload.unwrap())
+        };
+        // The frame grows a byte for each byte of an ASCII name.
+        let (small, _) = answered(1);
+        let edge = 1 + limit - small;
+        let (length, payload) = answered(edge);
+        assert_eq!(length, limit);
+        assert_eq!(payload["complete"], true);
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 2);
+        let (length, payload) = answered(edge + 1);
+        assert!(length <= limit, "{length}");
+        assert_eq!(payload["complete"], false);
+        assert_eq!(payload["cut"], "bytes");
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["tools"][0]["name"], "first");
+    }
+
+    /// One listed server whose single argument is `padding` bytes long.
+    fn padded_list(padding: usize) -> crate::mcp_servers::application::ServerList {
+        use crate::mcp_servers::application::{ListedServer, ServerList};
+        use crate::mcp_servers::domain::StdioServer;
+        ServerList {
+            revision: "r".repeat(64),
+            servers: vec![ListedServer {
+                server: StdioServer::new("s", "/usr/bin/python3", vec!["p".repeat(padding)]),
+                env_names: vec![],
+                enabled: true,
+                managed: false,
+            }],
+        }
+    }
+
+    /// L1 and L2 at the edge: a list answer of exactly the frame's 65536
+    /// bytes is sent whole; one byte more is refused
+    /// `mcp_servers_config_too_large` with the revision, in a frame that fits.
+    #[test]
+    fn l2_a_list_past_the_frame_bound_is_refused_with_its_revision() {
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let answered = |padding: usize| {
+            let message = super::super::mcp_servers::answered("id", padded_list(padding));
+            let length = message.to_wire_text().unwrap().len();
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            (length, response)
+        };
+        // The frame grows a byte for each byte of an ASCII argument.
+        let (small, _) = answered(1);
+        let edge = 1 + limit - small;
+        let (length, response) = answered(edge);
+        assert_eq!(length, limit);
+        assert!(response.ok);
+        assert_eq!(
+            response.payload.unwrap()["servers"][0]["args"][0]
+                .as_str()
+                .unwrap()
+                .len(),
+            edge
+        );
+        let (length, response) = answered(edge + 1);
+        assert!(length <= limit, "{length}");
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "mcp_servers_config_too_large");
+        assert_eq!(error.details, Some(json!({"revision": "r".repeat(64)})));
+    }
+
+    /// W1 at the edge: a save's list is measured for the longest request
+    /// id — 256 bytes, each written as six — so a list that passed answers
+    /// whole whatever id later asks for it.
+    #[cfg(unix)]
+    #[test]
+    fn w1_a_list_fits_for_the_longest_request_id_at_exactly_its_edge() {
+        use super::super::mcp_servers::{answered, list_fits};
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let longest = "\u{1}".repeat(256);
+        let length = |padding: usize| {
+            answered(&longest, padded_list(padding))
+                .to_wire_text()
+                .unwrap()
+                .len()
+        };
+        let edge = 1 + limit - length(1);
+        assert_eq!(length(edge), limit);
+        assert!(list_fits(&padded_list(edge)));
+        assert!(!list_fits(&padded_list(edge + 1)));
+        // With a short id the same list has room to spare.
+        assert!(answered("id", padded_list(edge + 1)).is_success());
+    }
+
+    /// A remove answers whether the stored list is now live: `false` while a
+    /// list edited by hand is still past the count after it (its server
+    /// taken out of the live set all the same), `true` once it is within it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_remove_answers_whether_the_list_went_live() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, entry, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let files = MemoryFiles::holding(config(
+            (0..17)
+                .map(|index| entry(&format!("s{index:02}")))
+                .collect(),
+        ));
+        let (settings, _) = settings_for(files, Arc::new(RecordingAudit::default()));
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let (_, listed) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        let mut revision = listed["revision"].clone();
+        // With the managed server, 17 and then 16: past the count, then within it.
+        for (name, live) in [("s16", false), ("s15", true)] {
+            let (ok, removed) = mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": revision, "name": name}),
+            )
+            .await;
+            assert!(ok, "{removed}");
+            assert_eq!(removed["live"], live, "{name}: {removed}");
+            revision = removed["revision"].clone();
+        }
+    }
+
+    /// L2, W1 and W2 over a store bounded as the gateway's: a file edited by
+    /// hand whose list would not fit is listed as a refusal carrying its
+    /// revision, and a remove naming that revision is made — even one that
+    /// leaves the list too long still — so removes recover; a save whose
+    /// list would not fit is refused `mcp_servers_config_too_large`, nothing
+    /// written, its outcome recorded refused.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers() {
+        use crate::mcp_servers::application::{McpServerAuditPhase, McpServerOutcome};
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            absolute, config, settings_at_full_size, MemoryFiles, RecordingAudit,
+        };
+        // s0 small, s1 to s14 padded.
+        let stored = |padding: usize| {
+            (0..15)
+                .map(|index| {
+                    let arg = if index == 0 {
+                        "/s0.py".to_owned()
+                    } else {
+                        "p".repeat(padding)
+                    };
+                    json!({"name": format!("s{index}"),
+                        "command": absolute("/usr/bin/python3"), "args": [arg]})
+                })
+                .collect::<Vec<_>>()
+        };
+        // Just under the file's 64 KiB, which the listed fields outgrow.
+        let bare = serde_json::to_vec(&config(stored(0))).unwrap().len();
+        let padding = (65_000 - bare) / 14;
+        let document = config(stored(padding));
+        assert!(serde_json::to_vec(&document).unwrap().len() <= 65_536);
+        let files = MemoryFiles::holding(document);
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_at_full_size(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let (ok, refused) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(!ok);
+        assert_eq!(refused["code"], "mcp_servers_config_too_large");
+        let revision = refused["details"]["revision"].clone();
+        assert!(revision.is_string(), "{refused}");
+        // Removing the small one leaves a list still too long: made all the
+        // same.
+        let (ok, removed) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.remove",
+            json!({"revision": revision, "name": "s0"}),
+        )
+        .await;
+        assert!(ok, "{removed}");
+        let (ok, refused) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(!ok);
+        assert_eq!(
+            refused,
+            json!({"code": "mcp_servers_config_too_large",
+                "details": {"revision": removed["revision"]}})
+        );
+        let (ok, removed) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.remove",
+            json!({"revision": removed["revision"], "name": "s1"}),
+        )
+        .await;
+        assert!(ok, "{removed}");
+        let (ok, listed) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(ok, "{listed}");
+        assert_eq!(listed["revision"], removed["revision"]);
+        assert_eq!(listed["servers"].as_array().unwrap().len(), 14);
+        // Saving it back would leave a list past the frame, though the file
+        // would fit.
+        let old = files.current();
+        let (ok, answer) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"], "server": {"kind": "stdio",
+                "name": "s1", "command": absolute("/usr/bin/python3"),
+                "args": ["p".repeat(padding)], "env": [], "enabled": true}}),
+        )
+        .await;
+        assert_eq!(
+            (ok, answer),
+            (
+                false,
+                json!({"code": "mcp_servers_config_too_large", "details": null})
+            )
+        );
+        assert_eq!(files.current(), old);
+        let records = audit.records();
+        assert!(matches!(
+            &records.last().unwrap().phase,
+            McpServerAuditPhase::Outcome(McpServerOutcome::Refused {
+                reason: "config_too_large",
+                ..
+            })
+        ));
+    }
+
     struct UnavailablePolicy;
     impl PolicyEvaluator for UnavailablePolicy {
         fn evaluate(
@@ -2014,6 +3106,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn passive_socket_preserves_retryable_authority_failures() {
         for (error, expected) in [
+            (AccessError::Denied, "forbidden"),
             (AccessError::Unavailable, "unverifiable"),
             (AccessError::StaleRevision, "unverifiable"),
             (AccessError::InvalidCredential, "unauthorized"),
@@ -2449,6 +3542,113 @@ mod tests {
         assert!(correlatable_invalid_request("not json").is_none());
     }
 
+    #[test]
+    fn a_nested_lone_surrogate_is_answered_invalid_request() {
+        for (method, id_first) in [
+            ("mcp.callTool", true),
+            ("mcp.callTool", false),
+            ("server.health", true),
+            ("server.health", false),
+        ] {
+            let params = r#"{"nested":"\ud800"}"#;
+            let text = if id_first {
+                format!(
+                    r#"{{"type":"req","id":"request-9","method":"{method}","params":{params}}}"#
+                )
+            } else {
+                format!(
+                    r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+                )
+            };
+            assert!(
+                RequestFrame::decode(&text).is_err(),
+                "{method} decoded; the refusal path was not reached"
+            );
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} id_first={id_first} got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        for (method, params) in [
+            ("mcp.callTool", r#"{"a":"\ud800\x"}"#),
+            ("server.health", r#"{"a":"\udfff\x"}"#),
+        ] {
+            let text = format!(
+                r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+            );
+            assert!(RequestFrame::decode(&text).is_err());
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} with a byte after the surrogate got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"\ud800","method":"server.health","params":{}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"a","id":"b","method":"mcp.callTool","params":{"nested":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"a","method":"b","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"","method":"m","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let long_id = "x".repeat(257);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{long_id}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
+        // 128 é is 256 bytes and is answered. 200 é is 200 code points and 400
+        // bytes, so it is not: the table counts UTF-8 bytes.
+        let exact = "é".repeat(128);
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{exact}","method":"m","params":{{"a":"\ud800"}}}}"#
+        )) else {
+            panic!("256-byte id got no answer");
+        };
+        assert_eq!(response.id, exact);
+        let wide = "é".repeat(200);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{wide}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"event","id":"request-9","payload":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{},"\ud800":1,"\ud800":2}"#,
+        ) else {
+            panic!("two non-Unicode names hid the id");
+        };
+        assert_eq!(response.id, "request-9");
+        assert_eq!(response.error.unwrap().code, "invalid_request");
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{"p":1,"p":2}}"#,
+        ) else {
+            panic!("a repeated nested name hid the id");
+        };
+        assert_eq!(response.id, "request-9");
+        let mut nested = "0".to_string();
+        for _ in 0..127 {
+            nested = format!("[{nested}]");
+        }
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"request-9","method":"m","params":{nested}}}"#
+        ))
+        .is_none());
+    }
+
     #[tokio::test]
     async fn session_ready_reports_current_restrictions_and_registered_methods() {
         let (state, _) = fixture(MembershipRole::Member);
@@ -2592,6 +3792,7 @@ mod tests {
             ))
             .await
             .unwrap();
+        let deliveries = Arc::new(WatchDeliveries::new());
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
@@ -2599,6 +3800,7 @@ mod tests {
             ordinary,
             records,
             Duration::from_secs(1),
+            deliveries.clone(),
         ));
         peer.writing.recv().await.unwrap();
         assert_eq!(slots.available_permits(), 2, "in-flight send owns its slot");
@@ -2624,6 +3826,8 @@ mod tests {
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], expected);
         }
+        // Close the same delivery interest as the production connection owner.
+        deliveries.close();
         drop(controls_send);
         drop(ordinary_send);
         drop(refusals_send);
@@ -2663,7 +3867,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.len() > MAX_PAYLOAD_BYTES as usize);
-        assert!(record.len() <= super::super::generated::MAX_RECORD_RESPONSE_BYTES);
+        assert!(record.len() <= MAX_RECORD_RESPONSE_BYTES);
 
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));
@@ -2672,8 +3876,10 @@ mod tests {
         let (refusal_send, refusals) = mpsc::channel(1);
         let (ordinary_send, ordinary) = mpsc::channel(16);
         let (record_send, records) = mpsc::channel(1);
-        let slots = Arc::new(Semaphore::new(2));
+        let slots = Arc::new(Semaphore::new(1));
+        let control_slots = Arc::new(Semaphore::new(1));
         let record_capacity = Arc::new(Semaphore::new(1));
+        let deliveries = Arc::new(WatchDeliveries::new());
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
@@ -2681,6 +3887,7 @@ mod tests {
             ordinary,
             records,
             Duration::from_secs(1),
+            deliveries.clone(),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
@@ -2699,13 +3906,30 @@ mod tests {
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
-                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _slot: control_slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
             })))
             .await
             .unwrap();
+        // The record's send is stalled: its capacity came back when the writer
+        // took it (row R64); the control still holds its own.
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(record_capacity.available_permits(), 1);
+        // One extra answer can be retained while the first send is active.
+        // It owns the only record slot, so a third read cannot be admitted.
+        record_send
+            .send(QueuedRecordResponse::new(QueuedResponse {
+                message: WireResponse::record("{}".into()),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: Some(RecordReadLease::new(
+                    record_capacity.clone().try_acquire_owned().unwrap(),
+                )),
+            }))
+            .await
+            .unwrap();
         assert_eq!(slots.available_permits(), 0);
         assert_eq!(record_capacity.available_permits(), 0);
+        assert!(slots.clone().try_acquire_owned().is_err());
         release.send(()).unwrap();
         let Message::Text(first) = peer.message().await else {
             panic!("record response expected")
@@ -2716,12 +3940,19 @@ mod tests {
         };
         let value: Value = serde_json::from_str(&second).unwrap();
         assert_eq!(value["id"], "control");
+        let Message::Text(third) = peer.message().await else {
+            panic!("second record response expected")
+        };
+        assert_eq!(third.as_str(), "{}");
+        // Close the same delivery interest as the production connection owner.
+        deliveries.close();
         drop(control_send);
         drop(refusal_send);
         drop(ordinary_send);
         drop(record_send);
         writer.await.unwrap();
-        assert_eq!(slots.available_permits(), 2);
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(control_slots.available_permits(), 1);
         assert_eq!(record_capacity.available_permits(), 1);
 
         let (mut socket, _peer) = test_socket(None);
@@ -2731,6 +3962,127 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// Row R64: a real server WebSocket over an in-memory duplex, as the
+    /// product's sink, noting the socket's free record slot and global read
+    /// permits at the first call that can write a byte.
+    struct ObservedWebSocket {
+        inner: WebSocketStream<DuplexStream>,
+        slots: Arc<Semaphore>,
+        reads: Arc<Semaphore>,
+        free_at_first_write: Option<(usize, usize)>,
+    }
+    impl ObservedWebSocket {
+        fn observe(&mut self) {
+            let free = (
+                self.slots.available_permits(),
+                self.reads.available_permits(),
+            );
+            self.free_at_first_write.get_or_insert(free);
+        }
+    }
+    impl Sink<Message> for ObservedWebSocket {
+        type Error = Error;
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            let this = self.get_mut();
+            this.observe();
+            Pin::new(&mut this.inner)
+                .poll_ready(context)
+                .map_err(Error::new)
+        }
+        fn start_send(self: Pin<&mut Self>, message: Message) -> Result<(), Error> {
+            let this = self.get_mut();
+            this.observe();
+            let Message::Text(text) = message else {
+                panic!("the record lane sends text")
+            };
+            let text = Frame::text(text.as_str());
+            Pin::new(&mut this.inner)
+                .start_send(text)
+                .map_err(Error::new)
+        }
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            let this = self.get_mut();
+            this.observe();
+            Pin::new(&mut this.inner)
+                .poll_flush(context)
+                .map_err(Error::new)
+        }
+        fn poll_close(
+            self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), Error>> {
+            Pin::new(&mut self.get_mut().inner)
+                .poll_close(context)
+                .map_err(Error::new)
+        }
+    }
+
+    /// The client pings before each read, so tungstenite has a pong due and
+    /// writes it with the answer inside `start_send`. The record slot and read
+    /// permit are free before any byte of either answer can reach the client,
+    /// for a record and for a refusal on the record lane.
+    #[tokio::test]
+    async fn record_capacity_is_free_before_any_byte_reaches_a_pinging_client() {
+        let (server, client) = tokio::io::duplex(4 * MAX_RECORD_RESPONSE_BYTES);
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let slots = Arc::new(Semaphore::new(1));
+        let reads = Arc::new(Semaphore::new(4));
+        let mut socket = ObservedWebSocket {
+            inner: WebSocketStream::from_raw_socket(server, Role::Server, None).await,
+            slots: slots.clone(),
+            reads: reads.clone(),
+            free_at_first_write: None,
+        };
+        for message in [
+            WireResponse::record("{}".into()),
+            WireResponse::record("x".repeat(MAX_RECORD_RESPONSE_BYTES)),
+            WireResponse::ordinary(failure("read", "source_preparing")),
+        ] {
+            client.send(Frame::Ping(vec![1].into())).await.unwrap();
+            // The server reads the ping, which queues its pong.
+            let ping = socket.inner.next().await.unwrap().unwrap();
+            assert!(matches!(ping, Frame::Ping(_)), "{ping:?}");
+            let slot = Arc::new(slots.clone().try_acquire_owned().unwrap());
+            let permit = reads.clone().try_acquire_owned().unwrap();
+            let response = QueuedRecordResponse::owned(
+                message,
+                Some(slot.clone()),
+                Some(RecordReadLease::new((permit, slot))),
+            );
+            socket.free_at_first_write = None;
+            assert!(
+                send_record_queued(Duration::from_secs(1), &mut socket, response)
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(socket.free_at_first_write, Some((1, 4)));
+            // The pong and the answer both arrive, in tungstenite's order.
+            let mut kinds = Vec::new();
+            for _ in 0..2 {
+                kinds.push(
+                    match timeout(Duration::from_secs(1), client.next())
+                        .await
+                        .expect("pong and answer arrive")
+                        .unwrap()
+                        .unwrap()
+                    {
+                        Frame::Pong(_) => "pong",
+                        Frame::Text(_) => "text",
+                        other => panic!("unexpected frame {}", other.len()),
+                    },
+                );
+            }
+            kinds.sort_unstable();
+            assert_eq!(kinds, ["pong", "text"]);
+        }
     }
 
     #[tokio::test]
@@ -2819,6 +4171,7 @@ mod tests {
             ordinary,
             records,
             Duration::from_secs(5),
+            Arc::new(WatchDeliveries::new()),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
@@ -2837,7 +4190,9 @@ mod tests {
             })))
             .await
             .unwrap();
-        assert_eq!(slots.available_permits(), 0);
+        // Only the queued control's slot is held while the record's send is
+        // stalled (row R64).
+        assert_eq!(slots.available_permits(), 1);
         tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
         timeout(Duration::from_secs(1), writer)
             .await
@@ -2929,11 +4284,14 @@ mod tests {
                 .into(),
             )))
             .unwrap();
-        let mut message = peer.message().await;
-        if matches!(message, Message::Text(_)) {
-            message = peer.message().await;
-        }
-        let Message::Close(Some(close)) = message else {
+        let Message::Text(text) = peer.message().await else {
+            panic!("unauthorized expected")
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "unauthorized");
+        let Message::Close(Some(close)) = peer.message().await else {
             panic!("close expected")
         };
         assert_eq!(close.code, 4001);

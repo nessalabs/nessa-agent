@@ -121,15 +121,13 @@ impl ReceiverTransition {
                 access_epoch: 1,
                 active: true,
             },
-            (ReceiverIntent::Revoke, Some(current), ReceiverInitiator::Principal(_))
-                if current.active =>
-            {
-                ReceiverBinding {
-                    access_epoch: next_epoch(current)?,
-                    active: false,
-                    ..current.clone()
-                }
-            }
+            // A principal revokes a receiver; the system fences one whose device
+            // enrollment has ended (device pairing cleanup).
+            (ReceiverIntent::Revoke, Some(current), _) if current.active => ReceiverBinding {
+                access_epoch: next_epoch(current)?,
+                active: false,
+                ..current.clone()
+            },
             (
                 ReceiverIntent::Regrant(credential_id),
                 Some(current),
@@ -172,6 +170,65 @@ impl ReceiverTransition {
         } else {
             Err(ReceiverTransitionError::Conflict)
         }
+    }
+}
+
+/// The receiver a device enrollment paired, as its stage recorded it: the
+/// one rule for whether a receiver still holds that pairing, and the system's
+/// fence of it (device pairing design rows P39, P41, P42, P46).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairedReceiver {
+    pub receiver_id: String,
+    pub credential_id: CredentialId,
+    pub organization_id: OrganizationId,
+    pub owner_id: PrincipalId,
+    pub paired_epoch: u64,
+}
+
+impl PairedReceiver {
+    /// Whether `binding` is this pairing's receiver, credential, organization
+    /// and owner at the paired epoch or later, active or not.
+    pub fn names(&self, binding: &ReceiverBinding) -> bool {
+        binding.receiver_id == self.receiver_id
+            && binding.credential_id == self.credential_id
+            && binding.organization_id == self.organization_id
+            && binding.owner_id == self.owner_id
+            && binding.access_epoch >= self.paired_epoch
+    }
+
+    /// Whether the current binding still holds this pairing: named and active,
+    /// and `revoked_since` (the journal's answer) is false. A revocation of the
+    /// credential since the pair ends the pairing even if it was regranted back.
+    pub fn admits(&self, current: &ReceiverBinding, revoked_since: bool) -> bool {
+        current.active && self.names(current) && !revoked_since
+    }
+
+    /// Whether a persisted transition revoked this pairing's credential on this
+    /// receiver after it was paired.
+    pub fn revoked_by(&self, cause: &ReceiverIntent, before: Option<&ReceiverBinding>) -> bool {
+        *cause == ReceiverIntent::Revoke
+            && before.is_some_and(|before| before.active && self.names(before))
+    }
+
+    /// The system's fence of this pairing's receiver. Only a binding that
+    /// still holds the pairing may be fenced; anything else conflicts.
+    pub fn fence(
+        &self,
+        current: &ReceiverBinding,
+        revoked_since: bool,
+        request_id: String,
+        observed_at_ms: i64,
+    ) -> Result<ReceiverTransition, ReceiverTransitionError> {
+        if !self.admits(current, revoked_since) {
+            return Err(ReceiverTransitionError::Conflict);
+        }
+        ReceiverTransition::apply(
+            Some(current),
+            ReceiverIntent::Revoke,
+            ReceiverInitiator::System,
+            request_id,
+            observed_at_ms,
+        )
     }
 }
 
@@ -329,5 +386,111 @@ mod tests {
             ),
             Err(ReceiverTransitionError::Exhausted)
         );
+    }
+
+    /// Device pairing cleanup (design row P39): the system fences an active
+    /// receiver, and the fence replays; an inactive one cannot be fenced again.
+    #[test]
+    fn the_system_fences_only_an_active_receiver() {
+        let fenced = ReceiverTransition::apply(
+            Some(&binding()),
+            ReceiverIntent::Revoke,
+            ReceiverInitiator::System,
+            "fence".into(),
+            2,
+        )
+        .unwrap();
+        assert!(!fenced.after.active);
+        assert_eq!(fenced.after.access_epoch, 2);
+        assert_eq!(fenced.verify(Some(&binding())), Ok(()));
+        assert_eq!(
+            ReceiverTransition::apply(
+                Some(&fenced.after),
+                ReceiverIntent::Revoke,
+                ReceiverInitiator::System,
+                "again".into(),
+                3
+            ),
+            Err(ReceiverTransitionError::Conflict)
+        );
+        // Pairing and regranting remain a principal's.
+        assert_eq!(
+            ReceiverTransition::apply(
+                Some(&fenced.after),
+                ReceiverIntent::Regrant(CredentialId::new("second").unwrap()),
+                ReceiverInitiator::System,
+                "regrant".into(),
+                3
+            ),
+            Err(ReceiverTransitionError::Conflict)
+        );
+    }
+
+    /// Rows P41, P42, P46: the pairing rule admits only the exact active
+    /// binding with no revocation since; the fence refuses anything else.
+    #[test]
+    fn a_paired_receiver_admits_and_fences_only_its_exact_binding() {
+        let paired = PairedReceiver {
+            receiver_id: "receiver".into(),
+            credential_id: binding().credential_id,
+            organization_id: binding().organization_id,
+            owner_id: binding().owner_id,
+            paired_epoch: 1,
+        };
+        assert!(paired.admits(&binding(), false));
+        assert!(!paired.admits(&binding(), true), "revoked since the pair");
+        for other in [
+            ReceiverBinding {
+                receiver_id: "other".into(),
+                ..binding()
+            },
+            ReceiverBinding {
+                credential_id: CredentialId::new("second").unwrap(),
+                ..binding()
+            },
+            ReceiverBinding {
+                organization_id: OrganizationId::new("org-2").unwrap(),
+                ..binding()
+            },
+            ReceiverBinding {
+                owner_id: PrincipalId::new("someone").unwrap(),
+                ..binding()
+            },
+            ReceiverBinding {
+                active: false,
+                ..binding()
+            },
+        ] {
+            assert!(!paired.admits(&other, false), "{other:?}");
+            assert_eq!(
+                paired.fence(&other, false, "fence".into(), 2),
+                Err(ReceiverTransitionError::Conflict)
+            );
+        }
+        let older = PairedReceiver {
+            paired_epoch: 2,
+            ..paired.clone()
+        };
+        assert!(
+            !older.admits(&binding(), false),
+            "an epoch older than the pair"
+        );
+        assert_eq!(
+            paired.fence(&binding(), true, "fence".into(), 2),
+            Err(ReceiverTransitionError::Conflict)
+        );
+        let fenced = paired.fence(&binding(), false, "fence".into(), 2).unwrap();
+        assert_eq!(fenced.initiator, ReceiverInitiator::System);
+        assert!(!fenced.after.active);
+        assert!(paired.revoked_by(&fenced.cause, fenced.before.as_ref()));
+        let policy = ReceiverTransition::apply(
+            Some(&binding()),
+            ReceiverIntent::PolicyChanged,
+            ReceiverInitiator::System,
+            "policy".into(),
+            2,
+        )
+        .unwrap();
+        assert!(!paired.revoked_by(&policy.cause, policy.before.as_ref()));
     }
 }

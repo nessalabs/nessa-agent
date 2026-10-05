@@ -2,13 +2,17 @@
 //! from each other, revoking a grant's, and the view's lookup of a
 //! conversation's own.
 use super::fixture::{launch, Behaviour, FixtureLauncher, CHART};
-use super::{servers, session, Harness};
+use super::{conversation, servers, session, Harness};
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::UiResourceUri;
+use crate::infrastructure::acp::sessions::{McpServerProblem, StdioMcpServer, MAX_MCP_SERVERS};
 use crate::infrastructure::clock::manual::ManualClock;
-use crate::infrastructure::mcp::{McpError, McpServers, INITIALIZE_TIMEOUT};
+use crate::infrastructure::mcp::{
+    McpError, McpServerLaunch, McpServers, INITIALIZE_TIMEOUT, MAX_TOOLS, MAX_TOOL_PAGES,
+    MCP_SESSION_VARIABLE,
+};
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::{ffi::OsString, sync::Arc, time::Duration};
 
 fn silent(method: &'static str) -> Behaviour {
     let mut behaviour = Behaviour::default();
@@ -191,14 +195,278 @@ fn an_invalid_or_repeated_configuration_is_refused() {
     let repeated = vec![launch("same"), launch("same")];
     assert!(matches!(
         McpServers::with_launcher(repeated, clock.clone(), launcher.clone()),
-        Err(McpError::InvalidConfiguration)
+        Err(McpError::InvalidConfiguration(McpServerProblem::DuplicateName { server }))
+            if server == "same"
     ));
     assert!(matches!(
         McpServers::with_launcher(vec![launch("a__b")], clock.clone(), launcher.clone()),
-        Err(McpError::InvalidConfiguration)
+        Err(McpError::InvalidConfiguration(McpServerProblem::Name { server }))
+            if server == "a__b"
     ));
     let servers = McpServers::with_launcher(vec![launch("one")], clock, launcher).unwrap();
-    assert_eq!(servers.names().collect::<Vec<_>>(), ["one"]);
+    let names: Vec<_> = servers
+        .configured()
+        .into_iter()
+        .map(|launch| launch.server.name)
+        .collect();
+    assert_eq!(names, ["one"]);
+}
+
+/// A harness names a tool `mcp__<server>__<tool>`: a server name that starts
+/// or ends with `_` runs into a separator (`a_` and `a` would both fit
+/// `mcp__a___c`), so it is refused as `__` inside one is; `_` within is a
+/// name.
+#[test]
+fn a_server_name_may_not_start_or_end_with_an_underscore() {
+    for name in ["_a", "a_", "_", "a__b"] {
+        assert_eq!(
+            launch(name).problem(),
+            Some(McpServerProblem::Name {
+                server: name.into()
+            }),
+            "{name}"
+        );
+    }
+    for name in ["a_b", "a-", "-a", "a"] {
+        assert_eq!(launch(name).problem(), None, "{name}");
+    }
+}
+
+/// #391 PR 2 round 2, item 5: every problem about one server names that
+/// server — in the value and in what it prints — so an entry added to the
+/// configuration by hand is named when it is refused, at startup and on the
+/// wire.
+#[test]
+fn every_problem_about_one_server_names_it() {
+    let with = |change: fn(&mut McpServerLaunch)| {
+        let mut launch = launch("hand-added");
+        change(&mut launch);
+        launch.problem().expect("refused")
+    };
+    let server = || "hand-added".to_owned();
+    for (problem, expected) in [
+        (
+            with(|launch| launch.server.command = "relative".into()),
+            McpServerProblem::Command { server: server() },
+        ),
+        (
+            with(|launch| launch.server.args = vec!["a\0b".into()]),
+            McpServerProblem::Arguments { server: server() },
+        ),
+        (
+            with(|launch| {
+                launch.environment.insert("1A".into(), "v".into());
+            }),
+            McpServerProblem::EnvironmentName {
+                server: server(),
+                name: "1A".into(),
+            },
+        ),
+        (
+            with(|launch| {
+                launch.environment.insert("KEY".into(), "a\0b".into());
+            }),
+            McpServerProblem::EnvironmentValue {
+                server: server(),
+                name: "KEY".into(),
+            },
+        ),
+    ] {
+        assert_eq!(problem, expected);
+        assert!(problem.to_string().contains("\"hand-added\""), "{problem}");
+    }
+    let named = launch("hand_").problem().unwrap();
+    assert!(named.to_string().contains("\"hand_\""), "{named}");
+}
+
+fn configured(servers: &McpServers) -> Vec<String> {
+    servers
+        .configured()
+        .into_iter()
+        .map(|launch| launch.server.name)
+        .collect()
+}
+
+/// #391 S11–S13: a replaced set is what the next opening reads. A session
+/// already open — a running harness's — is untouched; a server removed is not
+/// configured for a new opening, and one added back is.
+#[tokio::test]
+async fn a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let open = servers.open("fixture", super::owner()).await.unwrap();
+    servers.replace(vec![launch("other")]).unwrap();
+    assert_eq!(configured(&servers), ["other"]);
+    assert!(matches!(
+        servers.open("fixture", super::owner()).await,
+        Err(McpError::NotConfigured)
+    ));
+    servers.open("other", super::owner()).await.unwrap();
+    // The open session still answers, on the process it was opened with.
+    assert!(open.list_tools().await.is_ok());
+    assert_eq!(launcher.launches(), 2);
+    servers
+        .replace(vec![launch("fixture"), launch("other")])
+        .unwrap();
+    assert_eq!(configured(&servers), ["fixture", "other"]);
+    servers.open("fixture", super::owner()).await.unwrap();
+}
+
+/// #391 S14: once the servers are stopping, a replacement is refused as
+/// stopped, the set is kept, and nothing is launched.
+#[tokio::test]
+async fn a_replacement_once_stopping_is_refused_and_launches_nothing() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    servers.stop().await;
+    assert_eq!(
+        servers.replace(vec![launch("other")]),
+        Err(McpError::Stopped)
+    );
+    assert_eq!(configured(&servers), ["fixture"]);
+    assert_eq!(launcher.launches(), 0);
+}
+
+/// #391 S14, the ordering, with the real `stop`: a replacement and a stop
+/// contend for the live lock — both made to wait on it, the replacement
+/// first — and whichever takes it first, the replacement's answer agrees
+/// with the set: it landed, before the stop looked, and the set is the new
+/// one; or it saw the stop, was refused, and the set is kept. Once the stop
+/// has run, a replacement is refused. Real time, generously, for a
+/// replacement or a stop that does not wait to show that it did not.
+#[test]
+fn a_replacement_contending_with_the_real_stop_agrees_with_the_set() {
+    for _ in 0..20 {
+        let (servers, launcher, _) = servers(Behaviour::default());
+        let live = servers.inner.live.lock().unwrap();
+        let replacing = std::thread::spawn({
+            let servers = servers.clone();
+            move || servers.replace(vec![launch("other")])
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!replacing.is_finished(), "the replacement did not wait");
+        let stopping = std::thread::spawn({
+            let servers = servers.clone();
+            move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(servers.stop())
+            }
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!stopping.is_finished(), "the stop did not wait");
+        drop(live);
+        let answer = replacing.join().unwrap();
+        stopping.join().unwrap();
+        match answer {
+            Ok(()) => assert_eq!(configured(&servers), ["other"]),
+            Err(error) => {
+                assert_eq!(error, McpError::Stopped);
+                assert_eq!(configured(&servers), ["fixture"]);
+            }
+        }
+        assert_eq!(
+            servers.replace(vec![launch("later")]),
+            Err(McpError::Stopped)
+        );
+        assert_eq!(launcher.launches(), 0);
+    }
+}
+
+#[test]
+fn an_invalid_replacement_is_refused_and_keeps_the_set() {
+    let (servers, _, _) = servers(Behaviour::default());
+    assert_eq!(
+        servers.replace(vec![launch("same"), launch("same")]),
+        Err(McpError::InvalidConfiguration(
+            McpServerProblem::DuplicateName {
+                server: "same".into()
+            }
+        ))
+    );
+    assert_eq!(configured(&servers), ["fixture"]);
+}
+
+/// `launch(name)` with `environment`.
+fn with_environment(name: &str, environment: &[(&str, &[u8])]) -> McpServerLaunch {
+    use std::os::unix::ffi::OsStringExt;
+    McpServerLaunch {
+        environment: environment
+            .iter()
+            .map(|(key, value)| (OsString::from(*key), OsString::from_vec(value.to_vec())))
+            .collect(),
+        ..launch(name)
+    }
+}
+
+/// One owner of the set's rules: at most [`MAX_MCP_SERVERS`], names of
+/// their own, and what each process may be given in its environment.
+#[test]
+fn the_sets_count_and_each_servers_environment_are_checked_by_one_owner() {
+    let problem = |launches: &[McpServerLaunch]| McpServerLaunch::problem_in(launches);
+    let many = |count: usize| -> Vec<McpServerLaunch> {
+        (0..count)
+            .map(|index| launch(&format!("s{index}")))
+            .collect()
+    };
+    // The published bound (#391's design), which the gateway will refuse by.
+    assert_eq!(MAX_MCP_SERVERS, 16);
+    assert_eq!(problem(&many(MAX_MCP_SERVERS)), None);
+    assert_eq!(
+        problem(&many(MAX_MCP_SERVERS + 1)),
+        Some(McpServerProblem::TooMany)
+    );
+    let clock = Arc::new(ManualClock::default());
+    let launcher = FixtureLauncher::new(Behaviour::default());
+    assert!(matches!(
+        McpServers::with_launcher(many(MAX_MCP_SERVERS + 1), clock, launcher),
+        Err(McpError::InvalidConfiguration(McpServerProblem::TooMany))
+    ));
+    for name in ["PATH", "_X", "A1", &"N".repeat(256)] {
+        assert_eq!(
+            with_environment("s", &[(name, b"value")]).problem(),
+            None,
+            "{name}"
+        );
+    }
+    for name in ["", "1A", "A-B", "A=B", "Ä", &"N".repeat(257)] {
+        assert_eq!(
+            with_environment("s", &[(name, b"value")]).problem(),
+            Some(McpServerProblem::EnvironmentName {
+                server: "s".into(),
+                name: name.to_owned(),
+            }),
+            "{name:?}"
+        );
+    }
+    assert_eq!(
+        with_environment("s", &[(MCP_SESSION_VARIABLE, b"token")]).problem(),
+        Some(McpServerProblem::ReservedEnvironmentName {
+            server: "s".into(),
+            name: MCP_SESSION_VARIABLE.into()
+        })
+    );
+    assert_eq!(
+        with_environment("s", &[("KEY", b"a\0b")]).problem(),
+        Some(McpServerProblem::EnvironmentValue {
+            server: "s".into(),
+            name: "KEY".into()
+        })
+    );
+    // A server's own rules come first, and a set's rules see every launch's.
+    assert_eq!(
+        with_environment("a__b", &[("", b"")]).problem(),
+        Some(McpServerProblem::Name {
+            server: "a__b".into()
+        })
+    );
+    assert_eq!(
+        problem(&[launch("ok"), with_environment("s", &[("1", b"")])]),
+        Some(McpServerProblem::EnvironmentName {
+            server: "s".into(),
+            name: "1".into(),
+        })
+    );
 }
 
 fn chart_call() -> McpTool {
@@ -212,7 +480,8 @@ async fn the_view_finds_a_tools_ui_once_a_session_has_listed_it() {
     // Not listed yet: no UI.
     launcher.server(0).arrived("tools/list", 1).await;
     assert_eq!(servers.tool_ui(&super::conversation(), &chart_call()), None);
-    // Listed: the UI, for the call that names it; none for one that does not.
+    // Listed: the UI, for the call that names it; a named tool with none
+    // declared is no UI, for both; another server's call names nothing.
     let asked = launcher.server(0).with_method("tools/list")[0]["id"].clone();
     launcher.server(0).send(
         json!({ "jsonrpc": "2.0", "id": asked, "result": { "tools": [
@@ -230,6 +499,7 @@ async fn the_view_finds_a_tools_ui_once_a_session_has_listed_it() {
             .tool_ui(&super::conversation(), &chart_call())
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://fixture/chart.html"
     );
@@ -238,7 +508,7 @@ async fn the_view_finds_a_tools_ui_once_a_session_has_listed_it() {
             &super::conversation(),
             &McpTool::new("fixture", "report").unwrap()
         ),
-        None
+        Some(crate::domain::mcp_apps::ToolUi::default())
     );
     assert_eq!(
         servers.tool_ui(
@@ -277,7 +547,7 @@ async fn each_conversation_sees_its_own_newest_sessions_ui() {
     let uri = |session: &SessionId| {
         servers
             .tool_ui(session, &chart_call())
-            .map(|ui| ui.resource_uri().as_str().to_owned())
+            .and_then(|ui| Some(ui.resource_uri()?.as_str().to_owned()))
     };
     assert_eq!(uri(&a).as_deref(), Some(CHART));
     assert_eq!(uri(&b).as_deref(), Some("ui://fixture/other.html"));
@@ -511,6 +781,7 @@ async fn of_two_lists_finishing_out_of_order_the_one_asked_later_is_kept() {
             .tool_ui(&super::conversation(), &chart_call())
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://fixture/later.html"
     );
@@ -547,4 +818,116 @@ async fn a_list_that_falls_behind_the_change_notices_is_read_again() {
     server.send(json!({ "jsonrpc": "2.0", "id": first, "result": { "tools": [] } }));
     // Having fallen behind, it lists again.
     server.arrived("tools/list", 2).await;
+}
+
+/// #391 decision 1: an opening admitted against one configuration is served
+/// by that configuration or refused. A set replaced between the admission and
+/// the opening — its arguments or only its environment changed (#391 PR 2
+/// pass 2b, decision 2) — refuses it `ConfigurationChanged`, or
+/// `NotConfigured` once the name is gone, and launches nothing; the
+/// configuration as it is now opens.
+#[tokio::test]
+async fn an_opening_admitted_on_a_replaced_configuration_is_refused() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let admitted = launch("fixture");
+    let edited = McpServerLaunch {
+        server: StdioMcpServer {
+            args: vec!["--edited".into()],
+            ..admitted.server.clone()
+        },
+        ..launch("fixture")
+    };
+    let mut environment_only = admitted.clone();
+    environment_only
+        .environment
+        .insert("API_TOKEN".into(), "rotated".into());
+    for replaced in [edited.clone(), environment_only] {
+        servers.replace(vec![replaced]).unwrap();
+        assert!(matches!(
+            servers.open_as(&admitted, super::owner()).await,
+            Err(McpError::ConfigurationChanged)
+        ));
+    }
+    assert_eq!(launcher.launches(), 0);
+    servers.replace(vec![edited.clone()]).unwrap();
+    servers.open_as(&edited, super::owner()).await.unwrap();
+    assert_eq!(launcher.launches(), 1);
+    servers.replace(Vec::new()).unwrap();
+    assert!(matches!(
+        servers.open_as(&edited, super::owner()).await,
+        Err(McpError::NotConfigured)
+    ));
+}
+
+/// #391 decision 3: a launch's `Debug` names its environment's variables and
+/// never prints a value.
+#[test]
+fn a_launch_prints_its_environment_names_never_its_values() {
+    let launch = with_environment("s", &[("API_TOKEN", b"secret-value")]);
+    let printed = format!("{launch:?}");
+    assert!(printed.contains("API_TOKEN"), "{printed}");
+    assert!(!printed.contains("secret-value"), "{printed}");
+}
+
+/// #391 PR 2 decision 8: a session opened once, for no SDK session, is
+/// launched on the launch it is given — configured or not — and lists its
+/// tools only when asked: no background list, nothing kept for `tool_ui`.
+/// An invalid launch is refused before anything is launched, and `stop`
+/// ends a session opened once as it ends any other.
+#[tokio::test]
+async fn a_session_opened_once_belongs_to_no_conversation_and_stops_with_the_servers() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    assert!(matches!(
+        servers.open_once(&launch("a__b")).await,
+        Err(McpError::InvalidConfiguration(
+            McpServerProblem::Name { .. }
+        ))
+    ));
+    assert_eq!(launcher.launches(), 0);
+    // Not in the live set, and opened all the same.
+    let once = servers.open_once(&launch("unconfigured")).await.unwrap();
+    assert_eq!(once.server(), "unconfigured");
+    let server = launcher.server(0);
+    server.arrived("notifications/initialized", 1).await;
+    assert!(server.with_method("tools/list").is_empty());
+    let listed = once.list_tool_pages(MAX_TOOL_PAGES).await.unwrap();
+    assert_eq!(listed.tools.len(), 2);
+    assert!(!listed.more);
+    let call = McpTool::new("unconfigured", "show_chart").unwrap();
+    assert!(servers.tool_ui(&conversation(), &call).is_none());
+    servers.stop().await;
+    server.stopped().await;
+    assert!(matches!(
+        servers.open_once(&launch("unconfigured")).await,
+        Err(McpError::Stopped)
+    ));
+}
+
+/// #391 PR 2 decision 8: `list_tool_pages` stops at its page bound and says
+/// there was more, where `list_tools` refuses the list as too large.
+#[tokio::test]
+async fn listing_tool_pages_stops_at_its_bound_and_says_there_was_more() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let once = servers.open_once(&launch("fixture")).await.unwrap();
+    let tool = |name: &str| json!({ "name": name, "inputSchema": {"type": "object"} });
+    launcher
+        .server(0)
+        .set_pages(vec![vec![tool("a")], vec![tool("b")], vec![tool("c")]]);
+    let two = once.list_tool_pages(2).await.unwrap();
+    let names: Vec<_> = two.tools.iter().map(|each| each.tool().tool()).collect();
+    assert_eq!(names, ["a", "b"]);
+    assert!(two.more);
+    let all = once.list_tool_pages(3).await.unwrap();
+    assert_eq!(all.tools.len(), 3);
+    assert!(!all.more);
+    launcher.server(0).set_pages(vec![(0..=MAX_TOOLS)
+        .map(|n| tool(&format!("t{n}")))
+        .collect()]);
+    let capped = once.list_tool_pages(1).await.unwrap();
+    assert_eq!(capped.tools.len(), MAX_TOOLS);
+    assert!(capped.more);
+    assert_eq!(
+        once.list_tools().await,
+        Err(McpError::TooLarge("tools/list"))
+    );
 }

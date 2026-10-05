@@ -4,7 +4,8 @@
  *
  * ```text
  *   WorkspaceSource (application/ports.ts)
- *        │  implemented by adapters/in-memory/ today, the gateway later
+ *        │  implemented by adapters/gateway/ (the gateway's conversations)
+ *        │  and adapters/in-memory/ (the sample, for fixtures and previews)
  *        ▼
  *   commands (adapters/store/commands.ts) ── thunks and plain actions
  *        │  apply use cases (application/usecases/), whose rules are model/
@@ -57,6 +58,11 @@ export { ClockProvider } from "./adapters/dom/clock"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
 export { inMemorySource } from "./adapters/in-memory/in-memory-source"
+export {
+  gatewaySource,
+  type GatewayClient,
+  type GatewaySource,
+} from "./adapters/gateway/gateway-source"
 export { sampleAppSession, sampleWidgetSession } from "./adapters/in-memory/sample-labs"
 export { workspaceEffects } from "./adapters/store/effects"
 export { initialWorkspaceFrom, workspaceReducer } from "./adapters/store/slice"

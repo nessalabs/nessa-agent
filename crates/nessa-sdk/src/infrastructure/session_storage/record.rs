@@ -10,8 +10,10 @@ use super::{
     record_lifecycle::{join, shutdown_result, StorageOwner},
     record_source::CachedCommittedRead,
     record_writer::RecordWriter,
+    save_batch::{RecordRuntime, RecordStoreOptions, SaveCommits},
     terminal_discovery::TerminalCache,
 };
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::{
     application::agent_execution::sessions::{
         storage::{
@@ -24,9 +26,8 @@ use crate::{
     domain::agent_execution::sessions::SessionId,
 };
 use event_stream::{
-    infrastructure::{SqliteOptions, SqliteStore},
-    EventConfig, EventReader, EventRuntime, LifecycleAction, LifecycleOperationId,
-    LifecycleRequest, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+    infrastructure::SqliteOptions, EventConfig, EventReader, EventRuntime, LifecycleAction,
+    LifecycleOperationId, LifecycleRequest, PersistenceProfile, RuntimeConfig, StreamId,
 };
 use nessa_sync::replication::domain::Scope;
 use sha2::{Digest, Sha256};
@@ -50,7 +51,8 @@ pub const MAX_STORED_RECORD_BYTES: usize = 1024 * 1024;
 pub struct RecordStorage {
     root: PathBuf,
     options: SqliteOptions,
-    runtime: Arc<OnceCell<Runtime<SqliteStore>>>,
+    saves: Arc<SaveCommits>,
+    runtime: Arc<OnceCell<RecordRuntime>>,
     pub(super) owner: Arc<StorageOwner>,
     changes: RecordChanges,
     pub(super) committed_views: Arc<Mutex<HashMap<Scope, Arc<CachedCommittedRead>>>>,
@@ -72,6 +74,7 @@ impl RecordStorage {
         Ok(Self {
             root,
             options,
+            saves: Arc::new(SaveCommits::new()),
             runtime: Arc::new(OnceCell::new()),
             owner: Arc::default(),
             changes: RecordChanges::default(),
@@ -129,9 +132,18 @@ impl RecordStorage {
         self.runtime().await.map(|_| ())
     }
 
-    pub(super) async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
+    /// The SQLite runtime, opening it on first use.
+    ///
+    /// The worker thread's ready oneshot wakes this wait. `contain_caller_wake`
+    /// is the only owner of that fault, for `initialize` and for every other
+    /// method whose first call opens the runtime.
+    pub(super) async fn runtime(&self) -> Result<&RecordRuntime, StorageError> {
         self.owner.initialize()?;
-        initialize_runtime(&self.runtime, &self.options).await
+        contain_caller_wake(
+            "record storage runtime",
+            initialize_runtime(&self.runtime, &self.options, &self.saves),
+        )
+        .await
     }
 
     async fn open_inner(
@@ -155,6 +167,11 @@ impl RecordStorage {
             ));
         }
         let runtime = self.runtime().await?.clone();
+        let batch = self
+            .options
+            .failure_injection
+            .is_none()
+            .then(|| Arc::clone(&self.saves));
         let stream_id =
             StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
         let stream = if existing {
@@ -179,6 +196,7 @@ impl RecordStorage {
                 inner: Arc::new(LeaseInner {
                     _reservation: reservation,
                     runtime,
+                    batch,
                     changes,
                     state: AsyncMutex::new(LeaseState {
                         writer,
@@ -198,11 +216,14 @@ impl RecordStorage {
 impl SessionStorage for RecordStorage {
     fn shutdown(&self) -> StorageFuture<'_, ()> {
         Box::pin(async move {
+            // Close interest before storage admission closes; actual writers and
+            // reads retain their existing owners through physical completion.
             self.changes.close();
             let (completion, work) = self.owner.close()?;
             if let Some(work) = work {
                 let runtime = self.runtime.clone();
                 let options = self.options.clone();
+                let saves = Arc::clone(&self.saves);
                 tokio::spawn(async move {
                     let read = tokio::task::spawn_blocking(move || {
                         let mut failure = work.read_failure;
@@ -216,7 +237,7 @@ impl SessionStorage for RecordStorage {
                     .await
                     .unwrap_or_else(|error| Err(StorageError::Io(error.to_string())));
                     let cleanup = if work.initialized {
-                        match initialize_runtime(&runtime, &options).await {
+                        match initialize_runtime(&runtime, &options, &saves).await {
                             Ok(runtime) => match runtime
                                 .shutdown(Duration::from_secs(10))
                                 .await
@@ -253,14 +274,18 @@ impl SessionStorage for RecordStorage {
         Box::pin(async move { self.open_inner(id, true).await })
     }
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
-        Box::pin(async move { self.read_committed_source(&id).await })
+        Box::pin(contain_caller_wake("record committed read", async move {
+            self.read_committed_source(&id).await
+        }))
     }
 }
 
 async fn initialize_runtime<'a>(
-    cell: &'a OnceCell<Runtime<SqliteStore>>,
+    cell: &'a OnceCell<RecordRuntime>,
     options: &SqliteOptions,
-) -> Result<&'a Runtime<SqliteStore>, StorageError> {
+    saves: &Arc<SaveCommits>,
+) -> Result<&'a RecordRuntime, StorageError> {
+    let saves = Arc::clone(saves);
     cell.get_or_try_init(|| async {
         let config = RuntimeConfig {
             events: EventConfig {
@@ -269,9 +294,15 @@ async fn initialize_runtime<'a>(
             },
             ..RuntimeConfig::default()
         };
-        Runtime::<SqliteStore>::open(options.clone(), config)
-            .await
-            .map_err(store_error)
+        event_stream::Runtime::open(
+            RecordStoreOptions {
+                sqlite: options.clone(),
+                saves,
+            },
+            config,
+        )
+        .await
+        .map_err(store_error)
     })
     .await
 }
@@ -308,7 +339,8 @@ impl Drop for Reservation {
 struct LeaseInner {
     // Kept by every detached operation until its read, write or reset finishes.
     _reservation: Reservation,
-    runtime: Runtime<SqliteStore>,
+    runtime: RecordRuntime,
+    batch: Option<Arc<SaveCommits>>,
     changes: RecordChanges,
     state: AsyncMutex<LeaseState>,
     #[cfg(test)]
@@ -347,7 +379,8 @@ impl LeaseState {
             .change_lifecycle(request)
             .await
             .map_err(store_error)?;
-        // Reset is already durable even if its reply/replay/cleanup fails.
+        // Publication follows the durable lifecycle receipt, before replay or
+        // cleanup can fail and before caller acknowledgement is observed.
         inner.changes.publish(self.writer.id());
         #[cfg(test)]
         if inner.lose_reset_reply.swap(false, Ordering::SeqCst) {
@@ -395,7 +428,13 @@ impl SessionStorageLease for RecordLease {
                 state.reconcile_erasure(&inner).await?;
                 state
                     .writer
-                    .save(&inner.runtime, generation, &snapshot, &units)
+                    .save(
+                        &inner.runtime,
+                        inner.batch.as_ref(),
+                        generation,
+                        &snapshot,
+                        &units,
+                    )
                     .await
             })
             .await
@@ -412,11 +451,6 @@ impl SessionStorageLease for RecordLease {
                     return state.reconcile_erasure(&inner).await;
                 }
                 let key = state.writer.stream().clone();
-                let bounds = inner.runtime.bounds(&key).await.map_err(store_error)?;
-                if bounds.tail.offset == 0 && !state.writer.has_unresolved_fact() {
-                    state.cleanup_pending = true;
-                    return state.reconcile_erasure(&inner).await;
-                }
                 let mut digest = Sha256::new();
                 digest.update(key.id.as_str().as_bytes());
                 digest.update(key.incarnation.0);
@@ -486,16 +520,12 @@ mod tests {
             tools::{ToolCallId, ToolCallUpdate, ToolObservation},
         },
     };
-    use event_stream::{
-        infrastructure::SqliteFailureInjection, EventId, EventSink, NewEvent, Payload, SchemaId,
-        SchemaRef, StreamId,
-    };
+    use event_stream::{infrastructure::SqliteFailureInjection, EventSink, NewEvent, StreamId};
     use rusqlite::Connection;
     use std::{
         future::Future,
-        io::{BufRead, BufReader, Write},
         path::Path,
-        process::{Command, Stdio},
+        process::Command,
         task::{Context, Poll, Wake, Waker},
     };
 
@@ -538,17 +568,23 @@ mod tests {
         (change, snapshot)
     }
 
+    // Retained only for inherited private physical-frame cases. New acceptance
+    // constructs this immutable value in the external storage fixture module.
     fn partial_input(bytes: usize) -> SessionChange {
-        let mut change = accepted_input(
+        let SessionChange::InputAccepted(record) = accepted_input(
             ExecutionId::new("partial").unwrap(),
             SubmissionMode::Immediate,
             vec![],
-        );
-        if let SessionChange::InputAccepted(record) = &mut change {
-            record.request.user_message =
-                UserMessage::text_only(PromptText::new("x".repeat(bytes)).unwrap());
-        }
-        change
+        ) else {
+            unreachable!("input helper constructs an accepted input")
+        };
+        SessionChange::InputAccepted(Box::new(InvocationRecord {
+            request: ExecutionRequest {
+                user_message: UserMessage::text_only(PromptText::new("x".repeat(bytes)).unwrap()),
+                ..record.request.clone()
+            },
+            ..*record
+        }))
     }
 
     fn unit_frames(binding: &SessionSaveGeneration, change: &SessionChange) -> Vec<NewEvent> {
@@ -686,10 +722,8 @@ mod tests {
         );
         assert_eq!(watch_ready(&mut healthy), ChangeWatchState::Dirty);
         drop(wait);
-        assert_eq!(
-            watch_ready(&mut faulty),
-            ChangeWatchState::NotificationFailed
-        );
+        // The panicking waiter lost that wake. The notice stayed Dirty.
+        assert_eq!(watch_ready(&mut faulty), ChangeWatchState::Dirty);
         // The exact completed retry observes intact committed-prefix bookkeeping.
         lease
             .save_changes(
@@ -710,101 +744,10 @@ mod tests {
         ));
         drop(lease);
         storage.shutdown().await.unwrap();
-        assert_eq!(
-            watch_ready(&mut faulty),
-            ChangeWatchState::NotificationFailed
-        );
+        // A waker panic is not a terminal notice, so shutdown still closes it.
+        assert_eq!(watch_ready(&mut faulty), ChangeWatchState::Closed);
         drop(registrations);
         drop(faulty);
-    }
-
-    #[tokio::test]
-    async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retry() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("unpublished-watched").unwrap();
-        let mut watch = storage.watch_committed(&id).unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let original = lease.load().await.unwrap().binding().clone();
-        let (change, observed) = opening(&id);
-        let units = vec![SessionSaveUnit::new(vec![change]).unwrap()];
-        // The physical Start payload is version byte followed by FactKind.
-        // Ask the owner for its completion code; refuse only that actual row,
-        // after the Unit transaction has really committed.
-        let statement = format!(
-            "CREATE TRIGGER refuse_save_completion BEFORE INSERT ON event_records \
-             WHEN substr(NEW.payload, 2, 1) = X'{:02X}' \
-             BEGIN SELECT RAISE(ABORT, 'fixture completion refusal'); END;",
-            FactKind::SaveComplete.code(),
-        );
-        sql(&root, &statement);
-        assert!(matches!(
-            lease
-                .save_changes(original.clone(), observed.clone(), units.clone())
-                .await,
-            Err(StorageError::Io(_))
-        ));
-        assert_eq!(rows(&root), 1, "Unit is durable but no completion exists");
-        let unfinished = lease.load().await.unwrap();
-        assert_eq!(unfinished.state(), SessionLoadState::Unfinished);
-        assert_eq!(unfinished.binding(), &original);
-        assert!(unfinished.snapshot().is_none());
-        watch_pending(&mut watch);
-        let prior = storage.read_committed(id.clone()).await.unwrap().unwrap();
-        assert_eq!(prior.position(), 0);
-        assert!(prior.snapshot().is_none());
-        sql(&root, "DROP TRIGGER refuse_save_completion;");
-        let changed_opening = SessionChange::Opened {
-            id: id.clone(),
-            provider: ProviderIdentity::new("changed-provider", "model", "workspace").unwrap(),
-            context: ProviderContext::Absent,
-        };
-        let changed_candidate =
-            records::fold_changes(None, std::slice::from_ref(&changed_opening)).unwrap();
-        assert!(matches!(
-            lease
-                .save_changes(
-                    original.clone(),
-                    changed_candidate,
-                    vec![SessionSaveUnit::new(vec![changed_opening]).unwrap()],
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(
-            rows(&root),
-            1,
-            "changed confirmed unit cannot append completion"
-        );
-        let unfinished = lease.load().await.unwrap();
-        assert_eq!(unfinished.state(), SessionLoadState::Unfinished);
-        assert_eq!(unfinished.binding(), &original);
-        assert!(unfinished.snapshot().is_none());
-        watch_pending(&mut watch);
-        let receipt = lease
-            .save_changes(original.clone(), observed.clone(), units.clone())
-            .await
-            .unwrap();
-        assert_eq!(rows(&root), 2);
-        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Dirty);
-        assert_eq!(
-            storage
-                .read_committed(id)
-                .await
-                .unwrap()
-                .unwrap()
-                .snapshot(),
-            Some(&observed)
-        );
-        assert_eq!(
-            lease.save_changes(original, observed, units).await.unwrap(),
-            receipt
-        );
-        assert_eq!(rows(&root), 2);
-        watch_pending(&mut watch);
-        drop(lease);
-        storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -1295,117 +1238,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("generation-boundary").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, initial) = opening(&id);
-        let original = lease.load().await.unwrap().binding().clone();
-        assert_eq!((original.base(), original.generation()), (0, 0));
-        let skipped = SessionSaveGeneration::new(original.backend().clone(), original.base(), 1);
-        assert!(matches!(
-            lease
-                .save_changes(
-                    skipped,
-                    initial.clone(),
-                    vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()]
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(rows(&root), 0, "invalid binding refuses before append");
-        assert!(lease.load().await.unwrap().snapshot().is_none());
-        let first_receipt = lease
-            .save_changes(
-                original.clone(),
-                initial.clone(),
-                vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()],
-            )
-            .await
-            .unwrap();
-        drop(lease);
-
-        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
-        let restored_binding = lease.load().await.unwrap().binding().clone();
-        assert_eq!(&restored_binding, first_receipt.next());
-        assert!(restored_binding.base() > 0);
-        assert_eq!(restored_binding.generation(), 1);
-        let context = SessionChange::ProviderContext {
-            before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-        };
-        let restored =
-            records::fold_changes(Some(&initial), std::slice::from_ref(&context)).unwrap();
-        let skipped = SessionSaveGeneration::new(
-            restored_binding.backend().clone(),
-            restored_binding.base(),
-            restored_binding.generation() + 1,
-        );
-        assert!(matches!(
-            lease
-                .save_changes(
-                    skipped,
-                    restored.clone(),
-                    vec![SessionSaveUnit::new(vec![context.clone()]).unwrap()]
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert!(matches!(
-            lease
-                .save_changes(
-                    original,
-                    restored.clone(),
-                    vec![SessionSaveUnit::new(vec![context.clone()]).unwrap()]
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
-        let receipt = lease
-            .save_changes(
-                restored_binding,
-                restored,
-                vec![SessionSaveUnit::new(vec![context]).unwrap()],
-            )
-            .await
-            .unwrap();
-
-        lease.erase().await.unwrap();
-        let reset = lease.load().await.unwrap();
-        assert!(reset.snapshot().is_none());
-        assert_eq!(
-            (reset.binding().base(), reset.binding().generation()),
-            (0, 0)
-        );
-        assert_ne!(reset.binding().backend(), receipt.next().backend());
-        assert!(matches!(
-            lease
-                .save_changes(
-                    receipt.next().clone(),
-                    initial.clone(),
-                    vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()]
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert!(lease.load().await.unwrap().snapshot().is_none());
-        lease
-            .save_changes(
-                reset.binding().clone(),
-                initial.clone(),
-                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
-            )
-            .await
-            .unwrap();
-        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
-        drop(lease);
-        storage.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
     async fn erase_clears_an_unresolved_live_writer_even_with_an_empty_physical_tail() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");
@@ -1554,181 +1386,6 @@ mod tests {
         assert_eq!(lease.load().await.unwrap().snapshot(), Some(&observed));
         drop(lease);
         reopened.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn explicit_units_publish_one_direct_save_beyond_one_body_bound() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let observed = snapshot::checkpoint::history_fixture(41);
-        let id = observed.id.clone();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let original = lease.load().await.unwrap().binding().clone();
-        let units: Vec<_> = std::iter::once(SessionChange::Opened {
-            id: observed.id.clone(),
-            provider: observed.provider.clone(),
-            context: observed.provider_context.clone(),
-        })
-        .chain(
-            observed
-                .invocations
-                .iter()
-                .cloned()
-                .map(|record| SessionChange::InputAccepted(Box::new(record))),
-        )
-        .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
-        .collect();
-        assert!(
-            observed
-                .invocations
-                .iter()
-                .map(|record| record.request.user_message.text_str().len())
-                .sum::<usize>()
-                > stream_fact::MAX_BODY_BYTES
-        );
-        let indivisible = SessionSaveUnit::new(
-            units
-                .iter()
-                .flat_map(|unit| unit.changes().iter().cloned())
-                .collect(),
-        )
-        .unwrap();
-        let refused = lease
-            .save_changes(original.clone(), observed.clone(), vec![indivisible])
-            .await;
-        assert!(
-            matches!(refused, Err(StorageError::TooLarge)),
-            "actual refusal: {refused:?}"
-        );
-        assert_eq!(rows(&root), 0);
-        let prior = lease.load().await.unwrap();
-        assert_eq!(prior.state(), SessionLoadState::Published);
-        assert!(prior.snapshot().is_none());
-        assert_eq!(prior.binding(), &original);
-        let receipt = lease
-            .save_changes(original.clone(), observed.clone(), units.clone())
-            .await
-            .unwrap();
-        let loaded = lease.load().await.unwrap();
-        assert_eq!(loaded.state(), SessionLoadState::Published);
-        assert_eq!(loaded.snapshot(), Some(&observed));
-        assert_eq!(
-            loaded.binding(),
-            &receipt.next_for(&original, units.len()).unwrap()
-        );
-        let committed_rows = rows(&root);
-        assert!(committed_rows > units.len() as i64);
-        drop(lease);
-        storage.shutdown().await.unwrap();
-        drop(storage);
-        let reopened = RecordStorage::new(&root).unwrap();
-        let lease = reopened.open_existing(id).await.unwrap().unwrap();
-        let restored = lease.load().await.unwrap();
-        assert_eq!(restored.state(), SessionLoadState::Published);
-        assert_eq!(restored.snapshot(), Some(&observed));
-        assert_eq!(
-            restored.binding(),
-            &receipt.next_for(&original, units.len()).unwrap()
-        );
-        assert_eq!(
-            lease.save_changes(original, observed, units).await.unwrap(),
-            receipt
-        );
-        assert_eq!(rows(&root), committed_rows);
-        drop(lease);
-        reopened.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn valid_unit_plan_with_wrong_candidate_never_appends() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("whole-plan-preflight").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let original = lease.load().await.unwrap().binding().clone();
-        let (opened, initial) = opening(&id);
-        let units = vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()];
-        let contradictory = SessionSnapshot {
-            provider: ProviderIdentity::new("other-provider", "model", "workspace").unwrap(),
-            ..initial.clone()
-        };
-        assert!(matches!(
-            lease
-                .save_changes(original.clone(), contradictory, units.clone())
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(
-            rows(&root),
-            0,
-            "valid unit with wrong candidate must refuse before append"
-        );
-        assert!(lease.load().await.unwrap().snapshot().is_none());
-        let initial_receipt = lease
-            .save_changes(original, initial.clone(), units)
-            .await
-            .unwrap();
-        assert_eq!(initial_receipt.units(), 1);
-        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
-        drop(lease);
-        storage.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn late_invalid_unit_never_appends_valid_prefix() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("late-unit-preflight").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let original = lease.load().await.unwrap().binding().clone();
-        let (opened, initial) = opening(&id);
-        let initial_receipt = lease
-            .save_changes(
-                original,
-                initial.clone(),
-                vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let binding = initial_receipt.next().clone();
-        let context = SessionChange::ProviderContext {
-            before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(
-                ExecutionSessionId::new("valid-prefix-context").unwrap(),
-            ),
-        };
-        let candidate =
-            records::fold_changes(Some(&initial), std::slice::from_ref(&context)).unwrap();
-        let prefix = SessionSaveUnit::new(vec![context]).unwrap();
-        let late = SessionSaveUnit::new(vec![opened]).unwrap();
-        let before = rows(&root);
-        assert!(matches!(
-            lease
-                .save_changes(
-                    binding.clone(),
-                    candidate.clone(),
-                    vec![prefix.clone(), late]
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(
-            rows(&root),
-            before,
-            "late invalid unit cannot append valid prefix"
-        );
-        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
-        let receipt = lease
-            .save_changes(binding, candidate.clone(), vec![prefix])
-            .await
-            .unwrap();
-        assert_eq!(receipt.units(), 1);
-        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&candidate));
-        drop(lease);
-        storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3011,78 +2668,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn predecessor_semantic_sqlite_record_refuses_without_mutation() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("predecessor").unwrap();
-        let runtime = storage.runtime().await.unwrap();
-        let stream = runtime
-            .create_stream(&StreamId::new(id.as_str()).unwrap())
-            .await
-            .unwrap();
-        // Exact SessionOpen kind/key and inline frame grammar from base52bc:
-        // kind1, absent execution identity, ordinal0, attempt start1, version1.
-        let body = br#"{"Opened":{"id":"predecessor","provider":{"name":"provider","model_id":"model","context":"workspace"},"context":null}}"#;
-        let mut key = vec![1, 0, 0];
-        key.extend_from_slice(&0u64.to_be_bytes());
-        let mut identity = key.clone();
-        identity.extend_from_slice(&1u64.to_be_bytes());
-        let event_id =
-            EventId::new(format!("nessa-fact-{:x}-start", Sha256::digest(&identity))).unwrap();
-        let mut payload = vec![1];
-        payload.extend_from_slice(&key);
-        payload.extend_from_slice(&1u64.to_be_bytes());
-        payload.extend_from_slice(&(body.len() as u64).to_be_bytes());
-        payload.extend_from_slice(&0u32.to_be_bytes());
-        payload.extend_from_slice(&Sha256::digest(body));
-        payload.push(0);
-        payload.extend_from_slice(body);
-        let event = NewEvent {
-            id: event_id,
-            schema: SchemaRef {
-                id: SchemaId::new("nessa.fact-start").unwrap(),
-                version: 1,
-            },
-            payload: Payload::copy_from_slice(&payload),
-        };
-        runtime.append(&stream, event).await.unwrap();
-        let stored_payload = || {
-            Connection::open(root.join("records.sqlite3"))
-                .unwrap()
-                .query_row("SELECT payload FROM event_records", [], |row| {
-                    row.get::<_, Vec<u8>>(0)
-                })
-                .unwrap()
-        };
-        assert_eq!(stored_payload(), payload);
-        for _ in 0..2 {
-            assert!(matches!(
-                storage.open_existing(id.clone()).await,
-                Err(StorageError::Corrupt(_))
-            ));
-            assert_eq!(rows(&root), 1, "no abort or replacement semantic record");
-            assert_eq!(stored_payload(), payload);
-            assert_eq!(
-                runtime
-                    .find_stream(&StreamId::new(id.as_str()).unwrap())
-                    .await
-                    .unwrap(),
-                Some(stream.clone())
-            );
-        }
-        storage.shutdown().await.unwrap();
-        let reopened = RecordStorage::new(&root).unwrap();
-        assert!(matches!(
-            reopened.open_existing(id).await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(rows(&root), 1);
-        assert_eq!(stored_payload(), payload);
-        reopened.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
     async fn legacy_jsonl_refuses_without_creating_a_stream() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");
@@ -3248,132 +2833,6 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    #[tokio::test]
-    async fn killed_child_retains_original_unpublished_unit_retry() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("crash-unit").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, prior) = opening(&id);
-        lease
-            .save_changes(
-                lease.load().await.unwrap().binding().clone(),
-                prior.clone(),
-                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let original = lease.load().await.unwrap().binding().clone();
-        drop(lease);
-        storage.shutdown().await.unwrap();
-        drop(storage);
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "infrastructure::session_storage::record::tests::child_unpublished_unit_crash_probe", "--ignored", "--nocapture"])
-            .env("NESSA_RECORD_CHILD_ROOT", &root)
-            .stdout(Stdio::piped())
-            .spawn().unwrap();
-        let output = child.stdout.take().unwrap();
-        let (send, receive) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            let ready = BufReader::new(output)
-                .lines()
-                .any(|line| line.is_ok_and(|line| line == "NESSA_UNIT_DURABLE"));
-            let _ = send.send(ready);
-        });
-        let ready = receive.recv_timeout(Duration::from_secs(15));
-        // Always reap this original child, including a failed readiness boundary.
-        let killed = child.kill();
-        let status = child.wait();
-        reader.join().unwrap();
-        assert_eq!(ready, Ok(true));
-        killed.unwrap();
-        assert!(!status.unwrap().success());
-        let reopened = RecordStorage::new(&root).unwrap();
-        let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
-        let loaded = lease.load().await.unwrap();
-        assert_eq!(loaded.state(), SessionLoadState::Unfinished);
-        assert_eq!(loaded.binding(), &original);
-        assert_eq!(loaded.snapshot(), Some(&prior));
-        assert!(matches!(
-            loaded.into_published(&id),
-            Err(StorageError::Unresolved)
-        ));
-        let changed = partial_input(4 * 1024 * 1024 - 1);
-        let changed_snapshot =
-            records::fold_changes(Some(&prior), std::slice::from_ref(&changed)).unwrap();
-        let retained = rows(&root);
-        assert!(matches!(
-            lease
-                .save_changes(
-                    original.clone(),
-                    changed_snapshot,
-                    vec![SessionSaveUnit::new(vec![changed]).unwrap()]
-                )
-                .await,
-            Err(StorageError::Corrupt(_))
-        ));
-        assert_eq!(rows(&root), retained);
-        let change = partial_input(4 * 1024 * 1024);
-        let complete = records::fold_changes(Some(&prior), std::slice::from_ref(&change)).unwrap();
-        let receipt = lease
-            .save_changes(
-                original.clone(),
-                complete.clone(),
-                vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let published = lease.load().await.unwrap();
-        assert_eq!(published.state(), SessionLoadState::Published);
-        assert_eq!(published.snapshot(), Some(&complete));
-        assert_eq!(
-            published.binding(),
-            &receipt.next_for(&original, 1).unwrap()
-        );
-        let committed = rows(&root);
-        assert_eq!(
-            lease
-                .save_changes(
-                    original,
-                    complete,
-                    vec![SessionSaveUnit::new(vec![change]).unwrap()]
-                )
-                .await
-                .unwrap(),
-            receipt
-        );
-        assert_eq!(rows(&root), committed);
-        drop(lease);
-        reopened.shutdown().await.unwrap();
-    }
-
-    #[ignore = "child process crash probe"]
-    #[tokio::test]
-    async fn child_unpublished_unit_crash_probe() {
-        let root = std::env::var_os("NESSA_RECORD_CHILD_ROOT").expect("parent supplies path");
-        let storage = RecordStorage::new(PathBuf::from(root)).unwrap();
-        let id = SessionId::new("crash-unit").unwrap();
-        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
-        let original = lease.load().await.unwrap().binding().clone();
-        let runtime = storage.runtime().await.unwrap();
-        let stream = runtime
-            .find_stream(&StreamId::new(id.as_str()).unwrap())
-            .await
-            .unwrap()
-            .unwrap();
-        let frames = unit_frames(&original, &partial_input(4 * 1024 * 1024));
-        assert!(frames.len() > 3);
-        for frame in frames.into_iter().take(2) {
-            runtime.append(&stream, frame).await.unwrap();
-        }
-        println!("\nNESSA_UNIT_DURABLE");
-        std::io::stdout().flush().unwrap();
-        // Preserve the actual live storage and lease until the parent kills us.
-        std::thread::park();
-        panic!("parent must kill the original child before this continuation");
     }
 
     #[tokio::test]
@@ -3710,6 +3169,141 @@ mod tests {
             drop(lease);
         }
         storage.shutdown().await.unwrap();
+    }
+
+    /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`):
+    /// an accepted input saved without `user_app` or
+    /// `user_app_model_context`, as one saved before #390, is `Corrupt` for
+    /// its own conversation only. Its siblings in the same store open: one
+    /// saved by the writer, and one whose input went through this test's own
+    /// framing unchanged, which shows the refusal is the missing field's.
+    #[tokio::test]
+    async fn an_input_saved_without_its_app_fields_is_corrupt_for_its_conversation_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let input = accepted_input(
+            ExecutionId::new("accepted").unwrap(),
+            SubmissionMode::Immediate,
+            vec![],
+        );
+        // One save group of `input`, encoded as the writer would and then
+        // passed through `edit`, appended after the conversation's opening.
+        let save_raw = |id: &'static str, edit: Option<&'static str>| {
+            let storage = &storage;
+            let input = input.clone();
+            async move {
+                let id = SessionId::new(id).unwrap();
+                let lease = storage.open(id.clone()).await.unwrap();
+                let (change, snapshot) = opening(&id);
+                lease
+                    .save_changes(
+                        lease.load().await.unwrap().binding().clone(),
+                        snapshot,
+                        vec![SessionSaveUnit::new(vec![change]).unwrap()],
+                    )
+                    .await
+                    .unwrap();
+                let binding = lease.load().await.unwrap().binding().clone();
+                drop(lease);
+                let mut saved: serde_json::Value = serde_json::from_slice(
+                    &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
+                )
+                .unwrap();
+                let metadata = saved["changes"][0]["InputAccepted"]["metadata"]
+                    .as_object_mut()
+                    .unwrap();
+                assert!(metadata.contains_key("user_app"));
+                assert!(metadata.contains_key("user_app_model_context"));
+                if let Some(field) = edit {
+                    metadata.remove(field).unwrap();
+                }
+                let payload = serde_json::to_vec(&saved).unwrap();
+                let identity = SaveIdentity::binding(&binding).unwrap();
+                let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
+                let mut frames = stream_fact::frame_fact(
+                    &FramedFact {
+                        key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                        body: unit.encode(&payload),
+                    },
+                    binding.base() + 1,
+                )
+                .unwrap();
+                let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+                frames.extend(
+                    stream_fact::frame_fact(
+                        &FramedFact {
+                            key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                            body: complete.encode(&[]),
+                        },
+                        binding.base() + frames.len() as u64 + 1,
+                    )
+                    .unwrap(),
+                );
+                let runtime = storage.runtime().await.unwrap();
+                let stream = runtime
+                    .find_stream(&StreamId::new(id.as_str()).unwrap())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for frame in frames {
+                    runtime.append(&stream, frame).await.unwrap();
+                }
+            }
+        };
+        save_raw("without-user-app", Some("user_app")).await;
+        save_raw("without-contexts", Some("user_app_model_context")).await;
+        save_raw("framed-unchanged", None).await;
+        let written = SessionId::new("written").unwrap();
+        let lease = storage.open(written.clone()).await.unwrap();
+        let (change, opened) = opening(&written);
+        let expected = records::fold_changes(Some(&opened), std::slice::from_ref(&input)).unwrap();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                expected.clone(),
+                vec![
+                    SessionSaveUnit::new(vec![change]).unwrap(),
+                    SessionSaveUnit::new(vec![input.clone()]).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        for older in ["without-user-app", "without-contexts"] {
+            assert!(
+                matches!(
+                    reopened.open_existing(SessionId::new(older).unwrap()).await,
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{older}"
+            );
+        }
+        for sibling in ["framed-unchanged", "written"] {
+            let id = SessionId::new(sibling).unwrap();
+            let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
+            let snapshot = lease.load().await.unwrap().snapshot().unwrap().clone();
+            assert_eq!(snapshot.id, id);
+            assert_eq!(
+                snapshot
+                    .invocations
+                    .iter()
+                    .map(|record| &record.request)
+                    .collect::<Vec<_>>(),
+                expected
+                    .invocations
+                    .iter()
+                    .map(|record| &record.request)
+                    .collect::<Vec<_>>(),
+                "{sibling}"
+            );
+            drop(lease);
+        }
+        reopened.shutdown().await.unwrap();
     }
 
     #[ignore = "child process probe"]

@@ -5,21 +5,18 @@
 //! `ConversationDeletion`, which `Conversation::check_access` refuses callers
 //! by from then on. The tombstone also carries how far the deletion got, and
 //! the domain decides which progress is possible and which request decided it.
-//! Catalogue stream identity is pure owner evidence shared by application
-//! correlation and the physical metadata source.
-mod catalogue_identity;
+//! The conversation's identity, its summary and the catalogue stream identity
+//! are `nessa_protocol::conversation::domain`, read by gateway and device alike.
 mod entities;
 mod receiver;
 mod value_objects;
-pub use catalogue_identity::conversation_catalogue_stream;
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
-    ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
+    PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,
+    ReceiverTransitionError,
 };
 pub use value_objects::{
-    ConversationApprovalMode, ConversationDeletion, ConversationId, ConversationModelId,
-    ConversationPreview, ConversationSummary, ConversationTitle, DeletionContradiction,
-    ProviderSessionErasure, ProviderSessionLink, LATEST_TIME_MS,
+    ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
 };
 
 #[cfg(test)]

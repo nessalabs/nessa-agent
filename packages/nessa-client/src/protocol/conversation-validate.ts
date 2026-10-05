@@ -13,6 +13,7 @@ import type {
 import {
   bounds,
   CompactionReportingSupport,
+  ConversationPermissionOptionEffect,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
   ModelSwitchReportingSupport,
@@ -230,7 +231,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       const noticeId = text(part, "noticeId", 20)
       if (kind === "tool") {
         if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
-        toolPartIds.add(JSON.stringify([executionId, toolId]))
+        const key = JSON.stringify([executionId, toolId])
+        // A tool call is one part, however many updates it has (#418).
+        if (toolPartIds.has(key))
+          throw new Error("Conversation response repeats a tool call part")
+        toolPartIds.add(key)
       } else if (toolId.length) {
         throw new Error("Conversation non-tool part has a tool identity")
       }
@@ -397,17 +402,21 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Permission execution is missing its message")
     permissionIds.add(permissionKey)
     text(permission, "title", 2048)
-    text(permission, "toolName", 256)
+    const toolName = text(permission, "toolName", 256)
+    // The card names the app's tool; the answer approves toolName.
+    if (kind === "app" && origin.tool !== toolName)
+      throw new Error("An app's review names a tool other than the one it reviews")
     JSON.parse(text(permission, "argumentsJson", 32768))
     const options = items(permission, "options", 64)
     if (!options.length) throw new Error("Permission response has no choices")
     const ids = new Set<string>()
     for (const option of options) {
-      exact(option, ["id", "label"])
+      exact(option, ["id", "label", "effect"])
       const id = identity(option, "id")
       if (ids.has(id)) throw new Error("Permission response repeats an option")
       ids.add(id)
       text(option, "label", 2048, false)
+      oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
     }
   }
   const toolIds = new Set<string>()

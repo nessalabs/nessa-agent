@@ -369,6 +369,11 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
         "datasetRefused" => Some(
             "some of its saved data was written by another version of Nessa, or is damaged.".into(),
         ),
+        // The file is gone while an enrollment still owes a fence. Restart
+        // cannot invent the journal back, so the person has to restore it.
+        "receiverJournalMissing" => {
+            Some("its receiver access journal is missing and has to be restored.".into())
+        }
         "alreadyRunning" => Some("another Nessa is already running for this stage.".into()),
         "portInUse" => Some(format!("port {port} is already in use.")),
         "configuration" => Some("its configuration is not one it can start with.".into()),

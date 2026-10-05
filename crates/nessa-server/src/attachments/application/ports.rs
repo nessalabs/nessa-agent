@@ -1,8 +1,6 @@
-use crate::{
-    attachments::domain::{Attachment, Caller, Hold, HoldState, UploadTicket},
-    conversation::domain::ConversationId,
-};
+use crate::attachments::domain::{Attachment, Caller, Hold, HoldState, RetiredFrom, UploadTicket};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{future::Future, pin::Pin};
 
@@ -60,33 +58,180 @@ pub enum Confirmation {
 }
 
 /// What taking a claim back found.
+/// An absent hold cannot be a successful retirement predecessor: [`RetiredFrom`]
+/// enforces that restriction for both cleanup outcomes.
+///
+/// ```compile_fail,E0308
+/// use nessa_server::attachments::{application::Discard, domain::HoldState};
+/// let outcome = Discard::Discarded { was: HoldState::Absent };
+/// ```
+///
+/// ```compile_fail,E0308
+/// use nessa_server::attachments::{application::Discard, domain::HoldState};
+/// let outcome = Discard::CleanupIncomplete { was: HoldState::Absent };
+/// ```
+#[must_use = "retirement, cleanup and prior-state evidence must be handled"]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Discard {
-    /// The hold this claim wrote was removed, and bytes nothing else holds.
-    Discarded,
+    /// The lifetime this claim owns retired, and unheld-byte cleanup completed.
+    Discarded { was: RetiredFrom },
+    /// The lifetime retired, but its unheld blob cleanup could not complete.
+    CleanupIncomplete { was: RetiredFrom },
     /// Nothing of this claim remains: another upload took the hold over, or a
     /// release removed it. Nothing was touched.
     NotMine,
 }
 
-/// One hold a release removed, and whether it had become usable.
+/// One confirmed retirement, preserving its original predecessor and cause.
+///
+/// ```compile_fail
+/// use nessa_server::attachments::{application::RetiredHold, domain::RetiredFrom};
+/// fn rewrite(mut retired: RetiredHold) { retired.was = RetiredFrom::Held; }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReleasedHold {
-    pub hold: Hold,
-    /// [`HoldState::Held`], or [`HoldState::Pending`] for a hold whose upload
-    /// had not finished recording it.
-    pub was: HoldState,
+pub struct RetiredHold {
+    hold: Hold,
+    was: RetiredFrom,
+    evidence: RetirementEvidence,
 }
 
-/// Everything a release did. A failure never stops the rest from being tried.
+impl RetiredHold {
+    /// Refuse reversal evidence belonging to a different upload caller.
+    pub fn new(hold: Hold, was: RetiredFrom, evidence: RetirementEvidence) -> Option<Self> {
+        if let RetirementEvidence::RevertedUpload { caller, .. } = &evidence {
+            if caller != hold.uploaded_by() {
+                return None;
+            }
+        }
+        Some(Self {
+            hold,
+            was,
+            evidence,
+        })
+    }
+    pub fn hold(&self) -> &Hold {
+        &self.hold
+    }
+    pub fn was(&self) -> RetiredFrom {
+        self.was
+    }
+    pub fn evidence(&self) -> &RetirementEvidence {
+        &self.evidence
+    }
+    pub fn into_parts(self) -> (Hold, RetiredFrom, RetirementEvidence) {
+        (self.hold, self.was, self.evidence)
+    }
+}
+
+// Report agreement concerns returned facts, not physical blob verification.
+fn stored_content_agrees(retirements: &[RetiredHold]) -> bool {
+    retirements.iter().enumerate().all(|(index, retired)| {
+        let stored = retired.hold().stored();
+        retirements[..index].iter().all(|prior| {
+            prior.hold().stored().digest() != stored.digest()
+                || prior.hold().stored().size() == stored.size()
+        })
+    })
+}
+
+/// One physically removed digest and every related confirmed primary retirement.
+/// Contributor order conveys no chronology; no unique last hold is inferred.
+///
+/// ```compile_fail
+/// use nessa_server::attachments::application::RemovedBlob;
+/// fn erase(mut removed: RemovedBlob) { removed.retirements.clear(); }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedBlob {
+    digest: Sha256Digest,
+    retirements: Box<[RetiredHold]>,
+}
+
+impl RemovedBlob {
+    /// Refuse missing contributors or contradictory stored content facts.
+    pub fn new(retirements: Vec<RetiredHold>) -> Option<Self> {
+        let digest = retirements.first()?.hold().stored().digest();
+        if !stored_content_agrees(&retirements)
+            || retirements
+                .iter()
+                .any(|retired| retired.hold().stored().digest() != digest)
+        {
+            return None;
+        }
+        Some(Self {
+            digest,
+            retirements: retirements.into_boxed_slice(),
+        })
+    }
+    pub fn digest(&self) -> Sha256Digest {
+        self.digest
+    }
+    pub fn retirements(&self) -> &[RetiredHold] {
+        &self.retirements
+    }
+}
+
+/// Confirmed retirements (including retry confirmation) and actual byte cleanup.
+/// A failure never stops the rest from being tried.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseReport {
-    pub released: Vec<ReleasedHold>,
-    /// For each stored digest whose bytes were removed, the last hold on it.
-    pub removed: Vec<Hold>,
-    /// Holds that could not be read or removed, and bytes that could not be
+    pub retired: Vec<RetiredHold>,
+    /// One entry per actually removed digest, with complete related evidence.
+    pub removed: Vec<RemovedBlob>,
+    /// Holds whose retirement was not confirmed, and bytes that could not be
     /// removed or proved unheld. Each is left in place rather than guessed at.
     pub failures: usize,
+}
+
+impl ReleaseReport {
+    /// Correlate the whole returned report with the admitted release target.
+    /// Original causal evidence may predate this request, but no foreign target
+    /// or contradictory/partial removal group may become an audit fact.
+    pub fn agrees_with(
+        &self,
+        organization_id: &OrganizationId,
+        conversation_id: &ConversationId,
+    ) -> bool {
+        if !stored_content_agrees(&self.retired) {
+            return false;
+        }
+        for (index, retired) in self.retired.iter().enumerate() {
+            let hold = retired.hold();
+            if hold.organization_id() != organization_id
+                || hold.conversation_id() != conversation_id
+                || self.retired[..index].iter().any(|prior| {
+                    prior.hold().stored().digest() == hold.stored().digest()
+                        && prior.hold().stored().media_type() == hold.stored().media_type()
+                })
+            {
+                return false;
+            }
+        }
+        for (index, removed) in self.removed.iter().enumerate() {
+            if self.removed[..index]
+                .iter()
+                .any(|prior| prior.digest() == removed.digest())
+            {
+                return false;
+            }
+            let related_count = self
+                .retired
+                .iter()
+                .filter(|retired| retired.hold().stored().digest() == removed.digest())
+                .count();
+            if related_count != removed.retirements().len() {
+                return false;
+            }
+            for (index, contributor) in removed.retirements().iter().enumerate() {
+                if !self.retired.contains(contributor)
+                    || removed.retirements()[..index].contains(contributor)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
 /// A transfer being written to private temporary storage. Dropping it removes
@@ -138,13 +283,15 @@ pub trait AttachmentStore: Send + Sync {
         &'a self,
         hold: &'a Hold,
         claim: &'a HoldClaim,
+        cause: RevertCause,
     ) -> PortFuture<'a, Discard, StoreUnavailable>;
-    /// Remove every hold of one conversation, pending or usable, and bytes no
-    /// hold remains on.
+    /// Retire each active hold with actual release evidence, retaining identity
+    /// metadata, then clean up bytes no active hold remains on.
     fn release<'a>(
         &'a self,
         organization_id: &'a OrganizationId,
         conversation_id: &'a ConversationId,
+        evidence: &'a ReleaseEvidence,
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable>;
     /// At most `limit` bytes of the stored file with this digest, by content
     /// alone. `None` when no such bytes are stored.
@@ -279,7 +426,16 @@ pub struct ReleaseEvidence {
     pub requested_at_ms: u64,
 }
 
-/// Why a pending hold was taken back by the upload that wrote it.
+/// Durable cause and verified initiator of one attachment lifetime retirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RetirementEvidence {
+    /// An explicit conversation release with its actual request evidence.
+    Release(ReleaseEvidence),
+    /// The upload was taken back under its original verified caller/correlation.
+    RevertedUpload { cause: RevertCause, caller: Caller },
+}
+
+/// Why a pending or kept hold was taken back by the upload that wrote it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RevertCause {
     /// Its creation was not acknowledged by the audit sink. The sink may have
@@ -334,23 +490,28 @@ pub enum AttachmentAuditRecord {
     /// A verified upload arrived at a file the conversation already keeps.
     /// The ticket is used; `hold` is the unchanged hold.
     AlreadyHeld { ticket: UploadTicket, hold: Hold },
-    /// A pending hold was taken back by its own upload. Automatic.
-    HoldReverted { hold: Hold, cause: RevertCause },
+    /// A pending or kept hold was taken back by its own upload. Automatic.
+    HoldReverted {
+        hold: Hold,
+        was: RetiredFrom,
+        cause: RevertCause,
+    },
     /// A conversation let go of a stored file.
     HoldReleased {
         hold: Hold,
         was: HoldState,
         release: ReleaseEvidence,
     },
-    /// The last hold on some bytes was released, so the bytes were removed.
-    /// `hold` is that last hold.
-    BlobRemoved {
-        hold: Hold,
-        release: ReleaseEvidence,
-    },
+    /// Unheld bytes were removed after the original retirement.
+    /// Carries its actual predecessor and release-or-reversal evidence.
+    BlobRemoved { removed: RemovedBlob },
 }
 
 /// Durable evidence of attachment transitions, committed before success is reported.
+///
+/// Bulk admission is a permit the service holds around this call. The sink does
+/// not receive that permit and cannot keep it after the service's deadline
+/// drops the call.
 pub trait AttachmentAudit: Send + Sync {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable>;
 }

@@ -29,6 +29,8 @@ pub enum ExecutionError {
     InvalidMcpToolName(&'static str),
     /// A structured tool result is not one JSON value.
     InvalidStructuredResult,
+    /// An app's structured context is not the JSON text of one object.
+    InvalidStructuredContent,
     /// An update names a different MCP server or tool than the one already
     /// observed for this tool call. The first identity stands.
     DifferentMcpTool,

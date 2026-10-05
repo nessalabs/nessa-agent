@@ -1,6 +1,7 @@
 //! Owns this Agent’s live session, accepted work, and provider cleanup.
 //! Saved conversation history belongs to SessionManager.
-//! SDK tasks keep their work permits until recording and response delivery finish.
+//! SDK tasks keep their work permits through recording and physical recovery.
+//! Scheduling retires a queued receipt's original permit before publication.
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
 pub(super) use super::attachment_evidence::CloseAttempt;
 use super::{
@@ -175,6 +176,11 @@ pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
     id: u64,
     binding: Mutex<(WorkGeneration, ProviderGeneration)>,
+    /// The usable attachment's provider generation when this permit was
+    /// granted, or `None` when nothing was attached. Close can detach that
+    /// attachment before the admission record is written; this stays the
+    /// generation that accepted the work.
+    live_generation: Option<u64>,
     stop: watch::Receiver<()>,
     cancellation: watch::Receiver<Option<InvocationCancellationEvent>>,
 }
@@ -189,6 +195,10 @@ pub(super) struct AttachmentStart {
 impl WorkPermit {
     pub(super) fn provider_generation(&self) -> u64 {
         self.provider_generation_value().0
+    }
+    /// The usable attachment when this permit was granted.
+    pub(super) fn live_generation(&self) -> Option<u64> {
+        self.live_generation
     }
     fn provider_generation_value(&self) -> ProviderGeneration {
         self.binding.lock().expect("work binding").1
@@ -243,6 +253,15 @@ impl Drop for WorkPermit {
         self.owner.changed.send_replace(());
     }
 }
+fn usable_provider_generation(state: &State) -> Option<u64> {
+    match &state.attachment {
+        AttachmentState::Attached { .. } if state.provider_ready => {
+            Some(state.provider_generation.0)
+        }
+        _ => None,
+    }
+}
+
 impl SessionLifecycle {
     pub(super) fn new(
         attachment: Arc<AttachmentLease>,
@@ -324,12 +343,7 @@ impl SessionLifecycle {
     /// replacement attachment always has a later one.
     pub(super) fn attached_generation(&self) -> Option<u64> {
         let state = self.state.lock().expect("session lifecycle");
-        match &state.attachment {
-            AttachmentState::Attached { .. } if state.provider_ready => {
-                Some(state.provider_generation.0)
-            }
-            _ => None,
-        }
+        usable_provider_generation(&state)
     }
     pub(super) fn operation_capabilities(&self) -> OperationCapabilities {
         let state = self.state.lock().expect("session lifecycle");
@@ -462,7 +476,11 @@ impl SessionLifecycle {
             recorded: !matches!(start.cause, AttachmentCause::Initial),
             open_stop,
         };
-        Ok((start, AttachmentWait { result: wait }))
+        let wait = AttachmentWait {
+            generation: start.generation,
+            result: wait,
+        };
+        Ok((start, wait))
     }
     pub(super) fn abandon_attachment_authorization(
         self: &Arc<Self>,
@@ -859,9 +877,11 @@ impl SessionLifecycle {
                 cancellation,
             },
         );
+        let live_generation = usable_provider_generation(&state);
         Ok(WorkPermit {
             owner: self.clone(),
             id,
+            live_generation,
             binding: Mutex::new((work_generation, state.provider_generation)),
             stop: self.stop.subscribe(),
             cancellation: cancellation_notice,

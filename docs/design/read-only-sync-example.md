@@ -6,8 +6,8 @@ Owner: #261. This transport section composes with the separately owned cache des
 
 | Row | Input/order | Owner / required outcome |
 |---|---|---|
-| T1 | Connect/upgrade/challenge/auth/ready | Same absolute deadline; generated challenge/auth/ready and shared envelope decoder; no passive request before ready |
-| T2 | Fragmented/trickled HTTP or WS bytes; partial send; ping/event flood | DeadlineStream recomputes at each syscall; HTTP-byte/frame/message/write-buffer/event/control caps; typed bounded refusal |
+| T1 | Connect/pinned TLS/`openProduct`/challenge/auth/ready | Same absolute deadline; generated challenge/auth/ready and shared envelope decoder; no passive request before ready |
+| T2 | Fragmented/trickled TLS bytes; partial send; event flood; an announced frame above the response bound | DeadlineStream recomputes at each syscall; TLS handshake byte budget, frame/event caps; the frame reader refuses an oversized announced length before reading it; typed bounded refusal |
 | T3 | Duplicate keys at any depth, contradictory ok/payload/error, malformed frame kind, unknown envelope keys | protocol frame owner + existing unique_value; ResFrame schema publishes ok/payload/error presence, protocol generator derives the shared TS/Rust runtime table; present null success accepted before method-specific decoding |
 | T4 | Mismatched RPC ID or unexpected response while one is pending | Typed correlation failure and discard connection; do not wait past it or attribute it to current RPC |
 | T5 | Exact successful head | Existing selector/stream/schema owners + trusted ready origin/identity; actual scope/H, no raw physical-tail fallback |
@@ -31,7 +31,7 @@ Owner: #261. This transport section composes with the separately owned cache des
 | A1 | Borrowed credential/client ID exceeds its published character ceiling | Scan at most ceiling+1 characters before connect or owned DTO allocation; refuse InvalidCredential without effects. Supported scalar ceilings pass this acquisition guard; generated shape still owns remaining validity |
 | H1 | Authentication reply carries temporary, permanent or unknown error code | Existing product/wire authentication_close_reason maps the same code for server close and client typed Authentication cause; unknown retains original AuthenticationFailed fallback. Deadline and offline cache authority unchanged |
 | M1 | Current server advertises 29 ready methods but schema allowed only 16 | Manifest owns handshakeMethod and full inventory; generator publishes ready inventory excluding that own selector and derives schema maxItems. Both producer and decoders consume the publication; no authorization or item-semantic change |
-| S1 | Catalogue identity validation from physical constructor or receiver head | Same published check_scope_identity consumes org/principal domain IDs; caller attribution is not manufactured; wrong org/principal/schema/stream refused before source use |
+| S1 | Catalogue identity validation from physical constructor or receiver head | Same published check_catalogue_scope_identity consumes org/principal domain IDs; caller attribution is not manufactured; wrong org/principal/schema/stream refused before source use |
 | O1 | Driver callback returns or panics while an attempt owns the socket | GatewayConnection::run consumes one outcome; panic records DriverPanicked then physically drops socket before returning; no guessed core success |
 | T16 | Cancellation during physical read/write | Synchronous owner stops by cancellation check/absolute syscall deadline and closes; no detached task, cache publication or success before completion |
 | B1 | Default online CLI receives a valid passive response after five seconds but before the server read deadline, the server's own generated read timeout, or cumulative valid RPCs lasting sixteen seconds (three 3s head RPCs and a 7s page RPC, each within the 10s read phase) | Default composition derives one absolute whole-callback operation budget from shared server read (10s) plus queued delivery (30s) durations plus its existing 5s scheduling/cache allowance (45s). Handshake remains 5s; custom shorter GatewayPolicy stays valid. Finite page count bounds work count, while elapsed budget may stop a cumulative pass retaining confirmed progress: 45s does not promise completion of every allowed maximum-cardinality pass or arbitrary local work. Enforcers: `default_budget_consumes_valid_delayed_source`, `default_budget_preserves_real_server_read_timeout`, and `default_budget_consumes_cumulative_valid_rpcs` in the composition online tests enforce delayed success, genuine server timeout and cumulative success; existing custom deadline and confirmed-page tests retain refusal semantics. |
@@ -40,14 +40,14 @@ Owner: #261. This transport section composes with the separately owned cache des
 Use actual separate Rust client/gateway processes for normal challenge/read,
 Preparing/retry progress, cached restart/reconnect, credential-only-read refusing
 write/manage, wrong owner/receiver/epoch, loss and both restarts. Use controlled
-peer-only fixtures for malformed envelope/fragmentation/HTTP-byte/control-flood
+peer-only fixtures (a native TLS peer) for malformed envelope/fragmentation/oversized-frame/event-flood
 branches; these are supplemental, not production acceptance replacements.
 Instrument actual gateway read admission to show fresh head calls before each
 core authorization boundary, including catalogue pre-commit refusal and record
 already-admitted immutable page semantics.
 
 
-The adapter consumes core9d ordering: record authorization precedes page acquisition; admitted immutable pages may commit after subsequent revocation. Catalogue consumes its existing final authorization. No store authorization wrapper. Reuse app::ports::Clock; absolute elapsed deadlines are checked at every underlying socket syscall. One synchronous connection owner; no hidden retries or unsolicited event queue.
+The adapter consumes core9d ordering: record authorization precedes page acquisition; admitted immutable pages may commit after subsequent revocation. Catalogue consumes its existing final authorization. No store authorization wrapper. Reuse nessa_protocol::clock::Clock; absolute elapsed deadlines are checked at every underlying socket syscall. One synchronous connection owner; no hidden retries or unsolicited event queue.
 
 
 ## Default elapsed budget
@@ -99,11 +99,10 @@ substituted for that call.
 The scalar compiler handles only the schema subset used by handshake and generic
 envelopes and refuses unsupported keywords during generation. Wire cardinality
 and scalar checks do not grant permission. JSON acquisition is separately bounded
-by the websocket message ceiling; JSON and DTO conversion can retain temporary
-copies. HTTP acquisition counts all bytes physically returned before upgrade
-completion, including any websocket prefix returned in the same read. Engine
-buffer capacity, allocator overhead, OS scheduling and disk work are not reported
-as exact owned-payload bytes.
+by the protected frame ceiling (the generated response bound); JSON and DTO
+conversion can retain temporary copies. The TLS handshake is bounded by Auth's
+handshake byte budget. TLS buffer capacity, allocator overhead, OS scheduling
+and disk work are not reported as exact owned-payload bytes.
 
 ## Admitted wire schema grammar
 
@@ -144,6 +143,10 @@ gateway authentication and current Cedar policy; remote enrollment uses the
 separately owned [device pairing work](https://github.com/nessalabs/nessa-agent/issues/264).
 
 ## Owners and composition
+
+The device client lives in `crates/nessa-client-core/src/read_only_sync/`;
+`crates/nessa-client-core/src/composition/` wires the standalone example.
+The real paired gateway process tests stay in `crates/nessa-server/tests/composition/`.
 
 The sync core owns finite record/catalogue passes and response validation. The
 SDK owns physical fact validation, semantic reduction, checkpoints and read
@@ -218,24 +221,29 @@ already exist.
 
 ### Explicit online commands
 
-The same example also accepts `sync-records CACHE PROFILE CONVERSATION PAGES`,
-`check-records CACHE PROFILE CONVERSATION` (zero pages), and
-`sync-catalogue CACHE PROFILE PAGES`. Online arguments name the issued private
-profile and target, never a guessed source origin or incarnation. Composition
-acquires the current endpoint and bounded credential before connection, then
-asks the authenticated gateway for the actual scope before opening the cache.
-The finite driver owns admitted source work; stdout delivery is separate from
-confirmed cache effects.
+The same example also accepts `sync-records PROFILE CONVERSATION PAGES`,
+`check-records PROFILE CONVERSATION` (zero pages), and
+`sync-catalogue PROFILE PAGES`, with `pair PROFILE` (the code read as one line
+from standard input) and `status PROFILE` for the device's enrollment. Online
+commands take no cache argument: the profile names the device's one cache, so a
+Terminal status can only purge the cache that holds that device's data. Online
+arguments name the private profile and target, never a guessed source origin or
+incarnation. Composition loads the device's issued credential, reads the
+gateway's pinned enrollment status, and only for Active opens the protected
+native session ([device pairing slice 3](auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3))
+with the receiver and epoch that status names; it then asks the authenticated
+gateway for the actual scope before opening the cache. The finite driver owns
+admitted source work; stdout delivery is separate from confirmed cache effects.
 
 | Row | Online command ordering | Owner / required evidence |
 | --- | --- | --- |
-| O1 | Malformed command/profile, unavailable current endpoint or refused credential acquisition | Parse/acquire before connect or opening cache; no network or cache write. Valid private profile counterpart reaches actual authenticated gateway. Actual read-only issued credential can read; actual write and credential-management commands are refused without effects. Wrong receiver/epoch is refused before opening cache. `online_profile_refusal_precedes_network_and_cache` |
-| O2 | Actual discovery scope differs from the saved six-part scope | Gateway facade supplies trusted exact scope; cache/core return explicit scope/reset refusal while saved bytes remain. The explicit regrant fixture revokes then canonically issues a distinct credential to the same principal/membership and regrants the same receiver; ordinary restart never issues or pairs again. No guessed origin or automatic reset. `online_scope_change_preserves_saved_cache` |
+| O1 | Malformed command/profile, no issued credential, or a pinned status that cannot be read | Parse/load before connect or opening cache; no read or cache write. Valid private profile counterpart reaches actual authenticated gateway. Actual read-only issued credential can read; actual write and credential-management commands are refused without effects. `online_profile_refusal_precedes_network_and_cache`, `online_unusable_enrollment_does_not_open_cache` |
+| O2 | Actual discovery scope differs from the saved six-part scope | Gateway facade supplies trusted exact scope; cache/core return explicit scope/reset refusal while saved bytes remain. The regrant fixture changes the receiver policy revision, which moves the receiver to a new epoch that the next pinned status reports; ordinary restart never issues or pairs again. No guessed origin or automatic reset. `online_scope_change_preserves_saved_cache` |
 | O3 | Actual receiver epoch changes before page admission, or after an admitted immutable page is read | Existing ScopeAuthorizer before the source read is the admission observation. A valid already admitted page may finish and commit after revoke; every subsequent page/read/command freshly authorizes and refuses, preserving confirmed prior D/A/checkpoint and marking freshness Unknown. Revocation before page admission adds no page effects. This is no atomic revoke-versus-SQL guarantee and adds no final head RPC. Positive unchanged binding commits the same actual page. `online_revocation_before_page_admission_has_no_page_effects`, `online_revocation_after_admission_preserves_confirmed_page` |
 | O4 | Zero head, zero-page check, pending physical fact or bounded catchup | Composition uses generated product `MAX_RECORD_PAGE_RECORDS` (16), `MAX_RECORD_PAGE_PAYLOAD_BYTES` (65546 from `RecordPageRequest.maxPayloadBytes.maximum`) and `MAX_PHYSICAL_RECORD_PAYLOAD_BYTES` (65546 per-record) ceilings when constructing core Limits. Real wire accepts the aggregate boundary and refuses its immediate successor; process fixture saves one actual fact spanning at least two physical pages. Real driver/SDK/cache return actual captured timestamped check, physical D and terminal A/facts/status separately; pending bytes seal only after later command. `online_process_restarts_reuse_actual_binding`, `online_product_aggregate_boundary_and_read_privilege_are_actual` |
 | O5 | Connection disappears or final observation fails after confirmed pages | Preserve already committed progress/data; typed transport/core/cache/freshness evidence remains independent, freshness becomes Unknown. JSON includes the consumed connection operation number as transient attempt correlation; it resets with a new connection and is never a durable source position or access epoch. A successful begin_pass preserves its immutable captured head/time even on later refusal; absence means no successful captured check, not absence of an attempted connection. No rollback claim or hidden retry. `online_connection_loss_preserves_confirmed_pages` |
 | O6 | Stdout fails after confirmed commit; command is repeated or offline state is reopened | Report output failure without repeating effects; reopening sees original confirmed D/A/data and exact-repeat semantics. `online_process_restarts_reuse_actual_binding` |
-| O7 | Client and gateway restart | Reopen the same credential, membership, receiver authority and source/cache stores; resolve current canonical endpoint publication and retain the issued receiver/profile. No new issue/pair/epoch. `online_process_restarts_reuse_actual_binding` |
+| O7 | Client and gateway restart | Reopen the same device credential, gateway key, receiver authority and source/cache stores; the native address is configured, so the profile is unchanged. No new issue/pair/epoch. `online_process_restarts_reuse_actual_binding` |
 | O8 | Source appends after finite pass capture | Finish original target and report original head/time; no retarget or extra head observation. Existing D4a driver regression plus `online_source_append_does_not_retarget_captured_pass`. |
 | O9 | Authenticated catalogue resolve refuses an entry exceeding the supplied remaining payload budget | Preserve core OversizedEntry separately from transient Unavailable and retain the exact gateway refusal cause; the connection closes without an implicit retry. `catalogue_resolve_preserves_oversized_entry_and_transport_cause` exercises the real session facade and correlated wire response. |
 
@@ -262,18 +270,18 @@ it returns. A later invocation asks the core to begin or resume again.
 | C17a | Cache composition supplies suffix limits above the SDK/core physical envelopes | The physical cache adapter asks published source ceilings before opening the database. The application policy owns only finite positive database/checkpoint allowances; decoder scope/position/frame/checkpoint failures map to typed cache outcomes, with SDK application decision causes preserved | `physical_cache_policy_refuses_before_database_open`, `invalid_semantic_page_has_no_effects`, `unsupported_reset_schema_has_no_effects` |
 | D8 | Explicit reset command supplies operation/caller, exact old/new six-part scopes and expected generation | Consume the existing attributed cache reset; output its original receipt with before/after meaning, cause, initiator and timestamp. Exact retries reuse caller-supplied operation identity; output failure does not retry or fabricate rollback | `reset_command_outputs_original_receipt_after_reopen` |
 
-The online command profile contains the issued receiver and numeric access epoch,
-a private credential file path, and the canonical endpoint publication root and
-relative namespace. It retains no copied endpoint instance or source scope.
-Composition reads a private profile of at most 16 KiB, resolves the current
-publication through `FileEndpointDiscovery`, and acquires credential UTF-8 bytes
-under a physical ceiling derived from the generated authentication character
-ceiling. The existing session/wire/auth owners decide semantic validity.
+The online command profile names the device's private enrollment state (an
+absolute root and a relative directory), its one cache (absolute), and the
+gateway's numeric native address. It holds no secret, receiver, epoch or source scope: the device key,
+gateway pin, credential id and receiver live in the private state, and the
+epoch is read fresh from the pinned status each command. Composition reads a
+private profile of at most 16 KiB and opens the private state through its
+owner, which refuses unsafe storage and a second opener.
 
 | Row | Profile ordering | Result | Required evidence |
 | --- | --- | --- | --- |
-| D9 | Private profile is absent, malformed, oversized, has duplicate/unknown fields or invalid receiver syntax | Refuse before endpoint discovery or credential acquisition; decode only a bounded private file. Absolute root/credential paths make command location independent; the existing endpoint owner validates the relative namespace | `private_profile_admission_is_bounded_and_explicit` |
-| D10 | Current endpoint publication changes between commands; credential file is oversized or invalid UTF-8 | Resolve each command through the existing discovery owner and retain the actual endpoint identity. Bound credential bytes by four bytes per published character plus one refusal witness; preserve typed acquisition failures without exposing secret text | `profile_resolves_current_endpoint_without_copied_identity`, `credential_acquisition_uses_supplied_wire_ceiling` |
+| D9 | Private profile is absent, malformed, oversized, has duplicate/unknown fields, a hostname, a relative root or cache, or an absolute state directory | Refuse before opening private state or any connection; decode only a bounded private file | `private_profile_admission_is_bounded_and_explicit` |
+| D10 | The private state is first used, or already held by another command | Created beneath the root on first use; a second opener is refused while the first holds it | `profile_opens_one_private_state_owner` |
 
 Connection-check results belong to the current command. No durable last-contact
 timestamp or inferred successful check is added to the cache. The existing D/A
@@ -319,8 +327,8 @@ Its transient read model asks existing product constructors; the cache stores on
 The standalone Cargo example's retained reads are:
 
 ```sh
-cargo run -p nessa-server --example read_only_sync -- list CACHE RECEIVER ORIGIN CATALOGUE
-cargo run -p nessa-server --example read_only_sync -- show CACHE RECEIVER ORIGIN CONVERSATION
+cargo run -p nessa-client-core --example read_only_sync -- list CACHE RECEIVER ORIGIN CATALOGUE
+cargo run -p nessa-client-core --example read_only_sync -- show CACHE RECEIVER ORIGIN CONVERSATION
 ```
 
 Use the issued receiver and actual gateway/catalogue identities saved by setup.
@@ -335,8 +343,8 @@ shared local-storage permissions contract.
 Local reset commands accept the complete admitted target and expected generation:
 
 ```sh
-cargo run -p nessa-server --example read_only_sync -- reset-records CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
-cargo run -p nessa-server --example read_only_sync -- reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
+cargo run -p nessa-client-core --example read_only_sync -- reset-records CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
+cargo run -p nessa-client-core --example read_only_sync -- reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH
 ```
 
 Use the same operation and arguments for an exact retry after output loss. JSON
@@ -345,27 +353,34 @@ operator attribution. A refusal emits no receipt. Deletion evidence remains
 permanent under the cache reset owner. These commands do not contact the gateway.
 
 The production adapter consumes generated Rust DTOs and shared product codecs.
-It performs the actual `/session` challenge/authenticate/ready exchange, correlates
-RPC IDs and every returned scope/limit/target field, and configures bounded
-tungstenite frames/messages before reading. It has one outstanding passive RPC,
-one total request deadline, bounded unexpected-event handling and typed failures.
+Over the strictly pinned native TLS connection it selects the product session
+with `openProduct`, performs the challenge/authenticate/ready exchange with the
+device's credential id, correlates RPC IDs and every returned scope/limit/target
+field, and refuses an announced frame above the published response bound before
+reading it. It has one outstanding passive RPC, one total request deadline,
+bounded unexpected-event handling and typed failures.
 RecordsHead discovers actual scope from conversation/receiver/epoch; the client
 does not guess an incarnation or inspect gateway storage. Catalogue methods are
 provided by #297. Preparing is temporary unavailability, not an empty source.
 
-Disposable local setup verifies real writer/read credentials, current membership
-and Cedar delegation before invoking the canonical receiver pair owner. The
-same existing admin/member linkage is retained; the read credential has only
-conversation.read. Setup persists exact receiver/epoch/evidence once. Restart
-resolves the binding rather than issuing/pairing again. Secrets are read through
-private files or protected input, never command-line arguments or general logs.
+Setup pairs the device: the owner creates a code on the product socket, the
+device runs `pair` with the code on standard input, and the owner approves the
+exact claimed key, which stages the receiver and issues a credential holding
+only conversation.read for the owner's own principal. Restart reuses the
+binding rather than issuing or pairing again. The code is read from protected
+input, never command-line arguments or general logs.
 
 The CLI has finite record and catalogue sync, an online record check, offline
-`list`/`show`, and explicit reset. Experiment and watch controls remain future
-#262 work. Data goes to stdout as JSON and tracing to stderr.
+`list`/`show`, explicit reset, and one bounded `watch PROFILE CONVERSATION
+PAGES MAX_PASSES` that follows live hints on one connection (rows W1–W16 in
+[committed change watches](committed-change-watches.md#298c-the-example-client-follows-hints)).
+Experiment controls and weak-link shaping remain future #262 work. Data goes to stdout as JSON and tracing to stderr.
 Offline cache readability is intentional local policy. Only correlated trusted
 grant/epoch/deletion contact evidence authorizes fencing/purge; generic auth
-failure or network absence supplies no such evidence.
+failure or network absence supplies no such evidence. The one purge is the
+pinned enrollment status reading Terminal: the device's record store purges
+the receiver's rows, with a receipt that fences it, before the enrollment
+record may go (device pairing rows PC3–PC5).
 
 ## Acceptance and dependencies
 

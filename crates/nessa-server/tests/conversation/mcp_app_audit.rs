@@ -1,9 +1,10 @@
 //! What the durable MCP App record holds, what it keeps out, and what it
 //! refuses to overwrite.
 use super::*;
-use crate::conversation::application::McpAppRef;
-use crate::conversation::domain::ConversationId;
+use crate::conversation::application::{McpAppRef, TicketEnd};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A clock that answers what it is told, one tick per question.
@@ -109,7 +110,10 @@ async fn a_resource_read_records_the_uri_it_asked_for() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("mcp-apps");
     let audit = audit_at(&directory, 500);
-    let mut record = call(McpAppAuditPhase::Refused("not_an_app"), app_initiator());
+    let mut record = call(
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpAppUnknown),
+        app_initiator(),
+    );
     record.ask = McpAppAsk::ReadResource {
         server: "weather".into(),
         uri: "ui://weather/map".into(),
@@ -124,7 +128,7 @@ async fn a_resource_read_records_the_uri_it_asked_for() {
     );
     assert_eq!(
         stored["phase"],
-        json!({"kind": "refused", "code": "not_an_app"})
+        json!({"kind": "refused", "code": "mcp_app_unknown"})
     );
 }
 
@@ -139,9 +143,9 @@ async fn every_phase_of_one_request_is_its_own_record() {
     let review = || "permission-1".to_string();
     let cases = [
         (
-            McpAppAuditPhase::Refused("forbidden"),
+            McpAppAuditPhase::Refused(ConversationErrorCode::McpServerMismatch),
             app_initiator(),
-            json!({"kind": "refused", "code": "forbidden"}),
+            json!({"kind": "refused", "code": "mcp_server_mismatch"}),
         ),
         (
             McpAppAuditPhase::Admitted,
@@ -209,11 +213,12 @@ async fn every_phase_of_one_request_is_its_own_record() {
             json!({"kind": "ticket_redeemed", "ticketDigest": "ticket-digest"}),
         ),
         (
-            McpAppAuditPhase::TicketExpired {
+            McpAppAuditPhase::TicketEnded {
                 ticket_digest: "ticket-digest".into(),
+                cause: TicketEnd::Expired,
             },
             McpAppInitiator::System,
-            json!({"kind": "ticket_expired", "ticketDigest": "ticket-digest"}),
+            json!({"kind": "ticket_ended", "ticketDigest": "ticket-digest", "cause": "expired"}),
         ),
     ];
     let count = cases.len();
@@ -271,14 +276,14 @@ async fn each_withdrawal_and_failure_keeps_its_cause() {
     let directory = root.path().join("mcp-apps");
     audit_at(&directory, 1)
         .record(call(
-            McpAppAuditPhase::Completed(McpAppOutcome::Failed("timed_out")),
+            McpAppAuditPhase::Completed(McpAppOutcome::Failed(ConversationErrorCode::McpTimedOut)),
             McpAppInitiator::System,
         ))
         .await
         .unwrap();
     assert_eq!(
         sole_record(&directory)["phase"]["outcome"],
-        json!({"kind": "failed", "code": "timed_out"})
+        json!({"kind": "failed", "code": "mcp_timed_out"})
     );
 }
 
@@ -399,7 +404,10 @@ async fn a_record_larger_than_any_stored_is_refused_rather_than_written() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("mcp-apps");
     let audit = audit_at(&directory, 1);
-    let mut record = call(McpAppAuditPhase::Refused("too_large"), app_initiator());
+    let mut record = call(
+        McpAppAuditPhase::Refused(ConversationErrorCode::McpRequestTooLarge),
+        app_initiator(),
+    );
     record.ask = McpAppAsk::ReadResource {
         server: "weather".into(),
         uri: "x".repeat(MAX_RECORD_BYTES),

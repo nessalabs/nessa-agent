@@ -45,12 +45,44 @@ validated snapshot.
 
 The gateway renders transcript, input, receipts, terminal status and interactions
 from committed state. Broadcasts and receipt callbacks have no transcript write
-path. Exact local active execution identity separately identifies which unfinished
-committed execution this process can answer for; it may select running versus
-unresolved display and actionable interactions, but supplies no terminal result,
-receipt, completeness or applied position. Runtime capability and lifecycle fields
-come from Agent. Deletion comes from the metadata tombstone. A different execution
-or incarnation grants no interaction authority.
+path. The active execution is the one this process can answer for. It selects
+which unfinished record may offer an interaction. It does not, by itself, decide
+that every other unfinished record was interrupted. A projection remembers the
+unfinished executions present when it first accepted a snapshot. Only those
+can read as unresolved, and only when the last stage is not injected or
+cancelled. An injected or cancelled stage is that status on a restart and on
+a later admission, and it offers nothing. While a restarted record is still
+in the pending order the read shows it queued, which is what a pending id has
+to be; once it leaves that order without becoming the active execution, and
+its last stage is not injected or cancelled, it is unresolved. A record admitted after that — saved but not yet active, or no
+longer active while its result is not yet committed — stays running, and
+offers nothing until it is the active execution. Running one restored turn
+does not take the others out of that set. A result on a restored turn is that
+result even when no read passed the id as active. The active id supplies no
+terminal result, receipt, completeness or applied position. Runtime capability
+and lifecycle fields come from Agent. Deletion comes from the metadata tombstone.
+A different execution or incarnation grants no interaction authority.
+
+| Projection | Record | Passed as active | Status | Interactions | Regression |
+| --- | --- | --- | --- | --- | --- |
+| Opened on a snapshot that already holds the record | no result, not in the pending order, last stage not injected or cancelled | no | unresolved | none | `a_restarted_turn_stays_unresolved_beside_one_admitted_later`, `an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart` |
+| Opened on a snapshot that already holds the record | no result, still in the pending order | no | queued | none | `a_restarted_turn_still_in_the_queue_is_queued_then_unresolved` |
+| That same record then leaves the pending order | no result, last stage not injected or cancelled | no | unresolved | none | `a_restarted_turn_still_in_the_queue_is_queued_then_unresolved` |
+| Opened on a snapshot that already holds the record | no result, last stage injected, not in the pending order | no | injected | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Opened on a snapshot that already holds the record | no result, last stage cancelled, not in the pending order | no | cancelled | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Empty projection; the first replacement is that snapshot | no result, last stage not injected or cancelled | no, or a different id | unresolved | none | `the_first_snapshot_folded_into_an_empty_projection_is_a_restart`, `only_the_exact_live_execution_can_offer_a_committed_interaction` |
+| Opened before the record existed | no result, not pending, last stage not injected or cancelled | no | running | none | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| Opened before the record existed | no result, in the pending order | no | queued | none | `a_queued_turn_admitted_after_open_is_queued_then_running` |
+| Opened before the record existed | no result, last stage not injected or cancelled | that id | running | offered while it is active | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| Opened before the record existed | no result, last stage injected | no | injected | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Opened before the record existed | no result, last stage cancelled | no | cancelled | none | `an_injected_or_cancelled_turn_keeps_that_status` |
+| Was active; the replacement omits it; result still absent | no result, last stage not injected or cancelled | no | running | none | `a_turn_admitted_after_open_stays_running_until_its_result` |
+| First accepted as a restart, then this process runs it, then active is omitted before the result | no result | was that id, then no | running | offered only while it was active | `a_turn_this_process_runs_stays_running_after_it_stops_being_active` |
+| Two unfinished at first acceptance; this process runs one, then active is omitted | the other has no result, last stage not injected or cancelled | was the first id, then no | the other stays unresolved; the one this process ran stays running | offered only on the one this process ran, and only while it was active | `running_one_restored_turn_leaves_the_other_unresolved` |
+| Result committed, admitted after open | completed, failed, or cancelled | no | that result | none | `a_committed_result_is_the_turn_status_while_nothing_is_active` |
+| Opened on the record; the result arrives without that id being passed as active | completed, failed, or cancelled | no | that result | none | `a_restored_turn_takes_its_result_without_being_passed_as_active` |
+| Tool saved, result absent, admitted after open | no result, last stage not injected or cancelled | no | running; the tool stays pending | none | `a_pending_tool_does_not_make_an_admitted_turn_unresolved` |
+| Restarted record beside a later admission | restarted record has no result, last stage not injected or cancelled | no | restarted stays unresolved; the later record runs | none while not active | `a_restarted_turn_stays_unresolved_beside_one_admitted_later` |
 
 | State | Input | Decision / regression |
 | --- | --- | --- |
@@ -67,6 +99,14 @@ or incarnation grants no interaction authority.
 | Checkpoint | Altered scope, cursor, state or allocation overflow | Refuse before publication; checkpoint validation tests. |
 | Newer projection | Older complete read arrives after partial progress | Refuse lower D even when A equals. `committed_partial_progress_cannot_be_replaced_by_an_older_complete_read` |
 | Pending physical body | Stage each page, malformed suffix, shared-tail drop and Complete/Abort | Reuse the sole FrameValidator; immutable Arc piece chain clones its tail in O(1), charges node/control-block/payload allocations, and never copies accumulated prefix while staging. Complete assembles once and invokes the existing semantic decoder once; Abort drops without decoding. Iterative teardown preserves shared tails. `pending_piece_staging_shares_prefix_and_decodes_only_at_seal` and pending buffer operation-count tests. |
+| Real gateway producer at a permission wait | Accepted input, acknowledged receipt, scheduling and committed interaction; second input queued | Capture the actual producer candidate only after its delegated writer returns a successful save receipt; compare full public fold/checkpoint continuation against that independent confirmed snapshot. Keep `read_committed` comparison separately attributed as cached incremental/full parity, then sync a separate paired native core process. `online_semantic_corpus_converges_after_receiver_restart_and_live_suffix` |
+| Provider fixture receives the offered permission answer | Successful branch requested by the acceptance producer; adversarial defaults unchanged | Return the real ExecutionController resolution rather than the fixture's default stale-selection refusal. Same semantic corpus test; `current_permission_authority_tracks_consumption_before_audit` retains the failure-path expectations. |
+| Same producer after explicit permission answer | Provider observations, permission consumption and terminal settlement | Start the public core `watch` from the receiver's reopened prefix checkpoint; confirm registration and prefix recheck, hold its next head read while terminal facts commit, release the actual hint pass, and compare its durable progress/offline view with the independent confirmed producer snapshot and fresh replay. Same test. |
+| Producer candidate awaiting persistence | Save succeeds or is rejected | Recorder delegates the actual lease and retains the exact submitted snapshot/next binding only after success; rejection preserves the prior confirmed snapshot. `confirmed_producer_snapshot_changes_only_after_successful_save` |
+| Public watch after prefix recheck | Permission consumption and terminal writes emit several hints | Hold the next source head read until both actual producer scheduling settlements are confirmed; the released hint pass catches the complete terminal suffix and exits by its finite pass budget. Same semantic corpus test. |
+| Receiver reopened without a source check | Offline `show` after a successful authenticated pass | Preserve semantic content and A/D/facts while marking freshness stale and suppressing completeness-dependent controls. The producer oracle applies the same explicit stale transition; same semantic corpus test. |
+| Retained semantic corpus | Passive rendering and replay | Receiver reads cannot open or dispatch a provider or offer executable interactions; exact active gateway authority remains separate. Same test and `only_the_exact_live_execution_can_offer_a_committed_interaction`. |
+| Same conversation after metadata deletion | Delayed source records or saved semantic checkpoint | Catalogue sync publishes Deleted; subsequent offline reads cannot render the earlier transcript. Same semantic corpus test; stale publication races remain covered by `deletion_fences_delayed_transcript_transaction` and `committed_reads_recheck_tombstone_after_title_lookup`. |
 | Cached continuation | Concurrent reads | One per-conversation mutex advances the owned scoped continuation; each read materializes a separately owned immutable snapshot. `publication_materializes_independent_immutable_snapshot` |
 | Cache | Eviction target is exceeded | Evict inactive entries; retain fixed-pass progress and account pinned intentional history separately. Never truncate semantic state. |
 | Gateway read | Metadata tombstone commits during title lookup, normal or pending-mode read | Recheck the authoritative metadata after the await and refuse publication. `committed_reads_recheck_tombstone_after_title_lookup` |

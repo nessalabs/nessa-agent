@@ -2,16 +2,13 @@
 use super::super::LiveConversation;
 use super::*;
 use crate::{
-    agents::domain::AgentId,
     conversation::{
         application::{
             ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
             ConversationDependencies, ConversationLimits, ConversationRepository,
             ProviderSessionErasers, RuntimeReadiness,
         },
-        domain::{
-            Conversation, ConversationApprovalMode, ConversationDeletion, ConversationModelId,
-        },
+        domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
     },
     conversation_test_support::{
@@ -19,6 +16,8 @@ use crate::{
         ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
     },
 };
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,

@@ -1,8 +1,6 @@
-use crate::{
-    attachments::domain::{Attachment, Caller, UploadTicket},
-    conversation::domain::ConversationId,
-};
+use crate::attachments::domain::{Attachment, Caller, UploadTicket};
 use nessa_auth::domain::OrganizationId;
+use nessa_protocol::conversation::domain::ConversationId;
 
 /// Whether a conversation held a stored file before or after a transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,6 +9,22 @@ pub enum HoldState {
     /// Written, but not yet usable: its evidence had not been committed.
     Pending,
     Held,
+}
+
+/// The existing hold a retirement took back. [`Self`] excludes an absent
+/// predecessor for discard results, saved retirement and reversal audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetiredFrom {
+    Pending,
+    Held,
+}
+impl From<RetiredFrom> for HoldState {
+    fn from(value: RetiredFrom) -> Self {
+        match value {
+            RetiredFrom::Pending => Self::Pending,
+            RetiredFrom::Held => Self::Held,
+        }
+    }
 }
 
 /// One conversation keeping one stored file. Its identity is the organization,

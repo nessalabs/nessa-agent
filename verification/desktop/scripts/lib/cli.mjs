@@ -245,9 +245,14 @@ export async function attempt(rep, base, body) {
   }
 }
 
-/** The result a step that threw earns (`attempt`). */
+/**
+ * The result a step that threw earns (`attempt`). The result keeps only the
+ * error's first line. A throw that is not a `CannotRun` is a fault, so its
+ * stack goes to stderr here, and nowhere else (#419).
+ */
 export function resultOfThrown(base, error) {
   const cannotRun = error instanceof CannotRun
+  if (!cannotRun) log(error?.stack ?? String(error?.message ?? error))
   const message = String(error?.message ?? error).split("\n")[0]
   return { ...base, cannotRun, error: `${cannotRun ? "could not run: " : ""}${message}` }
 }

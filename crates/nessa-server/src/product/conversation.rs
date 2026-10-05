@@ -1,35 +1,33 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
-    generated::{
-        ApprovalMode as WireApprovalMode, ConversationAnswerParams,
-        ConversationAnswerQuestionParams, ConversationArchiveParams, ConversationCancelParams,
-        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
-        ConversationDeleteParams, ConversationErrorCode, ConversationListParams,
-        ConversationListResult, ConversationMutationResult,
-        ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
-        ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
-        ConversationSendParams, ConversationSetApprovalModeParams,
-        ConversationSetApprovalModeResult, ConversationSummary,
-        ConversationView as WireConversationView,
-    },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
-use crate::{
-    agents::domain::AgentId,
-    conversation::{
-        application::{
-            ConversationCaller, ConversationError, ConversationList,
-            ConversationView as ApplicationConversationView, DeletionFailures, McpAppError,
-            QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
-            SubmittedFile, SubmittedImage, SubmittedMessage,
-        },
-        domain::{ConversationApprovalMode, ConversationId},
-    },
-    protocol::{OutgoingMessage, RequestFrame},
+use crate::conversation::application::{
+    ConversationCaller, ConversationError, DeletionFailures, QuestionChoiceInput, RequestedAgent,
+    RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::conversation::view::{
+    ConversationList, ConversationView as ApplicationConversationView,
+};
+use nessa_protocol::product::generated::{
+    ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
+    ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
+    ConversationCreateParams, ConversationCreateResult, ConversationDeleteParams,
+    ConversationListParams, ConversationListResult, ConversationMutationResult,
+    ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
+    ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
+    ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
+    ConversationSummary, ConversationView as WireConversationView,
+};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::domain::{ConversationApprovalMode, ConversationId},
+};
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
     permissions::PermissionSelectionState,
@@ -469,25 +467,8 @@ pub(super) fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::PermissionAnswer { error, .. } => {
             error_code(&ConversationError::Agent(error.clone()))
         }
-        ConversationError::McpApp(error) => mcp_app_code(error),
-    }
-}
-
-/// The protocol code of an MCP App's refusal. `McpAppError::code` names the
-/// same code in audit; `tests/conversation/agreement.rs` holds them together.
-fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
-    match error {
-        McpAppError::AppUnknown => ConversationErrorCode::McpAppUnknown,
-        McpAppError::ServerMismatch => ConversationErrorCode::McpServerMismatch,
-        McpAppError::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
-        McpAppError::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
-        McpAppError::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
-        McpAppError::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
-        McpAppError::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
-        McpAppError::Cancelled => ConversationErrorCode::McpCancelled,
-        McpAppError::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
-        McpAppError::TimedOut => ConversationErrorCode::McpTimedOut,
-        McpAppError::Remote(_) => ConversationErrorCode::McpRemoteError,
+        // Audit already named this with the protocol's code.
+        ConversationError::McpApp(error) => error.code(),
     }
 }
 

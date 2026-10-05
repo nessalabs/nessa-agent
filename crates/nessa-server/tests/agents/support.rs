@@ -6,7 +6,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use crate::agents::application::{AgentProbe, AgentProbeEvidence, ProbeFailure};
-use crate::agents::domain::AgentId;
+use nessa_protocol::agents::AgentId;
 
 /// A host with both of its answers fixed in advance, including the answer that
 /// it could not answer.

@@ -3,7 +3,10 @@
 //! Owns everything that applies to the whole binary before any feature runs:
 //! tracing setup, the gateway log's size bound, fatal error reporting, the
 //! tokio runtime wrapper in `bootstrap`, and the trusted-origin predicate every
-//! context shares in `trusted_origin`.
+//! context shares in `trusted_origin`. `read_workers` owns tracked blocking
+//! source work and retained drain shared by record and catalogue infrastructure.
+//! Source adapters retain authorization and capacity policy; attachment consumers
+//! are integrated separately.
 //!
 //! How a run ends is decided in `ending`, out of four facts: what went wrong
 //! (`error`), which number says it (`exit_code`), whether launchd should start
@@ -34,12 +37,18 @@ pub mod launch;
 #[cfg(unix)]
 mod log_file;
 pub mod logging;
+pub(crate) mod read_workers;
 mod restart;
 mod shutdown;
 mod startup_failure;
 pub mod trusted_origin;
 
 pub use bootstrap::run;
-pub use error::{Dataset, DatasetRefusal, RunError};
+pub use error::{
+    Dataset, DatasetRefusal, MissingReceiverJournal, NativeFailure, RunError, ServeAndShutdown,
+};
 pub use launch::Launch;
-pub use shutdown::{PassiveReaderOutcomes, PassiveReaderShutdownFailure, ShutdownFailure};
+pub use shutdown::{
+    NativeShutdownFailure, Outcome, ReaderDrain, ServersOutcome, ShutdownFailure, ShutdownReport,
+    ShutdownStage, WatchDrain,
+};

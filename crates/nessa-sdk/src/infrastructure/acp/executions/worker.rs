@@ -6,6 +6,7 @@ use super::super::{
     sessions::{
         binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
+        forwarded::attach_forwarded,
         thought_level, AcpConfig,
     },
 };
@@ -1032,9 +1033,10 @@ impl<P: AcpProfile> Worker<P> {
         Ok(())
     }
 
-    /// The ACP content blocks for one user message: its text, then its images
-    /// in attachment order. Nothing has been written when this fails, so the
-    /// caller rejects the input without a dispatch.
+    /// The ACP content blocks for one user message, in [`content_blocks`]'
+    /// order: the block of what apps gave the model first, when there is one,
+    /// then the message itself. Nothing has been written when this fails, so
+    /// the caller rejects the input without a dispatch.
     ///
     /// This never waits. The session read, verified, and encoded `images`
     /// before it sent the command, because this task is the only one polling
@@ -2090,7 +2092,10 @@ impl<P: AcpProfile> Worker<P> {
             if !self.config.tools_enabled {
                 return Err(json_rpc::protocol("tool event in a text-only binding"));
             }
-            let tool = self.profile.tool_call(update)?;
+            let tool = attach_forwarded(
+                self.profile.tool_call(update)?,
+                self.config.stand_ins.forwarded(),
+            );
             self.emit(execution.tool_event(&target, tool)?)
         }
     }
@@ -2139,6 +2144,7 @@ impl<P: AcpProfile> Worker<P> {
         let input = match self.profile.permission_input(&params) {
             Ok(input) => input,
             Err(error) => {
+                self.profile.note_declined_permission(&params);
                 return self
                     .decline_review(
                         execution,
@@ -2147,7 +2153,7 @@ impl<P: AcpProfile> Worker<P> {
                         decline_reason(&error),
                         response_deadline,
                     )
-                    .await
+                    .await;
             }
         };
         let tool = match self.profile.tool_call(call) {

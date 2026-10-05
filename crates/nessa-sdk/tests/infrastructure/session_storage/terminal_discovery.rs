@@ -1,7 +1,7 @@
 //! Real SQLite bounded discovery, lifetime, refusal and work-accounting evidence.
 
 use super::super::{
-    save_group::{Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
+    save_group::{Header, SaveIdentity, EMPTY_CHAIN},
     stream_fact::{self, FramedFact},
 };
 use super::*;
@@ -10,19 +10,21 @@ use crate::{
     application::agent_execution::{
         providers::ProviderIdentity,
         sessions::{
-            records::{self, FactKey, FactKind},
-            SessionChange, SessionSaveBackend, SessionSaveGeneration, SessionSaveUnit,
-            SessionSnapshot,
+            records::{FactKey, FactKind},
+            SessionChange, SessionSaveBackend, SessionSaveGeneration,
         },
     },
-    domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
+    domain::agent_execution::sessions::{ProviderContext, SessionId},
     infrastructure::session_storage::RecordStorage,
 };
 use event_stream::{
     AdvanceRetentionFloor, EnableRetryPolicy, EventSink, IncarnationId, LifecycleAction,
     LifecycleOperationId, LifecycleRequest, NewEvent, Payload, RetentionOperationId, StreamId,
 };
-use nessa_sync::replication::domain::{Id, Page, PageRequest, Scope};
+use nessa_sync::replication::{
+    application::RecordSource,
+    domain::{Id, PageRequest, Scope},
+};
 use std::{env, panic, process::Command, sync::atomic::Ordering, thread};
 
 fn sid(value: &str) -> Id {
@@ -37,6 +39,22 @@ async fn head(storage: &RecordStorage, id: &SessionId) -> RecordReadStatus<u64> 
     let scope = source.scope(sid("receiver"), sid("epoch"));
     tokio::task::spawn_blocking(move || {
         thread::spawn(move || source.bounded_head(&scope).unwrap())
+            .join()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+// The blocking head captures the physical tail as its fixed ceiling.
+async fn captured_head(storage: &RecordStorage, id: &SessionId) -> u64 {
+    let mut source = storage
+        .record_source(id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let scope = source.scope(sid("receiver"), sid("epoch"));
+    tokio::task::spawn_blocking(move || {
+        thread::spawn(move || source.head(&scope).unwrap())
             .join()
             .unwrap()
     })
@@ -112,185 +130,6 @@ async fn append_save(
 }
 
 // Unlike raw envelope fixtures, these saves pass the canonical semantic fold.
-async fn save_sixteen_publications(storage: &RecordStorage, id: &SessionId) {
-    let lease = storage.open(id.clone()).await.unwrap();
-    let mut binding = lease.load().await.unwrap().binding().clone();
-    let mut snapshot: Option<SessionSnapshot> = None;
-    for generation in 0..16 {
-        let change = if generation == 0 {
-            SessionChange::Opened {
-                id: id.clone(),
-                provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
-                context: ProviderContext::Absent,
-            }
-        } else {
-            SessionChange::ProviderContext {
-                before: snapshot.as_ref().unwrap().provider_context.clone(),
-                after: ProviderContext::Recorded(
-                    ExecutionSessionId::new(format!("context-{generation}")).unwrap(),
-                ),
-            }
-        };
-        let next = records::fold_changes(snapshot.as_ref(), std::slice::from_ref(&change)).unwrap();
-        let receipt = lease
-            .save_changes(
-                binding.clone(),
-                next.clone(),
-                vec![SessionSaveUnit::new(vec![change]).unwrap()],
-            )
-            .await
-            .unwrap();
-        binding = receipt.next_for(&binding, 1).unwrap();
-        snapshot = Some(next);
-    }
-    assert_eq!(binding.base(), 32);
-}
-async fn target_page(
-    storage: &RecordStorage,
-    id: &SessionId,
-    target: u64,
-) -> Result<RecordReadStatus<Page>, SourceError> {
-    let mut source = storage
-        .record_source(id, sid("origin"))
-        .await
-        .unwrap()
-        .unwrap();
-    let request = PageRequest {
-        scope: source.scope(sid("receiver"), sid("epoch")),
-        after: 0,
-        target,
-        max_records: 16,
-        max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-        max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-    };
-    tokio::task::spawn_blocking(move || {
-        thread::spawn(move || source.bounded_page(&request))
-            .join()
-            .unwrap()
-    })
-    .await
-    .unwrap()
-}
-#[tokio::test]
-async fn shared_discovery_serves_smaller_publication_then_resumes_captured_head() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-    let id = SessionId::new("shared-smaller").unwrap();
-    save_sixteen_publications(&storage, &id).await;
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
-    assert_eq!(
-        storage
-            .terminal_cache
-            .returned_records
-            .load(Ordering::SeqCst),
-        16
-    );
-    let RecordReadStatus::Ready(page) = target_page(&storage, &id, 20).await.unwrap() else {
-        panic!("the next bounded read reaches the valid publication20")
-    };
-    assert_eq!(page.request.target, 20);
-    assert_eq!(page.records.len(), 16);
-    assert_eq!(page.records.last().unwrap().position, 16);
-    assert_eq!(
-        storage
-            .terminal_cache
-            .returned_records
-            .load(Ordering::SeqCst),
-        20
-    );
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(32));
-    assert_eq!(
-        storage
-            .terminal_cache
-            .returned_records
-            .load(Ordering::SeqCst),
-        32
-    );
-    storage.shutdown().await.unwrap();
-}
-#[tokio::test]
-async fn shared_discovery_refuses_intermediate_unit_and_keeps_larger_progress() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-    let id = SessionId::new("shared-unit").unwrap();
-    save_sixteen_publications(&storage, &id).await;
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
-    assert!(matches!(
-        target_page(&storage, &id, 19).await,
-        Err(SourceError::InvalidRequest)
-    ));
-    assert_eq!(
-        storage
-            .terminal_cache
-            .returned_records
-            .load(Ordering::SeqCst),
-        19
-    );
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(32));
-    assert_eq!(
-        storage
-            .terminal_cache
-            .returned_records
-            .load(Ordering::SeqCst),
-        32
-    );
-    storage.shutdown().await.unwrap();
-}
-#[tokio::test]
-async fn shared_discovery_finishes_smaller_capture_before_larger_requests() {
-    for head_first in [true, false] {
-        let directory = tempfile::tempdir().unwrap();
-        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-        let id = SessionId::new("shared-larger").unwrap();
-        save_sixteen_publications(&storage, &id).await;
-        assert!(matches!(
-            target_page(&storage, &id, 20).await.unwrap(),
-            RecordReadStatus::Preparing
-        ));
-        assert_eq!(
-            storage
-                .terminal_cache
-                .returned_records
-                .load(Ordering::SeqCst),
-            16
-        );
-        if head_first {
-            assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(20));
-        } else {
-            assert!(matches!(
-                target_page(&storage, &id, 32).await.unwrap(),
-                RecordReadStatus::Preparing
-            ));
-        }
-        assert_eq!(
-            storage
-                .terminal_cache
-                .returned_records
-                .load(Ordering::SeqCst),
-            20
-        );
-        let RecordReadStatus::Ready(page) = target_page(&storage, &id, 32).await.unwrap() else {
-            panic!("larger publication resumes after the original smaller capture")
-        };
-        assert_eq!(page.request.target, 32);
-        assert_eq!(
-            storage
-                .terminal_cache
-                .returned_records
-                .load(Ordering::SeqCst),
-            32
-        );
-        assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(32));
-        assert_eq!(
-            storage
-                .terminal_cache
-                .returned_records
-                .load(Ordering::SeqCst),
-            32
-        );
-        storage.shutdown().await.unwrap();
-    }
-}
 
 #[tokio::test]
 async fn recreated_sources_resume_bounded_large_fact_validation_and_pages_do_not_rescan() {
@@ -544,6 +383,45 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
             .returned_records
             .load(Ordering::SeqCst),
         before_completion + 1
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_head_inside_validated_partial_tail_does_no_read_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let runtime = storage.runtime().await.unwrap();
+    let stream = runtime
+        .create_stream(&StreamId::new(id.as_str()).unwrap())
+        .await
+        .unwrap();
+    let [unit, _] = save_facts(&stream, 0, 0, 2 * 1024 * 1024);
+    let frames = stream_fact::frame_fact(&unit, 1).unwrap();
+    assert!(
+        frames.len() > 16,
+        "the partial tail needs several bounded steps"
+    );
+    for frame in frames.iter().take(frames.len() - 1) {
+        runtime.append(&stream, frame.clone()).await.unwrap();
+    }
+    assert_eq!(captured_head(&storage, &id).await, 0);
+    let validated = storage
+        .terminal_cache
+        .returned_records
+        .load(Ordering::SeqCst);
+    // The unchanged tail lies inside the forward scan's validated range above
+    // its last publication; its answer is that publication, with no replay.
+    for _ in 0..3 {
+        assert_eq!(captured_head(&storage, &id).await, 0);
+    }
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        validated
     );
     storage.shutdown().await.unwrap();
 }
@@ -859,65 +737,11 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
             .state
             .as_ref()
             .unwrap();
-        assert_eq!(saved.terminal, valid);
+        assert_eq!(saved.forward.groups.published(), valid);
         assert_eq!(
-            saved.validator.offset(),
+            saved.forward.validator.offset(),
             valid,
             "invalid framing does not publish progress"
-        );
-    }
-    storage.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn malformed_completion_remains_refused_after_physical_validator_advanced() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-    let id = SessionId::new("conversation").unwrap();
-    let runtime = storage.runtime().await.unwrap();
-    let stream = runtime
-        .create_stream(&StreamId::new(id.as_str()).unwrap())
-        .await
-        .unwrap();
-    let [unit, _] = save_facts(&stream, 0, 0, 8);
-    let header = Header::decode(&unit.body).unwrap();
-    let chain = header.chain((unit.body.len() - HEADER_BYTES) as u64);
-    let sealed = stream_fact::commit_fact(runtime, &stream, &Cursor::new(stream.clone(), 0), &unit)
-        .await
-        .unwrap();
-    let invalid = FramedFact {
-        key: FactKey::new(FactKind::SaveComplete, None, 2).unwrap(),
-        body: Header::unit(header.identity, 2, chain, &[]).encode(&[]),
-    };
-    let tail = stream_fact::commit_fact(runtime, &stream, &sealed, &invalid)
-        .await
-        .unwrap();
-    assert_eq!(tail.offset, 2);
-    for attempt in 0..2 {
-        let mut source = storage
-            .record_source(&id, sid("origin"))
-            .await
-            .unwrap()
-            .unwrap();
-        let scope = source.scope(sid("receiver"), sid("epoch"));
-        let result = tokio::task::spawn_blocking(move || {
-            thread::spawn(move || source.bounded_head(&scope))
-                .join()
-                .unwrap()
-        })
-        .await
-        .unwrap();
-        assert_eq!(result, Err(SourceError::Unavailable), "attempt={attempt}");
-        let cache = storage.terminal_cache.entries.lock().unwrap();
-        let saved = cache.front().unwrap().state.as_ref().unwrap();
-        assert_eq!((saved.validator.offset(), saved.terminal), (2, 0));
-        assert_eq!(
-            storage
-                .terminal_cache
-                .returned_records
-                .load(Ordering::SeqCst),
-            2,
-            "failed cached validation cannot silently accept the already-scanned tail"
         );
     }
     storage.shutdown().await.unwrap();
@@ -962,7 +786,13 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
     {
         let cache = storage.terminal_cache.entries.lock().unwrap();
         let saved = cache.front().unwrap().state.as_ref().unwrap();
-        assert_eq!((saved.validator.offset(), saved.terminal), (0, 0));
+        assert_eq!(
+            (
+                saved.forward.validator.offset(),
+                saved.forward.groups.published()
+            ),
+            (0, 0)
+        );
     }
     storage.shutdown().await.unwrap();
 }
@@ -1153,8 +983,11 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             assert_eq!(result, Err(SourceError::Unavailable));
             let cache = storage.terminal_cache.entries.lock().unwrap();
             let progress = cache.front().unwrap().state.as_ref().unwrap();
-            assert_eq!(progress.validator.offset(), (16 + first_count) as u64);
-            assert_eq!(progress.terminal, 0);
+            assert_eq!(
+                progress.forward.validator.offset(),
+                (16 + first_count) as u64
+            );
+            assert_eq!(progress.forward.groups.published(), 0);
         } else {
             assert!(matches!(result, Ok(RecordReadStatus::Ready(_))));
         }

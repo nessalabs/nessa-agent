@@ -2,17 +2,17 @@
 //! This fixture uses Nessa's SQLite version, avoiding a second rusqlite in the
 //! Cargo graph. It is receiver test data, never a production metadata mirror.
 use super::*;
-use crate::{
-    agents::domain::AgentId,
-    conversation::{
-        application::{ConversationRepository, ConversationSummaries},
-        domain::{
-            Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-            ConversationModelId, ConversationSummary,
-        },
-    },
+use crate::conversation::{
+    application::{ConversationRepository, ConversationSummaries},
+    domain::{Conversation, ConversationDeletion},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::domain::{
+        ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+    },
+};
 use nessa_sync::replication::{
     catalogue::{
         apply_next_page, begin_or_resume, CataloguePagePlan, CatalogueStore, CatalogueStoreError,

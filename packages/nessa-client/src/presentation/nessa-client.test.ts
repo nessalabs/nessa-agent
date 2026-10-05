@@ -32,12 +32,14 @@ const CONVERSATION_ID = "00000000-0000-4000-8000-000000000001"
 describe("NessaClient", () => {
   let wss: WebSocketServer
   let port: number
+  const watchRequests: { method: string; params: unknown }[] = []
 
   beforeAll(async () => {
     wss = new WebSocketServer({ host: "127.0.0.1", port: 0 })
     wss.on("connection", (socket, request) => {
       let seq = 0
       let connected = false
+      let watchCounter = 0
       const product = request.url === "/session"
 
       seq += 1
@@ -66,6 +68,7 @@ describe("NessaClient", () => {
             nonce?: string
             text?: string
             executionId?: string
+            watchId?: string
           }
         }
 
@@ -113,6 +116,9 @@ describe("NessaClient", () => {
                   "credential.issue",
                   "credential.list",
                   "credential.revoke",
+                  "conversation.watchRecords",
+                  "conversation.watchCatalogue",
+                  "conversation.unwatch",
                 ],
                 additiveFutureField: true,
               },
@@ -230,6 +236,34 @@ describe("NessaClient", () => {
           return
         }
 
+        if (
+          connected &&
+          (frame.method === "conversation.watchRecords" ||
+            frame.method === "conversation.watchCatalogue" ||
+            frame.method === "conversation.unwatch")
+        ) {
+          watchRequests.push({ method: frame.method, params: frame.params })
+          const removing = frame.method === "conversation.unwatch"
+          const watchId = removing
+            ? frame.params?.watchId
+            : `00000000-0000-4000-8000-000000000002-${++watchCounter}`
+          socket.send(
+            JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { watchId } }),
+          )
+          if (!removing) {
+            socket.send(
+              JSON.stringify({
+                type: "event",
+                event: "conversation.changed",
+                payload: { watchId },
+                seq: ++seq,
+                stateVersion: 0,
+              }),
+            )
+          }
+          return
+        }
+
         if (frame.method === "conversation.send") {
           if (!connected) {
             socket.send(
@@ -303,6 +337,47 @@ describe("NessaClient", () => {
     })
 
     client.close()
+  })
+
+  it("routes public watch calls and opaque events through the existing session", async () => {
+    watchRequests.length = 0
+    const client = await NessaClient.connect({
+      stage: "ci",
+      url: `ws://127.0.0.1:${port}`,
+      role: "surface",
+      surface: { kind: "panel", instance: "watches" },
+      client: { id: "watch-client", version: "0.1.0", platform: "node" },
+      auth: { credential: TOKEN },
+    })
+    const notices: string[] = []
+    const unsubscribe = client.on("conversation.changed", ({ watchId }) => {
+      notices.push(watchId)
+    })
+    const binding = { receiverId: "receiver", accessEpoch: "3" }
+    try {
+      const records = await client.watches.records({
+        conversationId: CONVERSATION_ID,
+        ...binding,
+      })
+      const catalogue = await client.watches.catalogue(binding)
+      expect(records.watchId).not.toBe(catalogue.watchId)
+      await expect.poll(() => notices).toEqual([records.watchId, catalogue.watchId])
+      await expect(client.watches.unwatch(records.watchId)).resolves.toEqual(records)
+      expect(watchRequests).toEqual([
+        {
+          method: "conversation.watchRecords",
+          params: { conversationId: CONVERSATION_ID, ...binding },
+        },
+        { method: "conversation.watchCatalogue", params: binding },
+        { method: "conversation.unwatch", params: { watchId: records.watchId } },
+      ])
+      client.close()
+      await expect(client.watches.catalogue(binding)).rejects.toThrow("not connected")
+      expect(watchRequests).toHaveLength(3)
+    } finally {
+      unsubscribe()
+      client.close()
+    }
   })
 
   it("rejects invalid credentials with NessaRpcError", async () => {

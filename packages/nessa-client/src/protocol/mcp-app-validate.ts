@@ -6,6 +6,7 @@ import {
   type McpUiCsp,
   type McpUiPermissions,
 } from "../generated/product.js"
+import { wellFormedText } from "./unicode.js"
 
 /**
  * Bounds the protocol schema puts on an MCP App's calls, named here for what
@@ -19,6 +20,48 @@ export const MAX_MCP_RESULT_BYTES = bounds.maxMcpResultBytes
 export const MAX_MCP_RESOURCE_BYTES = bounds.maxMcpResourceBytes
 
 const utf8 = new TextEncoder()
+
+/**
+ * What an MCP App may send its server, held to the schema's bounds: the one
+ * statement of them. `McpAppsApi` refuses a request past them before sending
+ * anything, and a host may ask first, so it can refuse the app's request
+ * itself rather than read a `TypeError` whose cause it cannot tell. Each
+ * must also be Unicode text (`wellFormedText`): this client refuses a lone
+ * surrogate before send. If one still reaches the gateway, the frame is
+ * answered `invalid_request` when the envelope parser reads one JSON object,
+ * no decoded envelope name appears twice, `type` is `req`, and `id` is one
+ * Unicode string of 1 to 256 bytes. An envelope name that is not Unicode is
+ * not a second name, a repeated name inside a nested value still leaves that
+ * id, and a frame deeper than 127 containers is not read (#403). What the
+ * arguments decode to — an object, its strings — is the gateway's to judge,
+ * and it answers `invalid_request`.
+ *
+ * Each answers the problem in words, or `undefined` within bounds.
+ */
+export const mcpAppRequestProblem = {
+  /** A tool's name: 1 to `maxMcpNameBytes` UTF-8 bytes of Unicode. */
+  tool: (tool: string): string | undefined =>
+    !boundedName(tool, bounds.maxMcpNameBytes)
+      ? `Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`
+      : !wellFormedText(tool)
+        ? "Tool must be Unicode text"
+        : undefined,
+  /** A resource's URI: 1 to `maxMcpResourceUriBytes` UTF-8 bytes of Unicode. */
+  uri: (uri: string): string | undefined =>
+    !boundedName(uri, bounds.maxMcpResourceUriBytes)
+      ? `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`
+      : !wellFormedText(uri)
+        ? "Resource URI must be Unicode text"
+        : undefined,
+  /** A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8 bytes of Unicode text. */
+  argumentsJson: (argumentsJson: string): string | undefined =>
+    utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES
+      ? `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`
+      : !wellFormedText(argumentsJson)
+        ? "Arguments must be Unicode text"
+        : undefined,
+} as const
+
 const instanceIdPattern = new RegExp(bounds.mcpAppInstanceIdPattern)
 const digestPattern = new RegExp(bounds.mcpResourceDigestPattern)
 const ticketPattern = new RegExp(bounds.mcpResourceTicketPattern)

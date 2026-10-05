@@ -1,7 +1,10 @@
 use super::*;
 use std::{
     collections::VecDeque,
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Wake, Waker},
 };
 use tokio::sync::oneshot;
 
@@ -208,4 +211,110 @@ async fn dropping_an_unconfirmed_process_retains_its_private_directory() {
         "replacement cleanup did not delete the old root"
     );
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// Bites on macOS, where a group holding only an exited, unreaped leader
+/// refuses signals with EPERM. On Linux the same calls see the zombie as a
+/// member and deliver, so this passes there without reaching the EPERM arm.
+/// Whether cleanup in the live race reports `forced: false` follows from the
+/// `NotDelivered` asserted here; the race itself cannot be scheduled from a test.
+#[tokio::test]
+async fn signalling_an_exited_unreaped_group_is_not_a_cleanup_failure() {
+    let mut scope = ProcessScope::spawn(exiting_command()).unwrap();
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // WNOWAIT observes the exit and leaves the leader unreaped: the state the
+    // group is in when the adapter quits on stdin EOF just before the signal.
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            scope.group as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(waited, 0);
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            signal_group(scope.group, false),
+            Ok(SignalDelivery::NotDelivered)
+        );
+        assert_eq!(
+            signal_group(scope.group, true),
+            Ok(SignalDelivery::NotDelivered)
+        );
+    } else {
+        assert!(signal_group(scope.group, false).is_ok());
+    }
+    assert_eq!(
+        scope.cleanup(Duration::ZERO, Duration::from_secs(2)).await,
+        Ok(CloseOutcome { forced: false })
+    );
+}
+
+/// A process group outside our permission (a root daemon's) is the real
+/// refusal: the signal is not delivered and the probe never confirms it gone.
+/// Skipped when running as root or when no such group is found.
+#[test]
+fn a_group_that_refuses_signals_is_never_confirmed_gone() {
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    // Group 1 is excluded: kill(-1, _) means every process, not group 1.
+    let refused = (2..4096).find_map(|pid| {
+        let group = unsafe { libc::getpgid(pid) };
+        (group > 1
+            && unsafe { libc::kill(-group, 0) } == -1
+            && io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+        .then_some(group as u32)
+    });
+    let Some(group) = refused else {
+        return;
+    };
+    assert_eq!(signal_group(group, false), Ok(SignalDelivery::NotDelivered));
+    assert_eq!(group_exists(group), Err(AgentError::CleanupUncertain));
+}
+
+struct PanicWake {
+    seen: Mutex<Option<oneshot::Sender<()>>>,
+}
+impl Wake for PanicWake {
+    fn wake(self: Arc<Self>) {
+        if let Some(seen) = self.seen.lock().unwrap().take() {
+            let _ = seen.send(());
+        }
+        panic!("caller waker");
+    }
+}
+
+/// The timer that `wait_scope` sleeps on, then the process reaper, wake this
+/// wait. A panic there must leave a later process able to clean up.
+#[tokio::test]
+async fn panicking_cleanup_waiter_does_not_stop_later_cleanup() {
+    let mut first = ProcessScope::spawn(waiting_command()).unwrap();
+    let (seen, notified) = oneshot::channel();
+    let waker = Waker::from(Arc::new(PanicWake {
+        seen: Mutex::new(Some(seen)),
+    }));
+    let mut cleanup = Box::pin(first.cleanup(Duration::from_millis(50), Duration::from_secs(2)))
+        as Pin<Box<dyn Future<Output = Result<CloseOutcome, AgentError>> + Send>>;
+    assert!(
+        cleanup
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending(),
+        "cleanup must be parked on the timer before the process exits"
+    );
+    tokio::time::timeout(Duration::from_secs(3), notified)
+        .await
+        .expect("the timer woke the cleanup")
+        .unwrap();
+    let mut second = ProcessScope::spawn(waiting_command()).unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        second.cleanup(Duration::from_millis(50), Duration::from_secs(2)),
+    )
+    .await
+    .expect("a later cleanup still finishes")
+    .unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
 }

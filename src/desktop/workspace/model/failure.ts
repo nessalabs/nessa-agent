@@ -5,10 +5,19 @@
  * reason, never a sentence; the words a person is shown for each are the
  * UI's (`ui/failure-copy.ts`).
  *
- * `unavailable`: no answer came — the call may or may not have been done, so
- * a message is sent again under its id and the source's updates say what
- * happened. `unknown-session`: the source holds no such session, archived
+ * `unavailable`: not done now, or not known to be — no answer came, so the
+ * call may or may not have been done, or the source answered "not now" and
+ * did nothing; either way trying again is right, so a message is sent again
+ * under its id and the source's updates say what happened. `unknown-session`: the source holds no such session, archived
  * ones included, and begins none under an archived id. `not-waiting`: the
- * approval was already answered, or never asked.
+ * approval was already answered, or never asked. `not-supported`: the source
+ * has no such thing to do — a pin, or an answer it does not offer — so it
+ * did nothing, and asking again changes nothing. `signed-out`: the window
+ * could not connect because the gateway refused its credential — or, in a
+ * browser preview, because this origin has no session to present — so the
+ * request refused was not sent (a first message's conversation may already
+ * have been created before the connection closed); asking again changes
+ * nothing until it is signed in again.
  */
-export type WorkspaceFailureReason = "unavailable" | "unknown-session" | "not-waiting"
+export type WorkspaceFailureReason =
+  "unavailable" | "unknown-session" | "not-waiting" | "not-supported" | "signed-out"

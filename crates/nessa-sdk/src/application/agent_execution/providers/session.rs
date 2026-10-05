@@ -106,10 +106,11 @@ impl ProviderSession {
     pub fn operation_capabilities(&self) -> OperationCapabilities {
         OperationCapabilities::resolve(self.backend.operation_capabilities())
     }
-    /// Decide whether `input` may be accepted at all. Every way in runs this
-    /// before anything is saved, queued, or sent: an immediate invocation, a
-    /// queued one, queued steering, and native steering, and again when the
-    /// backend is finally called.
+    /// Decide whether `input` may be accepted at all. The configured limits
+    /// run before anything is saved, queued, or sent, at an immediate
+    /// invocation, a queued one, queued steering, and native steering. The
+    /// connected agent's image answer and the backend's own refusal run
+    /// here, when the backend is called.
     ///
     /// In order: the text's byte limit; the modalities and token budget of the
     /// selected model; each image against that model's recorded limits; the
@@ -245,7 +246,9 @@ pub(crate) fn validate_configured_input(
     input.validate_message_size()?;
     let images = input.user_message.images();
     let mut requirements = Vec::with_capacity(2);
-    if input.user_message.text().is_some() {
+    // App model contexts reach the agent as a leading text block, so a
+    // message carrying them is text input even with no text of its own.
+    if input.user_message.text().is_some() || !input.user_message.app_model_context().is_empty() {
         requirements.push(CapabilityRequirement::Input(Modality::Text));
     }
     if !images.is_empty() {
@@ -282,3 +285,7 @@ fn offered_image_input_or(error: CapabilityError) -> AgentError {
         other => AgentError::InvalidInput(other.to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/providers/session.rs"]
+mod tests;

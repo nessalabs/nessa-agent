@@ -91,11 +91,6 @@ impl CommittedTranscript {
             .saturating_add(self.continuation.derived_bytes)
     }
     #[cfg(test)]
-    pub(crate) fn assert_snapshot_allocation(&self, actual: usize) {
-        assert_eq!(self.continuation.snapshot_bytes, actual);
-        self.assert_retained_accounting();
-    }
-    #[cfg(test)]
     pub(crate) fn assert_retained_accounting(&self) {
         assert_eq!(
             self.continuation.snapshot_bytes,

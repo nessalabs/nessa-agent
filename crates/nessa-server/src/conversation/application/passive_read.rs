@@ -1,16 +1,19 @@
 //! Admission for bounded passive reads, before a record or catalogue source is touched.
 
 use super::ConversationRepository;
-use crate::conversation::domain::{ConversationId, ReceiverBinding};
+use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::{
     application::{
         authorization::AuthorizeAction,
         ports::{AccessError, Decision},
         session::AuthenticatedSession,
     },
-    domain::{Action, CredentialId, OrganizationId, PrincipalId, Resource},
+    domain::{Action, CredentialId, Resource},
 };
-use nessa_sync::replication::domain::{Id, Scope};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::read_scope::{
+    CatalogueReadScope, ReadRefusal, ReceiverReadScope,
+};
 use std::{future::Future, pin::Pin};
 
 /// A binding authority reads committed state. A missing or unavailable binding
@@ -20,52 +23,6 @@ pub trait ReceiverAuthority: Send + Sync {
         &'a self,
         credential_id: &'a CredentialId,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadRefusal {
-    InvalidRequest,
-    Unauthorized,
-    Forbidden,
-    WrongOwner,
-    WrongReceiver,
-    StaleEpoch,
-    Unverifiable,
-}
-
-impl From<AccessError> for ReadRefusal {
-    fn from(error: AccessError) -> Self {
-        match error {
-            AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
-                Self::Unverifiable
-            }
-            AccessError::InvalidCredential
-            | AccessError::CredentialRevoked
-            | AccessError::CredentialExpired
-            | AccessError::InactiveMembership
-            | AccessError::IdentityMismatch => Self::Unauthorized,
-        }
-    }
-}
-
-/// Exact receiver and ownership portion of a source scope. The physical source
-/// contributes its own origin, stream, incarnation and schema after admission.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReceiverReadScope {
-    pub receiver_id: String,
-    pub organization_id: OrganizationId,
-    pub owner_id: PrincipalId,
-    pub conversation_id: ConversationId,
-    pub access_epoch: u64,
-}
-
-/// Owner-scoped catalogue selector, independent of any conversation ID.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CatalogueReadScope {
-    pub receiver_id: String,
-    pub organization_id: OrganizationId,
-    pub owner_id: PrincipalId,
-    pub access_epoch: u64,
 }
 
 /// Admission orders fresh authentication, binding and ownership before source I/O.
@@ -173,7 +130,7 @@ impl AdmitPassiveRead<'_> {
         {
             Ok(Decision::Allow) => {}
             Ok(Decision::Deny) => return Err(ReadRefusal::Forbidden),
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(access_refusal(error)),
         }
         let binding = self
             .receivers
@@ -201,24 +158,18 @@ impl AdmitPassiveRead<'_> {
     }
 }
 
-/// Encode the trusted passive receiver and numeric epoch into opaque sync IDs.
-pub(crate) fn passive_read_selector(receiver: &str, epoch: u64) -> Result<(Id, Id), ReadRefusal> {
-    let receiver = Id::new(receiver).map_err(|_| ReadRefusal::Unverifiable)?;
-    let epoch = Id::new(format!("epoch-{epoch}")).map_err(|_| ReadRefusal::Unverifiable)?;
-    Ok((receiver, epoch))
-}
-
-pub(crate) fn validate_passive_read_selector(
-    receiver: &str,
-    epoch: u64,
-    scope: &Scope,
-) -> Result<(), ReadRefusal> {
-    let (receiver, epoch) = passive_read_selector(receiver, epoch)?;
-    if scope.receiver() != &receiver {
-        return Err(ReadRefusal::WrongReceiver);
+/// The refusal a passive read answers with when access was not granted:
+/// the gateway's policy for which access errors a reader may act on.
+pub(crate) fn access_refusal(error: AccessError) -> ReadRefusal {
+    match error {
+        AccessError::Denied => ReadRefusal::Forbidden,
+        AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
+            ReadRefusal::Unverifiable
+        }
+        AccessError::InvalidCredential
+        | AccessError::CredentialRevoked
+        | AccessError::CredentialExpired
+        | AccessError::InactiveMembership
+        | AccessError::IdentityMismatch => ReadRefusal::Unauthorized,
     }
-    if scope.access_epoch() != &epoch {
-        return Err(ReadRefusal::StaleEpoch);
-    }
-    Ok(())
 }

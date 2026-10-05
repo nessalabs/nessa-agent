@@ -470,7 +470,16 @@ export interface ConversationPermissionOption {
   id: string
   /** Provider label for this option. */
   label: string
+  /** What choosing this option decides for the reviewed request, as the gateway's domain classified the provider's offer: allow it, or deny it. A surface picks an option by this, never by its label or identifier. */
+  effect: ConversationPermissionOptionEffect
 }
+/** Whether a permission option allows or denies the reviewed request. Only options that decide that one request are offered: the gateway offers no review with a choice that reaches further. */
+export const ConversationPermissionOptionEffect = {
+  Allow: "allow",
+  Deny: "deny",
+} as const
+export type ConversationPermissionOptionEffect =
+  (typeof ConversationPermissionOptionEffect)[keyof typeof ConversationPermissionOptionEffect]
 /** A pending review with its complete offered choices. */
 export interface ConversationPermission {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
@@ -767,11 +776,11 @@ export interface ConversationRuntime {
 export interface ConversationPart {
   /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
   offset: number
-  /** Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice. */
+  /** Text, exposed thought content, a tool call, or a Nessa-owned runtime notice. A tool call is one part however many updates it has, at its first update's offset; its current state is its entry in tools. */
   kind: "text" | "thought" | "tool" | "local_notice"
-  /** Exact text fragment for text, thought, or local notice observations; empty for tool observations. */
+  /** Exact text fragment for text, thought, or local notice observations; empty for a tool call. */
   text: string
-  /** Owning tool identity for a tool observation; empty otherwise. */
+  /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
   /** Stable execution-scoped declined-review identity for a local notice; empty otherwise. */
   noticeId: string
@@ -791,7 +800,7 @@ export interface ConversationPermissionOrigin {
   kind: ConversationPermissionOriginKind
   /** For app: the app's server, on which the tool would be called. */
   server?: string
-  /** For app: the tool the app asked to call. */
+  /** For app: the tool the app asked to call, the review's toolName. */
   tool?: string
 }
 /** An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. instanceId names which mount of it is asking. */
@@ -812,7 +821,7 @@ export interface McpReleaseAppParams {
   /** The mount torn down. */
   app: McpAppReference
 }
-/** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (5 minutes), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
+/** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (x-mcpAppCallTiming.reviewDeadlineMs), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
 export interface McpCallToolParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -824,12 +833,12 @@ export interface McpCallToolParams {
   server: string
   /** The tool to call on that server. */
   tool: string
-  /** The tool's arguments: one JSON object, encoded, at most 32 KiB, the most a review shows (mcp_request_too_large past it, invalid_request if it is not an object). Absent is none. */
+  /** The tool's arguments: one JSON object, encoded, at most 32 KiB (mcp_request_too_large past it, invalid_request if it is not an object), sent as parsed — re-encoded, a duplicate key's last value kept — and shown so in a destructive tool's review, which may take at most 16 000 bytes of the view (mcp_request_too_large past it). Absent is none. */
   argumentsJson?: string
 }
 /** The tool's answer. */
 export interface McpCallToolResult {
-  /** The MCP CallToolResult exactly as the server answered it — content, structuredContent, isError, _meta — encoded as one JSON object, at most 56 KiB (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal. */
+  /** The MCP CallToolResult the server answered — content, structuredContent, isError, _meta — re-encoded as one JSON object, at most 56 KiB measured as the JSON string this field is (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal. */
   resultJson: string
 }
 /** An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources, the ticket in the x-nessa-resource-ticket header): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's. */
@@ -890,14 +899,196 @@ export interface McpReadResourceResult {
   /** Whether the app asked for a border, when it said. */
   prefersBorder?: boolean
 }
-/** The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error. */
+/** The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error, or mcp_server_remote_error from mcpServers.inspect. */
 export interface McpRemoteErrorDetails {
   /** The JSON-RPC error code. */
   code: number
   /** The server's message, at most 512 characters, control characters as spaces. */
   message: string
 }
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within 5 minutes; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 32 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
+/** How a configured MCP server is reached. stdio: the gateway starts it as a local process and speaks MCP over its standard input and output. */
+export const McpServerKind = { Stdio: "stdio" } as const
+export type McpServerKind = (typeof McpServerKind)[keyof typeof McpServerKind]
+/** One server as config.json stores it now, which mcpServers.list reads: the stored file, not the live set. A hand edit to the file is listed at once and reaches the live set, and new conversations, at the next save or remove or the next start. Variable values never leave the gateway; only their names are listed. */
+export interface McpServerListEntry {
+  /** How the server is reached. */
+  kind: McpServerKind
+  /** The server's name, unique among the configured servers. */
+  name: string
+  /** The absolute path of the executable the gateway starts. */
+  command: string
+  /** The arguments it is started with, in order. */
+  args: string[]
+  /** The names of the variables it is given over the gateway's own, sorted by name. Never their values. */
+  envNames: string[]
+  /** Whether it is stored turned on. A server saved on is given to new conversations from that save; one turned on by hand in the file, from the next save or remove or the next start. A server turned off stays stored, and can be inspected. */
+  enabled: boolean
+  /** Nessa's own server: listed, never saved or removed through these methods. */
+  managed: boolean
+}
+/** Result of mcpServers.list: the stored servers and the revision a save or remove must name. */
+export interface McpServersListResult {
+  /** A digest of the stored server list, keyed with a secret this gateway process mints at start: compare for equality only, and list again after a restart, since the same list has another revision then. A save or remove naming any other revision is refused mcp_servers_revision_conflict. */
+  revision: string
+  /** The stored servers in stored order, then the managed one. */
+  servers: McpServerListEntry[]
+}
+/** One variable a saved server is given. */
+export interface McpServerEnvEntry {
+  /** The variable's name: ASCII letters, digits and _, 1 to x-mcpServerRules.environmentNameMaxBytes bytes, not starting with a digit. NESSA_MCP_SESSION is reserved. */
+  name: string
+  /** Its value, or null to keep the value stored for this name on the server being saved, only when the save launches that server as stored apart from the kept values: the same command and args, and the same variable names, each other one null or given its stored value. A save that changes anything else (the command, an argument, a variable added, left out or given another value) must give every value again. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
+  value: string | null
+}
+/** A server as mcpServers.save stores it. */
+export interface McpServerInput {
+  /** How the server is reached. */
+  kind: McpServerKind
+  /** Its name: ASCII letters, digits, - and _, 1 to x-mcpServerRules.nameMaxBytes bytes, without __ and not starting or ending with _. nessa is reserved. */
+  name: string
+  /** The absolute path of its executable. */
+  command: string
+  /** Its arguments, in order: at most x-mcpServerRules.maxArgs, each at most x-mcpServerRules.argMaxBytes bytes. Never put credentials here; use env. */
+  args: string[]
+  /** Every variable it is given over the gateway's own, each name once; they are stored, and listed, sorted by name whatever order they are given in. A stored variable left out is removed. */
+  env: McpServerEnvEntry[]
+  /** Whether new conversations are given it. */
+  enabled: boolean
+}
+/** Wire input for mcpServers.save: store a server, adding it or replacing the one under its name, or renaming the one under previousName, in one write. */
+export interface McpServersSaveParams {
+  /** The revision the caller last listed. */
+  revision: string
+  /** The name the server is stored under now, when it is being renamed. Unknown: mcp_servers_not_found. */
+  previousName?: string
+  /** The server as it should be stored. */
+  server: McpServerInput
+}
+/** Wire input for mcpServers.remove: take a stored server out of the configuration. */
+export interface McpServersRemoveParams {
+  /** The revision the caller last listed. */
+  revision: string
+  /** The stored server's name. Unknown: mcp_servers_not_found. */
+  name: string
+}
+/** Result of mcpServers.save and mcpServers.remove: the published configuration's revision. New conversations get the new server set; running ones keep theirs. */
+export interface McpServersWriteResult {
+  /** The stored server list's revision now, for this gateway process. */
+  revision: string
+  /** Whether new conversations get the stored list as now written. False when the gateway is stopping (the next start reads the file), or when a remove left a list edited by hand still past a bound (more servers than x-mcpServerRules.maxServers, or one that breaks a rule): the removed server is out of the live set all the same, and the rest stay as they were until a change brings the list within its bounds. */
+  live: boolean
+}
+/** Why a saved server, or a stored one inspected, is invalid. The numbers are x-mcpServerRules, which the gateway's own rules publish. too_many: more than maxServers servers, the managed one included. duplicate_name: another server has the name. name: not 1 to nameMaxBytes bytes of ASCII letters, digits, - and _, holds __, or starts or ends with _. command: not an absolute UTF-8 path. arguments: more than maxArgs, or one over argMaxBytes bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1 to environmentNameMaxBytes bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value, or in a save that changes anything else the server is launched with. environment_name_repeated: a variable given twice, which is said before a value missing. */
+export const McpServerProblemCode = {
+  TooMany: "too_many",
+  DuplicateName: "duplicate_name",
+  Name: "name",
+  Command: "command",
+  Arguments: "arguments",
+  EnvironmentName: "environment_name",
+  ReservedEnvironmentName: "reserved_environment_name",
+  EnvironmentValue: "environment_value",
+  EnvironmentValueMissing: "environment_value_missing",
+  EnvironmentNameRepeated: "environment_name_repeated",
+} as const
+export type McpServerProblemCode =
+  (typeof McpServerProblemCode)[keyof typeof McpServerProblemCode]
+/** Attached to a refusal coded mcp_servers_invalid. */
+export interface McpServersInvalidDetails {
+  /** What is wrong. */
+  problem: McpServerProblemCode
+  /** The server the problem is about, as it is stored or was asked to be saved: present for every problem but too_many, so an entry added to config.json by hand is named. */
+  server?: string
+  /** The variable the problem is about, for environment_name, reserved_environment_name, environment_value, environment_value_missing and environment_name_repeated; for environment_name, any byte of it that is not UTF-8 replaced. Never a value. */
+  name?: string
+}
+/** Attached to a refusal coded mcp_servers_revision_conflict. */
+export interface McpServersRevisionConflictDetails {
+  /** The stored revision now; list again before retrying. */
+  revision: string
+}
+/** Attached to a refusal coded audit_unavailable from an mcpServers method. Nothing is rolled back; mcpServers.list shows where things stand. */
+export interface McpServersAuditUnavailableDetails {
+  /** For mcpServers.save and mcpServers.remove: whether the change was published all the same; the live set may not have been replaced if the gateway is stopping. For mcpServers.inspect: whether the server was started — or its launch had begun, when the work failed unexpectedly after that. */
+  applied: boolean
+  /** What the request would have been answered had its record been written: the refusal or failure that stopped it, or mcp_servers_storage_unavailable for a change published but not made durable. Absent when nothing stopped it, or when the first record could not be written and nothing was done. Never audit_unavailable. */
+  code?: McpServersErrorCode
+}
+/** Attached to a refusal coded mcp_servers_config_too_large that answers mcpServers.list: the stored list would not fit one frame (an entry added to config.json by hand). mcpServers.remove by name, naming this revision, still works, and is how the list is made to fit again. */
+export interface McpServersConfigTooLargeDetails {
+  /** The stored revision, as mcpServers.list would have answered it. */
+  revision: string
+}
+/** Attached to a refusal coded mcp_servers_storage_unavailable. mcpServers.list shows where things stand. */
+export interface McpServersStorageUnavailableDetails {
+  /** true: the change was published — config.json replaced, and the live set followed as far as it could (replaced, withdrawn, or kept during shutdown or when the list is past a bound); list again to see the current state — but its directory could not be synced, so a crash could still lose it; its outcome record says durable false. false: nothing was written, applied or started. */
+  applied: boolean
+}
+/** Wire input for mcpServers.inspect: start the stored server under name once, outside any conversation, list what it offers, then stop it. A server turned off can be inspected; a server not yet saved cannot. At most x-mcpServerInspect.maxConcurrent run at once, each within x-mcpServerInspect.deadlineMs. */
+export interface McpServersInspectParams {
+  /** The stored server's name. Unknown: mcp_servers_not_found; nessa: mcp_servers_reserved_name. */
+  name: string
+}
+/** Which bound left an inspection incomplete. tools: the server listed more than x-mcpServerInspect.maxToolPages pages, or more tools than the gateway reads from one server; the rest are not listed. ui: more distinct UI resources than x-mcpServerInspect.maxUiReads; tools past it are listed without ui. bytes: the answer would pass 64 KiB; tools were dropped from the end until it fits. stopping: the gateway began to stop after the server was started; the reading was dropped and the server's process group killed, and tools is empty. */
+export const McpServersInspectCut = {
+  Tools: "tools",
+  Ui: "ui",
+  Bytes: "bytes",
+  Stopping: "stopping",
+} as const
+export type McpServersInspectCut =
+  (typeof McpServersInspectCut)[keyof typeof McpServersInspectCut]
+/** A tool's MCP App as the server declares it: the resource, and the CSP and permissions it asks for, read as mcp.readResource reads them. */
+export interface McpInspectedUi {
+  /** The ui:// resource the tool declares. */
+  uri: string
+  /** The CSP the app asks for. */
+  csp: McpUiCsp
+  /** What the app asks of the host. */
+  permissions: McpUiPermissions
+}
+/** One tool a server lists, as mcpServers.inspect reports it. */
+export interface McpInspectedTool {
+  /** The tool's name on the server. */
+  name: string
+  /** annotations.readOnlyHint, when the server gives it as a boolean. */
+  readOnlyHint?: boolean
+  /** annotations.destructiveHint, when the server gives it as a boolean. */
+  destructiveHint?: boolean
+  /** Its MCP App, when it declares one and it was read. */
+  ui?: McpInspectedUi
+}
+/** Result of mcpServers.inspect: the tools the server listed, with each MCP App's CSP and permissions. The server has been stopped and its process group killed before this is answered. */
+export interface McpServersInspectResult {
+  /** Whether every tool and UI the server offered is here. */
+  complete: boolean
+  /** Which bound left it incomplete; present exactly when complete is false. */
+  cut?: McpServersInspectCut
+  /** The tools, in the server's order. */
+  tools: McpInspectedTool[]
+}
+/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound, a path was not UTF-8, or no key for its configuration digests could be drawn). mcp_servers_invalid: the saved server or the resulting set breaks a rule; or, for mcpServers.inspect, the stored server does (an entry added to config.json by hand), and it was not started (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written (a stored server name past x-mcpServerRules.nameMaxBytes among it, so every request naming a stored server fits one frame). It is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB as written, which is pretty-printed or, when only that fits, compact; or, for mcpServers.save, the resulting mcpServers.list answer would not fit one frame for the longest request id, and nothing was written (a remove is never refused for that); or, for mcpServers.list, the stored list would not fit one frame (details: McpServersConfigTooLargeDetails), or config.json itself passes 64 KiB (no details). mcp_servers_storage_unavailable (details: McpServersStorageUnavailableDetails): config.json could not be read, locked or published, or the work failed unexpectedly before it published or before the inspected server's launch began — its outcome recorded failed, panicked — and the stored file and the live set are unchanged (applied false); or the change was published, and the live set followed as far as it could (replaced, withdrawn, or kept during shutdown or when the list is past a bound), but config.json's directory could not be synced, so the change may not survive a crash (applied true); list again to see the current state. mcp_servers_stopping: the gateway is stopping, and nothing was started or written: the request came after shutdown began, and nothing was recorded; or, for mcpServers.inspect, shutdown began before the server was started, or the MCP client refused to start it, as the inspection's outcome record says (stopping, started false). Changes admitted before shutdown finish, and are recorded, before the gateway stops its MCP servers; an inspection already started is cut instead (McpServersInspectCut stopping). audit_unavailable: a record of the change or inspection could not be made durable, or the work failed unexpectedly after the change was published or the server's launch began, so no outcome was recorded (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails). */
+export const McpServersErrorCode = {
+  McpServersNotConfigured: "mcp_servers_not_configured",
+  McpServersInvalid: "mcp_servers_invalid",
+  McpServersReservedName: "mcp_servers_reserved_name",
+  McpServersNotFound: "mcp_servers_not_found",
+  McpServersRevisionConflict: "mcp_servers_revision_conflict",
+  McpServersBusy: "mcp_servers_busy",
+  McpServersConfigInvalid: "mcp_servers_config_invalid",
+  McpServersConfigTooLarge: "mcp_servers_config_too_large",
+  McpServersStorageUnavailable: "mcp_servers_storage_unavailable",
+  AuditUnavailable: "audit_unavailable",
+  McpServersStopping: "mcp_servers_stopping",
+  McpServerStartFailed: "mcp_server_start_failed",
+  McpServerTimedOut: "mcp_server_timed_out",
+  McpServerGone: "mcp_server_gone",
+  McpServerMalformed: "mcp_server_malformed",
+  McpServerRemoteError: "mcp_server_remote_error",
+} as const
+export type McpServersErrorCode =
+  (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 32 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1307,6 +1498,215 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Wire input for pairing.status, pairing.deny and pairing.cancel: the invitation the owner names. The owner, organization and gateway come from the session, never from the request. */
+export interface PairingInvitationParams {
+  /** Random identity of the invitation, as its bytes. */
+  invitationId: number[]
+}
+/** Wire input for pairing.approve. Approval records consent to this exact key, then stages, pairs a receiver and publishes the device's credential. */
+export interface PairingApproveParams {
+  /** Random identity of the invitation, as its bytes. */
+  invitationId: number[]
+  /** The exact device key the owner was shown as claimed, as its bytes. Any other key is refused. */
+  deviceKey: number[]
+}
+/** Where an enrollment stands. available: a device can present the code. claimed: one device key completed the code exchange. approved: the owner consented to that key. staging: a credential and receiver are being prepared for it. active: the credential is issued; this is historical enrollment, not read authority. terminal: ended; see terminal. */
+export const PairingOwnerPhase = {
+  Available: "available",
+  Claimed: "claimed",
+  Approved: "approved",
+  Staging: "staging",
+  Active: "active",
+  Terminal: "terminal",
+} as const
+export type PairingOwnerPhase = (typeof PairingOwnerPhase)[keyof typeof PairingOwnerPhase]
+/** The first cause that ended the enrollment, kept across later cleanup. */
+export const PairingTerminalCause = {
+  CredentialRevoked: "credential_revoked",
+  Denied: "denied",
+  Cancelled: "cancelled",
+  Expired: "expired",
+  Restarted: "restarted",
+} as const
+export type PairingTerminalCause =
+  (typeof PairingTerminalCause)[keyof typeof PairingTerminalCause]
+/** Who ended the enrollment: the local operator, an authenticated principal, the enrolling device, or the gateway itself (expiry, restart). */
+export const PairingInitiatorKind = {
+  LocalOperator: "local_operator",
+  Principal: "principal",
+  Device: "device",
+  System: "system",
+} as const
+export type PairingInitiatorKind =
+  (typeof PairingInitiatorKind)[keyof typeof PairingInitiatorKind]
+/** The actor that ended an enrollment. Exactly the field its kind names is present. */
+export interface PairingInitiator {
+  /** Which kind of actor. */
+  kind: PairingInitiatorKind
+  /** The principal, when kind is principal. */
+  principalId?: string
+  /** The device key, when kind is device. */
+  deviceKey?: number[]
+}
+/** How an enrollment ended. */
+export interface PairingTerminal {
+  /** First cause that ended the enrollment. */
+  cause: PairingTerminalCause
+  /** Who caused it. */
+  initiator: PairingInitiator
+}
+/** Receiver paired for an enrollment, with the access epoch of its original pair receipt; absent before a receiver is paired. */
+export interface PairingReceiver {
+  /** Receiver the device's reads are admitted through. */
+  receiverId: string
+  /** Receiver access epoch recorded with the enrollment. */
+  accessEpoch: number
+}
+/** An owner's view of one enrollment. This is historical enrollment, not read authority: every later read is authorized again. */
+export interface PairingOwnerStatus {
+  /** Random identity of the invitation, as its bytes. */
+  invitationId: number[]
+  /** Identity of the immutable consent the invitation carries. */
+  consentId: number[]
+  /** Consent generation the device enrolls under. */
+  generation: number
+  /** Fixed class of access the consent is for. */
+  class: string
+  /** The exact action and resource the consent covers. */
+  grant: ProductGrant
+  /** When the invitation was created, Unix milliseconds. */
+  createdAtMs: number
+  /** Exclusive deadline for presenting the code, Unix milliseconds. */
+  expiresAtMs: number
+  /** Where the enrollment stands. */
+  phase: PairingOwnerPhase
+  /** The device key that claimed the invitation, once one has. Approval must name exactly this key. */
+  claimedDeviceKey?: number[]
+  /** Credential reserved for the device, once staging has begun. */
+  credentialId?: string
+  /** Receiver recorded for the enrollment, once known. */
+  receiver?: PairingReceiver
+  /** How the enrollment ended, when phase is terminal. */
+  terminal?: PairingTerminal
+  /** Whether physical cleanup of a staged receiver is still owed. Read from the record, never stored separately. */
+  cleanupPending: boolean
+}
+/** Why an approval stopped before active. retryable: a failure that can clear (storage, receiver or worker unavailable, another approval of the same enrollment in progress, or the owner's session expired or membership is inactive, cleared by signing in again or an admin re-enabling the membership); approving again continues from status. permanent: approving again would stop the same way (the receiver no longer holds the pairing, the owner no longer holds the grant, a conflicting record); cancel the enrollment and pair again. */
+export const PairingActivationStop = {
+  Retryable: "retryable",
+  Permanent: "permanent",
+} as const
+export type PairingActivationStop =
+  (typeof PairingActivationStop)[keyof typeof PairingActivationStop]
+/** Result of pairing.approve: the enrollment after approval and activation, and why activation stopped if it did. */
+export interface PairingApproveResult {
+  /** The enrollment as it now stands. The approval itself is committed whatever else happened. */
+  status: PairingOwnerStatus
+  /** Present when activation stopped before active: whether approving again can finish it. */
+  activationStopped?: PairingActivationStop
+}
+/** Result of pairing.create: a code for one device, valid until status.expiresAtMs. */
+export interface PairingCreateResult {
+  /** The one-time code in its grouped display form, two groups joined by a hyphen. Shown once: it is not stored and cannot be read again. A lost code means cancelling the invitation and creating another. */
+  code: string
+  /** The invitation as committed. */
+  status: PairingOwnerStatus
+}
+/** Result of pairing.pending: the enrollments an owner can still act on, without any code. */
+export interface PairingPendingResult {
+  /** The caller's unfinished enrollments, including ended ones still owed cleanup. Bounded by the registry's configured capacity rather than a wire constant. */
+  items: PairingOwnerStatus[]
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later. */
+export const PairingErrorCode = {
+  PairingNotConfigured: "pairing_not_configured",
+  PairingNotFound: "pairing_not_found",
+  PairingSlotOccupied: "pairing_slot_occupied",
+  PairingCapacity: "pairing_capacity",
+  PairingConflict: "pairing_conflict",
+  PairingIneligible: "pairing_ineligible",
+  PairingBusy: "pairing_busy",
+  PairingUnavailable: "pairing_unavailable",
+} as const
+export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
+/** Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement. */
+export type ChangeWatchId = string
+/** Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed. */
+export interface ConversationWatchCatalogueParams {
+  /** Server-bound receiver identity requesting this owner catalogue. */
+  receiverId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** Register stable conversation interest before final head recheck. Reset notices do not carry a source incarnation. */
+export interface ConversationWatchRecordsParams {
+  /** Conversation selected under authenticated ownership. */
+  conversationId: string
+  /** Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read. */
+  receiverId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** A physically delivered acknowledgement activates this connection-local registration. */
+export interface ConversationWatchResult {
+  /** Opaque identity minted for this physical connection after producer installation; retain it only for this connection. */
+  watchId: ChangeWatchId
+}
+/** Remove only this connection’s watch interest. Repeating an allocated identity is idempotent. */
+export interface ConversationUnwatchParams {
+  /** Exact identity minted on this connection whose source interest is to be removed. */
+  watchId: ChangeWatchId
+}
+/** Removal acknowledgement. An already-started frame may finish before this response; no subsequent hint is admitted. */
+export interface ConversationUnwatchResult {
+  /** Original connection identity echoed after interest removal; previously admitted authority or physical frame work may remain. */
+  watchId: ChangeWatchId
+}
+/** Advisory payloadless dirty notice. Reauthorize and recheck heads; never advance progress from this event. */
+export interface ConversationChanged {
+  /** Opaque connection identity of the advisory hint; this field carries no source progress or authority. */
+  watchId: ChangeWatchId
+}
+/** Terminal advisory producer state. Neither outcome proves current source freshness or lost permission. */
+export const ChangeWatchEndReason = {
+  Closed: "closed",
+  NotificationFailed: "notification_failed",
+} as const
+export type ChangeWatchEndReason =
+  (typeof ChangeWatchEndReason)[keyof typeof ChangeWatchEndReason]
+/** Terminal producer notice under the same bounded delivery owner as changed notices. Recover with explicit reads/fallback. */
+export interface ConversationWatchEnded {
+  /** Opaque connection identity of the producer interest that ended. */
+  watchId: ChangeWatchId
+  /** Typed terminal producer outcome; neither value proves source freshness or permission revocation. */
+  reason: ChangeWatchEndReason
+}
+/** Typed watch admission/refusal. Watch state never changes downloaded/applied progress. */
+export const ChangeWatchErrorCode = {
+  InvalidRequest: "invalid_request",
+  Unauthorized: "unauthorized",
+  Forbidden: "forbidden",
+  WrongOwner: "wrong_owner",
+  WrongReceiver: "wrong_receiver",
+  StaleEpoch: "stale_epoch",
+  Unverifiable: "unverifiable",
+  TemporarilyUnavailable: "temporarily_unavailable",
+  WatchDuplicate: "watch_duplicate",
+  WatchCapacity: "watch_capacity",
+  WatchClosed: "watch_closed",
+  InvalidWatch: "invalid_watch",
+} as const
+export type ChangeWatchErrorCode =
+  (typeof ChangeWatchErrorCode)[keyof typeof ChangeWatchErrorCode]
+export const maxChangeWatchIdBytes = 57 as const
+export const changeWatchIdPattern =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
+export const changeWatchLimits = {
+  globalOwners: 64,
+  principalOwners: 8,
+  recordTargets: 1,
+  catalogueTargets: 1,
+} as const
 /** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
 export const passiveReadTiming = {
   readTimeoutMs: 10000,
@@ -1314,10 +1714,36 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
+/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first. */
+export const mcpAppCallTiming = {
+  reviewDeadlineMs: 300000,
+  callTimeoutMs: 60000,
+  readTimeoutMs: 10000,
+  clientAllowanceMs: 10000,
+  callDeadlineMs: 370000,
+} as const
+/** How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response. */
+export const mcpServerInspect = {
+  deadlineMs: 30000,
+  maxToolPages: 8,
+  maxUiReads: 32,
+  maxConcurrent: 2,
+  clientAllowanceMs: 10000,
+  requestDeadlineMs: 40000,
+} as const
+/** The SDK's rules for a stored MCP server, as x-mcpServerRules publishes them: at most maxServers servers, the managed one included; a name of 1 to nameMaxBytes bytes; at most maxArgs arguments of at most argMaxBytes bytes each; a variable name of 1 to environmentNameMaxBytes bytes. The gateway refuses past them (mcp_servers_invalid); a client may refuse early by reading these. */
+export const mcpServerRules = {
+  maxServers: 16,
+  nameMaxBytes: 64,
+  maxArgs: 64,
+  argMaxBytes: 8192,
+  environmentNameMaxBytes: 256,
+} as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
-  maxReadyMethods: 32,
+  maxRequestFrameBytes: 65536,
+  maxReadyMethods: 45,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1402,8 +1828,25 @@ export const ProductMethod = {
   McpCallTool: "mcp.callTool",
   McpReadResource: "mcp.readResource",
   McpReleaseApp: "mcp.releaseApp",
+  McpServersList: "mcpServers.list",
+  McpServersSave: "mcpServers.save",
+  McpServersRemove: "mcpServers.remove",
+  McpServersInspect: "mcpServers.inspect",
+  PairingCreate: "pairing.create",
+  PairingPending: "pairing.pending",
+  PairingStatus: "pairing.status",
+  PairingApprove: "pairing.approve",
+  PairingDeny: "pairing.deny",
+  PairingCancel: "pairing.cancel",
+  ConversationWatchRecords: "conversation.watchRecords",
+  ConversationWatchCatalogue: "conversation.watchCatalogue",
+  ConversationUnwatch: "conversation.unwatch",
 } as const
-export const ProductEvent = { SessionChallenge: "session.challenge" } as const
+export const ProductEvent = {
+  SessionChallenge: "session.challenge",
+  ConversationChanged: "conversation.changed",
+  ConversationWatchEnded: "conversation.watchEnded",
+} as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
   "auth.session",
@@ -1438,6 +1881,19 @@ export const productReadyMethods = [
   "mcp.callTool",
   "mcp.readResource",
   "mcp.releaseApp",
+  "mcpServers.list",
+  "mcpServers.save",
+  "mcpServers.remove",
+  "mcpServers.inspect",
+  "pairing.create",
+  "pairing.pending",
+  "pairing.status",
+  "pairing.approve",
+  "pairing.deny",
+  "pairing.cancel",
+  "conversation.watchRecords",
+  "conversation.watchCatalogue",
+  "conversation.unwatch",
 ] as const
 export const catalogueWireSchemas = {
   RecordScope: {

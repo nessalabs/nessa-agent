@@ -90,6 +90,17 @@ async function mount(text = "") {
       ),
     ),
   )
+  // The editor is made asynchronously, and focuses itself when it attaches
+  // (`use-composer.ts`). Wait for that before anything is clicked: under load
+  // it could otherwise land after a test opened the tray, whose blur rule
+  // then closes it (#396).
+  await act(async () => {
+    await vi.waitFor(() => {
+      const editor = container.querySelector('[contenteditable="true"]')
+      expect(editor, "the real Markdown editor must be mounted").not.toBeNull()
+      expect(document.activeElement).toBe(editor)
+    })
+  })
 }
 
 const active = () =>

@@ -390,8 +390,13 @@ fn each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with() {
         McpAppError::TimedOut,
         McpAppError::Remote(None),
         McpAppError::Remote(Some((-32602, "bad".into()))),
+        McpAppError::Busy,
     ] {
         let code = error.code();
-        assert_eq!(error_code(&ConversationError::McpApp(error)).as_str(), code);
+        assert_eq!(
+            error_code(&ConversationError::McpApp(error.clone())),
+            code,
+            "{error:?}"
+        );
     }
 }

@@ -1,6 +1,7 @@
 //! Principal creation control records on the existing SQLite runtime.
 use super::{
     record::{store_error, RecordStorage, Reservation},
+    save_batch::RecordRuntime,
     MAX_STORED_RECORD_BYTES,
 };
 use crate::application::agent_execution::{
@@ -13,8 +14,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::sessions::SessionId;
 use event_stream::{
-    infrastructure::SqliteStore, Cursor, EventId, EventReader, EventSink, NewEvent, PageLimits,
-    Payload, Runtime, SchemaId, SchemaRef, StreamId, StreamKey,
+    Cursor, EventId, EventReader, EventSink, NewEvent, PageLimits, Payload, SchemaId, SchemaRef,
+    StreamId, StreamKey,
 };
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
@@ -36,7 +37,7 @@ struct Control {
 }
 struct ControlInner {
     _reservation: Reservation,
-    runtime: Runtime<SqliteStore>,
+    runtime: RecordRuntime,
     stream: StreamKey,
     principal: String,
     receipts: Mutex<HashMap<String, CreationReceipt>>,
@@ -145,7 +146,7 @@ fn check_next(
     }
 }
 async fn replay(
-    runtime: &Runtime<SqliteStore>,
+    runtime: &RecordRuntime,
     stream: &StreamKey,
     principal: &str,
 ) -> Result<HashMap<String, CreationReceipt>, StorageError> {

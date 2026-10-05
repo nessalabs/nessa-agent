@@ -127,7 +127,8 @@ counter. The window never writes one and shows nothing where the source says
 nothing — a line of only whitespace says nothing either, the one rule for
 which is the model's (`nowLine`), the line otherwise shown as it was sent;
 the in-memory source writes one at each beat of its scripts and in
-its sample data, and the gateway will generate it (#248). An update at a
+its sample data; the gateway's source (#248) sends none, since the gateway's
+list says no such line, and the window shows none for it. An update at a
 revision the source could not have sent is let go, and logged where it is
 received (`followWorkspace`, `loadWorkspace`); the reducers stay pure.
 
@@ -897,17 +898,19 @@ session as it was, and a refused read mark stays cleared here; each is logged;
 anything a call throws but the source's typed refusal is logged as a fault.
 The consequential calls — an answer to an approval, a pin, an archive — carry
 who asked: the person at the window's controls or an agent dispatching the
-same command. The source records each the moment it is asked, then the session
-as it found it when it carried the call out, and what became of it — refused,
-or taken with the revision it produced (`WorkspaceSource.approve`, `deny`,
-`setPinned`, `archive`). A message carries who sent it too; the source records
+same command. The in-memory source records each the moment it is asked, then
+the session as it found it when it carried the call out, and what became of
+it — refused, or taken with the revision it produced (`WorkspaceSource.approve`,
+`deny`, `setPinned`, `archive`). The gateway's source records nothing itself:
+what it sends, the gateway records as this window's caller, and what it
+refuses without sending is on no record (#248). A message carries who sent it too; the source records
 it when, taken, it lets a waiting approval go — naming the message, the
 approval and the sender. The in-memory source keeps that record (`audit()`),
 and writes it before any subscriber hears of the change: one shown the
 approval gone finds its `let-go` on record already.
 Each of these commands, and sending a message, answers its caller with what
-became of it — `sent`, `refused` when the source said no, `unknown` when no
-answer came and it may have been done (`unavailable`), or `not-asked` when
+became of it — `sent`, `refused` when the source said no, `unknown` for
+`unavailable` (which `model/failure.ts` defines), or `not-asked` when
 there was nothing to ask, and for an answer `answering` when one is already on
 its way. An answer is `not-asked` when neither a pane nor the open overview
 shows the session (`onScreen`), or its conversation no longer asks that
@@ -923,9 +926,9 @@ leave a read or a send hanging. The one mark the window clears itself is
 | --- | --- | --- | --- | --- |
 | `sendMessage` to a draft | listed at revision 0, titled by the message, running; the message in the outbox, "sending" | mark cleared | "Not sent. …", with Send Again and Discard; at rest once no message may begin it; Discard of the last takes a shown one back to a new session's home and lets an unshown one go | the conversation that includes the message retires it from the outbox |
 | `sendMessage` to a session | the message in the outbox, "sending", with the model chosen for the next turn | mark cleared; an approval still waiting is let go, on the source's record with who sent the message | "Not sent. …", with Send Again (`resendMessage`) and Discard (`discardUnsent`); the session as the source last said | any conversation without it — a read of the history, a reply still streaming — leaves it where it is |
-| `approve` / `deny` (with the initiator: `"person"` from the card, `"agent"` from an agent) | the approval's buttons at rest | the conversation that no longer asks, delivered first, lets the answer go; the source has recorded the decision and who made it | asks again, saying why; answerable again | a conversation no longer asking lets the answer go |
+| `approve` / `deny` (with the initiator: `"person"` from the card, `"agent"` from an agent) | the approval's buttons at rest | the conversation that no longer asks lets the answer go — delivered before the call resolves where the source can say it by then (the in-memory source), after it otherwise (the gateway's, on its next read); the source records the decision, and who made it where it can tell (the gateway's records this window's caller, not person or agent) | asks again, saying why; answerable again | a conversation no longer asking lets the answer go |
 | an answer to an approval the window does not hold — moved on, or its session in no pane | nothing; the command returns `not-asked` | — | — | — |
-| `approve` / `deny` for a session the open overview shows (waiting, or chosen), in no pane | the row's and the peek's answers at rest; answered in the overview, the row settles in place (the view's own hold on the row) | as for a pane: the conversation that no longer asks, delivered first, lets the answer go; answered in the overview, the row says what became of it, then leaves; answered from a pane or by an agent, the row leaves as the session moves on, with no settle | asks again, saying why, in the row and its peek; `unknown` (no answer came) the same, as a pane's card does | the session moves to Working; a row answered in the overview leaves once its settle has played |
+| `approve` / `deny` for a session the open overview shows (waiting, or chosen), in no pane | the row's and the peek's answers at rest; answered in the overview, the row settles in place (the view's own hold on the row) | as for a pane: the conversation that no longer asks, when it arrives, lets the answer go; answered in the overview, the row says what became of it, then leaves; answered from a pane or by an agent, the row leaves as the session moves on, with no settle | asks again, saying why, in the row and its peek; `unknown` (`unavailable`) the same, as a pane's card does | the session moves to Working; a row answered in the overview leaves once its settle has played |
 | `approve` / `deny` for a session neither a pane nor the open overview shows (closed, or its filter leaves it out) | nothing; `not-asked` | — | — | — |
 | the overview closes while an answer is on its way | nothing | the answer is kept, as for a pane showing another session | its reason is kept for when it is shown again | as above |
 | `sendMessage` from the peek's reply pill while an approval waits | the message in the outbox, "sending" | the approval is let go, on the source's record with who sent it | "Not sent" under the pill; Send Again in the pane | as for a pane |
@@ -1027,13 +1030,6 @@ Watch for:
 Remaining — the one list of what this record leaves open; the
 [index](../README.md) summarises it. Each is its own issue:
 
-- **The gateway's `WorkspaceSource`**
-  ([#248](https://github.com/nessalabs/nessa-agent/issues/248)). The window runs on the in-memory
-  source; attaching the backend is one adapter implementing the port
-  (`application/ports.ts`), composed in `src/desktop/dependencies.ts` in its
-  place, with the port's guarantees: every call settles on a timeout of its
-  own, refusals are typed, each replacement carries its revision, and the
-  stream says `resync` when it reconnects or finds a gap.
 - **nessa_ui's icon contract, and an icon slot on its access mode**
   ([nessa_ui#101](https://github.com/nessalabs/nessa_ui/issues/101)). The icon
   provider in `src/desktop/ui/icons/` mirrors `NessaIconProvider` until

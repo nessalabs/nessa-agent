@@ -1,18 +1,36 @@
 //! One SDK physical operation executes outside Tokio enter and joins its source on drop.
 use crate::conversation::{
-    application::{
-        ReceiverReadScope, RecordHead, RecordReadError, RecordReadOperation, RecordReadValue,
-    },
+    application::{RecordHead, RecordReadError, RecordReadOperation, RecordReadValue},
     infrastructure::exact_record_scope,
 };
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_sdk::{
     application::agent_execution::sessions::StorageError,
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::{RecordReadStatus, RecordStorage, RecordStreamIdentity},
 };
 use nessa_sync::replication::{application::SourceError, domain::Scope};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::runtime::Handle;
+
+/// SDK discovery calls one admitted read may make before it answers
+/// `source_preparing`. Each call is one bounded SDK step. Bounds and
+/// orderings: "Steps per admitted read" in
+/// `docs/design/bounded-terminal-discovery.md`.
+pub(super) const DISCOVERY_STEPS_PER_READ: usize = 128;
+/// How long one admitted read keeps making discovery calls while it holds a
+/// global read permit and its socket's record slot (row S5).
+pub(super) const READ_WORK_BUDGET: Duration = Duration::from_millis(200);
+
+/// One physical operation and when its discovery calls must stop.
+pub(super) struct ReadWork {
+    pub(super) operation: RecordReadOperation,
+    /// Most SDK discovery calls this read makes.
+    pub(super) steps: usize,
+    /// Asked before every call after the first: true once the read's budget
+    /// has passed, its waiter is gone, or read worker shutdown has started.
+    pub(super) stopped: Box<dyn Fn() -> bool + Send>,
+}
 
 pub(super) fn execute(
     storage: Arc<RecordStorage>,
@@ -21,35 +39,53 @@ pub(super) fn execute(
     identity: RecordStreamIdentity,
     admitted: ReceiverReadScope,
     observed: Scope,
-    operation: RecordReadOperation,
+    work: ReadWork,
 ) -> Result<RecordReadValue, RecordReadError> {
     let mut source = runtime
         .block_on(storage.record_source_expected(&session, &identity))
         .map_err(storage_error)?;
     exact_record_scope(&admitted, &source, &observed).map_err(RecordReadError::Admission)?;
+    let ReadWork {
+        operation,
+        steps,
+        stopped,
+    } = work;
     let value = match operation {
-        RecordReadOperation::Head => source
-            .bounded_head(&observed)
-            .map_err(source_error)
-            .and_then(|status| match status {
-                RecordReadStatus::Ready(head) => Ok(RecordReadValue::Head(RecordHead {
+        RecordReadOperation::Head => discover(steps, &*stopped, || source.bounded_head(&observed))
+            .map(|head| {
+                RecordReadValue::Head(RecordHead {
                     scope: observed,
                     head,
-                })),
-                RecordReadStatus::Preparing => Err(RecordReadError::SourcePreparing),
+                })
             }),
-        RecordReadOperation::Page(page) => source
-            .bounded_page(&page)
-            .map_err(source_error)
-            .and_then(|status| match status {
-                RecordReadStatus::Ready(page) => Ok(RecordReadValue::Page(page)),
-                RecordReadStatus::Preparing => Err(RecordReadError::SourcePreparing),
-            }),
+        RecordReadOperation::Page(page) => {
+            discover(steps, &*stopped, || source.bounded_page(&page)).map(RecordReadValue::Page)
+        }
     };
     // The final SDK source drop joins its internal worker
     // here because this thread is outside a Tokio enter.
     drop(source);
     value
+}
+
+/// Ask the SDK again while it is still validating, up to `steps` calls or until
+/// `stopped`. The first call is always made, so every read advances; the SDK
+/// keeps every step's progress, so a later read resumes where this one stopped.
+/// The first refusal ends the read.
+fn discover<T>(
+    steps: usize,
+    stopped: &dyn Fn() -> bool,
+    mut call: impl FnMut() -> Result<RecordReadStatus<T>, SourceError>,
+) -> Result<T, RecordReadError> {
+    for step in 0..steps {
+        if step > 0 && stopped() {
+            break;
+        }
+        if let RecordReadStatus::Ready(value) = call().map_err(source_error)? {
+            return Ok(value);
+        }
+    }
+    Err(RecordReadError::SourcePreparing)
 }
 
 pub(super) fn storage_error(error: StorageError) -> RecordReadError {

@@ -1,15 +1,15 @@
 /**
  * A fixture MCP server's app, with every port in memory: what composition
  * registers beside the sample workspace, so an app can be seen and measured
- * in a real browser (`verification/desktop/scripts/mcp-apps.mjs`). The
- * gateway's `mcp.readResource` and `mcp.callTool` (#348) are wired to
- * `McpAppServer` in #384; the fixture stays for the sample workspace and the
- * browser checks.
+ * in a real browser (`verification/desktop/scripts/mcp-apps.mjs`). A real
+ * server's app goes through the gateway (`adapters/gateway/`, #384); the
+ * fixture stays for the sample workspace and the browser checks.
  *
  * It stands in for a server and for the gateway in front of it, and decides
  * nothing for either: `fixture_refresh` answers, `fixture_secret` is refused
  * as the gateway refuses a tool hidden from apps, and any other tool is
- * refused too. Its one call is finished, with arguments and a result.
+ * refused too. Its one call is finished, with arguments and a result. A
+ * release holds nothing to let go of.
  */
 import type { JsonObject } from "../model/json-rpc"
 import type { AppCall } from "../model/tool-call"
@@ -22,10 +22,16 @@ import type {
   Timers,
 } from "../application/ports"
 import type { PageContext } from "../model/host-context"
+import { deadlines } from "../application/bridge"
 import { appMimeType } from "../model/resource"
 import { appPlugin } from "../ui/app-plugin"
 import { fixtureAppHtml } from "./fixture-app"
-import { fixtureResourceUri, fixtureServer, fixtureWidget } from "./fixture-widgets"
+import {
+  fixtureCallIdentity,
+  fixtureResourceUri,
+  fixtureServer,
+  fixtureWidget,
+} from "./fixture-widgets"
 
 /** The tools it answers an app for, and the one it refuses as hidden. */
 export const fixtureTools = {
@@ -56,6 +62,8 @@ export function fixtureServerPort(html = fixtureAppHtml): McpAppServer {
         }
       return { kind: "refused", reason: `${tool} is not available to apps` }
     },
+    release: async () => {},
+    callWithin: deadlines.request,
   }
 }
 
@@ -67,6 +75,7 @@ export function fixtureCall(sessionId: string): AppCall {
   }
   return {
     sessionId,
+    ...fixtureCallIdentity,
     tool: "show_fixture",
     definition: { name: "show_fixture", inputSchema: { type: "object" } },
     resourceUri: fixtureResourceUri,
@@ -79,6 +88,7 @@ export function fixtureAppPlugin(options: {
   readonly sessionId: string
   readonly sandbox: SandboxOrigin | undefined
   readonly timers: Timers
+  readonly newId: () => string
   readonly page: () => PageContext
 }): AppWidgetPlugin {
   const known: CallRead = { kind: "known", call: fixtureCall(options.sessionId) }
@@ -86,10 +96,11 @@ export function fixtureAppPlugin(options: {
   const ports: McpAppPorts = {
     server: fixtureServerPort(),
     calls: {
-      read: (id) => (id === fixtureWidget.id ? known : missing),
+      read: (id) => (id === fixtureWidget(options.sessionId).id ? known : missing),
       subscribe: () => () => {},
     },
     timers: options.timers,
+    newId: options.newId,
     ...(options.sandbox ? { sandbox: options.sandbox } : {}),
     hostInfo: { name: "Nessa", version: "fixture" },
     page: options.page,

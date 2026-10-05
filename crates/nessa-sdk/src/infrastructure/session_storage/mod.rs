@@ -10,8 +10,14 @@
 //! product reads reuse terminal-discovery metadata/hash in a sixteen-entry cache
 //! and return [`RecordReadStatus::Preparing`] until a captured tail is validated.
 //! That cache retains no worker or semantic body.
+//! `save_batch` arms one save's remaining physical events so their first append
+//! commits a bounded chunk in one SQLite transaction. A rolled-back chunk
+//! continues one event at a time.
 //! `record_changes` publishes payloadless interest only at durable save completion
 //! and Reset receipts. Closure preserves actual writer/read physical ownership.
+//! Public producer/source/discovery acceptance lives under the external storage
+//! integration tests; inherited private codec/allocation fixtures remain limited
+//! implementation observations, not public acceptance.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
 //! committed read cache advances from a fixed head and remains separate from
 //! the writer's observed state.
@@ -23,6 +29,7 @@
 //! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
 //! RecordStorage -> transcript fold -> committed gateway view
 //! RecordStorage -> creation control stream -> principal command lease/receipts
+//! RecordStorage -> bounded committed-change watches (no read or permission)
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete outer save publishes
@@ -36,6 +43,7 @@ mod message_commit_clock;
 mod paths;
 mod record;
 mod record_changes;
+mod save_batch;
 pub use record_changes::MAX_RECORD_CHANGE_WATCHES;
 mod record_lifecycle;
 mod record_source;

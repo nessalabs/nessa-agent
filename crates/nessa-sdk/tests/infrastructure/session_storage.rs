@@ -1,4 +1,18 @@
 //! Public record-storage contract exercised through the SDK port.
+//! session_storage -> memory public bindings / receipts / reset
+//!                 -> record public writer / watch / physical interruption / retry
+//!                 -> record_source public publication / restored extension
+//!                 -> discovery public bounded query ordering / physical faults
+//!                 -> save_group public leases / emitted records / checkpoints
+//!                 -> fixtures public immutable data / actual emitted donor output
+
+mod caller_wakes;
+mod discovery;
+mod fixtures;
+mod memory;
+mod record;
+mod record_source;
+mod save_group;
 
 use nessa_sdk::{
     application::agent_execution::{

@@ -3,17 +3,19 @@
 //! before it admits anything, and what a view echoes back.
 use super::{
     ConversationCaller, ConversationDependencies, ConversationError, ConversationFileLinkCause,
-    ConversationFileLinkState, ConversationLimits, ConversationMessageStatus, ConversationService,
-    ProviderSessionErasers, SubmissionMode, SubmittedFile, SubmittedMessage,
+    ConversationFileLinkState, ConversationLimits, ConversationService, ProviderSessionErasers,
+    SubmissionMode, SubmittedFile, SubmittedMessage,
 };
 use crate::{
-    conversation::{domain::ConversationId, infrastructure::DurableConversationFileLinkAudit},
+    conversation::infrastructure::DurableConversationFileLinkAudit,
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
         Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::{
     application::agent_execution::sessions::{
         CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,

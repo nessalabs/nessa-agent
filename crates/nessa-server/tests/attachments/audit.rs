@@ -1,6 +1,7 @@
 //! What each committed record says, and that it is committed privately.
 use super::*;
-use crate::attachments::domain::TicketLifetime;
+use crate::attachments::application::{RemovedBlob, RetiredHold, RetirementEvidence};
+use crate::attachments::domain::{RetiredFrom, TicketLifetime};
 use crate::attachments_test_support::{
     attachment, conversation, digest_of, organization, principal, ManualClock, CONVERSATION,
 };
@@ -126,6 +127,7 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
             AttachmentAuditRecord::HoldReverted {
                 hold: hold(),
                 cause: RevertCause::AuditUnconfirmed,
+                was: RetiredFrom::Pending,
             },
             json!({
                 "kind": "attachment_hold_reverted",
@@ -223,18 +225,29 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         ),
         (
             AttachmentAuditRecord::BlobRemoved {
-                hold: hold(),
-                release: release(),
+                removed: RemovedBlob::new(vec![RetiredHold::new(
+                    hold(),
+                    RetiredFrom::Held,
+                    RetirementEvidence::Release(release()),
+                )
+                .expect("valid original retirement")])
+                .expect("nonempty same-digest retirements"),
             },
             json!({
                 "kind": "attachment_bytes_removed",
-                "target": target(true),
+                "target": {"storedDigest": digest_of(b"kept").to_string()},
                 "transition": {"before": "stored", "after": "absent"},
-                "cause": "last_hold_released",
-                "releaseCause": "conversation_closed",
-                "initiator": closer(),
-                "correlationId": "close-1",
-                "requestedAtMs": 3_000,
+                "cause": "unheld_cleanup",
+                "initiator": {"kind": "automatic"},
+                "retirements": [{
+                    "kind": "attachment_hold_released",
+                    "target": target(true),
+                    "transition": {"before": "held", "after": "absent"},
+                    "cause": "conversation_closed",
+                    "initiator": closer(),
+                    "correlationId": "close-1",
+                    "requestedAtMs": 3_000,
+                }],
             }),
         ),
     ] {
@@ -254,6 +267,7 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         let value = record_value(&AttachmentAuditRecord::HoldReverted {
             hold: hold(),
             cause,
+            was: RetiredFrom::Pending,
         });
         assert_eq!(value["cause"], name);
         assert_eq!(value["initiator"], json!({"kind": "automatic"}));
@@ -283,13 +297,23 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         ),
         (
             AttachmentAuditRecord::BlobRemoved {
-                hold: hold(),
-                release: deleting.clone(),
+                removed: RemovedBlob::new(vec![RetiredHold::new(
+                    hold(),
+                    RetiredFrom::Held,
+                    RetirementEvidence::Release(deleting.clone()),
+                )
+                .expect("valid original retirement")])
+                .expect("nonempty same-digest retirements"),
             },
-            "releaseCause",
+            "cause",
         ),
     ] {
         let value = record_value(&record);
+        let value = if matches!(record, AttachmentAuditRecord::BlobRemoved { .. }) {
+            &value["retirements"][0]
+        } else {
+            &value
+        };
         assert_eq!(value[field], "conversation_deleted", "{record:?}");
         assert_eq!(value["initiator"], closer());
     }
@@ -361,6 +385,69 @@ async fn a_record_is_committed_privately_with_its_own_identity_and_observation_t
     assert_ne!(identities[0], identities[1]);
 }
 
+#[tokio::test]
+async fn a_durable_write_does_not_start_until_the_previous_one_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let audit = Arc::new(
+        DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap(),
+    );
+    audit.pause_writes_for_test();
+    // A failing assertion must still let the blocked write return, or the
+    // runtime waits on that thread and the failure never prints.
+    let release_writes = ReleaseWrites(Arc::clone(&audit));
+    let first = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..100 {
+        if audit.writes_started() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(audit.writes_started(), 1, "the first write did not start");
+    // The place is still held inside the blocking write. Dropping it before
+    // `spawn_blocking` leaves this at 1.
+    assert_eq!(
+        audit.write_permits_available(),
+        0,
+        "the write dropped its place before it finished"
+    );
+    let second = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..40 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        audit.writes_started(),
+        1,
+        "a second write started while the first still held its place"
+    );
+    drop(release_writes);
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(audit.writes_started(), 2);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+struct ReleaseWrites(Arc<DurableAttachmentAudit>);
+impl Drop for ReleaseWrites {
+    fn drop(&mut self) {
+        self.0.resume_writes_for_test();
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_failure() {
@@ -381,4 +468,63 @@ async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_fai
             .await,
         Err(AuditUnavailable)
     );
+}
+
+#[test]
+fn a_hold_reversal_reports_its_actual_existing_before_state() {
+    for (was, before) in [
+        (RetiredFrom::Pending, "pending"),
+        (RetiredFrom::Held, "held"),
+    ] {
+        let value = record_value(&AttachmentAuditRecord::HoldReverted {
+            hold: hold(),
+            was,
+            cause: RevertCause::ConfirmationFailed,
+        });
+        assert_eq!(
+            value["transition"],
+            json!({"before": before, "after": "absent"})
+        );
+        assert_eq!(value["target"], target(true));
+        assert_eq!(value["initiator"], json!({"kind": "automatic"}));
+        assert_eq!(value["uploadedBy"], uploader());
+        assert_eq!(value["correlationId"], hold().uploaded_by().action_id());
+        assert_eq!(value["cause"], "confirmation_failed");
+    }
+}
+
+#[test]
+fn substitutable_retirement_reports_refuse_contradictory_inputs() {
+    for was in [RetiredFrom::Pending, RetiredFrom::Held] {
+        let original = hold();
+        assert!(RetiredHold::new(
+            original.clone(),
+            was,
+            RetirementEvidence::RevertedUpload {
+                cause: RevertCause::ConfirmationFailed,
+                caller: release().caller,
+            }
+        )
+        .is_none());
+        let valid = RetiredHold::new(
+            original.clone(),
+            was,
+            RetirementEvidence::RevertedUpload {
+                cause: RevertCause::ConfirmationFailed,
+                caller: original.uploaded_by().clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(valid.hold(), &original);
+        assert_eq!(valid.was(), was);
+        let removed = RemovedBlob::new(vec![valid.clone()]).unwrap();
+        assert_eq!(removed.digest(), original.stored().digest());
+        assert_eq!(removed.retirements(), std::slice::from_ref(&valid));
+        assert!(RemovedBlob::new(vec![]).is_none());
+        let other =
+            Hold::from_upload(&ticket(), attachment(b"another", "image/jpeg"), 2_000).unwrap();
+        let other = RetiredHold::new(other, was, RetirementEvidence::Release(release())).unwrap();
+        assert!(RemovedBlob::new(vec![valid.clone(), other.clone()]).is_none());
+        assert!(RemovedBlob::new(vec![other, valid]).is_none());
+    }
 }

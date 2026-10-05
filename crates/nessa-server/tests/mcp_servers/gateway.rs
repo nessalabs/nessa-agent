@@ -1,8 +1,7 @@
 /// `GET /mcp-resources` through the real router, over a real connection.
 mod mcp_resource_gateway {
     use super::*;
-    use crate::conversation::application::ResourceTickets;
-    use crate::mcp_servers::infrastructure::ticket_test_support::{app, held, Fixture, CONVERSATION};
+    use crate::mcp_servers::infrastructure::ticket_test_support::{app, held, issued, Fixture, CONVERSATION};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const PAGE: &[u8] = b"<!doctype html><title>chart</title>";
@@ -52,9 +51,7 @@ mod mcp_resource_gateway {
         let fixture = Fixture::new();
         let (state, _) = fixture_state();
         let state = state.with_resource_tickets(fixture.store.clone(), fixture.audit.clone());
-        let ticket = fixture
-            .store
-            .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))
+        let ticket = issued(&fixture.store, held(CONVERSATION, app("call-1", "mount-1"), PAGE))
             .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -87,9 +84,7 @@ mod mcp_resource_gateway {
         assert!(spent.starts_with("HTTP/1.1 404"), "{spent}");
         assert!(spent.contains("content-length: 0"), "{spent}");
         // A ticket in the URL is not one: it is not read from there.
-        let fresh = fixture
-            .store
-            .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))
+        let fresh = issued(&fixture.store, held(CONVERSATION, app("call-1", "mount-1"), PAGE))
             .unwrap();
         let in_url = exchange(
             address,
@@ -171,6 +166,40 @@ mod mcp_app_lane {
     }
 
     #[tokio::test]
+    async fn what_the_wire_cannot_carry_is_refused_or_left_out_on_the_way() {
+        let fixture = owners_fixture().await;
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+
+        // A URI past the schema's bound is refused before the service: its
+        // refusal is not even on record, as no record could hold it.
+        let mut long = call(&fixture, "long", "read_rows");
+        long.as_object_mut().unwrap().remove("tool");
+        long.as_object_mut().unwrap().remove("argumentsJson");
+        long["uri"] = json!(format!("ui://charts/{}", "x".repeat(2048)));
+        send_command(&peer, "long", "mcp.readResource", long);
+        assert_eq!(response(&mut peer).await["error"]["code"], "invalid_request");
+        assert!(fixture.audit.phases().is_empty());
+
+        // A JSON-RPC code past what a JSON number keeps: the code, without
+        // details the schema could not carry.
+        fixture.apps.answers.lock().unwrap().push(Err(
+            crate::conversation::application::McpAppFailure::Remote {
+                code: i64::MAX,
+                message: "bad".into(),
+            },
+        ));
+        send_command(&peer, "far", "mcp.callTool", call(&fixture, "far", "read_rows"));
+        let refused = response(&mut peer).await;
+        assert_eq!(refused["error"]["code"], "mcp_remote_error");
+        assert!(refused["error"].get("details").is_none());
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn held_calls_fill_their_lane_and_never_keep_out_the_read_and_answer() {
         let fixture = owners_fixture().await;
         let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
@@ -247,7 +276,13 @@ mod mcp_app_lane {
             }
         }
         assert!(fixture.app_reviews().await.is_empty());
+        // The released mount opens nothing again; a new mount of the same
+        // tool call does.
         send_command(&peer, "c7", "mcp.callTool", call(&fixture, "c7", "delete_rows"));
+        assert_eq!(response(&mut peer).await["error"]["code"], "mcp_cancelled");
+        let mut fresh = call(&fixture, "c8", "delete_rows");
+        fresh["app"]["instanceId"] = json!(crate::app_call_test_support::OTHER_INSTANCE);
+        send_command(&peer, "c8", "mcp.callTool", fresh);
         until(async || fixture.app_reviews().await.len() == 1).await;
 
         // The socket goes: its held call is withdrawn, on record.

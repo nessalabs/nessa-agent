@@ -18,14 +18,21 @@
 //! connection of its own, never resuming the session it asks the agent to
 //! delete. `thought_level` reads the reasoning effort option an agent
 //! advertises, whatever it calls it. `stand_ins` holds the host's grant for
-//! one open, whose environment every MCP server process of that open gets.
+//! one open, whose environment every MCP server process of that open gets;
+//! `forwarded` holds the results that open's stand-ins forwarded, and attaches
+//! each to the completed call it answers.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
 pub(crate) mod configuration;
 pub(crate) mod deletion;
+pub(crate) mod forwarded;
 pub(crate) mod identity;
 mod stand_ins;
 pub(crate) mod thought_level;
-pub use config::{AcpConfig, StdioMcpServer};
+pub use config::{
+    AcpConfig, McpServerList, McpServerProblem, McpServerSource, StdioMcpServer, MAX_MCP_SERVERS,
+    MAX_MCP_SERVER_ARGS, MAX_MCP_SERVER_ARG_BYTES, MAX_MCP_SERVER_NAME_BYTES,
+};
+pub use forwarded::{ForwardedResults, MAX_FORWARDED_RESULTS};
 pub use stand_ins::{StandInGrant, StandInGrants, StandInSessions};

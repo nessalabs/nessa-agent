@@ -39,19 +39,17 @@
 use super::managed_adapter::ManagedAdapter;
 #[cfg(unix)]
 use crate::agents::application::AgentCredentialSource;
-use crate::agents::domain::AgentId;
 #[cfg(unix)]
 use crate::agents::infrastructure::CredentialedClaudeProvider;
 #[cfg(unix)]
 use crate::conversation::application::{ConversationAgent, ProviderSessionErasers};
 #[cfg(any(unix, test))]
 use crate::core::RunError;
+use crate::mcp_servers::{domain::ConfiguredMcpServer, infrastructure::stored_servers};
 #[cfg(unix)]
 use nessa_auth::application::ports::Clock;
-use nessa_sdk::{
-    application::agent_execution::providers::ExecutableUseSnapshot,
-    infrastructure::acp::sessions::StdioMcpServer,
-};
+use nessa_protocol::agents::AgentId;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, UserImageSource},
@@ -75,8 +73,20 @@ use std::{collections::HashMap, path::PathBuf};
 pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
     pub workspace: PathBuf,
-    #[serde(default)]
-    pub mcp_servers: Vec<StdioMcpServer>,
+    /// The MCP servers configured at startup, each with whether it is on and
+    /// its own variables (`mcp_servers::infrastructure::stored_servers`, the
+    /// one reader of the block). Composition takes them into the gateway's
+    /// live set ([`super::mcp_servers`]) before any agent is built, leaving
+    /// this empty; agents read `mcp_stand_ins` instead.
+    #[serde(default, deserialize_with = "stored_servers")]
+    pub mcp_servers: Vec<ConfiguredMcpServer>,
+    /// What each provider open's `mcpServers` are read from: the stand-ins
+    /// for the gateway's live set once MCP is composed
+    /// ([`super::mcp_servers`]), none before. Never configured. Unix only,
+    /// as composing MCP and launching an agent are.
+    #[cfg(unix)]
+    #[serde(skip)]
+    pub mcp_stand_ins: nessa_sdk::infrastructure::acp::sessions::McpServerList,
     /// Where each provider open's MCP stand-ins get their session token: the
     /// gateway's grants once MCP is composed ([`super::mcp_servers`]), none
     /// before. Never configured. Unix only, as composing MCP and launching an
@@ -915,7 +925,9 @@ pub(super) mod build {
             common::value_objects::TokenLimits,
         },
         infrastructure::{
-            acp::sessions::AcpConfig, clock::RuntimeClock, codex_acp::sessions::CodexAcpProvider,
+            acp::sessions::{AcpConfig, McpServerList, StandInSessions},
+            clock::RuntimeClock,
+            codex_acp::sessions::CodexAcpProvider,
             opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
@@ -1004,8 +1016,20 @@ pub(super) mod build {
             credential_environment,
             workspace,
             tools_enabled: runtime.tools_enabled,
-            mcp_servers: config.mcp_servers.clone(),
-            stand_ins: config.stand_ins.clone(),
+            // MCP servers are tools: a runtime with tools off is given none,
+            // so a server saved later cannot break its opens or deletes,
+            // which the SDK refuses with servers and no tools
+            // (`a_tools_disabled_agent_opens_and_deletes_with_a_server_saved`).
+            mcp_servers: if runtime.tools_enabled {
+                config.mcp_stand_ins.clone()
+            } else {
+                McpServerList::none()
+            },
+            stand_ins: if runtime.tools_enabled {
+                config.stand_ins.clone()
+            } else {
+                StandInSessions::none()
+            },
             permissions: PermissionOfferPolicy::once_only(),
             // All four from protocol/defaults/agent-startup-budgets.json,
             // which the client compiles in too: a client that gives up before

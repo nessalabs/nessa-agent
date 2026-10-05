@@ -8,10 +8,20 @@ import {
   coreWireContract,
   applyCoreWireBounds,
 } from "./product-protocol/core-contract.mjs"
+import {
+  derivePairingValues,
+  pairingArrayOwner,
+  pairingValueSchema,
+} from "./product-protocol/pairing-values.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
+const pairingValues = JSON.parse(
+  readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8"),
+)
+const pairing = pairingValueSchema(pairingValues)
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
@@ -26,6 +36,8 @@ const readyMethods = Object.keys(manifest.methods).filter(
 )
 const ownedSchema = JSON.stringify(schema)
 applyCoreWireBounds(schema, coreWireContract(root))
+// Pairing identity, key and code widths have one owner: Auth's wire-values.json.
+schema.$defs = derivePairingValues(schema, pairingValues).schema.$defs
 schema.$defs.ProductSessionReady.properties.methods.maxItems = readyMethods.length
 let schemaOutput
 if (JSON.stringify(schema) !== ownedSchema) {
@@ -58,6 +70,106 @@ passiveReadTiming.minRequestTimeoutMs =
 if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
   throw new Error("Passive request deadline exceeds the runtime timer range")
 
+// How long an MCP App's calls can take the gateway, with one owner: a review
+// waiting for the person, the server's budgets for a call and a read, and the
+// client's allowance. The client waits their sum for `mcp.callTool` and, since
+// the gateway may open the conversation first, for `mcp.readResource` too;
+// every layer reads these generated values and spells none of them.
+const appTiming = schema["x-mcpAppCallTiming"]
+const mcpAppCallTiming = {}
+for (const name of [
+  "reviewDeadlineMs",
+  "callTimeoutMs",
+  "readTimeoutMs",
+  "clientAllowanceMs",
+]) {
+  if (
+    !appTiming ||
+    !Object.hasOwn(appTiming, name) ||
+    !Number.isSafeInteger(appTiming[name]) ||
+    appTiming[name] <= 0
+  )
+    throw new Error(`Invalid MCP App call timing: ${name}`)
+  mcpAppCallTiming[name] = appTiming[name]
+}
+if (Object.keys(appTiming).length !== Object.keys(mcpAppCallTiming).length)
+  throw new Error("MCP App call timing has unknown fields")
+mcpAppCallTiming.callDeadlineMs =
+  mcpAppCallTiming.reviewDeadlineMs +
+  mcpAppCallTiming.callTimeoutMs +
+  mcpAppCallTiming.clientAllowanceMs
+if (mcpAppCallTiming.callDeadlineMs > 2_147_483_647)
+  throw new Error("MCP App call deadline exceeds the runtime timer range")
+// A client waits a call's deadline for a read too; a read longer than a call
+// would be abandoned while the gateway is still bound to answer it.
+if (mcpAppCallTiming.readTimeoutMs > mcpAppCallTiming.callTimeoutMs)
+  throw new Error("MCP App read timeout outlasts a call")
+
+// How long, how far and how many at once mcpServers.inspect runs, with one
+// owner: the gateway reads the bounds as generated constants, and the client
+// waits the deadline plus its allowance (the server's stop and the audit
+// records come after the deadline).
+const inspectPolicy = schema["x-mcpServerInspect"]
+const mcpServerInspect = {}
+for (const name of [
+  "deadlineMs",
+  "maxToolPages",
+  "maxUiReads",
+  "maxConcurrent",
+  "clientAllowanceMs",
+]) {
+  if (
+    !inspectPolicy ||
+    !Object.hasOwn(inspectPolicy, name) ||
+    !Number.isSafeInteger(inspectPolicy[name]) ||
+    inspectPolicy[name] <= 0
+  )
+    throw new Error(`Invalid MCP server inspection policy: ${name}`)
+  mcpServerInspect[name] = inspectPolicy[name]
+}
+if (Object.keys(inspectPolicy).length !== Object.keys(mcpServerInspect).length)
+  throw new Error("MCP server inspection policy has unknown fields")
+mcpServerInspect.requestDeadlineMs =
+  mcpServerInspect.deadlineMs + mcpServerInspect.clientAllowanceMs
+if (mcpServerInspect.requestDeadlineMs > 2_147_483_647)
+  throw new Error("MCP server inspection deadline exceeds the runtime timer range")
+
+// The rules for a stored MCP server, owned by the SDK (StdioMcpServer::problem,
+// problem_in and McpServerLaunch::problem) and published as schema data so the
+// schema's prose and a client name the same numbers: each value must equal the
+// SDK constant it names, or generation fails.
+const mcpServerRules = {}
+{
+  const rules = schema["x-mcpServerRules"]
+  const owners = {
+    maxServers: ["acp/sessions/config.rs", "MAX_MCP_SERVERS"],
+    nameMaxBytes: ["acp/sessions/config.rs", "MAX_MCP_SERVER_NAME_BYTES"],
+    maxArgs: ["acp/sessions/config.rs", "MAX_MCP_SERVER_ARGS"],
+    argMaxBytes: ["acp/sessions/config.rs", "MAX_MCP_SERVER_ARG_BYTES"],
+    environmentNameMaxBytes: ["mcp/servers.rs", "MAX_MCP_ENVIRONMENT_NAME_BYTES"],
+  }
+  if (!rules || Object.keys(rules).length !== Object.keys(owners).length)
+    throw new Error("MCP server rules must name exactly the SDK's bounds")
+  for (const [name, [file, constant]] of Object.entries(owners)) {
+    const source = readFileSync(
+      resolve(root, `crates/nessa-sdk/src/infrastructure/${file}`),
+      "utf8",
+    )
+    const owned = Number(
+      source
+        .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+        .replaceAll("_", ""),
+    )
+    if (
+      !Object.hasOwn(rules, name) ||
+      !Number.isSafeInteger(owned) ||
+      rules[name] !== owned
+    )
+      throw new Error(`x-mcpServerRules.${name} drifted from the SDK's ${constant}`)
+    mcpServerRules[name] = owned
+  }
+}
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -67,7 +179,7 @@ const sdkSource = readFileSync(
   "utf8",
 )
 const ordinaryWire = readFileSync(
-  resolve(root, "crates/nessa-server/src/protocol/encode.rs"),
+  resolve(root, "crates/nessa-protocol/src/protocol/encode.rs"),
   "utf8",
 )
 const maxOrdinaryResponseBytes = Number(
@@ -96,6 +208,13 @@ const externalRustTypes = new Set()
 const sharedRustReferences = new Set()
 const rustTypeName = (value) => value.split("::").at(-1)
 function type(node, rust) {
+  // A pairing byte array is the owner's fixed width, so serde refuses any other length.
+  const pairingOwner = pairingArrayOwner(node)
+  if (pairingOwner) {
+    if (!rust) return "number[]"
+    externalRustTypes.add(pairingOwner)
+    return `[u8; ${rustTypeName(pairingOwner)}::LENGTH]`
+  }
   if (node.$ref) {
     const name = node.$ref.split("/").at(-1)
     const externalType = schema.$defs[name]["x-rust-type"]
@@ -127,12 +246,29 @@ function doc(description) {
 let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
-  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n#![allow(dead_code)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+// ConversationErrorCode is named by MCP app audit and by the product wire.
+// It has no payload field, so it is published here with the other outcome
+// codes an application module may import.
 const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
+  "ChangeWatchErrorCode",
+  "ChangeWatchEndReason",
+  "ConversationErrorCode",
 ])
+// Outcome enums referenced by typed payload fields serialize through Serde.
+// Unreferenced code vocabularies and close-policy enums also expose string codes.
+const payloadOutcomes = new Set(
+  Object.values(schema.$defs).flatMap((definition) =>
+    Object.values(definition.properties ?? {}).flatMap((field) =>
+      typeof field.$ref === "string" && field.$ref.startsWith("#/$defs/")
+        ? [field.$ref.slice("#/$defs/".length)]
+        : [],
+    ),
+  ),
+)
 let contractRs =
   "//! Pure product outcome values generated from protocol/product/v1.json. Do not edit.\nuse serde::{Deserialize, Serialize};\n"
 rs += "__SHARED_RUST_IMPORTS__"
@@ -148,14 +284,20 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
     let enumRs = ""
     enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
-    // The wire spelling, so handlers pass the typed value where a code is written.
-    enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
+    // Shared payload outcomes need no separate string-code API.
+    if (!sharedOutcomes.has(name) || !payloadOutcomes.has(name) || def["x-close-policy"])
+      enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
     if (def["x-close-policy"]) {
       ts += `export const sessionClosePolicy = ${JSON.stringify(def["x-close-policy"])} as const\n`
-      enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } pub(crate) fn from_web_socket_code(code: u16) -> Option<Self> { match code {${def.enum.map((v) => `${def["x-close-policy"][v].webSocketCode} => Some(Self::${pascal(v)})`).join(",")}, _ => None } } }\n`
+      enumRs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } }\n`
     }
     if (sharedOutcomes.has(name)) contractRs += enumRs
     else rs += enumRs
+    continue
+  }
+  if (def.type === "string" && !def.properties) {
+    ts += `export type ${name} = string\n`
+    rs += `pub type ${name} = String;\n`
     continue
   }
   ts += `export interface ${name} {\n`
@@ -168,7 +310,9 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     ts += doc(node.description)
     ts += `  ${field}${optional ? "?" : ""}: ${type(node, false)}\n`
     if (!externalRust)
-      rs += `${optional ? '#[serde(default, skip_serializing_if = "Option::is_none")]\n' : ""}pub ${snake(field)}: ${optional ? `Option<${type(node, true).replace(/^Option<(.*)>$/, "$1")}>` : type(node, true)},\n`
+      // A required field that may be null must still be present: serde reads
+      // a missing `Option` as `None` unless told otherwise.
+      rs += `${optional ? '#[serde(default, skip_serializing_if = "Option::is_none")]\n' : Array.isArray(node.type) ? '#[serde(deserialize_with = "Option::deserialize")]\n' : ""}pub ${snake(field)}: ${optional ? `Option<${type(node, true).replace(/^Option<(.*)>$/, "$1")}>` : type(node, true)},\n`
   }
   ts += "}\n"
   if (!externalRust) rs += "}\n"
@@ -206,6 +350,43 @@ function agreeing(name, values) {
     throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
   return first
 }
+// Watch capacity is product policy. The server reads these constants and holds
+// no limit of its own; per-connection capacity is the sum of the per-kind limits.
+const watchLimits = schema["x-changeWatchLimits"]
+const watchLimitNames = [
+  "globalOwners",
+  "principalOwners",
+  "recordTargets",
+  "catalogueTargets",
+]
+for (const name of watchLimitNames) {
+  if (
+    !watchLimits ||
+    !Object.hasOwn(watchLimits, name) ||
+    !Number.isSafeInteger(watchLimits[name]) ||
+    watchLimits[name] <= 0
+  )
+    throw new Error(`Invalid change watch limit: ${name}`)
+}
+if (Object.keys(watchLimits).length !== watchLimitNames.length)
+  throw new Error("Invalid change watch limit: unknown policy key")
+if (watchLimits.principalOwners > watchLimits.globalOwners)
+  throw new Error("Invalid change watch limit: principalOwners exceeds globalOwners")
+const connectionWatches = watchLimits.recordTargets + watchLimits.catalogueTargets
+const watchId = schema.$defs.ChangeWatchId
+if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
+  throw new Error("Invalid change watch ID publication")
+rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
+// Published so the server can test the identities it mints against the schema.
+rs += `pub const CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(watchId.pattern)};\n`
+rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
+rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
+rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
+rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
+rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
+ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
+ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
+ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties
@@ -222,6 +403,10 @@ const catalogueDecimalFields = [
 ]
 const bounds = {
   maxOrdinaryResponseBytes,
+  // The same gateway limit, read where it bites a client: the gateway takes no
+  // WebSocket message longer (`max_message_size`), and its read loop closes the
+  // socket on one rather than answering it, so a client must not send one.
+  maxRequestFrameBytes: maxOrdinaryResponseBytes,
   maxReadyMethods: schema.$defs.ProductSessionReady.properties.methods.maxItems,
   maxAuthCredentialCharacters:
     schema.$defs.SessionAuthenticateParams.properties.credential.maxLength,
@@ -351,9 +536,31 @@ for (const name of [
 for (const [name, value] of Object.entries(passiveReadTiming)) {
   rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
 }
+// Pure values the gateway's own layers read (the review, the call, the read,
+// the ticket), so they sit with the product contract, not the wire. The
+// client's allowance and deadlines are the client's alone.
+for (const name of ["reviewDeadlineMs", "callTimeoutMs", "readTimeoutMs"]) {
+  contractRs += `/// Published MCP App call timing from the product schema, in milliseconds.\npub const MCP_APP_${snake(name).toUpperCase()}: u64 = ${mcpAppCallTiming[name]};\n`
+}
+// The gateway's own bounds for an inspection; the client's allowance and
+// deadline are the client's alone.
+for (const name of ["deadlineMs", "maxToolPages", "maxUiReads", "maxConcurrent"]) {
+  const type = name === "deadlineMs" ? "u64" : "usize"
+  contractRs += `/// Published mcpServers.inspect policy from the product schema${name === "deadlineMs" ? ", in milliseconds" : ""}.\npub const MCP_SERVER_INSPECT_${snake(name).toUpperCase()}: ${type} = ${mcpServerInspect[name]};\n`
+}
+contractRs += `/// Published lifetime of an MCP App's resource ticket from the product schema, in milliseconds.\npub const MCP_RESOURCE_TICKET_MS: u64 = ${bounds.mcpResourceTicketMs};\n`
 ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
+ts += `${doc(
+  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first.",
+)}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
+ts += `${doc(
+  "How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response.",
+)}export const mcpServerInspect = ${JSON.stringify(mcpServerInspect)} as const\n`
+ts += `${doc(
+  "The SDK's rules for a stored MCP server, as x-mcpServerRules publishes them: at most maxServers servers, the managed one included; a name of 1 to nameMaxBytes bytes; at most maxArgs arguments of at most argMaxBytes bytes each; a variable name of 1 to environmentNameMaxBytes bytes. The gateway refuses past them (mcp_servers_invalid); a client may refuse early by reading these.",
+)}export const mcpServerRules = ${JSON.stringify(mcpServerRules)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
@@ -446,10 +653,18 @@ const formattedContract = spawnSync("rustfmt", ["--edition", "2021"], {
 })
 if (formattedContract.status !== 0) throw new Error(formattedContract.stderr)
 const outputs = [
+  [`${pairingDirectory}/wire_values.rs`, pairing.rust],
+  [
+    "protocol/product/pairing-values.generated.json",
+    await format(JSON.stringify(pairing.schema), {
+      ...(await resolveConfig(resolve(root, "prettier.config.js"))),
+      parser: "json",
+    }),
+  ],
   ...(schemaOutput === undefined ? [] : [["protocol/product/v1.json", schemaOutput]]),
   ["packages/nessa-client/src/generated/product.ts", ts],
-  ["crates/nessa-server/src/product/generated.rs", formatted.stdout],
-  ["crates/nessa-server/src/product_contract/generated.rs", formattedContract.stdout],
+  ["crates/nessa-protocol/src/product/generated.rs", formatted.stdout],
+  ["crates/nessa-protocol/src/product_contract/generated.rs", formattedContract.stdout],
 ]
 for (const [path, contents] of outputs) {
   const target = resolve(root, path)

@@ -1,32 +1,31 @@
 //! Test-only ports for the attachment service. Every double can fail the way
 //! its real counterpart can, because those are the paths nothing else reaches.
-use crate::{
-    attachments::{
-        application::{
-            AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
-            AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
-            BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
-            Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
-            OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseReport, ReleasedHold,
-            SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
-            UploadInterrupted,
-        },
-        domain::{Attachment, Hold, HoldState, MediaType},
+use crate::attachments::{
+    application::{
+        AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
+        AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
+        BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
+        Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable,
+        PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold,
+        RetirementEvidence, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
+        TicketSecrets, UploadBody, UploadInterrupted,
     },
-    conversation::domain::ConversationId,
+    domain::{Attachment, Hold, MediaType, RetiredFrom},
 };
 use nessa_auth::{
     application::ports::Clock,
     domain::{OrganizationId, PrincipalId},
 };
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, Notify};
 
@@ -105,7 +104,18 @@ pub(crate) struct RecordingAudit {
     records: Mutex<Vec<AttachmentAuditRecord>>,
     pub(crate) refusing: AtomicBool,
     pub(crate) stalled: AtomicBool,
+    /// The next `record` panics after it has been counted, so a delivery task
+    /// can be left finished with a panic.
+    pub(crate) panic_in_record: AtomicBool,
+    /// Panic this many of the next `record` calls, then stop. Unlike
+    /// [`Self::panic_in_record`], the count is used up.
+    pub(crate) panic_next: AtomicUsize,
     pub(crate) attempts: AtomicUsize,
+    /// Conversation of each `record` call, in the order the sink was entered.
+    conversations: Mutex<Vec<ConversationId>>,
+    /// How long each `record` future lived, in call order. A deadline drops
+    /// the future, so this is the attempt the service actually gave it.
+    durations: Mutex<Vec<Duration>>,
     /// Signalled once per acknowledged record, so a test can wait for one
     /// without guessing how long it takes.
     pub(crate) recorded: Notify,
@@ -134,10 +144,76 @@ impl RecordingAudit {
         records.retain(|record| !matches!(record, AttachmentAuditRecord::TicketIssued { .. }));
         records
     }
+    /// How long each attempt lived, in the order the sink was asked.
+    pub(crate) fn durations(&self) -> Vec<Duration> {
+        self.durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+    /// Forget timings from earlier phases, so a later assertion reads only
+    /// the attempts it is about.
+    pub(crate) fn clear_durations(&self) {
+        self.durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+    /// Conversations whose records have entered the sink, in that order.
+    pub(crate) fn conversations(&self) -> Vec<ConversationId> {
+        self.conversations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
 }
+
+fn record_conversation(record: &AttachmentAuditRecord) -> ConversationId {
+    match record {
+        AttachmentAuditRecord::TicketIssued { ticket }
+        | AttachmentAuditRecord::TicketReplaced { ticket }
+        | AttachmentAuditRecord::TicketExpired { ticket }
+        | AttachmentAuditRecord::TicketWithdrawn { ticket, .. }
+        | AttachmentAuditRecord::UploadRejected { ticket, .. } => ticket.conversation_id().clone(),
+        AttachmentAuditRecord::HoldCreated { hold }
+        | AttachmentAuditRecord::AlreadyHeld { hold, .. }
+        | AttachmentAuditRecord::HoldReverted { hold, .. }
+        | AttachmentAuditRecord::HoldReleased { hold, .. } => hold.conversation_id().clone(),
+        AttachmentAuditRecord::BlobRemoved { removed } => {
+            removed.retirements()[0].hold().conversation_id().clone()
+        }
+    }
+}
+
+/// Times one sink call, including the drop that ends a deadline.
+struct AttemptSpan<'a> {
+    audit: &'a RecordingAudit,
+    started: tokio::time::Instant,
+}
+impl Drop for AttemptSpan<'_> {
+    fn drop(&mut self) {
+        self.audit
+            .durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(self.started.elapsed());
+    }
+}
+
 impl AttachmentAudit for RecordingAudit {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
+        let conversation_id = record_conversation(&record);
         Box::pin(async move {
+            // The service drops its admission permit when this future ends,
+            // including when a deadline drops a stall.
+            self.conversations
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(conversation_id);
+            let _span = AttemptSpan {
+                audit: self,
+                started: tokio::time::Instant::now(),
+            };
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
             let gate = {
                 let mut gate = self.gate.lock().unwrap();
@@ -149,6 +225,18 @@ impl AttachmentAudit for RecordingAudit {
                 if gate.then_refuse {
                     return Err(AuditUnavailable);
                 }
+            }
+            // After a held gate, so a test can drop the caller while this
+            // attempt is still inside the sink and only then let it panic.
+            #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
+            let counted_panic = self
+                .panic_next
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            if self.panic_in_record.load(Ordering::SeqCst) || counted_panic {
+                panic!("attachment audit sink panicked");
             }
             if self.stalled.load(Ordering::SeqCst) {
                 std::future::pending::<()>().await;
@@ -304,11 +392,16 @@ pub(crate) struct MemoryStore {
     pub(crate) unavailable: AtomicBool,
     pub(crate) keep_fails: Arc<AtomicBool>,
     pub(crate) confirm_fails: AtomicBool,
+    /// Confirmation committed Kept, but its caller received an unavailable reply.
+    pub(crate) confirm_reply_fails: AtomicBool,
     /// Stops the work of an upload dead, after its ticket is spent and its
     /// pending hold is written: the one thing no failure path of the store can
     /// report, because nothing is left to report it.
     pub(crate) confirm_panics: AtomicBool,
     pub(crate) discard_fails: AtomicBool,
+    /// An actual substitutable port can return independently valid but unrelated reports.
+    pub(crate) release_report: Mutex<Option<ReleaseReport>>,
+    pub(crate) discard_cleanup_incomplete: AtomicBool,
     /// Transfers staged and not yet kept or dropped.
     pub(crate) staged: Arc<AtomicUsize>,
     /// Bytes written to staged transfers, ever.
@@ -327,6 +420,7 @@ struct MemoryState {
     blobs: HashMap<Sha256Digest, Vec<u8>>,
     records: Vec<MemoryRecord>,
     generations: u64,
+    retired_claims: HashSet<(OrganizationId, ConversationId, String)>,
     /// Stored digests whose hold cannot be released.
     stuck: Vec<Sha256Digest>,
 }
@@ -456,6 +550,13 @@ impl AttachmentStore for MemoryStore {
                 return Err(StoreUnavailable);
             }
             let mut state = self.state.lock().unwrap();
+            if state.retired_claims.contains(&(
+                hold.organization_id().clone(),
+                hold.conversation_id().clone(),
+                claim.as_str().to_owned(),
+            )) {
+                return Ok(Confirmation::Gone);
+            }
             let Some(index) = state.position(hold) else {
                 return Ok(Confirmation::Gone);
             };
@@ -472,13 +573,18 @@ impl AttachmentStore for MemoryStore {
                 kept: true,
                 generation: claim.as_str().to_owned(),
             };
-            Ok(Confirmation::Confirmed)
+            if self.confirm_reply_fails.load(Ordering::SeqCst) {
+                Err(StoreUnavailable)
+            } else {
+                Ok(Confirmation::Confirmed)
+            }
         })
     }
     fn discard<'a>(
         &'a self,
         hold: &'a Hold,
         claim: &'a HoldClaim,
+        _cause: RevertCause,
     ) -> PortFuture<'a, Discard, StoreUnavailable> {
         Box::pin(async move {
             if self.discard_fails.load(Ordering::SeqCst) {
@@ -486,10 +592,26 @@ impl AttachmentStore for MemoryStore {
             }
             let mut state = self.state.lock().unwrap();
             match state.position(hold) {
-                Some(index) if state.records[index].generation == claim.as_str() => {
-                    state.records.remove(index);
+                Some(index)
+                    if state.records[index].generation == claim.as_str()
+                        && state.records[index].hold == *hold =>
+                {
+                    let was = if state.records[index].kept {
+                        RetiredFrom::Held
+                    } else {
+                        RetiredFrom::Pending
+                    };
+                    let retired = state.records.remove(index);
+                    state.retired_claims.insert((
+                        retired.hold.organization_id().clone(),
+                        retired.hold.conversation_id().clone(),
+                        retired.generation,
+                    ));
+                    if self.discard_cleanup_incomplete.load(Ordering::SeqCst) {
+                        return Ok(Discard::CleanupIncomplete { was });
+                    }
                     state.remove_unheld(hold.stored().digest());
-                    Ok(Discard::Discarded)
+                    Ok(Discard::Discarded { was })
                 }
                 _ => Ok(Discard::NotMine),
             }
@@ -499,9 +621,13 @@ impl AttachmentStore for MemoryStore {
         &'a self,
         organization_id: &'a OrganizationId,
         conversation_id: &'a ConversationId,
+        evidence: &'a ReleaseEvidence,
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable> {
         Box::pin(async move {
             self.check()?;
+            if let Some(report) = self.release_report.lock().unwrap().take() {
+                return Ok(report);
+            }
             let mut state = self.state.lock().unwrap();
             let mut report = ReleaseReport::default();
             let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut state.records)
@@ -516,25 +642,44 @@ impl AttachmentStore for MemoryStore {
                     report.failures += 1;
                     state.records.push(record);
                 } else {
-                    report.released.push(ReleasedHold {
-                        hold: record.hold,
-                        was: if record.kept {
-                            HoldState::Held
-                        } else {
-                            HoldState::Pending
-                        },
-                    });
+                    state.retired_claims.insert((
+                        record.hold.organization_id().clone(),
+                        record.hold.conversation_id().clone(),
+                        record.generation.clone(),
+                    ));
+                    report.retired.push(
+                        RetiredHold::new(
+                            record.hold,
+                            if record.kept {
+                                RetiredFrom::Held
+                            } else {
+                                RetiredFrom::Pending
+                            },
+                            RetirementEvidence::Release(evidence.clone()),
+                        )
+                        .expect("valid original retirement"),
+                    );
                 }
             }
             let mut considered = Vec::new();
-            for released in &report.released {
-                let digest = released.hold.stored().digest();
+            for released in &report.retired {
+                let digest = released.hold().stored().digest();
                 if considered.contains(&digest) {
                     continue;
                 }
                 considered.push(digest);
                 if state.remove_unheld(digest) {
-                    report.removed.push(released.hold.clone());
+                    report.removed.push(
+                        RemovedBlob::new(
+                            report
+                                .retired
+                                .iter()
+                                .filter(|retired| retired.hold().stored().digest() == digest)
+                                .cloned()
+                                .collect(),
+                        )
+                        .expect("nonempty same-digest retirements"),
+                    );
                 }
             }
             Ok(report)

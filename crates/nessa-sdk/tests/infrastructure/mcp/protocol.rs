@@ -3,10 +3,12 @@
 use super::fixture::{Behaviour, CHART, CHART_HTML};
 use super::{servers, session};
 use crate::domain::agent_execution::tools::McpTool;
-use crate::domain::mcp_apps::{UiResourceUri, UiVisibility, APP_MIME_TYPE, MAX_UI_HTML_BYTES};
+use crate::domain::mcp_apps::{
+    ToolUi, UiResourceUri, UiVisibility, APP_MIME_TYPE, MAX_UI_HTML_BYTES,
+};
 use crate::infrastructure::mcp::{
     connection::{Connection, MAX_IN_FLIGHT},
-    McpError, MAX_TOOLS, MAX_TOOL_PAGES, REQUEST_TIMEOUT,
+    wire, McpError, MAX_TOOLS, MAX_TOOL_PAGES, REQUEST_TIMEOUT,
 };
 use base64::Engine;
 use serde_json::json;
@@ -47,10 +49,10 @@ async fn the_handshake_declares_the_mcp_apps_extension_and_lists_the_tools() {
         tools[0].tool(),
         &McpTool::new("fixture", "show_chart").unwrap()
     );
-    assert_eq!(tools[0].ui().unwrap().resource_uri(), &chart());
-    assert_eq!(tools[0].ui().unwrap().visibility(), UiVisibility::BOTH);
-    // A tool without UI.
-    assert_eq!(tools[1].ui(), None);
+    assert_eq!(tools[0].ui().resource_uri(), Some(&chart()));
+    assert_eq!(tools[0].ui().visibility(), UiVisibility::BOTH);
+    // A tool without UI: for both, as one that says nothing is.
+    assert_eq!(tools[1].ui(), &ToolUi::default());
     // Kept for the view: the call names `show_chart`, which has a UI.
     let call = McpTool::new("fixture", "show_chart").unwrap();
     assert_eq!(
@@ -58,14 +60,14 @@ async fn the_handshake_declares_the_mcp_apps_extension_and_lists_the_tools() {
             .tool_ui(&super::conversation(), &call)
             .unwrap()
             .resource_uri(),
-        &chart()
+        Some(&chart())
     );
     assert_eq!(
         servers.tool_ui(
             &super::conversation(),
             &McpTool::new("fixture", "report").unwrap()
         ),
-        None
+        Some(ToolUi::default())
     );
     assert_eq!(
         servers.tool_ui(
@@ -114,11 +116,14 @@ async fn tools_are_read_across_pages_and_unreadable_ones_are_handled_one_by_one(
                 json!({ "description": "no name" }),
             ],
             vec![
-                // `_meta.ui` that cannot be read: kept without a UI.
+                // A `resourceUri` that cannot be read: kept without a UI.
                 json!({ "name": "b", "_meta": { "ui": { "resourceUri": "https://not-ui" } } }),
+                // A `visibility` that cannot be read: no one's, UI or not.
                 json!({ "name": "c", "_meta": { "ui": { "resourceUri": "ui://f/c", "visibility": "app" } } }),
+                // No UI, and visibility all the same (#412).
                 json!({ "name": "d", "_meta": { "ui": { "visibility": ["model"] } } }),
                 json!({ "name": "e", "_meta": { "ui": { "resourceUri": "ui://f/e", "visibility": ["model", "other"] } } }),
+                json!({ "name": "f", "_meta": { "ui": { "resourceUri": 7, "visibility": ["app"] } } }),
             ],
         ],
         ..Behaviour::default()
@@ -129,18 +134,106 @@ async fn tools_are_read_across_pages_and_unreadable_ones_are_handled_one_by_one(
         .iter()
         .map(|tool| tool.tool().tool().to_owned())
         .collect();
-    assert_eq!(names, ["a", "b", "c", "d", "e"]);
-    assert_eq!(
-        tools[0].ui().unwrap().visibility(),
-        UiVisibility::new(false, true)
+    assert_eq!(names, ["a", "b", "c", "d", "e", "f"]);
+    let uri = |value: &str| Some(UiResourceUri::new(value).unwrap());
+    let (app_only, model_only, nobody) = (
+        UiVisibility::new(false, true),
+        UiVisibility::new(true, false),
+        UiVisibility::new(false, false),
     );
-    assert_eq!(tools[1].ui(), None);
-    assert_eq!(tools[2].ui(), None);
-    assert_eq!(tools[3].ui(), None);
-    assert_eq!(
-        tools[4].ui().unwrap().visibility(),
-        UiVisibility::new(true, false)
-    );
+    assert_eq!(tools[0].ui(), &ToolUi::new(uri("ui://f/a"), app_only));
+    assert_eq!(tools[1].ui(), &ToolUi::default());
+    assert_eq!(tools[2].ui(), &ToolUi::new(uri("ui://f/c"), nobody));
+    assert_eq!(tools[3].ui(), &ToolUi::new(None, model_only));
+    assert_eq!(tools[4].ui(), &ToolUi::new(uri("ui://f/e"), model_only));
+    assert_eq!(tools[5].ui(), &ToolUi::new(None, app_only));
+}
+
+/// What a page says each tool is for (#412): the visibility a listed tool
+/// keeps for an app is the one the model is shown or hidden by, with a UI
+/// or without one.
+#[test]
+fn a_listed_tools_visibility_is_the_one_the_model_is_hidden_by() {
+    let page = wire::tools_page(
+        "f",
+        &json!({ "tools": [
+            json!({ "name": "plain" }),
+            json!({ "name": "empty", "_meta": { "ui": {} } }),
+            json!({ "name": "model_only", "_meta": { "ui": { "visibility": ["model"] } } }),
+            json!({ "name": "app_only", "_meta": { "ui": { "visibility": ["app"] } } }),
+            json!({ "name": "nobody", "_meta": { "ui": { "visibility": [] } } }),
+            // A `visibility` that cannot be read is no one's (#412): not one
+            // that names the model as a string, nor an array naming the app
+            // beside something that is not a string, nor `null`.
+            json!({ "name": "unreadable", "_meta": { "ui": { "visibility": { "app": true } } } }),
+            json!({ "name": "model_string", "_meta": { "ui": { "visibility": "model" } } }),
+            json!({ "name": "app_string", "_meta": { "ui": { "visibility": "app" } } }),
+            json!({ "name": "app_and_number", "_meta": { "ui": { "visibility": ["app", 1] } } }),
+            json!({ "name": "null", "_meta": { "ui": { "visibility": null } } }),
+            json!({ "name": "drawn", "_meta": { "ui": { "resourceUri": "ui://f/d", "visibility": ["model"] } } }),
+        ] }),
+    )
+    .unwrap();
+    let both = UiVisibility::BOTH;
+    let expected = [
+        ("plain", both, false),
+        ("empty", both, false),
+        ("model_only", UiVisibility::new(true, false), false),
+        ("app_only", UiVisibility::new(false, true), false),
+        ("nobody", UiVisibility::new(false, false), false),
+        ("unreadable", UiVisibility::new(false, false), false),
+        ("model_string", UiVisibility::new(false, false), false),
+        ("app_string", UiVisibility::new(false, false), false),
+        ("app_and_number", UiVisibility::new(false, false), false),
+        ("null", UiVisibility::new(false, false), false),
+        ("drawn", UiVisibility::new(true, false), true),
+    ];
+    assert_eq!(page.tools.len(), expected.len());
+    for ((tool, (name, hidden)), (want, visibility, drawn)) in
+        page.tools.iter().zip(&page.hidden).zip(expected)
+    {
+        assert_eq!((tool.tool().tool(), name.as_str()), (want, want));
+        assert_eq!(tool.ui().visibility(), visibility, "{want}");
+        assert_eq!(*hidden, !visibility.model(), "{want}");
+        assert_eq!(tool.ui().resource_uri().is_some(), drawn, "{want}");
+    }
+}
+
+/// A `_meta.ui` that is present and not an object is no one's (#424): hidden
+/// from the model and not for an app. Absence of `_meta.ui` stays both.
+/// String, array, number, boolean, and `null` are the JSON values that are
+/// not objects.
+#[test]
+fn a_meta_ui_that_is_not_an_object_is_no_ones() {
+    let nobody = UiVisibility::new(false, false);
+    let shapes = [
+        ("string", json!("app")),
+        ("array", json!(["app"])),
+        ("number", json!(1)),
+        ("boolean", json!(true)),
+        ("null", json!(null)),
+    ];
+    let mut tools = vec![
+        json!({ "name": "absent" }),
+        json!({ "name": "empty", "_meta": { "ui": {} } }),
+    ];
+    for (name, ui) in &shapes {
+        tools.push(json!({ "name": name, "_meta": { "ui": ui } }));
+    }
+    let page = wire::tools_page("f", &json!({ "tools": tools })).unwrap();
+    let both = UiVisibility::BOTH;
+    let mut expected = vec![("absent", both), ("empty", both)];
+    expected.extend(shapes.iter().map(|(name, _)| (*name, nobody)));
+    assert_eq!(page.tools.len(), expected.len());
+    for ((tool, (name, hidden)), (want, visibility)) in
+        page.tools.iter().zip(&page.hidden).zip(expected)
+    {
+        assert_eq!(tool.tool().tool(), want);
+        assert_eq!(name, want);
+        assert_eq!(tool.ui().visibility(), visibility, "{want}");
+        assert_eq!(*hidden, !visibility.model(), "{want}");
+        assert!(tool.ui().resource_uri().is_none(), "{want}");
+    }
 }
 
 #[tokio::test]
@@ -440,6 +533,7 @@ async fn a_changed_tool_list_is_read_again() {
             .tool_ui(&super::conversation(), &call)
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://fixture/later"
     );

@@ -4,6 +4,10 @@ The repository rules live in [AGENTS.md](../AGENTS.md) and the
 [coding standards](../CODING_STANDARDS.md). This guide maps those dependency and
 ownership rules to Nessa's current modules and changes as the codebase grows.
 
+The [system state atlas](state/README.md) organizes lifecycle reading models by
+system, service, feature, and flow. Its Markdown lives in this repository;
+the local website that renders it is a separate service.
+
 ## Organization applies to every change
 
 The [organization standards](../CODING_STANDARDS.md#organization-across-the-repository)
@@ -219,7 +223,8 @@ writing the full defaults on first launch is buying.
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
-  the split panes' source in `store/`; the in-memory source in `in-memory/`;
+  the split panes' source in `store/`; the gateway's source and its mapping
+  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
@@ -229,7 +234,10 @@ writing the full defaults on first launch is buying.
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source and store its tests share. The
   window has its own store (`src/desktop/store.ts`) and composition
-  (`src/desktop/dependencies.ts`). How the window's keys are matched and
+  (`src/desktop/dependencies.ts`). Where its workspace comes from is the
+  window's too: the host's gateway, a browser's, or the sample, by
+  `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
+  in `src/desktop/adapters/host-gateway.ts`. How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
   `src/desktop/model/keyboard.ts`, with the platform read once in
   `src/desktop/adapters/platform.ts`. So is the one id encoder
@@ -258,11 +266,16 @@ writing the full defaults on first launch is buying.
   and its ports — the server, the tool calls, the conversation, links,
   downloads, the timers (`app/application/`); the frame transport, the page's
   style variables, where the sandbox proxy is and its frame's sandbox flags
-  (`app/adapters/dom/`); the proxy itself and the dev server's listener for
+  (`app/adapters/dom/`); the server port over the gateway's
+  `client.mcpApps` — the typed outcomes, the resource ticket redeemed once,
+  each mount's release — and the calls an app's widgets name, read from a
+  conversation view's MCP tools, with an app plugin registered per server
+  (`app/adapters/gateway/`, #384); the proxy itself and the dev server's listener for
   it (`app/sandbox/`, served
   in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
   draw (`app/ui/`); and a fixture server's app (`app/fixture/`). How an app's
-  widgets are named — `mcp:` and the server, and the call's two identities —
+  widgets are named — `mcp:` and the server, and the call's session, execution
+  and tool ids —
   is stated once, in `app/model/app-ref.ts`, which the transcript uses. It
   knows no plugin and imports no other vertical. The workspace draws the
   chrome around the hosts and carries out their callbacks with its own
@@ -346,13 +359,13 @@ own current lifecycle and API contracts.
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
 | `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
@@ -361,6 +374,50 @@ and processes out of the domain. Do not create empty counterpart modules or spli
 a live session's tool/permission consistency boundary into independent aggregates.
 
 ## Identity and access library
+
+The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
+
+The native server consumer is `nessa-server/src/device_pairing/`. `application/`
+holds the owner use cases (`owner.rs`), approval through to an issued credential
+(`activation.rs`), cleanup of ended stages (`cleanup.rs`), the receiver port
+(`receivers.rs`) and the device status query (`read_status.rs`), whose
+projection is `nessa_protocol::pairing::DevicePairingStatus`. What both ends of
+a native connection run on is `crates/nessa-protocol/src/pairing/`: the pure
+JSON codec (`wire/`), the length-prefixed frame reader both phases use
+(`frames.rs`), enrollment framing (`enrollment_channel.rs`), the protected frame
+bounds (`limits.rs`), and the deadline-and-wake socket with its shutdown
+wake-ups and worker-fault mapping (`socket/`), which reads the monotonic
+`nessa_protocol::clock::Clock`. `infrastructure/` holds the protected
+product phase after an `openProduct` envelope (`protected.rs`), the gateway runtime
+(`runtime.rs`, with the single code-registration worker in `registration.rs`),
+connection workers (`connection.rs`), the listener, gateway identity
+restore, `receivers.rs` (the receiver port over the conversation context's
+`LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
+product socket holds, and `owner_admission.rs`, the lease every owner command
+holds until shutdown drains it. The native device client is
+`crates/nessa-client-core/src/pairing/client.rs`; gateway tests consume it as a
+dev-dependency.
+The owner product methods are `nessa-server/src/product/pairing.rs`, and the
+product session over a protected native connection is
+`nessa-server/src/product/native.rs`; mounting is
+`nessa-server/src/composition/native_pairing.rs`, only when `config.json` names a
+native listen address. Public tests are under
+`nessa-server/tests/device_pairing/infrastructure/`, the owner routes in
+`tests/device_pairing/owner_routes.rs`, activation and cleanup in
+`tests/device_pairing/infrastructure/activation.rs` and the composed process in
+`tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
+`tests/native_enrollment.rs`, which also registers the protected sessions in
+`tests/device_pairing/infrastructure/protected.rs`; the protected connection's
+write-wakeup unit test is `tests/device_pairing/infrastructure/protected_waker.rs`;
+codec tests are `crates/nessa-protocol/tests/pairing/wire.rs`, the
+frame reader's unit tests are `crates/nessa-protocol/tests/pairing/frames.rs`, the
+socket stream's unit tests are `crates/nessa-protocol/tests/pairing/socket/deadline_stream.rs`
+and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
+composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
+Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
+[owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
+[activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b)
+and [protected reads](design/auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
@@ -435,6 +492,17 @@ a schema change ships its own move. See the
 [local-database crate](../crates/nessa-local-database/README.md) and
 [ADR 196](adr/done/196-conversation-metadata-database.md).
 
+`crates/nessa-protocol` is the contract between the gateway and its clients:
+what both ends of a gateway connection agree on and nothing only one end does.
+It holds the wire frames and generated payloads (`protocol/`), the product
+contract's outcome values (`product_contract/`), the product DTOs, handshake
+rules and read codecs (`product/`), native pairing framing, codec, channel and
+socket (`pairing/`), the monotonic `Clock` port (`clock.rs`), and the
+conversation read model with the agent names it uses (`conversation/`,
+`agents/`). `nessa-server` depends on it; it depends on neither the gateway nor
+any client. See the [protocol crate](../crates/nessa-protocol/README.md) and
+[ADR 483](adr/done/483-protocol-and-client-core-crates.md).
+
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
 Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
@@ -474,9 +542,13 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
-`crates/nessa-server/src/conversation/` groups durable conversation identity/access
-(domain), shared Agent orchestration and bounded views (application), and private
-metadata/audit adapters (infrastructure). A conversation records the agent it was
+`crates/nessa-server/src/conversation/` groups durable conversation ownership and
+access (domain), shared Agent orchestration (application), and private
+metadata/audit adapters (infrastructure). The conversation's identity and summary,
+the bounded view and its projection, catalogue metadata and the read-scope checks
+are the read model in `crates/nessa-protocol/src/conversation/`, which a device
+reads with too; the projection's tests drive the service and stay in
+`tests/conversation/projection.rs`. A conversation records the agent it was
 created on and is reopened on that same agent for the rest of its life, so
 `composition/agent.rs` builds fixed providers for configured bundled agents.
 `composition/opencode_profile.rs` owns one static OpenCode decision shared by
@@ -502,11 +574,20 @@ joins its worker on a tracked thread before storage shutdown. Composition
 `root.rs` owns the ordered cleanup report; `core/shutdown.rs` carries typed
 reader deadline/drain and conversation cleanup failures back to the process. The product
 `record_read/` codec validates pages through sync-engine and caps encoded
-replies; `product/socket.rs` reserves independent record capacity and retains
-it until both physical source work and delivery/drop have finished. The existing
+replies; `product/socket.rs` reserves independent record capacity. Physical
+source work retains its ownership until joined. Delivery ownership ends after
+encoding and size checks, before the first sink call, or when the response drops
+([R61 and R64](design/authorized-record-reads.md)). The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
+`core/read_workers/` owns tracked blocking source threads, sticky faults and the
+retained join-all drain used by record/catalogue infrastructure. It grants no
+source permission or socket capacity. Its lifecycle tests live under
+`tests/core/read_workers.rs`; record-specific admission tests stay with their
+source adapter. Attachment adapters consume this owner when activated.
+
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
+`product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -544,6 +625,9 @@ conversations, newest first and one past the bound. `LocalConversationStore`
 tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
 once in `infrastructure/schema.sql` and opened by `crates/nessa-local-database`
 ([ADR 196](adr/done/196-conversation-metadata-database.md)).
+The receiver journal is a different file, `receiver-access/receiver-access.sqlite3`
+under the namespace: retirement treats `conversations/` as conversation data,
+so the journal is not kept there.
 The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
@@ -626,18 +710,44 @@ Nessa is also an MCP client, holding the connection to each configured server
 for each harness session (ADR 344, [design](design/mcp-connections.md)). The
 SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
 bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
-cancellation, `stand_in` for what a harness sees, `servers` for the open
-sessions and their tool lists, `process` for a server's process group, `wire`
-for MCP's JSON), tested in
+cancellation, `stand_in` for what a harness sees, and for keeping a
+forwarded `tools/call` result's `structuredContent` for the ACP worker to
+attach, `servers` for the live configured set (replaced whole, read at each
+opening), the open sessions and their tool lists, and a session opened once
+for no conversation (`open_once`, a host's look at a server), `process` for a
+server's process group, `wire` for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
-the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
-grants that tie each stand-in to its conversation, the store an MCP App's
+the resource ticket, and a user's server as stored with the edits made to
+the stored list (`domain/configured_server.rs`), the relay socket, the
+`mcp-relay` command, the
+grants that tie each stand-in to its conversation (each the owner's own
+grant, carrying what its stand-ins forward), the store an MCP App's
 resources wait in behind their tickets, and the view's tool UI lookup
 (`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
-(`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
-with its stand-in, gives the agents the grants, and builds the ticket store,
-before any agent is built. The policy an MCP App's calls are held to is
+(`entrypoint`); managing the stored servers — `mcpServers.list`, `.save`,
+`.remove` and `.inspect`, their wire in `product/mcp_servers.rs` (which fits
+an inspection to the frame's bound) — is `application/settings.rs` over its
+ports (`application/ports.rs`), with the adapters
+`infrastructure/stored_servers.rs` (the one reader and writer of
+`agents.mcpServers`), `infrastructure/config_store.rs` (`config.json`, its
+lock and the lock's bounded wait), `infrastructure/live_set.rs` (the live set
+over `McpServers`, and `LaunchSettings`, the one place a stored server becomes
+a launch), `infrastructure/inspector.rs` (one server started once with
+`McpServers::open_once`, read within its bounds, then stopped; tested against
+real processes in `tests/mcp_servers/inspect.rs`) and
+`infrastructure/settings_audit.rs`
+([design](design/mcp-connections.md#managing-the-stored-servers));
+`composition/mcp_servers.rs` takes the configured servers
+into `McpServers`, the one owner of the live set, gives every provider open
+the stand-ins for that set as it is then (`StandIns`, an
+`McpServerSource`), gives the agents the grants, and builds the relay —
+on Unix even with no server configured — and the ticket store, before any
+agent is built, and builds the settings over the live set. The relay admits
+each stand-in against the set's digests at its hello, then opens only what it
+admitted (`McpServers::open_as`). The digest it compares is keyed per gateway
+process (`domain::ConfigurationKey`) over a server's command, arguments and
+environment, its fields chosen once by `infrastructure::launch_digest`. The policy an MCP App's calls are held to is
 `mcp_servers/domain/app_call.rs`, its session port's adapter
 `mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
 service's (`conversation/application/service/app_calls.rs`, with the reviews
@@ -648,11 +758,15 @@ one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
 `@nessa/client` they share `application/gateway-http.ts` (the origin, the
 deadline clock, and how one request ends), and an app's calls are
 `presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
-`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
-(`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
-entry. The desktop's
+`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding reads a provider open's MCP servers
+once (`McpServerList` in `acp/sessions/config.rs`, beside the one owner of
+the server rules, `StdioMcpServer::problem_in`), holds the open's grant
+(`acp/sessions/stand_ins.rs`), and puts its environment in every MCP server
+entry; its worker attaches the grant's forwarded results to the completed
+calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
-transcript's `widget` part.
+transcript's `widget` part. The MCP server list is not part of the
+restoration fingerprint (`acp/sessions/identity.rs`, ADR 344).
 
 `scripts/mcp-test-server/` is developer tooling, not a Nessa tool: a
 dependency-free stdio MCP server whose tools return structured results, resource
@@ -706,10 +820,10 @@ independently of whether that turn contains text.
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
-- `src-tauri/src/gateway/application/` is the single owner of retryable startup, its revisioned projection, retained cleanup candidate, and automatic-quit dispatch authority. `gateway/domain/value_objects/lifecycle_journal.rs` validates the immutable `Intent`, `JoinedRequest`, `EffectPlan`, `EffectCompletion`, `Observation`, and `Outcome` chain with contiguous sequence, one namespace and target, operation-specific agreement between old identity, desired target, label and cleanup scope, increasing observation versions, and a distinct physical result. No outcome can settle a plan whose primary completion or observation remains unresolved, and terminal cleanup must agree with the physical result. `gateway/infrastructure/reconciliation_audit.rs` acquires the private config root, journal child, and retained directory as one transaction, retaining exact rollback authority for each newly created component until the retained binding succeeds. It then holds one stage-wide lock while it validates every final record, writes deterministic immutable names, and derives a delivery receipt only after retained-directory sync, binding and exact file read-back. Before a current attempt opens, the host settles the sole restored intent or missing observation/outcome; each native adapter decides which fresh state it closes on (the domain requires only an observation for an intent with no plan), and recovery retains the exact pending step and completion. The journal lists the steps an interrupted attempt must settle; macOS recovery settles them without running any command, adopts only an exact planned target, and otherwise closes failed, reading launchd and health through the injected `Launchctl`. Every launchd read and command in the macOS adapter goes through that one seam — status, health, bootstrap, bootout, and the agent-stop and retirement signals — with `NativeLaunchctl` as the production adapter; the stale, legacy and unavailable registrations leave through one journaled `unload_service` step. Runtime and data directories are created only inside the acknowledged staging plan; fresh staging predeclares exact fingerprint cleanup. Newly created private ancestry is rolled back deepest first only while each retained name still has its original identity and remains empty. Bootstrap likewise predeclares an exact bootout contingency. Each contingency is owed only when the journal holds its step's result and observation and that result is not success; the live path runs it only then, after fresh proof for a bootout that the intended target still owns the label, and runs nothing after a failed delivery. The next successful registration prunes what an interrupted attempt left, and a matching staged runtime is reused under `reuse-staged-runtime`. LaunchAgent definitions are converted through pipes, written to exclusively reserved private files, and published with anchored replacement before the directory durability fact is recorded. Quit records `DesktopQuitPolicy`/`DesktopHost`, carries one monotonic deadline through lock acquisition, dispatch, and each terminal-outcome delivery attempt; the outcome owner retains a returned error or panic, any retry denial or second failure, and the settled physical result together. The session atomically consumes a matching identity/version proof immediately before `launchctl`; manager acceptance and the fresh post-command observation remain separate. Concurrent startup callers still share one receipt owner, while physical reconciliation and audit delivery remain independent facts. `gateway/infrastructure/commands.rs` exposes startup state only to bundled windows. The macOS adapter distinguishes managed, legacy, and foreign processes and requires the expected health fingerprint, generation, runtime-instance UUID, and launchd PID before readiness. `macos/generation.rs` allocates service generations; unfinished bootstrap authority remains in the same stage lifecycle journal.
+- `src-tauri/src/gateway/application/` is the single owner of retryable startup, its revisioned projection, retained cleanup candidate, and automatic-quit dispatch authority. `gateway/domain/value_objects/lifecycle_journal.rs` validates the immutable `Intent`, `JoinedRequest`, `EffectPlan`, `EffectCompletion`, `Observation`, and `Outcome` chain with contiguous sequence, one namespace and target, operation-specific agreement between old identity, desired target, label and cleanup scope, increasing observation versions, and a distinct physical result. No outcome can settle a plan whose primary completion or observation remains unresolved, and terminal cleanup must agree with the physical result. `gateway/infrastructure/reconciliation_audit.rs` acquires the private config root, journal child, and retained directory as one transaction, retaining exact rollback authority for each newly created component until the retained binding succeeds. It then holds one stage-wide lock while it validates every final record, writes deterministic immutable names, and derives a delivery receipt only after retained-directory sync, binding and exact file read-back. Before a current attempt opens, the host settles the sole restored intent or missing observation/outcome; each native adapter decides which fresh state it closes on (the domain requires only an observation for an intent with no plan), and recovery retains the exact pending step and completion. The journal lists the steps an interrupted attempt must settle; macOS recovery settles them without running any command, adopts only an exact planned target, and otherwise closes failed, reading launchd and health through the injected `Launchctl`. Every launchd read and command in the macOS adapter goes through that one seam — status, health, bootstrap, bootout, and the agent-stop and retirement signals — with `NativeLaunchctl` as the production adapter; the stale, legacy and unavailable registrations leave through one journaled `unload_service` step. Runtime and data directories are created only inside the acknowledged staging plan; fresh staging predeclares exact fingerprint cleanup. Newly created private ancestry is rolled back deepest first only while each retained name still has its original identity and remains empty. Bootstrap likewise predeclares an exact bootout contingency. Each contingency is owed only when the journal holds its step's result and observation and that result is not success; the live path runs it only then, after fresh proof for a bootout that the intended target still owns the label, and runs nothing after a failed delivery. The next successful registration prunes what an interrupted attempt left, and a matching staged runtime is reused under `reuse-staged-runtime`. LaunchAgent definitions are converted through pipes, written to exclusively reserved private files, and published with anchored replacement before the directory durability fact is recorded. Quit records `DesktopQuitPolicy`/`DesktopHost`, carries one monotonic deadline through lock acquisition, dispatch, and each terminal-outcome delivery attempt; the outcome owner retains a returned error or panic, any retry denial or second failure, and the settled physical result together. The session atomically consumes a matching identity/version proof immediately before `launchctl`; manager acceptance and the fresh post-command observation remain separate. Concurrent startup callers still share one receipt owner, while physical reconciliation and audit delivery remain independent facts. `gateway/infrastructure/commands.rs` exposes startup state only to bundled windows (`BUNDLED_WINDOWS`), and owns `GatewayReader`: who may read the endpoint and the surface credential, the desktop window only once startup is ready (#419). The macOS adapter distinguishes managed, legacy, and foreign processes and requires the expected health fingerprint, generation, runtime-instance UUID, and launchd PID before readiness. `macos/generation.rs` allocates service generations; unfinished bootstrap authority remains in the same stage lifecycle journal.
 - `src-tauri/src/gateway/infrastructure/linux/` owns the packaged Linux systemd user service. It refuses hosts without the account user manager, the owned `UnitPath`, the root-owned non-symlink `/usr/bin/env` launcher, or pidfd support before admitting an intent, and it repeats the UID, desktop-injected XDG config/data/state roots, pidfd prerequisite, manager owner, and path authority checks before native effects. Every refusal before intent acknowledgement states that Nessa made no service change. Linger is not required: the unit runs while its user is signed in. Linux lifecycle journals live under `XDG_STATE_HOME` (or `~/.local/state`), while definitions and immutable runtimes remain under their XDG config and data roots. It publishes a private immutable runtime and an acknowledged rendered-definition digest, plans data-directory creation, then publishes an identity-checked `default.target.wants` link and confirms enablement through `GetUnitFileState`. The unit passes the configured data root as `NESSA_DATA_DIR`; the server adds the stage and instance, so both sides name the same data directory. An installed exact owned unit that is inactive/dead with no process and no endpoint advertisement — a server that recorded a startup failure it will not retry and exited zero — is admitted like a fresh install with its installed bytes as the prior definition; on that path and a fresh install, each definition, reload, and start effect first confirms the unit is absent or has no process; every other installed unit without a corroborated endpoint is preserved. Definition and link publication predeclare transaction cleanup, run it even when completion delivery fails, retain cleanup failure beside the audit failure, and remove only the exact owned unpublished temporary. Start and stop use non-replayable `fail` jobs: the returned manager owner, unit, operation, mode, object path, and numeric job ID must agree with the plan and matching `JobRemoved` signal. Audit delivery failure after enqueue cannot cancel terminal waiting or fresh observation. The command result and a fresh typed physical state are separate facts: start succeeds only for the exact active target with native manager, invocation, PID, definition, endpoint, and link evidence, judged once the forked server advertises, the unit leaves `activating`/`running`, or the ready deadline passes, while stop succeeds only for absent or inactive/dead state. Replacement keeps the old link and runtime, journals the retirement request identity, opens a process handle through the injected pidfd seam immediately after snapshot A, requires the gateway's durable request/result acknowledgement tuple, then checks snapshot B and liveness immediately before signaling that held process. Quit uses the same seam and carries the handle through corroboration to the consume-once proof and signal. Recovery uses the admitted definition digest rather than current candidate inputs, records closed systemd states, closes an intent with no plan on whatever it freshly observes because no plan authorized no effect, closes settled plans on their last durable observation, treats an exact owned render of another target as a definition not yet replaced, never replays an unacknowledged D-Bus enqueue, and preserves ambiguous names and identities for diagnosis.
 - The agent's `PATH` is decided, not inherited. `src-tauri/src/gateway/domain/value_objects/search_path.rs` is the value: absolute entries only, bounded, no control characters, and no staged runtime directory, so Nessa's bundled `node` never shadows the one a project pinned. `gateway/infrastructure/login_shell.rs` reads it from the account's own login shell — the shell named in the account record rather than inherited `SHELL` — behind the `LoginShellPath` port, which tests substitute. How a shell is asked depends on how much one invocation of it can read, measured against real shells. zsh is asked `-i -l -c` once, because for zsh that is a superset: it reads `.zshenv`, `.zprofile`, `.zlogin` and `.zshrc`, and `.zshrc` is where pnpm's installer and the standard nvm setup write. bash has no such invocation — `-i -l -c` reads `.bash_profile` and never `.bashrc`, `-i -c` reads `.bashrc` and none of the login files — so bash is asked both ways and the answers are combined. macOS puts the login answer first to match Terminal; Linux puts the interactive non-login answer first to match its desktop terminal policy. Asking only one of them would succeed with a `PATH` missing whichever half the user's tools are in, and a success is what no fallback can catch. Any other shell gets `-l -c`, which is also where the login files come from when nothing else has brought them: a `.bash_profile` that hangs while interactive leaves the `-i -c` answer alone, and that answer has read neither `/etc/profile` nor `.bash_profile` — no `path_helper`, so no Homebrew. Returning it as a success would be the same failure in a narrower place, and would make the registered path depend on whether a profile happened to hang, which the plist equality check answers by retiring a healthy gateway. Every attempt shares one budget, so a shell asked more ways is not a shell the panel waits longer for; the cost is that an attempt after one that timed out gets what is left rather than a full deadline. The shell runs from the account's home, not from wherever the app was started, so a profile that decides the path from the working directory cannot make two launches register differently. The `PATH` is printed between markers made of `/dev/urandom` bytes and only what is between them is read, so a chatty or hostile profile can neither drown the answer nor forge one. The shell runs with a cleared environment, no stdin, a bounded read, and one deadline over both the output and the exit — output arriving is not the shell being finished with — after which its process group is killed and reaped. `Gateway` resolves it at most once per host process and caches the outcome, failure included: reconciliation runs on every webview load, and a profile edited mid-session would otherwise change the definition and retire a healthy gateway. A healthy registration for the same staged runtime keeps its registered path across app launches, so shell-profile or launch-context changes do not retire it. A newly staged runtime takes the current resolved path. The path is registered as `NESSA_AGENT_PATH` in the native service definition; a login shell that cannot be read and a shell that changed both leave a healthy same-runtime definition alone. The service's own `PATH` stays the system one. `crates/nessa-server/src/composition/agent.rs` gives `NESSA_AGENT_PATH` to the ACP child — and through it to Claude Code's Bash tool and the Nessa MCP shell — falling back to the process `PATH`, which is what the developer loop has.
-- `protocol/defaults/gateway-exit-codes.json` is why the gateway process stopped, said across the process boundary. `crates/nessa-server/src/core/exit_code.rs` maps each `RunError` to a code from that table — the match is exhaustive, so a new fatal error does not compile until it has one — and `Termination::report` exits with it; `RunError::Registry` keeps the credential-registry failure typed rather than flattened into a string so it can choose its own, and `RunError::Dataset` does the same for a gateway-scope store holding what this build cannot read — conversation metadata at another version or not a database, a browser-session journal replay refuses (`datasetRefused`, never retried; [ADR 202](adr/todo/202-versioned-local-datasets.md)). `src-tauri/src/gateway/infrastructure/macos/startup.rs` includes the same bytes and reads the code back from what `launchctl print` reports as the service's last exit. It never parses the log: a message can be reworded, a line can belong to an earlier run in the same append-only file, and a healthy launch mentions the same subsystems a failing one does. The log tail goes to the app's log as evidence and decides nothing.
+- `protocol/defaults/gateway-exit-codes.json` is why the gateway process stopped, said across the process boundary. `crates/nessa-server/src/core/exit_code.rs` maps each `RunError` to a code from that table — the match is exhaustive, so a new fatal error does not compile until it has one — and `Termination::report` exits with it; `RunError::Registry` keeps the credential-registry failure typed rather than flattened into a string so it can choose its own, and `RunError::Dataset` does the same for a gateway-scope store holding what this build cannot read — conversation metadata at another version or not a database, a browser-session journal replay refuses (`datasetRefused`, never retried; [ADR 202](adr/todo/202-versioned-local-datasets.md)). A receiver journal that is absent while an enrollment still owes cleanup is `receiverJournalMissing`, also never retried, and is not reported as damaged data. `src-tauri/src/gateway/infrastructure/macos/startup.rs` includes the same bytes and reads the code back from what `launchctl print` reports as the service's last exit. It never parses the log: a message can be reworded, a line can belong to an earlier run in the same append-only file, and a healthy launch mentions the same subsystems a failing one does. The log tail goes to the app's log as evidence and decides nothing.
 - Not every failure is worth restarting for, and launchd cannot be told which. Its only exit condition is `KeepAlive: { SuccessfulExit: false }` — restart unless the process exited with status zero — with no condition on *which* non-zero code, verified against launchd on macOS 26 rather than read off the man page alone. So `crates/nessa-server/src/core/restart.rs` decides, on the typed fatal error, whether starting again could end differently: a configuration this build cannot parse, a credential registry it cannot read and a prepared runtime that is missing or not the one the registration was fingerprinted against cannot, while a held registry lock, a taken port, I/O and anything whose only evidence is prose can.
 - Exiting zero to stop those restarts is not a diagnostic decision, because nothing will start the service again afterwards except the desktop host's next reconciliation, and the only thing that authorizes *that* is `logs/gateway-startup-failure.json`. So `core/error.rs` publishes the record — durably, under its own name, directory synced — and only then chooses the ending: published means exit zero, and a publication that failed keeps the non-zero code from the shared table, because launchd going on retrying is the old loop and survivable while a silent exit zero is a service nobody can start again. A credential-registry refusal audit is separate evidence: its success never authorizes zero, and its failure stays beside the original registry fault while the managed recovery record independently decides the ending. `core/launch.rs` decides who may do any of this: `Launch::Managed` is resolved once at the process edge from the command launchd is configured to run plus the service generation only the host's plist sets, and only it bounds the log, publishes a record, or forgets one — and only one its own generation wrote. A `nessa server` someone runs in the same data directory while diagnosing exactly this problem is `Standalone`: it keeps the table's non-zero exit codes, so scripts and other supervisors still read a failure as one, and it leaves the registration's recovery evidence untouched. `macos/startup.rs` corroborates the record against the registration being reconciled before it decides anything: it ends the readiness wait for a process launchd is not going to replace, and it is what lets the host boot out and retry a service that gave up, which is otherwise loaded and dead forever even after its cause is repaired. The reason and the exit code it carries must agree with the shared table, or it describes no run the server could have had. A record shown in a sentence is corroborated too, but decides nothing.
 - Zero is also what a process that served and was asked to stop would ordinarily exit with, and under this `KeepAlive` that would permanently disable the service: a gateway killed from Activity Monitor or with `kill` would never come back, and only a hand-run `launchctl bootout` could make it startable again. So `core/ending.rs` gives a managed launch's clean stop the table's `stoppedOnRequest` code instead, and launchd brings it back a throttle interval later — which is what it did before the exit status meant anything. `launchctl bootout`, which is how that service is actually stopped, unloads the job before the status is read, so the service that is meant to stop still stops; both were verified against launchd on macOS 26. A standalone server still exits zero when someone stops it.
@@ -948,9 +1062,10 @@ the auth registry resolves current identity and access state on every admission.
 
 `crates/nessa-server/src/agents/` answers which coding agents could actually
 start here, before there is a session to authenticate with.
-`domain/value_objects/` owns `AgentId` — which carries the one name an agent is
-known by outside the server, because configuration, this route, the socket and
-the conversation records on disk must all spell it the same way — the host's
+`AgentId` — which carries the one name an agent is known by outside the
+server, because configuration, this route, the socket and the conversation
+records on disk must all spell it the same way — is `nessa_protocol::agents`,
+since a device reads that name too. `domain/value_objects/` owns the host's
 three-way `HostAnswer`, and the `Readiness` rule that turns two answers into one
 thing to tell the person;
 `application/` owns the `AgentProbe` port, whose typed `ProbeFailure` keeps "not
@@ -1042,6 +1157,18 @@ for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
 an `image/*` `attachment.begin` on such a gateway is refused with
 `image_input_unsupported` rather than answered with a ticket for bytes no
 message could name.
+
+`domain/value_objects/artifact_id.rs` derives an immutable held-registration
+identity from its saved minted generation. `application/artifacts.rs` owns the
+local `AttachmentArtifacts` facts/range/drain port and immutable range/byte types.
+`domain/entities/hold.rs` publishes `RetiredFrom`, the Pending/Held predecessor
+consumed by successful discard outcomes, reversal audit and saved retirement.
+`infrastructure/hold_record.rs` owns the typed Pending/Kept/Retired saved codec;
+`store/artifacts.rs` scans exact identities incrementally and archives retirement
+metadata. `store/source.rs` consumes `core::read_workers` with one shared,
+nonwaiting manifest/range slot. The source is local and not composed into protected
+transport or gateway shutdown. State order and remaining activation boundaries
+are owned by [artifact sync](design/artifact-sync.md).
 `src-tauri/src/attachments/` is the desktop half: the file a person picks, as
 a path rather than as bytes. `FilePicker` is the operating system's own dialog,
 `ChosenFiles` is the filesystem — a chosen file's kind, length and bytes —
@@ -1411,35 +1538,83 @@ the export builds in its `wire-contract` subdirectory.
 
 ### Shared product contract values
 
-`crates/nessa-server/src/product_contract/generated.rs` publishes the pure typed
+`crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed
 product error/close values and their schema-derived policy. The product schema
 remains their owner. Generated product DTOs, the product socket and read-only
 sync application ports consume this publication; it contains no routing, IO or
-runtime state. Generic frame protocol types remain under `protocol/`.
+runtime state. Generic frame protocol types are `crates/nessa-protocol/src/protocol/`,
+and the generated product DTOs `crates/nessa-protocol/src/product/generated.rs`.
+
+### Record read benchmark
+
+`crates/nessa-server/examples/record_read_bench.rs` times SDK saves and cold
+and warm reads through `NessaRecordReadSource` after a storage restart, printing
+one JSON report. It is a measurement tool, not run in CI; the
+[steps per admitted read](design/bounded-terminal-discovery.md#steps-per-admitted-read)
+cite its numbers.
+
+### Device client core
+
+`crates/nessa-client-core` owns native device enrollment and retained sync.
+Its [module map](../crates/nessa-client-core/README.md) connects the pairing
+client, `read_only_sync` layers, executable composition, and matching tests.
+The gateway consumes this crate only as a dev-dependency. The portable package
+gate refuses any client dependency path to `nessa-server`, including renamed
+and transitive edges. It also refuses gateway normal/build paths to the client;
+dev-only edges break production paths. Both ends depend on `nessa-protocol` for shared rules.
 
 ### Retained read-only example
 
-`crates/nessa-server/examples/read_only_sync.rs` starts the standalone example
-through `composition/read_only_example.rs`. Its `profile.rs` child admits
-bounded private configuration and delegates current endpoint discovery. Its
-`online.rs` child composes real socket facades and the private cache after actual
-authenticated discovery; the existing finite drivers own work.
-The `read_only_sync/entrypoint/`
+`crates/nessa-client-core/examples/read_only_sync.rs` starts the standalone example
+through `crates/nessa-client-core/src/composition/mod.rs`. Its `profile.rs` child admits the
+bounded private profile and opens the device's private enrollment state; its
+`device.rs` child pairs and reads the pinned enrollment status. Its `online.rs`
+child admits each run by that status, composes the protected native session's
+facades and the private cache after actual authenticated discovery; the
+existing finite drivers own work. For `watch` it also adapts that connection,
+driver and cache to the session port of `application/watch.rs`, the bounded
+loop of one record watch, whose hints the session keeps in its inbox
+(`infrastructure/gateway/session.rs`) and whose lines `entrypoint/watch.rs`
+writes.
+Paths in this module map are relative to `crates/nessa-client-core/src/` unless
+a crate is named. The `read_only_sync/entrypoint/`
 owns argument parsing and JSON output; its `online.rs` presents separate captured
 checks, confirmed durable progress, transport and core/cache refusal evidence; `online/causes.rs` owns their sanitized
 typed JSON presentation. `application/driver.rs` schedules finite
 core passes, `application/offline.rs` owns the saved-read port, and
-`application/reset.rs` exposes attributed reset receipts. The private
+`application/reset.rs` exposes attributed reset receipts, and
+`application/device.rs` turns a pinned status into a read or, through the
+record store it gives the enrollment client, a purge before the record goes. The private
 SQLite adapter under `infrastructure/cache/` retains catalogue values, SDK
 checkpoints, pending physical records and their atomic progress. Offline
-transcript views use the conversation feature's shared bounded passive
-projection. Cache/command evidence lives under
-`tests/read_only_sync/infrastructure/`; the [example design](design/read-only-sync-example.md)
+transcript views use the shared bounded passive projection,
+`nessa_protocol::conversation::projection`; `infrastructure/cache/purge.rs` deletes a receiver's rows with the
+receipt that fences it. Cache/command evidence lives under
+`crates/nessa-client-core/tests/read_only_sync/infrastructure/`; the [example design](design/read-only-sync-example.md)
 names ordering and resource evidence. Real paired-credential client/gateway
 process, restart, output loss and authority-order evidence lives under
-`tests/composition/read_only_online.rs`, with canonical gateway provisioning and
-client/encoder support in its `read_only_online/fixtures/` children. Pure parser
-and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`.
+`crates/nessa-server/tests/composition/read_only_online.rs`, with canonical gateway provisioning and
+client/encoder support in its `read_only_online/fixtures/` children. The
+`read_only_online/semantic.rs` acceptance corpus uses `fixtures/semantic.rs` to
+produce real SDK Agent decisions through the gateway service and its canonical
+record/metadata stores. Its `semantic/storage.rs` child delegates the real writer
+and captures only successfully confirmed producer candidates. Public fold replay
+and checkpoint continuation compare with those independent snapshots; cached
+committed reads separately check incremental/full parity. The public core watch
+command resumes the rich prefix through actual hint passes. Independent native
+core processes compare retained views,
+progress, live suffixes and deletion after restart. Pure parser
+and JSON presentation evidence lives under `crates/nessa-client-core/tests/read_only_sync/entrypoint/`,
+the status decision's and the watch loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
+the session's watch evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/watch.rs`, and the
+code-line reader's in `crates/nessa-client-core/tests/composition/read_only_device.rs`.
+The five-mode saved-output race is in the client's
+`tests/read_only_sync/infrastructure/saved_output.rs`, beside the private cache
+hook and production formatter; the gateway retains a real public-API saved-output
+check.
+`crates/nessa-server/examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
+against a real `nessa server` and real client processes and reports timings and
+bytes on the wire as JSON.
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
 
@@ -1454,3 +1629,17 @@ helper, metadata/deletion authority and admission guard. Tests mirror those
 owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs` and
 `nessa-server/tests/conversation/creation_commands.rs`. The state table is in
 [command creation](design/command-creation.md).
+
+Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
+pairing is signalled to stop, it closes
+`ProductRouteState` watch admission before polling the reader and watch drains,
+then carries their outcomes through conversation/storage, MCP and the native join
+in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
+stage, in `core/shutdown.rs`). Interleaving tests are
+`tests/composition/watch_shutdown.rs`, using the watch fixture in
+`tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
+`composition/mcp_servers.rs::stop` draining stored-server changes before the
+servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with
+the probe client and with the example's own `watch` on two paired devices, are in
+`tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
+`fixtures/gateway.rs`.

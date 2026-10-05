@@ -1,4 +1,6 @@
-//! `committed_changes` owns payloadless interest independent of save bindings and receiver progress.
+//! `committed_changes` owns payloadless interest independent of save bindings,
+//! writer leases and receiver progress. RecordStorage closes interest before
+//! shutdown joins.
 //! Queue evidence follows the same consistency boundary as pending dispatch:
 //! ```text
 //! Agent scheduler -> InvocationQueue -> actual membership/order changes
@@ -48,7 +50,15 @@
 //! or a tool/review/terminal or settlement save.
 //! A process failure may lose unfinished text. Consequential changes require saved
 //! evidence; snapshots expose only committed state. Adapters choose its encoding.
+//! `app_sources` owns which apps a message may name: MCP tool calls the
+//! session recorded before it, asked at admission and of restored history.
+//! `steering_position` owns where a steered message stands in its target turn:
+//! taken at admission from the target's saved events, and read once from saved
+//! history for restoration, replay, `app_sources` and provider correlation
+//! evidence.
 
+mod app_sources;
+pub use app_sources::UnknownApp;
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
 mod manager;
@@ -57,6 +67,10 @@ pub use committed_changes::{ChangeWatchError, ChangeWatchState, CommittedChangeW
 pub(crate) mod records;
 mod retained;
 mod retention;
+mod steering_position;
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/sessions/support.rs"]
+mod test_support;
 // Queue membership is replayed separately from provider/lifecycle scheduling.
 mod queue_validation;
 pub mod storage;

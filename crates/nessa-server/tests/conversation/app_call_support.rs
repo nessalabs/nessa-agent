@@ -1,21 +1,25 @@
 //! Substitutes for what an MCP App's calls go through — the conversation's
 //! MCP session, the audit, the ticket store — and a conversation whose one
 //! turn called a tool with a UI, for the service's tests and the socket's.
+use crate::conversation::application::conversation_session;
 use crate::conversation::application::{
-    conversation_session, ConversationCaller, ConversationDependencies, ConversationError,
-    ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationPermission,
-    ConversationPermissionOrigin, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
-    McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppPorts, McpAppRef, McpApps,
-    McpToolUis, ProviderSessionErasers, RequestedConversation, ResourceTickets, SubmissionMode,
-    SubmittedMessage, TicketRefusal,
+    ConversationCaller, ConversationDependencies, ConversationError, ConversationFuture,
+    ConversationLimits, ConversationService, HeldResource, McpAppAudit, McpAppAuditPhase,
+    McpAppAuditRecord, McpAppCall, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppPorts,
+    McpAppRef, McpApps, ProviderSessionErasers, RequestedConversation, ResourceTickets,
+    SubmissionMode, SubmittedMessage, TicketEnd, TicketRefusal,
 };
-use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
     Provider, ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
     DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::tool_uis::McpToolUis;
+use nessa_protocol::conversation::view::{
+    ConversationMessageStatus, ConversationPermission, ConversationPermissionOrigin,
+};
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
@@ -25,7 +29,7 @@ use nessa_sdk::domain::mcp_apps::{
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
@@ -39,8 +43,8 @@ pub(crate) const OTHER_INSTANCE: &str = "0d6c3e7a-1b2c-4d5e-8f90-a1b2c3d4e5f6";
 /// The UI the call `charts/show` declared, for the conversation's session.
 pub(crate) struct Uis(String);
 impl McpToolUis for Uis {
-    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
-        (session.as_str() == self.0 && (call.server(), call.tool()) == (SERVER, UI_TOOL))
+    fn resource_uri(&self, conversation: &ConversationId, call: &McpTool) -> Option<UiResourceUri> {
+        (conversation.to_string() == self.0 && (call.server(), call.tool()) == (SERVER, UI_TOOL))
             .then(|| UiResourceUri::new(URI).unwrap())
     }
 }
@@ -55,7 +59,11 @@ pub(crate) struct Apps {
     pub(crate) calls: Mutex<Vec<(String, Option<Value>)>>,
     /// While set, a call waits for the gate to open before it answers.
     pub(crate) hold: AtomicBool,
+    /// Resources asked for, held or not.
+    pub(crate) reads: std::sync::atomic::AtomicUsize,
     pub(crate) gate: Gate,
+    /// When set, every listing fails so.
+    pub(crate) listing_fails: Mutex<Option<McpAppFailure>>,
 }
 /// Closed until a test opens it.
 pub(crate) struct Gate(pub(crate) tokio::sync::Semaphore);
@@ -65,12 +73,17 @@ impl Default for Gate {
     }
 }
 impl Apps {
+    /// `tool` listed with a UI seen by whom `ui` says, or with no `_meta.ui`
+    /// when `None`.
     pub(crate) fn list(&self, tool: &str, ui: Option<UiVisibility>, hints: ToolHints) {
-        let listed = ListedTool::new(
-            McpTool::new(SERVER, tool).unwrap(),
-            ui.map(|visibility| ToolUi::new(UiResourceUri::new(URI).unwrap(), visibility)),
-        )
-        .with_hints(hints);
+        let ui = ui.map_or_else(ToolUi::default, |visibility| {
+            ToolUi::new(Some(UiResourceUri::new(URI).unwrap()), visibility)
+        });
+        self.list_declared(tool, ui, hints);
+    }
+    /// `tool` listed with `ui` as its `_meta.ui`.
+    pub(crate) fn list_declared(&self, tool: &str, ui: ToolUi, hints: ToolHints) {
+        let listed = ListedTool::new(McpTool::new(SERVER, tool).unwrap(), ui).with_hints(hints);
         self.listed.lock().unwrap().insert(tool.into(), listed);
     }
     pub(crate) fn calls(&self) -> usize {
@@ -84,6 +97,9 @@ impl McpApps for Apps {
         server: &str,
         name: &str,
     ) -> Result<Option<ListedTool>, McpAppFailure> {
+        if let Some(failure) = self.listing_fails.lock().unwrap().clone() {
+            return Err(failure);
+        }
         Ok((server == SERVER)
             .then(|| self.listed.lock().unwrap().get(name).cloned())
             .flatten())
@@ -111,6 +127,10 @@ impl McpApps for Apps {
         _: &'a UiResourceUri,
     ) -> McpAppFuture<'a, UiResource> {
         Box::pin(async move {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            if self.hold.load(Ordering::SeqCst) {
+                drop(self.gate.0.acquire().await.unwrap());
+            }
             self.resource
                 .lock()
                 .unwrap()
@@ -126,6 +146,8 @@ pub(crate) struct Audit {
     pub(crate) failing: AtomicBool,
     /// Fails every record from this many taken on, when set.
     pub(crate) failing_after: Mutex<Option<usize>>,
+    /// When set, every record takes this long to commit.
+    pub(crate) slow: Mutex<Option<Duration>>,
 }
 impl Audit {
     pub(crate) fn phases(&self) -> Vec<McpAppAuditPhase> {
@@ -146,13 +168,16 @@ impl McpAppAudit for Audit {
                 .lock()
                 .unwrap()
                 .is_some_and(|after| taken >= after);
-        if !failing {
-            self.records.lock().unwrap().push(record);
-        }
+        let slow = *self.slow.lock().unwrap();
         Box::pin(async move {
+            // On record only once committed.
+            if let Some(slow) = slow {
+                tokio::time::sleep(slow).await;
+            }
             if failing {
                 Err(ConversationError::Audit)
             } else {
+                self.records.lock().unwrap().push(record);
                 Ok(())
             }
         })
@@ -162,10 +187,13 @@ impl McpAppAudit for Audit {
 #[derive(Default)]
 pub(crate) struct Tickets {
     pub(crate) issued: Mutex<Vec<HeldResource>>,
-    pub(crate) released_apps: Mutex<Vec<McpAppRef>>,
-    pub(crate) released_conversations: AtomicUsize,
+    pub(crate) activated: Mutex<Vec<String>>,
+    pub(crate) released_apps: Mutex<Vec<(McpAppRef, McpAppInitiator)>>,
+    pub(crate) released_conversations: Mutex<Vec<McpAppInitiator>>,
     pub(crate) discarded: Mutex<Vec<String>>,
     pub(crate) full: AtomicBool,
+    /// When set, the next activation answers that its ticket ended first.
+    pub(crate) ended_first: Mutex<Option<(TicketEnd, McpAppInitiator)>>,
 }
 impl ResourceTickets for Tickets {
     fn issue(&self, resource: HeldResource) -> Result<String, TicketRefusal> {
@@ -175,14 +203,24 @@ impl ResourceTickets for Tickets {
         self.issued.lock().unwrap().push(resource);
         Ok("t".repeat(43))
     }
-    fn release_conversation(&self, _: &ConversationId) {
-        self.released_conversations.fetch_add(1, Ordering::SeqCst);
-    }
-    fn release_app(&self, _: &ConversationId, app: &McpAppRef) {
-        self.released_apps.lock().unwrap().push(app.clone());
+    fn activate(&self, ticket: &str) -> Result<(), (TicketEnd, McpAppInitiator)> {
+        if let Some(ended) = self.ended_first.lock().unwrap().take() {
+            return Err(ended);
+        }
+        self.activated.lock().unwrap().push(ticket.into());
+        Ok(())
     }
     fn discard(&self, ticket: &str) {
         self.discarded.lock().unwrap().push(ticket.into());
+    }
+    fn release_conversation(&self, _: &ConversationId, by: &McpAppInitiator) {
+        self.released_conversations.lock().unwrap().push(by.clone());
+    }
+    fn release_app(&self, _: &ConversationId, app: &McpAppRef, by: &McpAppInitiator) {
+        self.released_apps
+            .lock()
+            .unwrap()
+            .push((app.clone(), by.clone()));
     }
 }
 

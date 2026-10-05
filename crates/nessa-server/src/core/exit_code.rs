@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use nessa_auth::adapters::local::LocalStoreError;
 
-use super::RunError;
+use super::{error::NativeFailure, RunError};
 
 const CODES_JSON: &str = include_str!("../../../../protocol/defaults/gateway-exit-codes.json");
 
@@ -40,7 +40,7 @@ static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
 /// one, which is what keeps the table from falling behind the errors.
 pub(super) fn reason(error: &RunError) -> &'static str {
     match error {
-        RunError::Environment(_) => "configuration",
+        RunError::Environment(_) | RunError::RuntimeConfig(_) => "configuration",
         // The registry lock is held for the lifetime of the store, and the
         // registry is per stage and instance. So a registry another process
         // is already holding is not a registry problem at all: it is the
@@ -66,6 +66,9 @@ pub(super) fn reason(error: &RunError) -> &'static str {
         }
         RunError::Registry(_) => "credentialRegistry",
         RunError::Dataset(_) => "datasetRefused",
+        // Absent while cleanup is still owed. Not damaged data, and not a
+        // new empty journal: the file has to be restored.
+        RunError::ReceiverJournal(_) => "receiverJournalMissing",
         // The command line named nothing this binary can run. Under launchd
         // that is this installation's own plist being wrong, not anything the
         // person did, so it is told apart from the reasons they can act on
@@ -79,7 +82,23 @@ pub(super) fn reason(error: &RunError) -> &'static str {
         RunError::Agent(_) => "agent",
         RunError::Runtime(_) => "runtime",
         RunError::Serve(_) => "serve",
+        // Both facts survive the process boundary. Folding this into "serve"
+        // or "shutdown" would drop the other one, which is the failure this
+        // reason exists to avoid.
+        RunError::ServeAndShutdown(_) => "serveAndShutdown",
         RunError::Shutdown(_) => "shutdown",
+        // Native pairing's own failures, said with the reasons the host
+        // already knows: its listener failing is a serve failure, its socket a
+        // bind failure, and its key and private state the authentication setup
+        // they belong to.
+        RunError::Native(NativeFailure::Listener(_)) => "serve",
+        RunError::Native(NativeFailure::Bind { .. }) => "bind",
+        RunError::Native(
+            NativeFailure::Directory(_)
+            | NativeFailure::PrivateState(_)
+            | NativeFailure::Identity(_)
+            | NativeFailure::Open(_),
+        ) => "authentication",
     }
 }
 
@@ -106,6 +125,7 @@ pub(super) fn code(reason: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ServeAndShutdown;
     use std::io::{Error, ErrorKind};
 
     /// Every reason the table names is a distinct, non-zero code, and every
@@ -138,6 +158,7 @@ mod tests {
                 },
             ),
             RunError::Authentication("setup".into()),
+            RunError::RuntimeConfig("unknown field".into()),
             RunError::Agent("provider".into()),
             RunError::Runtime("missing bundled runtime file".into()),
             RunError::Bind {
@@ -149,7 +170,22 @@ mod tests {
                 source: Error::from(ErrorKind::PermissionDenied),
             },
             RunError::Serve(Error::from(ErrorKind::BrokenPipe)),
+            RunError::ServeAndShutdown(Box::new(ServeAndShutdown::new(
+                Error::from(ErrorKind::BrokenPipe),
+                None,
+            ))),
             RunError::Shutdown(None),
+            RunError::Native(NativeFailure::Directory(Error::from(
+                ErrorKind::PermissionDenied,
+            ))),
+            RunError::Native(NativeFailure::Bind {
+                address: "127.0.0.1:47650".parse().unwrap(),
+                source: Error::from(ErrorKind::AddrInUse),
+            }),
+            RunError::Native(NativeFailure::Listener(ErrorKind::InvalidInput)),
+            RunError::ReceiverJournal(super::super::MissingReceiverJournal::new(
+                std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
+            )),
         ] {
             assert!(CODES.codes.contains_key(reason(&error)), "{error}");
             assert_eq!(exit_code(&error), CODES.codes[reason(&error)]);
@@ -163,6 +199,14 @@ mod tests {
         // A reason the table has never heard of is the unclassified failure,
         // which is still a failure.
         assert_eq!(code("somethingTheTableDoesNotName"), 1);
+        // Absent while cleanup is owed. Not damaged data: the host's
+        // datasetRefused sentence would say another version or a damaged file.
+        let missing = RunError::ReceiverJournal(crate::core::MissingReceiverJournal::new(
+            std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
+        ));
+        assert_eq!(reason(&missing), "receiverJournalMissing");
+        assert_eq!(exit_code(&missing), 35);
+        assert_ne!(reason(&missing), "datasetRefused");
     }
 
     /// The registry a build cannot read is the case the desktop reports as a

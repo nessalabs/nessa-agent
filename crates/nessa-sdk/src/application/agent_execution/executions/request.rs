@@ -8,11 +8,11 @@ pub struct ExecutionRequest {
     /// Stable submission key. Agent queue/steering retries with the same key recover
     /// the original delivery; changing the input or attribution is a conflict.
     pub execution_id: ExecutionId,
-    /// What the user said: text of at most [`Self::MAX_MESSAGE_BYTES`] UTF-8 bytes,
-    /// images referred to by digest, or both. Image bytes are never held here,
-    /// so a request can be compared for retry identity and persisted whole; the
-    /// adapter resolves them when it dispatches. Previously submitted messages
-    /// are not replayed here.
+    /// The new message: see [`UserMessage`] for what it holds. Its text is at
+    /// most [`Self::MAX_MESSAGE_BYTES`] UTF-8 bytes; it refers to images and
+    /// files rather than holding their bytes, so a request can be compared for
+    /// retry identity and persisted whole. Previously submitted messages are
+    /// not replayed here.
     pub user_message: UserMessage,
     /// Caller estimate of total input context tokens, including retained history
     /// and tool material. Used only for local admission; ACP does not supply exact

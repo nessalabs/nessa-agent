@@ -4,6 +4,7 @@
 //! harness ──initialize──────────────▶ answered here, from the upstream's own answer
 //!         ──request (its id)────────▶ Connection::call (an id of the connection's)
 //!         ◀─answer (its id)─────────┘   tools/list: without the model's hidden tools
+//!                                           tools/call: structuredContent kept first
 //!         ──notifications/cancelled─▶ that call dropped: cancelled upstream
 //!         ◀─*/list_changed────────── the connection's notices
 //! ```
@@ -15,6 +16,9 @@
 use super::connection::{Connection, Reply};
 use super::framing::{self, Frames, MAX_FRAME_BYTES};
 use super::{wire, McpError};
+use crate::domain::agent_execution::tools::ToolCallId;
+use crate::infrastructure::acp::fields::identifier;
+use crate::infrastructure::acp::sessions::ForwardedResults;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -30,13 +34,15 @@ use tokio::{
 };
 
 /// What a finished call hands back: the harness's key and id for it, the
-/// server's reply, and, for a `tools/list`, the order it was asked in and
-/// which of the tools its answer named it hid from the model.
+/// server's reply, for a `tools/list` the order it was asked in and which of
+/// the tools its answer named it hid from the model, and for a `tools/call`
+/// the harness's own id for the call, when it named one.
 type Finished = (
     String,
     Value,
     Result<Reply, McpError>,
     Option<(u64, Vec<(String, bool)>)>,
+    Option<ToolCallId>,
 );
 
 /// What a stand-in sends a harness that fell too far behind the server's
@@ -77,16 +83,14 @@ impl Visibility {
     pub(crate) fn ask(&self) -> u64 {
         self.asked.fetch_add(1, Ordering::Relaxed) + 1
     }
-    /// What list `order` said of each tool it named: hidden or not. A name
-    /// the list gives twice is hidden if either says so.
+    /// What list `order` said of each tool it named: hidden or not. Each
+    /// name is given once. A name the list gave twice was already folded
+    /// ([`wire::one_visibility_per_name`]): a side may see it only when
+    /// every entry says so.
     pub(crate) fn listed(&self, order: u64, tools: impl IntoIterator<Item = (String, bool)>) {
-        let mut said: HashMap<String, bool> = HashMap::new();
-        for (name, hidden) in tools {
-            *said.entry(name).or_default() |= hidden;
-        }
         let mut known = self.known.lock().expect("visibility");
         known.listed = true;
-        for (name, hidden) in said {
+        for (name, hidden) in tools {
             let entry = known.tools.entry(name).or_insert((order, hidden));
             if entry.0 <= order {
                 *entry = (order, hidden);
@@ -121,11 +125,15 @@ impl Visibility {
 /// either ends. `initialized` is the upstream's answer to the client's own
 /// `initialize`; the harness gets it, without `resources.subscribe`.
 /// `visibility` is the session's: what its lists, and this stand-in's, said
-/// the model may not see.
+/// the model may not see. `forwarded` is its grant's: where a `tools/call`
+/// result's `structuredContent` is kept, under the harness's id for the call,
+/// before the harness is answered.
 pub(crate) async fn serve(
     connection: Arc<Connection>,
     initialized: Arc<Value>,
     visibility: Arc<Visibility>,
+    forwarded: ForwardedResults,
+    server: &str,
     input: impl AsyncRead + Unpin,
     mut output: impl AsyncWrite + Unpin,
 ) {
@@ -144,7 +152,7 @@ pub(crate) async fn serve(
             frame = frames.next() => frame,
             Some(done) = calls.join_next_with_id(), if !calls.is_empty() => {
                 // An aborted call has nothing to answer: its harness cancelled it.
-                if let Ok((task, (key, id, reply, listed))) = done {
+                if let Ok((task, (key, id, reply, listed, call))) = done {
                     if !answered_by(&waiting, &key, task) {
                         continue;
                     }
@@ -152,7 +160,14 @@ pub(crate) async fn serve(
                     if let Some((order, listed)) = listed {
                         visibility.listed(order, listed);
                     }
-                    if !send(&mut output, &answer(&id, reply)).await {
+                    let answer = answer(&id, reply);
+                    // Kept before the harness has it, so the harness cannot
+                    // report the call before its result is here to take
+                    // (`s1_…_before_the_harness_is_answered`).
+                    if let Some(call) = call {
+                        keep_structured(&forwarded, call, server, &answer);
+                    }
+                    if !send(&mut output, &answer).await {
                         return;
                     }
                 }
@@ -224,6 +239,11 @@ pub(crate) async fn serve(
                 let method = method.to_owned();
                 let params = message.get("params").cloned();
                 let order = (method == "tools/list").then(|| visibility.ask());
+                let call = if method == "tools/call" {
+                    call_id(params.as_ref())
+                } else {
+                    None
+                };
                 let call = calls.spawn({
                     let key = key.clone();
                     async move {
@@ -235,7 +255,7 @@ pub(crate) async fn serve(
                             }
                             (other, _) => (other, None),
                         };
-                        (key, id, reply, listed)
+                        (key, id, reply, listed, call)
                     }
                 });
                 waiting.insert(key, call);
@@ -259,6 +279,35 @@ pub(super) fn answered_by(waiting: &HashMap<String, AbortHandle>, key: &str, tas
     waiting.get(key).is_some_and(|call| call.id() == task)
 }
 
+/// Where Claude's harness puts its own id for the call in a forwarded
+/// `tools/call`: the id its ACP frames give the same call (`toolCallId`).
+const CALL_ID: &str = "claudecode/toolUseId";
+
+/// The harness's id for a forwarded `tools/call`, from its `params`: one the
+/// ACP binding would accept as a tool call's id ([`identifier`], then
+/// [`ToolCallId`]), or `None` — as for Codex and OpenCode, which name none.
+fn call_id(params: Option<&Value>) -> Option<ToolCallId> {
+    let id = identifier(params?.get("_meta")?, CALL_ID).ok()?;
+    ToolCallId::new(id).ok()
+}
+
+/// Keep the `structuredContent` of `answer` — the harness's answer, as it will
+/// be written — under `call`, as `server`'s answer, when it is a result that
+/// has one. An error,
+/// including a result too large for a frame ([`answer`]), keeps nothing.
+fn keep_structured(forwarded: &ForwardedResults, call: ToolCallId, server: &str, answer: &Value) {
+    let Some(structured) = answer
+        .get("result")
+        .and_then(|result| result.get("structuredContent"))
+        .filter(|structured| !structured.is_null())
+    else {
+        return;
+    };
+    if let Ok(result) = wire::structured_result(structured) {
+        forwarded.record(call, server, result);
+    }
+}
+
 /// The upstream's `initialize` answer as a harness is given it: without
 /// `resources.subscribe`, which is not offered.
 fn for_harness(initialized: &Value) -> Value {
@@ -273,21 +322,35 @@ fn for_harness(initialized: &Value) -> Value {
 }
 
 /// A `tools/list` result without the tools the model may not see
-/// ([`wire::model_may_see`]), and each listed tool's name with whether it is
-/// hidden — none for a result with no tools array, which says nothing.
+/// ([`wire::tool_visibility`]), and each listed tool's name with whether it
+/// is hidden — none for a result with no tools array, which says nothing.
+/// A name given twice is hidden when any entry hides it, and then left out
+/// entirely ([`wire::one_visibility_per_name`]).
 fn for_model(mut result: Value) -> (Value, Option<Vec<(String, bool)>>) {
     let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) else {
         return (result, None);
     };
-    let mut listed = Vec::new();
-    tools.retain(|tool| {
-        let visible = wire::model_may_see(tool);
-        if let Some(name) = tool.get("name").and_then(Value::as_str) {
-            listed.push((name.to_owned(), !visible));
-        }
-        visible
+    let combined = wire::one_visibility_per_name(tools.iter().filter_map(|tool| {
+        let name = tool.get("name").and_then(Value::as_str)?;
+        Some((name.to_owned(), wire::tool_visibility(tool)))
+    }));
+    let hidden: HashMap<&str, bool> = combined
+        .iter()
+        .map(|(name, who)| (name.as_str(), !who.model()))
+        .collect();
+    tools.retain(|tool| match tool.get("name").and_then(Value::as_str) {
+        Some(name) => hidden.get(name).is_some_and(|is_hidden| !is_hidden),
+        None => wire::tool_visibility(tool).model(),
     });
-    (result, Some(listed))
+    (
+        result,
+        Some(
+            combined
+                .into_iter()
+                .map(|(name, who)| (name, !who.model()))
+                .collect(),
+        ),
+    )
 }
 
 /// The harness's answer under its own `id`. One that would not fit a frame

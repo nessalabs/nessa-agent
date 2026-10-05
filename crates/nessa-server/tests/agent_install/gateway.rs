@@ -7,7 +7,7 @@ mod native_installs {
         },
         domain::{AgentName, InstallRequest, ReleaseVersion},
     };
-    use crate::product::generated::MAX_AGENT_INSTALL_REQUEST_ID_BYTES;
+    use nessa_protocol::product::generated::MAX_AGENT_INSTALL_REQUEST_ID_BYTES;
     use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
     use std::sync::{atomic::AtomicUsize, mpsc};
 

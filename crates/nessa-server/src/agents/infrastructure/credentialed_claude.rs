@@ -30,11 +30,11 @@ use nessa_sdk::{
     infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
 };
 
-use crate::agents::{
-    application::{AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource},
-    domain::AgentId,
+use crate::agents::application::{
+    AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
 };
 use crate::conversation::infrastructure::LaunchedDeletions;
+use nessa_protocol::agents::AgentId;
 
 const CREDENTIAL_READ_DEADLINE: Duration = Duration::from_secs(3);
 
@@ -280,7 +280,7 @@ mod tests {
             credential_environment: BTreeMap::new(),
             workspace: root.path().into(),
             tools_enabled: true,
-            mcp_servers: Vec::new(),
+            mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             launch_timeout: Duration::from_secs(10),

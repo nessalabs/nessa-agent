@@ -139,7 +139,6 @@ export function agentTranscript(
         inputIndex++
       }
     }
-    const seenTools = new Set<string>()
     for (const part of turn.parts) {
       insertInputs(part.offset)
       if (part.kind === "local_notice") {
@@ -183,24 +182,21 @@ export function agentTranscript(
           /* exact plain text */
         }
       }
-      if (!seenTools.has(part.toolId))
-        push(
-          `${callId}:start`,
-          {
-            type: "tool_call_started",
-            callId,
-            name: tool.title,
-            kind: toolKind(tool.kind),
-            title: tool.title,
-            input,
-          },
-          { ...tool, ...execution },
-        )
-      seenTools.add(part.toolId)
-      const last = [...turn.parts]
-        .reverse()
-        .find((item) => item.kind === "tool" && item.toolId === part.toolId)
-      if (last === part && (tool.status === "completed" || tool.status === "failed"))
+      // The gateway gives a tool call one part (nessa-server tests/conversation/tool_parts.rs),
+      // so its start, and its result once it has one, are told here.
+      push(
+        `${callId}:start`,
+        {
+          type: "tool_call_started",
+          callId,
+          name: tool.title,
+          kind: toolKind(tool.kind),
+          title: tool.title,
+          input,
+        },
+        { ...tool, ...execution },
+      )
+      if (tool.status === "completed" || tool.status === "failed")
         push(`${callId}:result`, {
           type: "tool_call_completed",
           callId,

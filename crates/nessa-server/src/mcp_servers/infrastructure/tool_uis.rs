@@ -1,5 +1,5 @@
-use crate::conversation::application::McpToolUis;
-use nessa_sdk::domain::agent_execution::sessions::SessionId;
+use crate::conversation::application::conversation_session;
+use nessa_protocol::conversation::{domain::ConversationId, tool_uis::McpToolUis};
 use nessa_sdk::domain::{agent_execution::tools::McpTool, mcp_apps::UiResourceUri};
 use nessa_sdk::infrastructure::mcp::McpServers;
 
@@ -8,9 +8,9 @@ use nessa_sdk::infrastructure::mcp::McpServers;
 /// connection.
 pub struct ListedToolUis(pub McpServers);
 impl McpToolUis for ListedToolUis {
-    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
+    fn resource_uri(&self, conversation: &ConversationId, call: &McpTool) -> Option<UiResourceUri> {
         self.0
-            .tool_ui(session, call)
-            .map(|ui| ui.resource_uri().clone())
+            .tool_ui(&conversation_session(conversation), call)
+            .and_then(|ui| ui.resource_uri().cloned())
     }
 }

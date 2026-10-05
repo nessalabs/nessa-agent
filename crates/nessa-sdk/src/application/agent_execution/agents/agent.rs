@@ -14,6 +14,7 @@ use super::{
 use crate::application::agent_execution::agents::{
     AgentError, AgentFuture, AgentInitializationError,
 };
+use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
     limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
     AttachmentAuditStage, EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord,
@@ -40,7 +41,10 @@ use crate::application::agent_execution::sessions::{
 use crate::domain::agent_execution::permissions::{PermissionAuthorityError, PermissionId};
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
-    agent_execution::executions::{ExecutionId, ExecutionOutcome},
+    agent_execution::{
+        executions::{ExecutionId, ExecutionOutcome},
+        sessions::SessionId,
+    },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
 use std::{
@@ -90,7 +94,10 @@ pub struct Agent {
 }
 pub(super) struct Inner {
     pub(super) instance_id: String,
-    pub(super) approval_mode: RwLock<Option<ApprovalMode>>,
+    /// A preset verified by a live change, and the provider generation of the
+    /// attachment it was applied to. It is in force only while that
+    /// attachment is: any other opens at the provider's own preset.
+    pub(super) live_approval_mode: RwLock<Option<(u64, ApprovalMode)>>,
     /// A level verified by a live change, and the provider generation of the
     /// attachment it was applied to. It is in force only while that
     /// attachment is: any other opens at the provider's own level.
@@ -149,21 +156,69 @@ impl Agent {
     /// Whether this Agent currently has no running or queued work. This
     /// snapshot does not reserve admission; a host must serialize subsequent
     /// mode changes with its own turn-admission owner.
+    ///
+    /// Waiting for the scheduler lock registers the polling task's `Waker`
+    /// with it. A panic from that waker when another task releases the lock
+    /// is logged and does not fail that task. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn idle_for_approval_change(&self) -> bool {
-        let scheduler = self.inner.scheduler.lock().await;
-        scheduler.is_idle() && self.inner.lifecycle.active().is_none()
+        let waiter = CallerWaiter::IdleForApprovalChange(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, async {
+            let scheduler = self.inner.scheduler.lock().await;
+            scheduler.is_idle() && self.inner.lifecycle.active().is_none()
+        })
+        .await
     }
-    /// The preset this agent generation was configured with or last verified
-    /// through a live mode change. `None` means this provider makes no claim.
+    /// The approval preset in force: the one last verified by a live change
+    /// on the current attachment, or else the provider's own
+    /// ([`AgentProvider::approval_mode`]), which every new attachment opens
+    /// at — including while none is attached, so work admitted then names
+    /// the mode the next attachment will run at. `None` means this provider
+    /// makes no claim.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
-        *self.inner.approval_mode.read().expect("approval mode lock")
+        self.approval_mode_at(self.inner.lifecycle.attached_generation())
+    }
+    /// The preset of `generation` when that attachment accepted the work.
+    /// `None` means nothing was attached, so the binding's preset is the one
+    /// a later attachment opens at. Close can detach the current attachment
+    /// before the admission record is written; the generation captured when
+    /// the work was accepted still names its own preset.
+    pub(super) fn approval_mode_at(&self, generation: Option<u64>) -> Option<ApprovalMode> {
+        let Some(generation) = generation else {
+            return self.inner.provider.approval_mode();
+        };
+        let live = *self
+            .inner
+            .live_approval_mode
+            .read()
+            .expect("approval mode lock");
+        match live {
+            Some((live_generation, mode)) if live_generation == generation => Some(mode),
+            _ => self.inner.provider.approval_mode(),
+        }
     }
     /// Apply and verify a native approval preset on an attached, idle provider
     /// generation. The scheduler lock excludes queued admission and dispatch
     /// until the response is checked. A failed application carries explicit
     /// session status; callers must retire an uncertain generation before
     /// admitting another turn.
+    ///
+    /// A verified change is recorded against this attachment's provider
+    /// generation. [`Self::approval_mode`] reports it only while that
+    /// attachment is the one in use. A later attachment opens at
+    /// [`AgentProvider::approval_mode`], and every admission after that
+    /// records that mode
+    /// ([`QueueAdmissionRecord::approval_mode`](crate::application::agent_execution::executions::QueueAdmissionRecord::approval_mode)).
+    ///
+    /// Waiting for the scheduler lock registers the polling task's `Waker`
+    /// with it. A panic from that waker when another task releases the lock
+    /// is logged and does not fail that task. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
+        let waiter = CallerWaiter::ApprovalModeChange(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, self.apply_approval_mode(mode)).await
+    }
+    async fn apply_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
         let scheduler = self.inner.scheduler.lock().await;
         if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
             return Err(ProviderOperationFailure::new(
@@ -185,9 +240,9 @@ impl Agent {
         if result.is_ok() {
             *self
                 .inner
-                .approval_mode
+                .live_approval_mode
                 .write()
-                .expect("approval mode lock") = Some(mode);
+                .expect("approval mode lock") = Some((permit.provider_generation(), mode));
         }
         drop(permit);
         drop(scheduler);
@@ -276,6 +331,10 @@ impl Agent {
     /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
     ///   when the agent verified the change but it cannot be recorded: the
     ///   level is in force, and no turn may run under it unrecorded.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn set_effort_level(
         &self,
         level: EffortLevel,
@@ -285,15 +344,19 @@ impl Agent {
         // recorded, its settlement is recorded and applied to this Agent and
         // its connection whether or not the caller still waits.
         let agent = self.clone();
-        tokio::spawn(async move { agent.change_effort_level(level, actor).await })
-            .await
-            .unwrap_or_else(|_| {
-                // Panicked or cancelled: whether it reached the agent is not known.
-                Err(ProviderOperationFailure::new(
-                    AgentError::SubmissionUnresolved,
-                    ProviderSessionState::CleanupRequired,
-                ))
-            })
+        let waiter = CallerWaiter::EffortLevelChange(self.inner.manager.id().clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move { agent.change_effort_level(level, actor).await }),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            // Panicked or cancelled: whether it reached the agent is not known.
+            Err(ProviderOperationFailure::new(
+                AgentError::SubmissionUnresolved,
+                ProviderSessionState::CleanupRequired,
+            ))
+        })
     }
     async fn change_effort_level(
         &self,
@@ -422,7 +485,22 @@ impl Agent {
     /// `provider` supplies immutable identity and model capabilities;
     /// `session_manager` transfers its exclusive storage lease into this Agent;
     /// `audit` receives mandatory attachment and scheduling evidence. Identity and
-    /// storage failures return [`AgentInitializationError`]. Provider startup is a
+    /// storage failures return [`AgentInitializationError`].
+    ///
+    /// Opening a new conversation, or recording that a restart cleared its saved
+    /// queue, is saved before this returns. When an earlier `prepare` left that
+    /// save unfinished — its decision durable, its completion refused or never
+    /// written — this call derives the same decision from the same saved state
+    /// and completes it. Identity and storage failures are reported first. When
+    /// the storage refuses that decision because the unfinished save's durable
+    /// units differ from it, or when initialization has nothing to save, this
+    /// returns
+    /// [`StorageError::Unresolved`](crate::application::agent_execution::sessions::StorageError::Unresolved)
+    /// with nothing written. Storage compares only durable units, so a longer
+    /// plan written directly through
+    /// [`SessionStorageLease::save_changes`](crate::application::agent_execution::sessions::SessionStorageLease::save_changes)
+    /// whose durable prefix is exactly this decision is completed as this
+    /// decision. Provider startup is a
     /// separate, explicitly authorized operation through
     /// [`Self::authorize_attachment`] and [`Self::start_attachment`].
     ///
@@ -490,7 +568,7 @@ impl Agent {
         Ok(Self {
             inner: Arc::new(Inner {
                 instance_id: uuid::Uuid::new_v4().to_string(),
-                approval_mode: RwLock::new(provider.approval_mode()),
+                live_approval_mode: RwLock::new(None),
                 live_effort_level: RwLock::new(None),
                 provider,
                 capabilities,
@@ -789,6 +867,7 @@ impl Agent {
     /// Storage and execution do not depend on a UI reader.
     pub fn subscribe(&self) -> AgentEvents {
         AgentEvents {
+            session: self.inner.manager.id().clone(),
             receiver: self.inner.updates.subscribe(),
         }
     }
@@ -805,6 +884,10 @@ impl Agent {
     /// future has no effects. Keep the Tokio runtime alive until work or close
     /// finishes. Immediate calls have no recoverable receipt; use [`Self::enqueue`]
     /// when callers need to retrieve the result after losing their wait.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn invoke(
         &self,
         input: ExecutionRequest,
@@ -822,12 +905,16 @@ impl Agent {
             // Accepted work always reaches its owner, even if close overtakes
             // this handoff. The supervisor saves the input and its stop evidence.
             let agent = self.clone();
-            tokio::spawn(async move {
-                // The task, not its waiter, owns the slot and the attachment.
-                let _invocation = invocation;
-                let _work = work;
-                agent.supervise_invocation(input, actor, None, &_work).await
-            })
+            let waiter = CallerWaiter::Invocation(input.execution_id.clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    // The task, not its waiter, owns the slot and the attachment.
+                    let _invocation = invocation;
+                    let _work = work;
+                    agent.supervise_invocation(input, actor, None, &_work).await
+                }),
+            )
             .await
             .map_err(|_| {
                 self.stop_control_admission();
@@ -1499,6 +1586,10 @@ impl Agent {
     /// and continuing even if its caller stops waiting — the agent is holding a
     /// request open and must be told something. Success is that the answer was
     /// written, never that the agent acted on it.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn answer_question(
         &self,
         answer: QuestionAnswer,
@@ -1509,14 +1600,18 @@ impl Agent {
             let attached = agent.inner.lifecycle.attached_provider(&admission)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
-            tokio::spawn(async move {
-                agent
-                    .run_control_observed(admission.clone(), async {
-                        attached.session.answer_question(answer).await
-                    })
-                    .await
-                    .map_err(ProviderOperationFailure::into_error)
-            })
+            let waiter = CallerWaiter::QuestionAnswer(agent.inner.manager.id().clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    agent
+                        .run_control_observed(admission.clone(), async {
+                            attached.session.answer_question(answer).await
+                        })
+                        .await
+                        .map_err(ProviderOperationFailure::into_error)
+                }),
+            )
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
@@ -1539,6 +1634,10 @@ impl Agent {
     /// Failure returns [`PermissionAnswerFailure`](crate::application::agent_execution::permissions::PermissionAnswerFailure),
     /// whose selection state distinguishes a still-pending review from a consumed
     /// decision and from an interrupted outcome that must be reloaded.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn answer_permission(&self, answer: PermissionAnswer) -> PermissionAnswerFuture<'_> {
         let agent = self.clone();
         Box::pin(async move {
@@ -1554,30 +1653,34 @@ impl Agent {
                 })?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
-            tokio::spawn(async move {
-                let resolution = agent
-                    .run_control_observed(admission.clone(), async {
-                        attached.session.answer_permission(answer).await
-                    })
-                    .await
-                    .map_err(|failure| {
-                        let selection = failure
-                            .permission_selection()
-                            .unwrap_or(PermissionSelectionState::Unknown);
-                        PermissionAnswerFailure::new(failure.into_error(), selection)
-                    })?;
-                agent
-                    .validate_permission_receipt(
-                        &admission,
-                        resolution.request(),
-                        resolution.input(),
-                    )
-                    .await
-                    .map_err(|error| {
-                        PermissionAnswerFailure::new(error, PermissionSelectionState::Consumed)
-                    })?;
-                Ok(resolution)
-            })
+            let waiter = CallerWaiter::PermissionAnswer(agent.inner.manager.id().clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    let resolution = agent
+                        .run_control_observed(admission.clone(), async {
+                            attached.session.answer_permission(answer).await
+                        })
+                        .await
+                        .map_err(|failure| {
+                            let selection = failure
+                                .permission_selection()
+                                .unwrap_or(PermissionSelectionState::Unknown);
+                            PermissionAnswerFailure::new(failure.into_error(), selection)
+                        })?;
+                    agent
+                        .validate_permission_receipt(
+                            &admission,
+                            resolution.request(),
+                            resolution.input(),
+                        )
+                        .await
+                        .map_err(|error| {
+                            PermissionAnswerFailure::new(error, PermissionSelectionState::Consumed)
+                        })?;
+                    Ok(resolution)
+                }),
+            )
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
@@ -1600,6 +1703,10 @@ impl Agent {
     /// interrupts pending response waits with `Closed`. A received receipt still
     /// completes local evidence validation. Admitted provider effects and mandatory
     /// audit remain owned by the adapter and settled by cleanup.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn cancel_permission(
         &self,
         request: PermissionCancellationRequest,
@@ -1610,21 +1717,25 @@ impl Agent {
             let attached = agent.inner.lifecycle.attached_provider(&admission)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
-            tokio::spawn(async move {
-                let cancellation = agent
-                    .run_control(admission.clone(), async {
-                        attached.session.cancel_permission(request).await
-                    })
-                    .await?;
-                agent
-                    .validate_permission_receipt(
-                        &admission,
-                        cancellation.request(),
-                        cancellation.input(),
-                    )
-                    .await?;
-                Ok(cancellation)
-            })
+            let waiter = CallerWaiter::PermissionCancellation(agent.inner.manager.id().clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    let cancellation = agent
+                        .run_control(admission.clone(), async {
+                            attached.session.cancel_permission(request).await
+                        })
+                        .await?;
+                    agent
+                        .validate_permission_receipt(
+                            &admission,
+                            cancellation.request(),
+                            cancellation.input(),
+                        )
+                        .await?;
+                    Ok(cancellation)
+                }),
+            )
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
@@ -1645,6 +1756,10 @@ impl Agent {
     /// Once polled, close continues even if its caller stops waiting. Retries and
     /// final handle drop preserve the attachment's first shutdown cause and known
     /// initiator until cleanup is confirmed; a resumed attachment owns a new cause.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn close(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
         Box::pin(async move { self.close_scheduled(actor).await })
     }
@@ -1654,13 +1769,21 @@ impl Agent {
 /// This is a lossy projection; committed snapshots remain available via the manager.
 /// Streaming text can precede its next save boundary and be lost on process failure.
 pub struct AgentEvents {
+    session: SessionId,
     receiver: broadcast::Receiver<ExecutionEvent>,
 }
 impl AgentEvents {
     /// Wait for the next update. Returns Backpressure after subscriber lag, or None
     /// when all Agent senders are dropped. Cancelling this wait loses no queued update.
+    ///
+    /// Updates are published on the Agent's own tasks. A panic raised by the
+    /// polling task's `Waker` is logged and loses that one wake; it does not
+    /// stop the invocation that published, and the update stays queued for
+    /// the next poll. See "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn next(&mut self) -> Result<Option<ExecutionEvent>, AgentError> {
-        match self.receiver.recv().await {
+        let waiter = CallerWaiter::Events(self.session.clone());
+        let received = contain_caller_wake(waiter, self.receiver.recv()).await;
+        match received {
             Ok(event) => Ok(Some(event)),
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(AgentError::Backpressure),

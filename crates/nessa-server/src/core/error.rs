@@ -11,14 +11,52 @@ use super::ShutdownFailure;
 use crate::browser_session::adapters::JournalOpenError;
 #[cfg(test)]
 use crate::conversation::application::ConversationError;
+use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
-#[cfg(unix)]
+use nessa_auth::application::pairing::PrivateStateError;
 use nessa_local_database::OpenError;
 use std::fmt;
 use std::io::{self, ErrorKind};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+
+/// Browser serving failed, and shutdown from the same run did not confirm.
+///
+/// The browser error and the shutdown evidence are the originals from that
+/// run. Neither is rewritten into the other. A confirmed shutdown is
+/// [`RunError::Serve`] alone, because there is no shutdown failure to keep.
+/// `shutdown` is `None` when cleanup never published a report — the same fact
+/// as [`RunError::Shutdown`] with `None`, not a successful stop.
+/// [`std::error::Error::source`] on the [`RunError`] that carries this is the
+/// browser error; the shutdown evidence stays in `shutdown`.
+///
+/// The value is boxed where [`RunError`] carries it so the other fatal errors
+/// stay small enough to return directly.
+#[derive(Debug)]
+pub struct ServeAndShutdown {
+    serve: io::Error,
+    shutdown: Option<ShutdownFailure>,
+}
+
+impl ServeAndShutdown {
+    /// Both originals from one run. `shutdown` is `None` when cleanup never published.
+    pub(crate) fn new(serve: io::Error, shutdown: Option<ShutdownFailure>) -> Self {
+        Self { serve, shutdown }
+    }
+
+    /// The error the browser listener returned.
+    pub fn serve(&self) -> &io::Error {
+        &self.serve
+    }
+
+    /// The shutdown report that did not confirm, or `None` when shutdown
+    /// never reported.
+    pub fn shutdown(&self) -> Option<&ShutdownFailure> {
+        self.shutdown.as_ref()
+    }
+}
 
 /// Fatal errors that stop the server process.
 #[derive(Debug)]
@@ -40,6 +78,10 @@ pub enum RunError {
     Dataset(DatasetRefusal),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
+    /// `config.json` was read and its contents refused (an unknown field, a
+    /// malformed native address, an unusable limit). The same file refuses the
+    /// same way next time.
+    RuntimeConfig(String),
     /// Invalid or unavailable configured agent provider.
     Agent(String),
     /// The prepared runtime this process was handed is missing, unreadable, or
@@ -52,13 +94,96 @@ pub enum RunError {
         source: io::Error,
     },
     Serve(io::Error),
-    /// Composed owners did not confirm cleanup on the way down. A missing
-    /// outcome records an interrupted callback; typed failures retain reader
-    /// drain/deadline and conversation cleanup causes independently.
+    /// Browser serving failed, and shutdown from the same run did not confirm.
+    /// See [`ServeAndShutdown`].
+    ServeAndShutdown(Box<ServeAndShutdown>),
+    /// Composed owners did not confirm cleanup on the way down. `Some` is the
+    /// shutdown report that did not confirm: every owner's typed outcome, and
+    /// the first owner, in cleanup order, whose outcome is still unknown.
     /// The HTTP server itself finished; this is what shutdown could not prove.
     /// `None` means shutdown never reported at all — unknown, which is its own
     /// fact and not the same as a reported failure.
     Shutdown(Option<ShutdownFailure>),
+    /// Native device pairing, configured in `config.json`, could not start or
+    /// stopped serving (design rows S4, S10, S14 in
+    /// `docs/design/auth/device-pairing.md`).
+    Native(NativeFailure),
+    /// The receiver journal is not on disk, and an enrollment still owes
+    /// receiver cleanup. A new empty journal would turn that fence into a
+    /// missing receiver, which startup then refuses for good. The file is
+    /// left absent (design rows RJ1–RJ2 in `docs/design/auth/device-pairing.md`).
+    ReceiverJournal(MissingReceiverJournal),
+}
+
+/// Where the receiver journal was looked for, and was not.
+#[derive(Debug)]
+pub struct MissingReceiverJournal {
+    path: PathBuf,
+}
+
+impl MissingReceiverJournal {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    /// The file that was not there.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Why native pairing stopped this gateway: preparing its private state and
+/// key, binding its socket, or its listener failing while serving.
+#[derive(Debug)]
+pub enum NativeFailure {
+    /// The private `native-pairing/` directory could not be created or verified.
+    Directory(io::Error),
+    /// The private pairing state refused to open, or is held by another process.
+    PrivateState(PrivateStateError),
+    /// The gateway key could not be restored or first published. A missing key
+    /// with enrollment history is refused here rather than regenerated.
+    Identity(GatewayIdentityError),
+    /// Settling this gateway's unfinished enrollments before serving failed.
+    Open(PairingRuntimeError),
+    /// The configured native address could not be bound.
+    Bind {
+        address: SocketAddr,
+        source: io::Error,
+    },
+    /// The listener ended on an accept failure (design row P67).
+    Listener(ErrorKind),
+}
+
+impl fmt::Display for NativeFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Directory(error) => {
+                write!(formatter, "native pairing directory unusable: {error}")
+            }
+            Self::PrivateState(error) => {
+                write!(formatter, "native pairing private state refused: {error:?}")
+            }
+            Self::Identity(error) => {
+                write!(
+                    formatter,
+                    "native pairing gateway key unavailable: {error:?}"
+                )
+            }
+            Self::Open(error) => {
+                write!(
+                    formatter,
+                    "native pairing enrollments could not be settled: {error:?}"
+                )
+            }
+            Self::Bind { address, source } => {
+                write!(
+                    formatter,
+                    "native pairing could not bind {address}: {source}"
+                )
+            }
+            Self::Listener(kind) => write!(formatter, "native pairing listener failed: {kind}"),
+        }
+    }
 }
 
 impl RunError {
@@ -66,8 +191,9 @@ impl RunError {
     /// another version, not a database, a damaged page — is a
     /// [`RunError::Dataset`]; anything that can clear — a directory, I/O, a
     /// lock — stays `Agent`, which is retried. Conversations are composed
-    /// only on Unix, so this is too.
-    #[cfg(unix)]
+    /// only on Unix; the receiver journal is also opened for native pairing,
+    /// on every OS. It is `receiver-access/receiver-access.sqlite3` under
+    /// the namespace, not a file in `conversations/`.
     pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
         match cause {
             OpenError::Version { .. } | OpenError::Unreadable(_) | OpenError::Damaged(_) => {
@@ -225,6 +351,7 @@ impl fmt::Display for RunError {
             Self::Registry(error) => write!(f, "authentication setup failed: {error}"),
             Self::Dataset(refusal) => write!(f, "stored data refused: {refusal}"),
             Self::Authentication(message) => write!(f, "authentication setup failed: {message}"),
+            Self::RuntimeConfig(message) => write!(f, "invalid runtime config: {message}"),
             Self::Environment(error) => write!(f, "invalid configuration: {error}"),
             Self::Bind { addr, source } => match source.kind() {
                 ErrorKind::AddrInUse => write!(
@@ -234,12 +361,30 @@ impl fmt::Display for RunError {
                 _ => write!(f, "failed to bind {addr}: {source}"),
             },
             Self::Serve(source) => write!(f, "server stopped: {source}"),
+            Self::ServeAndShutdown(failure) => match failure.shutdown() {
+                Some(error) => write!(
+                    f,
+                    "server stopped: {}; shutdown did not confirm all cleanup: {error}",
+                    failure.serve()
+                ),
+                None => write!(
+                    f,
+                    "server stopped: {}; shutdown never reported whether cleanup completed",
+                    failure.serve()
+                ),
+            },
             Self::Shutdown(Some(error)) => {
                 write!(f, "shutdown did not confirm all cleanup: {error}")
             }
             Self::Shutdown(None) => {
                 write!(f, "shutdown never reported whether cleanup completed")
             }
+            Self::Native(failure) => write!(f, "{failure}"),
+            Self::ReceiverJournal(missing) => write!(
+                f,
+                "receiver access journal missing at {}: an enrollment still owes receiver cleanup",
+                missing.path.display()
+            ),
         }
     }
 }
@@ -250,10 +395,19 @@ impl std::error::Error for RunError {
             Self::Environment(error) => Some(error),
             Self::Registry(error) => Some(error),
             Self::Dataset(refusal) => Some(&*refusal.cause),
-            Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
+            Self::Usage(_)
+            | Self::Authentication(_)
+            | Self::RuntimeConfig(_)
+            | Self::Agent(_)
+            | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
+            Self::ServeAndShutdown(failure) => Some(failure.serve()),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),
+            Self::Native(NativeFailure::Directory(source) | NativeFailure::Bind { source, .. }) => {
+                Some(source)
+            }
+            Self::Native(_) | Self::ReceiverJournal(_) => None,
         }
     }
 }
@@ -275,13 +429,14 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::conversation::infrastructure::LocalConversationStore;
+    use crate::core::ShutdownReport;
     use crate::env::{EnvironmentError, HOST};
 
     #[test]
     fn an_unconfirmed_shutdown_says_which_kind_it_was() {
-        let reported = RunError::Shutdown(Some(ShutdownFailure::Conversations(
-            ConversationError::Audit,
-        )));
+        let mut report = ShutdownReport::default();
+        report.observe_conversations(Err(ConversationError::Audit));
+        let reported = RunError::Shutdown(report.into_result().err());
         assert!(reported.to_string().contains("did not confirm all cleanup"));
         // The typed failure is the source, so a caller can match on it.
         assert!(std::error::Error::source(&reported).is_some());

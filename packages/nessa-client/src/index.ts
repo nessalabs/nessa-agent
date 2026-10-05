@@ -25,6 +25,7 @@ export {
   type ServerApi,
   type AgentsApi,
   type RecordReadApi,
+  type ChangeWatchApi,
 } from "./presentation/index.js"
 export type {
   NessaClientConnectOptions,
@@ -119,6 +120,15 @@ export type {
   RecordPageRequest,
 } from "./generated/product.js"
 export type { DecodedRecord, DecodedRecordPage } from "./protocol/record-read-validate.js"
+export { ChangeWatchEndReason, ChangeWatchErrorCode } from "./generated/product.js"
+export type {
+  ConversationWatchRecordsParams,
+  ConversationWatchCatalogueParams,
+  ConversationWatchResult,
+  ConversationUnwatchResult,
+  ConversationChanged,
+  ConversationWatchEnded,
+} from "./generated/product.js"
 
 export { NessaMutationError } from "./application/mutation-error.js"
 export type {
@@ -151,8 +161,13 @@ export {
   type AttachmentBeginRefusal,
   type AttachmentFailureCode,
 } from "./application/attachment-upload.js"
-export type { McpAppsApi, McpResourceDescription } from "./presentation/mcp-apps-api.js"
+export {
+  mcpAppDeadlines,
+  type McpAppsApi,
+  type McpResourceDescription,
+} from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
+export { NessaRequestTooLargeError } from "./application/request-too-large-error.js"
 export {
   NessaMcpResourceError,
   type McpResourceFailureCode,
@@ -161,6 +176,7 @@ export {
   MAX_MCP_ARGUMENTS_BYTES,
   MAX_MCP_RESOURCE_BYTES,
   MAX_MCP_RESULT_BYTES,
+  mcpAppRequestProblem,
 } from "./protocol/mcp-app-validate.js"
 export type {
   McpAppReference,

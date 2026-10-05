@@ -35,7 +35,7 @@ export function compareGeneratedRust(functions, cases) {
         "--manifest-path",
         resolve(directory, "Cargo.toml"),
         "--target-dir",
-        resolve(root, "target/wire-shape-runtime"),
+        process.env.CARGO_TARGET_DIR ?? resolve(root, "target/wire-shape-runtime"),
       ],
       {
         encoding: "utf8",

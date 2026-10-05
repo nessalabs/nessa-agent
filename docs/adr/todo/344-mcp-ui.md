@@ -190,16 +190,23 @@ app widgets alike.
 - The gateway gains the connection to each server for each harness session —
   the harness's MCP traffic now passes through it — and two app methods, with
   policy and audit; what that connection means is designed in
-  [mcp-connections](../../design/mcp-connections.md) (#346): a harness's
-  context fingerprint covers its stand-in, whose arguments carry a digest of
-  the configured server, so it still changes exactly when the server does; a
-  gateway restart ends every session, so a restored conversation's handles
-  are gone and the server says so; a server that exits ends its stand-in, as
-  when the harness owned it; and which conversation a stand-in belongs to is
-  carried to the gateway by a token issued for each open, in the stand-in's
-  environment (#348), before any app method exists. The SDK and
-  protocol carry tool identity and `_meta`, which also helps any tool view in
-  the transcript.
+  [mcp-connections](../../design/mcp-connections.md) (#346): a stand-in's
+  arguments carry a digest of the configured server, which the relay compares;
+  a gateway restart ends every session, so a restored
+  conversation's handles are gone and the server says so; a server that exits
+  ends its stand-in, as when the harness owned it; and which conversation a
+  stand-in belongs to is carried to the gateway by a token issued for each
+  open, in the stand-in's environment (#348), before any app method exists.
+  The SDK and protocol carry tool identity and `_meta`, which also helps any
+  tool view in the transcript.
+- **Amended (#391): the MCP server list is not part of a conversation's
+  restoration identity.** It is attached to each open, like the stand-in
+  token, and selects no provider context, so the SDK's fingerprint no longer
+  hashes it. This replaces "the fingerprint still changes exactly when the
+  server does", which the record first chose. The consequences — the one-time
+  strand of conversations saved before the release, what still strands one,
+  and what `configuration-changed` is for — are in
+  [MCP servers and the restoration identity](../../design/mcp-connections.md#mcp-servers-and-the-restoration-identity).
 - A view like experiments becomes a package with its own release, testable in a
   fake host, and portable.
 - An extension cannot reach into the core: whatever it needs from the
@@ -230,6 +237,51 @@ app widgets alike.
   and the app's `srcdoc` load in a frame (`links.rs`). Not driven by a script:
   the scripts run the browser build.
 
+## Evidence (#384)
+
+- **The adapter** (`widgets/app/adapters/gateway/mcp-app-server.ts`), against
+  a fake `client.mcpApps` that gives every answer the gateway can:
+  `mcp-app-server.test.ts`, one test at least per row of the state table on
+  #384 — each refusal with its reason, `server-gone` and `failed` apart, a
+  server's own JSON-RPC error passed on with its signed code, what the app
+  sends held to the client's bounds (`mcpAppRequestProblem`) before sending,
+  the ticket redeemed once and never handed on — and
+  #349's L14 and L24 through the real bridge over it.
+- **The mount**: each view mints its `instanceId` and releases it once, the
+  first time it fails or ends, aborting what its reads have not fetched
+  (`bridge.test.ts`, "the mount and its release"; `app-view.test.tsx` under
+  StrictMode). A first read the gateway was too busy for is made again
+  (`bridge.test.ts`, L1b).
+- **Limits, each its own issue**: a release ends the reviews already open, but
+  a call admitted before it can still open one after (#397); the app lane's
+  4 slots per socket are shared by every app in the window (#398); an app is
+  told `{}` for arguments the view does not carry (#394); a frame the gateway
+  cannot decode is answered `invalid_request` when the envelope parser reads
+  one JSON object, no decoded envelope name appears twice, `type` is `req`,
+  and `id` is one Unicode string of 1 to 256 bytes. An envelope name that is
+  not Unicode is not a second name, a repeated name inside a nested value
+  still leaves that id, and a frame deeper than 127 containers is not read
+  (#403),
+  so the client refuses a lone surrogate in what it sends; and it closes the
+  socket on a frame past its
+  message limit, so the client refuses one before sending
+  (`NessaRequestTooLargeError`).
+- **The calls from the transcript** (`app-calls.ts`), each named by its
+  conversation as well as its execution and tool ids, and kept, at the last
+  state a view reported, until the conversation is deleted — a view holds only
+  its latest tools — and a forgotten conversation is not brought back by a
+  late view. The order of views is the gateway source's to keep: it tells
+  the apps each view in the order read, and a conversation the gateway says
+  was deleted (`gateway-source.test.ts`, "MCP Apps (#384)"), and its apps'
+  calls go on the client it holds (`dependencies.test.ts`):
+  `app-calls.test.ts`, and
+  `workspace/adapters/gateway/tool-widget.test.ts` for the widget the
+  transcript draws reading the same call.
+- **Not yet in a real browser against a real gateway**: the gateway source
+  (#248) is on `main`, so the window draws a real conversation's apps in a
+  browser preview opened with `?gateway`; the Chromium and WebKit run against
+  a real server is still to do.
+
 ## What each harness passes through ACP
 
 A spike for #347, first read from the pinned harnesses' bundled code and then
@@ -245,7 +297,7 @@ tests' fixtures (`tests/infrastructure/{claude_acp,codex_acp}/tools/fixtures/`).
 
 | | Claude ACP 0.76.0 (observed) | Codex ACP 1.12.0 (observed) | Opencode 1.18.31 (from bundled code) |
 | --- | --- | --- | --- |
-| Server and tool | `_meta.claudeCode.toolName` is `mcp__<server>__<tool>` on every frame, and `title` on the announcement and the frames that restate input, each name with `[^A-Za-z0-9_-]` replaced by `_`: `rows.get` arrives as `rows_get`; kind `other`. Only a configured prefix says where the server ends: Nessa's server names hold no `__` but may end in `_`. In the run, each MCP call was preceded by a `ToolSearch` call that loaded its schema (the fixture keeps the first) | `rawInput.{server, tool}` exactly (`rows.get` kept); title `mcp.<server>.<tool>`, kind `execute`; `_meta.is_mcp_tool_call` on the announcement only, which is `in_progress`; a bare `{status: in_progress}` update follows; the completion repeats `rawInput` without the marker | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
+| Server and tool | `_meta.claudeCode.toolName` is `mcp__<server>__<tool>` on every frame, and `title` on the announcement and the frames that restate input, each name with `[^A-Za-z0-9_-]` replaced by `_`: `rows.get` arrives as `rows_get`; kind `other`. Only a configured prefix says where the server ends: Nessa's server names hold no `__` and neither start nor end with `_` (#391), so at most one fits. In the run, each MCP call was preceded by a `ToolSearch` call that loaded its schema (the fixture keeps the first) | `rawInput.{server, tool}` exactly (`rows.get` kept); title `mcp.<server>.<tool>`, kind `execute`; `_meta.is_mcp_tool_call` on the announcement only, which is `in_progress`; a bare `{status: in_progress}` update follows; the completion repeats `rawInput` without the marker | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
 | The tool's `_meta` (`ui.resourceUri`) | **not passed on**: no `ui://` or `resourceUri` in any frame | **not passed on**: no `ui://` or `resourceUri` in any frame | not passed on |
 | The result's `_meta` | not in any `session/update` | `rawOutput.result._meta` (`null` when the result has none) | dropped |
 | `structuredContent` | replaces the result's text as JSON text, in `content`, `rawOutput`, and a separate update's `_meta.claudeCode.toolResponse`: indistinguishable from text | `rawOutput.result.structuredContent`, verbatim (`null` when absent) | JSON text only when there is no other content |
@@ -267,6 +319,9 @@ where before a finished Codex MCP call showed nothing. Only Codex's announcement
 carries the MCP marker; its completion, which carries the result, does not
 (`index.js:25123-25130`), so the adapter remembers the marking per call. Both reach the window on
 `ConversationTool` (`mcp`, `structuredContent`).
+Claude's `structuredContent`, which no ACP frame carries as an object, is taken from the
+gateway's own connection instead: its stand-in keeps each forwarded result
+for the call it was reported under (#435, [forwarded results](../../design/mcp-connections.md#forwarded-results)).
 
 What it does not: **no harness passes the tool's UI resource through ACP**, so a
 tool's `_meta.ui.resourceUri` comes from the server itself, over the gateway's

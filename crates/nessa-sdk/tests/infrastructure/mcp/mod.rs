@@ -4,12 +4,15 @@
 //! ```text
 //! protocol -> McpSession -> Connection -> fixture (in process, manual clock)
 //! stand_in -> McpSession::serve -> Connection -> fixture
+//! forwarded -> McpSession::serve -> ForwardedResults (the grant's)
 //! sessions -> McpServers::open / tool_ui / stop -> FixtureLauncher
 //! process  -> McpServers -> ProcessLauncher -> fixtures/server.py
 //! ```
 //! Arrows show what each file drives.
 mod apps;
+mod caller_wakes;
 mod fixture;
+mod forwarded;
 mod process;
 mod protocol;
 mod sessions;

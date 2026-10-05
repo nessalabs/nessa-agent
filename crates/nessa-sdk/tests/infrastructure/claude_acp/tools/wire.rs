@@ -13,7 +13,7 @@ fn tool_call(
 /// The name this binding retained for `id`, or `None` where it retained none.
 fn reviewable(names: &HashMap<String, ObservedTool>, id: &str) -> Option<String> {
     match names.get(id) {
-        Some(ObservedTool::Reviewable(name)) => Some(name.clone()),
+        Some(ObservedTool::Reviewable { name, .. }) => Some(name.clone()),
         _ => None,
     }
 }
@@ -199,7 +199,7 @@ fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
 /// Name bytes this binding retained for one observed call.
 fn observed_bytes(observed: &ObservedTool) -> usize {
     match observed {
-        ObservedTool::Reviewable(name) => name.len(),
+        ObservedTool::Reviewable { name, .. } => name.len(),
         ObservedTool::Declined => 0,
     }
 }
@@ -523,8 +523,11 @@ fn a_call_is_left_without_an_mcp_identity_where_none_can_be_named_exactly() {
     let mut names = HashMap::new();
     // Built-in tools, a frame naming nothing, an unconfigured server, and a
     // name two configured servers both fit.
-    // Configured names cannot hold `__` (`AcpConfig::validate`), but one may
-    // end in `_`: `a` and `a_` both fit `mcp__a___c`.
+    // A configured name holds no `__` and neither starts nor ends with `_`
+    // (`StdioMcpServer::problem`), so no configuration gives two fitting
+    // prefixes. These are handed in directly — `a` and `a_` both fit
+    // `mcp__a___c` — to show the split withholds an identity rather than
+    // guess, were two ever to fit.
     let ambiguous = vec!["mcp__a__".to_owned(), "mcp__a___".to_owned()];
     for (frame, prefixes) in [
         (mcp_frame("read", "Read"), vec!["mcp__nessa__".to_owned()]),
@@ -559,6 +562,9 @@ fn recorded_claude_mcp_calls_name_their_server_and_keep_their_text() {
     for (name, frames) in recorded["calls"].as_object().unwrap() {
         for frame in frames.as_array().unwrap() {
             let update = super::tool_call(frame, &mut names, &configured).unwrap();
+            // One call's frames are updates to one call: the gateway draws
+            // them as one part (`nessa-server` `tool_parts.rs`).
+            assert_eq!(update.id().as_str(), frames[0]["toolCallId"], "{name}");
             // Every frame names the tool, so every frame carries the same identity.
             let identity = update.mcp_tool().map(|tool| (tool.server(), tool.tool()));
             match name.strip_prefix("mcp__mcptest__") {
@@ -589,4 +595,428 @@ fn recorded_claude_mcp_calls_name_their_server_and_keep_their_text() {
         last["mcp__mcptest__always_fails"].status(),
         &Some(ToolStatus::Failed)
     );
+}
+
+fn permission(
+    names: &HashMap<String, ObservedTool>,
+    tool: Value,
+) -> Result<ToolReviewInput, AgentError> {
+    super::permission_input(&json!({"toolCall": tool}), names, &[])
+}
+
+/// Claude ACP 0.76.0 announces WebSearch, then a query update, then a permission
+/// whose `toolCall` is only an update. The query stays reviewable when that
+/// update omits both the name and `rawInput`.
+#[test]
+fn websearch_review_keeps_the_query_when_the_permission_update_omits_it() {
+    let mut names = HashMap::new();
+    let query = json!({"query": "Rust programming language official website"});
+    tool_call(
+        &json!({"toolCallId":"search-1","title":"Web search","kind":"fetch","status":"pending",
+            "_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    tool_call(
+        &json!({"toolCallId":"search-1","title":"Search \"Rust programming language official website\"",
+            "kind":"fetch","rawInput":query,"_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    let review = permission(&names, json!({"toolCallId":"search-1","status":"pending"})).unwrap();
+    assert_eq!(review.name, "WebSearch");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        query
+    );
+}
+
+/// The same review when the permission frame itself carries `name` and the query,
+/// which is the shape captured from the pinned harness after the announcement.
+#[test]
+fn websearch_review_reads_a_self_contained_permission_request() {
+    let mut names = HashMap::new();
+    let query = json!({"query": "Rust programming language official website"});
+    tool_call(
+        &json!({"toolCallId":"search-1","kind":"fetch","status":"pending",
+            "_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    let review = permission(
+        &names,
+        json!({"toolCallId":"search-1","name":"WebSearch","kind":"fetch","status":"pending",
+            "title":"Search \"Rust programming language official website\"","rawInput":query}),
+    )
+    .unwrap();
+    assert_eq!(review.name, "WebSearch");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        query
+    );
+}
+
+#[test]
+fn an_unobserved_permission_stays_unreadable_even_when_it_names_a_tool() {
+    assert!(permission(
+        &HashMap::new(),
+        json!({"toolCallId":"never-observed","name":"WebSearch",
+            "rawInput":{"query":"Rust programming language official website"}})
+    )
+    .is_err());
+}
+
+/// ACP `name` is enough to remember the call when Claude metadata is absent.
+#[test]
+fn websearch_name_on_the_tool_call_is_retained_for_a_later_sparse_review() {
+    let mut names = HashMap::new();
+    let query = json!({"query": "Rust programming language official website"});
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":query}),
+        &mut names,
+    )
+    .unwrap();
+    let review = permission(&names, json!({"toolCallId":"search-1"})).unwrap();
+    assert_eq!(review.name, "WebSearch");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        query
+    );
+}
+
+#[test]
+fn a_sparse_websearch_permission_without_an_observed_query_stays_unreadable() {
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}}}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(permission(&names, json!({"toolCallId":"search-1"})).is_err());
+    assert!(permission(
+        &names,
+        json!({"toolCallId":"search-1","rawInput":"not an object"})
+    )
+    .is_err());
+}
+
+/// An object that does not fit the retention budget is not the previous query.
+///
+/// Other calls can fill the budget after a query was cached. The next object
+/// for that call then cannot be retained. Keeping the old query would let a
+/// sparse permission approve input the provider has already replaced. The cache
+/// is cleared instead, whether or not this update repeats the tool name.
+#[test]
+fn an_unretained_query_replacement_clears_the_cached_input() {
+    let max = super::MAX_RETAINED_INPUT_BYTES;
+    let old = object_with_json_len(32);
+    let filler = object_with_json_len(max - 32);
+    let replacement = object_with_json_len(33);
+    for named in [true, false] {
+        let mut names = HashMap::new();
+        tool_call(
+            &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+            &mut names,
+        )
+        .unwrap();
+        tool_call(
+            &json!({"toolCallId":"filler","name":"WebFetch","rawInput":filler}),
+            &mut names,
+        )
+        .unwrap();
+        // Omitting the object leaves the cached query, even with a full budget.
+        tool_call(
+            &json!({"toolCallId":"search-1","status":"pending"}),
+            &mut names,
+        )
+        .unwrap();
+        let kept = permission(&names, json!({"toolCallId":"search-1"})).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&kept.arguments_json).unwrap(),
+            old,
+            "named={named}"
+        );
+        let update = if named {
+            json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+                "rawInput":replacement})
+        } else {
+            json!({"toolCallId":"search-1","rawInput":replacement})
+        };
+        tool_call(&update, &mut names).unwrap();
+        assert_no_cached_query(&names, &format!("named={named}"));
+        let review = permission(
+            &names,
+            json!({"toolCallId":"search-1","rawInput":replacement}),
+        )
+        .unwrap();
+        assert_eq!(review.name, "WebSearch", "named={named}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+            replacement,
+            "named={named}"
+        );
+    }
+}
+
+fn object_with_json_len(bytes: usize) -> Value {
+    let overhead = serde_json::to_string(&json!({"q":""})).unwrap().len();
+    assert!(bytes >= overhead);
+    let value = json!({"q": "x".repeat(bytes - overhead)});
+    assert_eq!(serde_json::to_string(&value).unwrap().len(), bytes);
+    value
+}
+
+/// An object of `bytes` JSON whose text is shorter in characters than in bytes.
+///
+/// The retained-input budget charges UTF-8 bytes. A character count would
+/// under-charge this value and free too little room for the next one.
+fn object_with_multibyte_json_len(bytes: usize, mark: &str) -> Value {
+    let overhead = serde_json::to_string(&json!({"q":""})).unwrap().len();
+    let content_bytes = bytes.checked_sub(overhead).expect("object is at least {}");
+    assert!(mark.len() >= 2 && content_bytes >= mark.len());
+    let mut text = String::from(mark);
+    text.push_str(&"x".repeat(content_bytes - mark.len()));
+    let value = json!({"q": text});
+    assert!(text.chars().count() < text.len());
+    assert_eq!(serde_json::to_string(&value).unwrap().len(), bytes);
+    value
+}
+
+fn query_update(named: bool, raw_input: Value) -> Value {
+    if named {
+        json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+            "rawInput": raw_input})
+    } else {
+        json!({"toolCallId":"search-1","rawInput": raw_input})
+    }
+}
+
+fn assert_cached_query(names: &HashMap<String, ObservedTool>, expected: &Value, label: &str) {
+    let review = permission(names, json!({"toolCallId":"search-1"})).unwrap();
+    assert_eq!(review.name, "WebSearch", "{label}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        *expected,
+        "{label}"
+    );
+}
+
+/// A later object that fits is the query a sparse permission shows.
+///
+/// The budget is already full. The replacement fits only because this call's
+/// own cached bytes are released first, and those bytes are counted in UTF-8
+/// rather than characters. One extra byte clears the cache. Freeing another
+/// call's input afterwards does not bring the old query back; only a new
+/// object that fits does.
+#[test]
+fn a_fitting_replacement_is_the_query_a_sparse_permission_shows() {
+    let max = super::MAX_RETAINED_INPUT_BYTES;
+    let old = object_with_multibyte_json_len(32, "é");
+    let filler = object_with_json_len(max - 32);
+    let replacement = object_with_multibyte_json_len(32, "ü");
+    let over = object_with_json_len(33);
+    assert_ne!(old, replacement);
+    for named in [true, false] {
+        let label = format!("named={named}");
+        let mut names = HashMap::new();
+        tool_call(
+            &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+            &mut names,
+        )
+        .unwrap();
+        tool_call(
+            &json!({"toolCallId":"filler","name":"WebFetch","rawInput":filler}),
+            &mut names,
+        )
+        .unwrap();
+        tool_call(&query_update(named, replacement.clone()), &mut names).unwrap();
+        assert_cached_query(&names, &replacement, &label);
+        tool_call(&query_update(named, over.clone()), &mut names).unwrap();
+        assert_no_cached_query(&names, &label);
+        tool_call(&json!({"toolCallId":"filler","rawInput":{}}), &mut names).unwrap();
+        assert_no_cached_query(&names, &format!("{label}: budget released"));
+        tool_call(&query_update(named, replacement.clone()), &mut names).unwrap();
+        assert_cached_query(&names, &replacement, &format!("{label}: resent"));
+    }
+}
+
+/// A supplied value that is not an object is not the cached query. Null and a
+/// missing field are omissions, so they leave the query in place.
+#[test]
+fn a_non_object_input_clears_the_cached_query() {
+    for named in [true, false] {
+        for raw_input in [
+            json!("next query"),
+            json!(["next query"]),
+            json!(1),
+            json!(true),
+        ] {
+            let label = format!("named={named} input={raw_input}");
+            let mut names = HashMap::new();
+            let old = json!({"query": "old"});
+            tool_call(
+                &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+                &mut names,
+            )
+            .unwrap();
+            tool_call(&query_update(named, Value::Null), &mut names).unwrap();
+            assert_cached_query(&names, &old, &format!("{label}: null"));
+            tool_call(
+                &json!({"toolCallId":"search-1","status":"pending"}),
+                &mut names,
+            )
+            .unwrap();
+            assert_cached_query(&names, &old, &format!("{label}: omitted"));
+            tool_call(&query_update(named, raw_input), &mut names).unwrap();
+            assert_no_cached_query(&names, &label);
+        }
+    }
+}
+
+/// A finished call no longer offers its query. An active update still does.
+///
+/// The terminal frame repeats an object. Ignoring the status and keeping that
+/// object would leave the old query approvable after the call has finished.
+#[test]
+fn a_finished_call_drops_its_cached_input() {
+    let old = json!({"query": "old"});
+    let repeated = json!({"query": "old again"});
+    for status in ["completed", "failed"] {
+        for named in [true, false] {
+            let label = format!("status={status} named={named}");
+            let mut names = HashMap::new();
+            tool_call(
+                &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+                &mut names,
+            )
+            .unwrap();
+            for active in ["pending", "in_progress"] {
+                let update = if named {
+                    json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+                        "status":active})
+                } else {
+                    json!({"toolCallId":"search-1","status":active})
+                };
+                tool_call(&update, &mut names).unwrap();
+                assert_cached_query(&names, &old, &format!("{label} {active}"));
+            }
+            let mut finished = query_update(named, repeated.clone());
+            finished
+                .as_object_mut()
+                .unwrap()
+                .insert("status".into(), json!(status));
+            tool_call(&finished, &mut names).unwrap();
+            assert_no_cached_query(&names, &label);
+            let review =
+                permission(&names, json!({"toolCallId":"search-1","rawInput":old})).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+                old,
+                "{label}: the permission frame's object"
+            );
+        }
+    }
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(tool_call(
+        &json!({"toolCallId":"search-1","name":"WebFetch","status":"completed",
+            "rawInput":{"url":"https://example.com"}}),
+        &mut names
+    )
+    .is_err());
+    assert_cached_query(&names, &old, "rejected finished rename");
+}
+
+/// A permission the review declines still applies its input rule.
+///
+/// A non-object `rawInput` is declined before the shared runtime records the
+/// frame as a tool update. The previous query must not stay approvable. A
+/// frame for a call that was never observed must not create that call.
+#[test]
+fn a_declined_non_object_permission_drops_the_cached_query() {
+    let mut names = HashMap::new();
+    let old = json!({"query": "old"});
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+        &mut names,
+    )
+    .unwrap();
+    let request = json!({"toolCall":{"toolCallId":"search-1","name":"WebSearch",
+        "rawInput":"not an object"}});
+    assert!(matches!(
+        permission(
+            &names,
+            json!({"toolCallId":"search-1","name":"WebSearch","rawInput":"not an object"})
+        ),
+        Err(AgentError::Protocol(_))
+    ));
+    super::note_declined_permission(&request, &mut names, &[]);
+    assert_no_cached_query(&names, "non-object permission");
+    super::note_declined_permission(
+        &json!({"toolCall":{"toolCallId":"never-observed","name":"WebSearch","rawInput":"x"}}),
+        &mut names,
+        &[],
+    );
+    assert!(
+        !names.contains_key("never-observed"),
+        "a declined frame admitted a call"
+    );
+}
+
+/// A rejected identity change is not an accepted input update.
+#[test]
+fn a_rejected_identity_change_keeps_the_cached_query() {
+    let mut names = HashMap::new();
+    let old = json!({"query": "old"});
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(tool_call(
+        &json!({"toolCallId":"search-1","name":"WebFetch","rawInput":{"url":"https://example.com"}}),
+        &mut names
+    )
+    .is_err());
+    assert_cached_query(&names, &old, "rejected rename");
+}
+
+fn assert_no_cached_query(names: &HashMap<String, ObservedTool>, label: &str) {
+    assert!(
+        matches!(
+            names.get("search-1"),
+            Some(ObservedTool::Reviewable {
+                arguments_json: None,
+                ..
+            })
+        ),
+        "{label}"
+    );
+    assert!(
+        matches!(
+            permission(names, json!({"toolCallId":"search-1"})),
+            Err(AgentError::Protocol(_))
+        ),
+        "{label}: the previous query stayed approvable"
+    );
+}
+
+#[test]
+fn a_permission_name_that_disagrees_with_the_observed_call_is_rejected() {
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"search-1","_meta":{"claudeCode":{"toolName":"WebSearch"}},
+            "rawInput":{"query":"Rust programming language official website"}}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(permission(
+        &names,
+        json!({"toolCallId":"search-1","name":"WebFetch","rawInput":{"url":"https://example.com"}})
+    )
+    .is_err());
 }

@@ -5,9 +5,12 @@
 //! upstream session and no two harness sessions share one.
 //!
 //! ```text
-//! McpServers ──open(server, McpOwner)──▶ McpSession: server process ─ Connection
-//!     │                                    ├── list_tools / read_ui_resource
+//! McpServers ──open(server, McpOwner) / open_as(admitted, McpOwner)──▶ McpSession: server process ─ Connection
+//!     ├── configured / replace (the live set, read at each opening)
+//!     ├── open_once(launch) ──▶ McpSession of no SDK session (a host's look at a server)
+//!     │                                    ├── list_tools / list_tool_pages / read_ui_resource
 //!     │                                    └── serve(harness pipes) ──▶ stand_in
+//!     │                                          └── record ──▶ acp::sessions::ForwardedResults (the grant's)
 //!     ├── tool_ui (an SDK session's own newest session of the server)
 //!     ├── listed_tool / call_tool / read_app_resource (an MCP App's calls, on that session)
 //!     └── revoke (a grant's sessions closed, none opened under it after)
@@ -15,13 +18,17 @@
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! ```
 //!
-//! Arrows are calls. `McpServers` owns the open sessions and refuses new ones
-//! once stopped; each is owned by an SDK session (a conversation's) and the
-//! host's grant for that open ([`McpOwner`]); an `McpSession` owns one
+//! Arrows are calls. `McpServers` owns the configured set, which a host
+//! replaces while sessions are open, and the open sessions, and refuses new
+//! ones once stopped; each is owned by an SDK session (a conversation's) and the
+//! host's grant for that open ([`McpOwner`]) — or, opened once, by no SDK
+//! session and no grant, only its handles; an `McpSession` owns one
 //! process (its process group) and its connection, closed when its harness
 //! session ends or its grant is revoked; `Connection` owns
 //! request ids, answers, cancellation and the end of a connection; `stand_in`
-//! owns what a harness sees; `process` launching and stopping; `wire` the
+//! owns what a harness sees, and keeps a forwarded `tools/call` result's
+//! `structuredContent` in the grant's store for the ACP worker to attach;
+//! `process` launching and stopping; `wire` the
 //! shapes, and the domain (`domain::mcp_apps`) the values and their bounds.
 //! The states and orderings are tabled in `docs/design/mcp-connections.md`.
 //!
@@ -42,9 +49,13 @@ mod wire;
 
 pub use error::McpError;
 pub use servers::{
-    McpOwner, McpServerLaunch, McpServers, McpSession, APP_CALL_TIMEOUT, INITIALIZE_TIMEOUT,
-    MAX_TOOLS, MAX_TOOL_PAGES, REQUEST_TIMEOUT,
+    ListedPages, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT,
+    MAX_MCP_ENVIRONMENT_NAME_BYTES, MAX_TOOLS, MAX_TOOL_PAGES, MCP_SESSION_VARIABLE,
+    REQUEST_TIMEOUT,
 };
+pub(crate) use wire::structured_result;
+#[cfg(test)]
+pub(crate) use wire::STRUCTURED_RESULT_OMITTED;
 
 #[cfg(all(test, unix))]
 #[path = "../../../tests/infrastructure/mcp/mod.rs"]

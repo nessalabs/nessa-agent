@@ -6,9 +6,14 @@
 //! listing and the owner-scoped catalogue at once.
 //!
 //! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
-//! epochs and transition evidence in its own private SQLite dataset. It supplies
-//! passive admission; `exact_record_scope` combines its admitted receiver and
-//! epoch with the SDK source's physical identity before a bounded read.
+//! epochs and transition evidence in its own private SQLite dataset,
+//! `receiver-access/receiver-access.sqlite3` under the namespace. That file is
+//! not conversation data and is not under `conversations/`. It supplies
+//! passive admission, and device pairing pairs a receiver with an issued device
+//! credential and fences it, as the system, once that enrollment has ended
+//! (`device_pairing::infrastructure::ConversationReceivers`).
+//! `exact_record_scope` combines its admitted receiver and epoch with the SDK
+//! source's physical identity before a bounded read.
 //! `record_read` checks that identity from metadata before worker creation,
 //! runs each SDK source on a tracked non-entered thread, and joins those threads
 //! before storage shutdown.
@@ -38,7 +43,9 @@
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
-//! by the conversation, the app's mount, the app's request and the phase.
+//! by the conversation, the app's mount, the gateway's call id and the phase.
+mod change_watch;
+pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 mod catalogue_changes;
 mod receiver_authority;
 mod store;
@@ -47,17 +54,13 @@ pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;
-mod read_workers;
 mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::NessaRecordReadSource;
 pub use store::LocalConversationStore;
 
-pub(crate) mod catalogue_payload;
 mod catalogue_source;
-pub use catalogue_source::{
-    conversation_catalogue_schema, CatalogueWorkerError, NessaCatalogueSource,
-};
+pub use catalogue_source::{CatalogueWorkerError, NessaCatalogueSource};
 
 mod provider_sessions;
 pub use provider_sessions::BindingSessionEraser;
@@ -89,3 +92,6 @@ pub use audit::DurableExecutionAudit;
 #[cfg(test)]
 #[path = "../../../tests/conversation/store.rs"]
 mod store_tests;
+
+#[cfg(test)]
+pub(crate) use record_read::TestReadGate;

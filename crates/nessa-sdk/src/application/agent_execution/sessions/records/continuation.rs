@@ -82,7 +82,7 @@ impl Continuation {
                         .map(|event| (index, event))
                 });
         let queue = QueueReplay::from_snapshot(&snapshot)?;
-        let evidence = ProviderEvidence::from_snapshot(Some(&snapshot));
+        let evidence = ProviderEvidence::from_snapshot(Some(&snapshot))?;
         let snapshot_bytes = retained::snapshot(&snapshot);
         let identity_bytes = snapshot
             .invocations

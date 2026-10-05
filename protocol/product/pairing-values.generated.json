@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nessa://product/pairing-values.generated.json",
+  "description": "Generated from the pairing value owner's wire-values.json. Do not edit.",
+  "$defs": {
+    "InvitationId": {
+      "x-pairing-byte-array": "InvitationId",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "maxItems": 16,
+      "minItems": 16
+    },
+    "ConsentIntentId": {
+      "x-pairing-byte-array": "ConsentIntentId",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "maxItems": 16,
+      "minItems": 16
+    },
+    "AttemptId": {
+      "x-pairing-byte-array": "AttemptId",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "maxItems": 16,
+      "minItems": 16
+    },
+    "DeviceKey": {
+      "x-pairing-byte-array": "DeviceKey",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "maxItems": 32,
+      "minItems": 32
+    },
+    "ManualCodeDisplay": { "type": "string", "minLength": 9, "maxLength": 9 }
+  }
+}

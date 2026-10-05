@@ -8,6 +8,10 @@ For extension and dependency rules, see [AGENTS.md](../AGENTS.md),
 [coding standards](../CODING_STANDARDS.md), and
 [codebase structure](codebase-structure.md).
 
+For lifecycle diagrams and user flows, browse the [system state atlas](state/README.md).
+Its component maps lead to scoped statecharts with source and regression links;
+this document remains the owner of the implementation ownership map.
+
 Every change must meet the [repository-wide organization gate](../CODING_STANDARDS.md#organization-across-the-repository).
 Keep ownership maps, tests, and documentation aligned with the implementation;
 this applies equally to host, shell, server, SDK, and supporting scripts.
@@ -282,8 +286,12 @@ not reading the session, which stays unread.
   approval and a model chosen for the next turn wait beside the source's data
   the same way. Pin and archive show when the source's update says so. An
   answer, a pin, an archive and a message carry who asked — the person or an
-  agent; the source records the first three and what became of each, and a
-  message when it lets a waiting approval go; each command returns its
+  agent; the in-memory source records the first three and what became of
+  each, and a message when it lets a waiting approval go, while the
+  gateway's source records nothing itself — what it sends the gateway
+  records as this window's authenticated caller, unable to tell the person
+  from an agent, and what it refuses without sending is on no record; each
+  command returns its
   outcome to its caller. Every
   call to the source settles; an adapter rejects on a timeout of its own.
 - `adapters/store/` is the Redux slice, which only names actions over those use
@@ -295,7 +303,10 @@ not reading the session, which stays unread.
   Try Again rather than being retried on every update, and is forgotten once
   nothing shows the session, and a read of the index again reads every
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
-  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
+  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/gateway/` is the
+  port over the gateway's conversations: a serial poller of `conversation.list`
+  and `conversation.read`, with revisions it mints and the views read into the
+  workspace's types (`gateway-views.ts`). `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/store/split-panes-source.ts` is
   the workspace as the split panes' source (below). `adapters/dom/` holds what
@@ -389,18 +400,31 @@ underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.
 The right toggle exits this mode and closes the panel.
 
-The workspace layouts read the desktop store, a projection of the in-memory
-`WorkspaceSource` described above; the window has no backend connection yet,
-and the pane arrangement is not kept between launches (the chosen layout is,
-as a stored preference).
+The workspace layouts read the desktop store, a projection of one
+`WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
+when the window is given a way to connect, and the in-memory sample
+otherwise (`model/workspace-backend.ts`). The desktop app's own window
+connects to the local gateway under the panel's surface credential (#419):
+the host serves it the endpoint and the credential over IPC once the gateway
+the host started at launch is ready, and refuses it before then — it reads the
+gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
+after a failed connect it waits five poll rounds before it tries again, unless
+a person asks. A
+browser preview opened with `?gateway` connects over the session its origin
+signed in to. Only a browser page without `?gateway` — the verification
+fixtures — shows the sample. A window that cannot read the gateway says why
+(signed out, or no answer) rather than showing anything in its place. The
+pane arrangement is not kept between launches (the chosen
+layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. The workspace's content is sample data until the gateway implements its port, and no layout
-persistence are implemented. Restart `pnpm app` after changing the Tauri
+window with the panel. The native minimum width is 800px. In a browser the workspace's content is the
+sample unless the page is opened with `?gateway` (above), and layout persistence is not
+implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
 This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)
@@ -422,10 +446,10 @@ opinion rather than the product's.
 | `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the agent credential writer and audit, the independent `CredentialSaveTargets` authority derived from the durable namespace, the gateway, the release source — and the bundle every command and menu is given. Before correlation allocation, intent audit, or keychain effect, the save use case compares every field of the writer's claimed target with that canonical authority. Nothing below composition reaches back for a dependency. |
 | `updater.rs` | Whether a newer Nessa is published and installing it. `ReleaseSource`, `CheckOutcome`, `Installer` and `Restarter` are its ports; the decisions are pure and tested, and the module header states which adapters are not. |
 | `attachments/` | Choosing files to attach, and reading the ones that turn out to be images. Four ports, because they are four different outside things: `FilePicker` is the OS dialog, `ChosenFiles` is the filesystem (a chosen file's kind, length and bytes, which fail the same ways at the same moment), `AttachmentTickets` is the desk that mints and spends the one-shot tickets — the operating system's randomness and clock, and the port that carries the rule that a page cannot name a path — and `ContentTypes` is the platform's type database — Launch Services on macOS, shared-mime-info on Linux, nothing elsewhere — so a `.ico` or `.svgz` is recognised as an image without this app keeping a list of formats. That answer goes where a dropped file's `type` goes, which is what keeps one file from taking two routes. Anything that is not a regular file is refused before it is opened, and both the look and the read have deadlines on their own threads, so a FIFO or a stalled mount cannot wedge the panel. A read is authorised by a one-shot ticket the picker minted, never by a path the page names. The page calls `choose_attachment_files` and `read_attachment_bytes`; the host calls the dialog plugin, so `capabilities/` grants the webview nothing. |
-| `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
+| `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the panel, setup and the desktop window may ask (`GatewayReader`); the desktop window only once the gateway is ready. |
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
-| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads reconcile the complete service again while concurrent callers share one attempt. Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. Recovery settles an unfinished attempt without replaying its commands: the journal lists the steps still to settle, and each native adapter records fresh state, adopts only an exact planned target, and closes anything else as failed, keeping unresolved a namespace it does not own or an effect it cannot recognise, and, until a later attempt, one whose launchd state or journal delivery is unavailable. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
+| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads from a bundled surface reconcile the complete service again while concurrent callers share one attempt, and the desktop window's loads only read a `ready` startup (`GatewayReader`, #419). Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. Recovery settles an unfinished attempt without replaying its commands: the journal lists the steps still to settle, and each native adapter records fresh state, adopts only an exact planned target, and closes anything else as failed, keeping unresolved a namespace it does not own or an effect it cannot recognise, and, until a later attempt, one whose launchd state or journal delivery is unavailable. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
 | `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. Beside the app's origins it allows the frame an MCP App is drawn in — the sandbox proxy's scheme and its `about:srcdoc` — and says what that route opens. |
 | `app_sandbox.rs` | The MCP Apps sandbox proxy (ADR 344, #349) on the `nessa-sandbox` scheme (`http://nessa-sandbox.localhost` on Windows): an origin that is never the window's, serving `GET /proxy.html` and nothing else. The window's CSP names it in `frame-src`; `links.rs` lets it load in a frame. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
@@ -802,8 +826,10 @@ request passes current credential, receiver-binding and conversation-owner
 admission before the server checks the exact SDK stream identity. A tracked
 source thread reads one bounded head or page without opening an Agent or writer
 lease. The socket reserves one record response per connection and four across
-the gateway, retaining global capacity through source completion and physical
-delivery. Product JSON/base64 responses have a separate 128 KiB ceiling; other
+the gateway. Physical source work retains capacity until joined; response
+delivery releases its ownership before sending, after encoding and size checks
+([R61 and R64](design/authorized-record-reads.md)).
+Product JSON/base64 responses have a separate 128 KiB ceiling; other
 responses retain their existing limit. Receiver download and semantic-apply
 checkpoints belong to the receiving process, not this gateway.
 
@@ -818,6 +844,13 @@ adapter reads bytes by content through the SDK's image port, and its frame bound
 is derived from the message's image budget. Closing a conversation releases its
 holds, with audit evidence for every transition. See the
 [attachments module map](../crates/nessa-server/src/attachments/mod.rs).
+Local held-registration manifest facts and bounded range reads are implemented
+through `AttachmentArtifacts`, using the shared tracked read-worker owner; their
+retained retirement metadata and later protected-network activation are described
+in [artifact sync](design/artifact-sync.md). The hold domain's `RetiredFrom` supplies
+the Pending/Held predecessor shared by discard results, reversal audit and saved
+retirement. The local port supplies no access grant
+and is not yet wired into composed gateway shutdown.
 
 What happens to an attached file is decided by its type and never by the
 gesture that attached it: an image is uploaded and normalised wherever it came
@@ -852,6 +885,17 @@ provider adapters remain separate features. Existing design proposals do not rep
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
+The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. The server `device_pairing` consumer implements native enrollment on top of it: the
+gateway runtime and listener. The device client is owned by `nessa-client-core`.
+Both consume the JSON codec, framing and enrollment deadline socket in
+`crates/nessa-protocol` —
+owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
+It ends at Approved. When `config.json` names `native.listenAddress`, composition
+restores the gateway key before any bind, mounts the listener and joins its drain
+into the shutdown report, and the owner `pairing.*` product methods drive it;
+otherwise nothing native is opened. Receiver staging and Active publication are
+later slices. See [device pairing](design/auth/device-pairing.md).
+
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
 **Local agent credential values** (`crates/nessa-agent-credentials`) — pure
@@ -870,10 +914,27 @@ it does not read the stage-scoped store or promise live environment refresh. See
 
 ## Shared product contract
 
-`product_contract/generated.rs` contains pure schema-derived product outcome
-values and close policy. Product DTOs/socket and read-only sync application ports
-consume that publication. The product schema owns its vocabulary; this contract
-contains no routing or IO and is separate from generic protocol frames.
+**Gateway protocol** (`crates/nessa-protocol`) — library, no binary. What both
+ends of a gateway connection agree on: wire frames and generated payloads, the
+product DTOs, handshake rules and read codecs, native pairing framing and its
+deadline socket, and the conversation read model (`ConversationView` and the
+projection that folds committed records into it). The gateway depends on it,
+and so does the device client; it depends on neither
+([ADR 483](adr/done/483-protocol-and-client-core-crates.md)).
+
+`nessa-protocol/src/product_contract/generated.rs` contains pure schema-derived
+product outcome values and close policy. Product DTOs/socket and read-only sync
+application ports consume that publication. The product schema owns its
+vocabulary; this contract contains no routing or IO and is separate from generic
+protocol frames.
+
+**Device client core** (`crates/nessa-client-core`) — reusable Rust library and
+standalone retained-sync example. Owns device enrollment, private profile/cache,
+finite retained reads and bounded watch composition. The gateway's real paired
+process tests consume its public entry point through a dev-dependency. Shared
+schemas, framing and conversation projection remain in `nessa-protocol`; the
+client graph cannot reach the gateway runtime. See the
+[module map](../crates/nessa-client-core/README.md).
 
 ## Gateway authorization
 
@@ -885,7 +946,14 @@ committed state. Only auth mutations serialize; network writes share no admissio
 only liveness, without product state.
 
 The panel authenticates using its distinct private surface credential loaded by
-the native host. The SDK supports injected credential storage and a Node file
+the native host; the desktop window connects under the same credential and
+client id (`nessa-panel`), served once the gateway is ready (#419). The
+gateway cannot tell the two windows apart: each authenticates as client
+`nessa-panel` and is answered as principal `surface:nessa-panel`, which
+`gateway-window.mjs`'s handshake checks (W4′) assert of every handshake the
+window makes, and `session.authenticate` has no field for the surface kind the
+client is given (`SessionAuthenticateParams`, generated in
+`packages/nessa-client/src/generated/product.ts`; #447). The SDK supports injected credential storage and a Node file
 source. Composition loads namespace `config.json` and injects registry limits
 and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the
@@ -896,8 +964,10 @@ and session deadlines. Use the
 `crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
 native file/web tools remain provider-owned. No tool request selects executable
 configuration. The gateway holds the connection to each configured MCP server
-for each harness session (ADR 344): each agent's `session/new` gets a stand-in
-in the server's place (`nessa mcp-relay`, `crates/nessa-server/src/mcp_servers/`);
+for each harness session (ADR 344): each provider open gets a stand-in in the
+place of each server configured then — `McpServers` owns that live set, which
+can be replaced while conversations run — (`nessa mcp-relay`,
+`crates/nessa-server/src/mcp_servers/`);
 when a harness starts it, the SDK's `infrastructure::mcp::McpServers` opens a
 session of its own — the server process and the one connection to it — lists
 its tools with their MCP Apps `_meta.ui`, reads `ui://` resources, and
