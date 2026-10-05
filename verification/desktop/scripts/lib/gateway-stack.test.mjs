@@ -41,13 +41,18 @@ test("evidence wraps the agent and the MCP server with the recorder", () => {
   assert.equal(readFileSync(join(directory, "mcp.jsonl"), "utf8"), "")
 })
 
-/** A stack whose only live resource is `directory`, and whether `close` ran. */
+/**
+ * A stack whose only live resource is `directory`. `close` counts as done
+ * only after a turn of the event loop: calling it without awaiting returns
+ * while `closed()` is still false, which is the leak.
+ */
 function credentialStack(directory) {
   let closed = false
   return {
     stack: {
       gateway: { directory },
       close: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30))
         closed = true
       },
     },
