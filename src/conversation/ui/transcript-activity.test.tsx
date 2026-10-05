@@ -652,6 +652,7 @@ it("replaces only the typed authentication error divider with provider sign-in",
     remote: value.remote
       ? {
           ...value.remote,
+          latestInputId: "run",
           runtime: {
             agent: "claude",
             provider: "anthropic",
@@ -675,16 +676,19 @@ it("replaces only the typed authentication error divider with provider sign-in",
   )
   expect(container.querySelector("[data-slot=transcript-divider]")).toBeNull()
   expect(container.querySelectorAll(".provider-sign-in")).toHaveLength(1)
-  for (const receipt of ["queued", "delivered"] as const) {
+  for (const status of ["queued", "running"] as const) {
     await render({
       ...typed,
+      remote: typed.remote
+        ? { ...typed.remote, latestInputId: "new-attempt" }
+        : undefined,
       turns: [
         ...typed.turns,
         {
-          id: `new-${receipt}`,
+          id: "new-user",
           from: "user",
           executionId: "new-attempt",
-          receipt,
+          receipt: status === "queued" ? "queued" : "delivered",
           content: textContent("Try again"),
         },
       ],
@@ -711,6 +715,7 @@ it("keeps an independent error beside authentication recovery", async () => {
     remote: value.remote
       ? {
           ...value.remote,
+          latestInputId: "run",
           runtime: {
             agent: "claude",
             provider: "anthropic",

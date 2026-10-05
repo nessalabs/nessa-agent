@@ -12,6 +12,16 @@ reads only the explicit variant; the conversation projection publishes it from t
 retained provider report, and both desktop surfaces consume the latest turn's published
 fact. Internal errors (`-32603`) and diagnostic text never select the card.
 
+Recovery eligibility is owned once by
+`src/provider-authentication/model/recovery.ts`. Each mapping retains the raw
+execution identity of its latest published input, including nonduplicate pending
+inputs. A local submission captures that identity when it starts (null when none
+has been observed), and an explicit resend refreshes it. That boundary survives
+replacement views while local intent is retained. Matching boundaries mean the
+local send began after observing the published input; they do not compare remote
+and local clocks or claim global chronology. Local turns are not persisted in
+saved tab references, so restoring tabs reads published evidence afresh.
+
 The pure card lives in `src/provider-authentication/ui/`, with an injected login
 action. Desktop workspace supplies its Redux controller; floating panel supplies
 the host action through its App composition. The panel replaces the matching
@@ -52,7 +62,12 @@ outside Nessa's launcher.
 | Launch pending | Additional activation | No second launch | Disabled button and component in-flight guard |
 | Launch pending | Launch acknowledged | Button available; card remains | Browser script |
 | Launch pending | Launch refused / unsupported | Button available; small launch failure shown | Browser script |
-| Card shown | Optimistic newer user input sending or failed before acceptance | Old refusal hidden while outbox owns the newer input | Public send and browser regressions |
+| Local A retained before observing wire B | B publishes an authentication refusal | B card shown; A remains visible | Real panel projection/render and desktop send/store regressions |
+| Wire B observed | Local A begins, then sends or fails | B recovery hidden; historical failure remains | Shared boundary owner and both real render paths |
+| Wire B observed with retained A | Same B read again under another revision | Captured boundary unchanged; recovery does not flip | Replacement-view regressions |
+| Multiple local submissions retained | Newly observed refused wire D | Older boundaries do not hide D; a local begun after D does | Both surface regressions |
+| Local A retained | Explicit resend after B observed | Boundary refreshed to B; B recovery hidden | Panel replay and desktop resend regressions |
+| Local A queued with captured B | A acknowledged pending, then omitted from incomplete view | B boundary retained until authoritative retirement | Projection regression |
 | Optimistic retry | Gateway accepts its ID into pending; outbox retires | Latest mapped input owns recovery; old refusal stays hidden | Mapping, store reconciliation and browser regressions |
 | Accepted retry | Pending becomes running user-only, then emits output | Old recovery stays retired throughout | Mapping and browser regressions |
 | Failed turn | Duplicate pending entry names the same dispatched execution | No new input supersedes the refusal; card remains | Mapping regression |

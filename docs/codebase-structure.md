@@ -1616,15 +1616,23 @@ variant. Generic provider errors keep their numeric code and diagnostic.
 `crates/nessa-protocol/src/conversation/projection.rs` publishes it from retained
 provider reports, with restoration regressions in that crate’s
 `tests/conversation/projection.rs`. The desktop
-maps typed recovery only while its input ID remains latest across dispatched
+maps the refused execution identity and latest published input across dispatched
 and pending inputs, then draws
 the shared `src/provider-authentication/ui/provider-sign-in.tsx`, with its
 workspace Redux controller in `workspace/ui/transcript/provider-sign-in.tsx`.
-A newer unconfirmed outbox message retires that older wire refusal even when the
-new delivery fails before acceptance; `ui/transcript/transcript.test.tsx` and the
+`src/provider-authentication/model/recovery.ts` owns recovery eligibility for both
+surfaces: the refused execution must be the latest published input, and no retained
+local submission may have begun after observing that input. Local sends retain
+that observed identity (null before any input); repeated views preserve it.
+An older delivery failure cannot hide a newly observed refusal. A local send made
+after observing a refusal retires its recovery even if delivery fails; `ui/transcript/transcript.test.tsx` and the
 provider-sign-in browser fixture exercise both states and the accepted queued,
 running and output transitions.
 The floating panel carries the same typed fact through `applyView` and replaces
 that turn's error divider with the shared card; its App receives the login action
 from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
 for states and the Claude internal-error limitation.
+
+The panel's causal recovery integration test is
+`src/conversation/adapters/store/authentication-recovery.test.tsx`: local send,
+retry and replacement use cases followed by the real transcript renderer.

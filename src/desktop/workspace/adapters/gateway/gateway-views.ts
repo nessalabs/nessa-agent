@@ -256,9 +256,11 @@ export function transcriptFrom(
     )
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
   }
+  let latestInputId = view.messages.at(-1)?.executionId
   const listed = new Set(view.messages.map((turn) => turn.executionId))
   for (const waiting of view.pending) {
     if (listed.has(waiting.executionId)) continue
+    latestInputId = waiting.executionId
     const input = inputId(waiting.executionId)
     messages.push({
       id: input,
@@ -268,12 +270,6 @@ export function transcriptFrom(
     })
   }
   const latestTurn = view.messages.at(-1)
-  // Inputs appended from pending are newer displayed turns too. Compare the
-  // mapped input identity, including duplicate pending entries skipped above.
-  const latestInput = messages.reduce<string | undefined>(
-    (latest, message) => (message.role === "user" ? message.id : latest),
-    undefined,
-  )
   // What runs is the tool and its exact input, which the gateway offers a
   // review only when it can show whole; why is the provider's title for it.
   const asked = view.permissions[0]
@@ -292,8 +288,9 @@ export function transcriptFrom(
     approval,
     revision,
     agent: view.runtime?.agent,
-    authenticationRequired:
-      latestTurn?.authenticationRequired === true &&
-      latestInput === inputId(latestTurn.executionId),
+    authenticationRefusal: latestTurn?.authenticationRequired
+      ? latestTurn.executionId
+      : undefined,
+    latestInputId,
   }
 }

@@ -123,12 +123,25 @@ await main(
                     throw new Error(`${phase} duplicated the accepted retry input`)
                 }
               }
+              await page.evaluate(() => window.__providerSignIn.olderFailure())
+              await card.waitFor({ state: "visible" })
+              await page.getByText("Older local failure", { exact: true }).waitFor()
+              await page.evaluate(() => window.__providerSignIn.repeatRefusal())
+              if ((await card.count()) !== 1)
+                throw new Error("repeated view hid later refusal")
+              await page.evaluate(() => window.__providerSignIn.newerFailure())
+              await card.waitFor({ state: "detached" })
+              await page.evaluate(() => window.__providerSignIn.repeatRefusal())
+              if ((await card.count()) !== 0)
+                throw new Error("repeated view revived older refusal")
+              await page.evaluate(() => window.__providerSignIn.newRefusal())
+              await card.waitFor({ state: "visible" })
               await page.evaluate(() => {
                 window.__providerSignIn.recover()
               })
               await card.waitFor({ state: "detached" })
               if (surface === "panel") {
-                const historical = page.locator("[data-slot=transcript-divider]")
+                const historical = page.locator("[data-slot=transcript-divider]").first()
                 await historical.waitFor()
                 if (!(await historical.textContent()).includes("failed"))
                   throw new Error("retired recovery erased the historical failed status")

@@ -1,3 +1,4 @@
+import { offersAuthenticationRecovery } from "../../provider-authentication/model/recovery"
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
 import { WorkActivity, WorkDetails } from "./work-activity"
@@ -89,7 +90,11 @@ export function Transcript({
     (turn) =>
       turn.from === "user" && turn.receipt === "queued" && !linkedUserIds.has(turn.id),
   )
-  const latestTurn = conversation.turns.at(-1)
+  const localInputs = conversation.turns.flatMap((turn) =>
+    turn.from === "user" && turn.actionId && turn.receipt !== "delivered"
+      ? [{ observedInput: turn.observedInput }]
+      : [],
+  )
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
 
@@ -165,12 +170,15 @@ export function Transcript({
                     </React.Fragment>
                   ))}
                   {(provider === "claude" || provider === "codex") &&
-                  latestTurn?.id === row.sourceTurnId &&
-                  conversation.turns.some(
-                    (turn) =>
-                      turn.id === row.sourceTurnId &&
-                      turn.from === "assistant" &&
-                      turn.authenticationRequired,
+                  offersAuthenticationRecovery(
+                    conversation.turns.find(
+                      (turn) =>
+                        turn.id === row.sourceTurnId &&
+                        turn.from === "assistant" &&
+                        turn.authenticationRequired,
+                    )?.executionId,
+                    conversation.remote?.latestInputId,
+                    localInputs,
                   ) ? (
                     <React.Fragment key={`${row.key}:auth`}>
                       <ProviderSignInCard

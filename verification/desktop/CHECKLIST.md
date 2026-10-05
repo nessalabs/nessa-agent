@@ -779,3 +779,10 @@ acknowledged launch keeps the card, a failed launch says so, and a newer
 transcript removes the card. Both browser engines report geometry, launch counts,
 and zero page errors. The raw authentication diagnostic is absent and unrelated
 local notices remain.
+
+The same script drives an older failed local submission through a later wire
+refusal, a newer local submission after seeing that refusal, repeated replacement
+views, and two retained locals superseded by another refusal. Both surfaces read
+`src/provider-authentication/model/recovery.ts`: observed execution identity,
+including accepted pending inputs, owns recovery rather than array-tail position
+or clocks.

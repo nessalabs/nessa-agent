@@ -34,6 +34,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
           : "delivered",
       executionId: message.executionId,
       actionId: local?.actionId,
+      observedInput: local?.observedInput,
       mode: local?.mode,
       steeringTarget: message.steeringTarget,
       steeringOffset: message.steeringOffset,
@@ -84,6 +85,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       receipt: "queued",
       executionId: pending.executionId,
       actionId: local?.actionId,
+      observedInput: local?.observedInput,
       mode: local?.mode,
     })
   }
@@ -147,6 +149,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     // a notice branching on a failure the conversation no longer reports.
     failure: retainedError === undefined ? undefined : current.failure,
     remote: {
+      latestInputId: [...seen].at(-1),
       runtime: view.runtime,
       approvalMode: view.approvalMode,
       approvalModes: view.approvalModes,

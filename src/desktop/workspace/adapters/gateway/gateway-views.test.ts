@@ -1,3 +1,4 @@
+import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
 import type {
   ConversationMessage,
   ConversationPermission,
@@ -367,11 +368,11 @@ describe("provider authentication recovery", () => {
   it("uses only the latest turn's typed refusal, never its diagnostic text", () => {
     const source = view("auth")
     source.messages = [turn({ status: "failed", authenticationRequired: true })]
-    expect(transcriptFrom(source, 1, at).authenticationRequired).toBe(true)
+    expect(recovery(transcriptFrom(source, 1, at))).toBe(true)
     source.messages.push(turn({ executionId: "later" }))
-    expect(transcriptFrom(source, 2, at).authenticationRequired).toBe(false)
+    expect(recovery(transcriptFrom(source, 2, at))).toBe(false)
     source.messages = [turn({ status: "failed", error: "OAuth session expired" })]
-    expect(transcriptFrom(source, 3, at).authenticationRequired).toBe(false)
+    expect(recovery(transcriptFrom(source, 3, at))).toBe(false)
   })
 })
 
@@ -393,7 +394,7 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
     ],
   })
   const transcript = transcriptFrom(source, 1, at)
-  expect(transcript.authenticationRequired).toBe(true)
+  expect(recovery(transcript)).toBe(true)
   expect(transcript.messages.flatMap((message) => message.parts)).toEqual([
     { kind: "text", text: "Chart the sales" },
     { kind: "text", text: "Nessa declined a tool review." },
@@ -410,20 +411,20 @@ it("recovery follows the latest mapped input across pending and dispatched turns
     mode: "queued" as const,
   }
   const source = view("auth", { messages: [refusal] })
-  expect(transcriptFrom(source, 1, at).authenticationRequired).toBe(true)
+  expect(recovery(transcriptFrom(source, 1, at))).toBe(true)
   source.pending = [{ ...pending, executionId: refusal.executionId }]
-  expect(transcriptFrom(source, 2, at).authenticationRequired).toBe(true)
+  expect(recovery(transcriptFrom(source, 2, at))).toBe(true)
   source.pending.push(pending)
-  expect(transcriptFrom(source, 3, at).authenticationRequired).toBe(false)
+  expect(recovery(transcriptFrom(source, 3, at))).toBe(false)
   source.messages.push(turn({ executionId: pending.executionId, status: "running" }))
-  expect(transcriptFrom(source, 4, at).authenticationRequired).toBe(false)
+  expect(recovery(transcriptFrom(source, 4, at))).toBe(false)
   source.pending = []
   source.messages[1] = turn({
     executionId: pending.executionId,
     status: "completed",
     parts: [textPart("Ready", 0)],
   })
-  expect(transcriptFrom(source, 5, at).authenticationRequired).toBe(false)
+  expect(recovery(transcriptFrom(source, 5, at))).toBe(false)
 })
 
 it("retains an unknown Codex runtime agent independently of catalogue fallback", () => {
@@ -433,3 +434,11 @@ it("retains an unknown Codex runtime agent independently of catalogue fallback",
   expect(runningModel(source)).toBeUndefined()
   expect(transcriptFrom(source, 1, at).agent).toBe("codex")
 })
+
+function recovery(transcript: ReturnType<typeof transcriptFrom>) {
+  return offersAuthenticationRecovery(
+    transcript.authenticationRefusal,
+    transcript.latestInputId,
+    [],
+  )
+}

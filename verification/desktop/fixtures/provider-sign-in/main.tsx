@@ -151,6 +151,45 @@ function publishRetry(phase: "queued" | "running" | "completed") {
     ),
   })
 }
+let causalRevision = 10
+function publishRefusal(executionId: string) {
+  const transcript = transcriptFrom(
+    view("b", {
+      runtime: {
+        agent: provider,
+        provider,
+        model: "unknown",
+        modelName: "Unknown",
+        workspace: "/tmp",
+        contextWindowTokens: 200000,
+        reasoning: true,
+      },
+      messages: [
+        {
+          executionId,
+          userText: "Later wire input",
+          attachments: [],
+          files: [],
+          status: "failed",
+          authenticationRequired: true,
+          parts: [],
+        },
+      ],
+    }),
+    ++causalRevision,
+    () => 1000,
+  )
+  source.transcripts.set("b", transcript)
+  source.emit({ kind: "transcript", transcript })
+}
+async function failLocal(text: string) {
+  source.hold("send")
+  const sent = store.dispatch(sendMessage({ initiator: "person", sessionId: "b", text }))
+  // The real command publishes the local input before it awaits the source.
+  source.refuse("send", "unavailable")
+  await source.release("send")
+  await sent
+}
 let resolve: (() => void) | undefined
 const fixture = {
   calls: [] as string[],
@@ -182,10 +221,26 @@ const fixture = {
   outboxCount() {
     return store.getState().workspace.outbox.b?.length ?? 0
   },
+  async olderFailure() {
+    const transcript = { ...emptyTranscript("b"), revision: ++causalRevision }
+    source.transcripts.set("b", transcript)
+    source.emit({ kind: "transcript", transcript })
+    await failLocal("Older local failure")
+    publishRefusal("B")
+  },
+  async newerFailure() {
+    await failLocal("Newer local input")
+  },
+  repeatRefusal() {
+    publishRefusal("B")
+  },
+  newRefusal() {
+    publishRefusal("D")
+  },
   recover() {
     source.emit({
       kind: "transcript",
-      transcript: { ...emptyTranscript("b"), revision: 5 },
+      transcript: { ...emptyTranscript("b"), revision: ++causalRevision },
     })
   },
 }

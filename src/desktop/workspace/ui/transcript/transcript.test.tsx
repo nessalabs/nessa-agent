@@ -7,7 +7,13 @@ import { act, StrictMode, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { loadWorkspace, openSession, sendMessage } from "../../adapters/store/commands"
+import {
+  loadWorkspace,
+  followWorkspace,
+  openSession,
+  sendMessage,
+  resendMessage,
+} from "../../adapters/store/commands"
 import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
@@ -340,7 +346,8 @@ describe("provider recovery ownership", () => {
     const { store } = await shown(source, {
       ...emptyTranscript("b"),
       revision: 1,
-      authenticationRequired: true,
+      authenticationRefusal: "m1",
+      latestInputId: "m1",
       agent: "codex",
       messages: [conversation.messages[0]],
     })
@@ -431,10 +438,114 @@ it.each([undefined, "unknown-provider"])(
     await shown(fakeSource(), {
       ...emptyTranscript("b"),
       revision: 1,
-      authenticationRequired: true,
+      authenticationRefusal: "m1",
+      latestInputId: "m1",
       agent,
       messages: [conversation.messages[0]],
     })
     expect(host.querySelector(".provider-sign-in")).toBeNull()
   },
 )
+
+it("keeps an older failed outbox message from hiding a later observed refusal", async () => {
+  const source = fakeSource()
+  source.hold("send")
+  const { store } = await shown(source, { ...emptyTranscript("b"), revision: 1 })
+  store.dispatch(followWorkspace())
+  let sent: Promise<unknown> | undefined
+  await act(async () => {
+    sent = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: "b", text: "Older local failure" }),
+    )
+    await settle()
+  })
+  source.refuse("send", "unavailable")
+  await act(async () => {
+    await source.release("send")
+    await sent
+  })
+  const [older] = store.getState().workspace.outbox.b
+  expect(older.observedInput).toBeNull()
+  const refusal = (executionId: string, revision: number) =>
+    transcriptFrom(
+      view("b", {
+        runtime: {
+          agent: "codex",
+          provider: "openai",
+          model: "unknown",
+          modelName: "Unknown",
+          workspace: "/tmp",
+          contextWindowTokens: 200000,
+          reasoning: true,
+        },
+        messages: [
+          {
+            executionId,
+            userText: "Later wire input",
+            attachments: [],
+            files: [],
+            parts: [],
+            status: "failed",
+            authenticationRequired: true,
+          },
+        ],
+      }),
+      revision,
+      () => 1,
+    )
+  for (const revision of [2, 3]) {
+    await act(async () => {
+      const transcript = refusal("B", revision)
+      source.transcripts.set("b", transcript)
+      source.emit({ kind: "transcript", transcript })
+      await settle()
+    })
+    expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+  }
+  expect(host.textContent).toContain("Older local failure")
+  source.hold("send")
+  await act(async () => {
+    sent = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: "b", text: "Newer local input" }),
+    )
+    await settle()
+  })
+  expect(host.querySelector(".provider-sign-in")).toBeNull()
+  await act(async () => {
+    const transcript = refusal("B", 4)
+    source.transcripts.set("b", transcript)
+    source.emit({ kind: "transcript", transcript })
+    await settle()
+  })
+  expect(host.querySelector(".provider-sign-in")).toBeNull()
+  await act(async () => {
+    await source.release("send")
+    await sent
+  })
+  expect(host.querySelector(".provider-sign-in")).toBeNull()
+  expect(store.getState().workspace.outbox.b).toHaveLength(2)
+  await act(async () => {
+    const transcript = refusal("D", 5)
+    source.transcripts.set("b", transcript)
+    source.emit({ kind: "transcript", transcript })
+    await settle()
+  })
+  expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+  source.hold("send")
+  await act(async () => {
+    sent = store.dispatch(
+      resendMessage({ sessionId: "b", messageId: older.id, initiator: "person" }),
+    )
+    await settle()
+  })
+  expect(store.getState().workspace.outbox.b[0].observedInput).toBe("D")
+  expect(host.querySelector(".provider-sign-in")).toBeNull()
+  await act(async () => {
+    const transcript = refusal("D", 6)
+    source.transcripts.set("b", transcript)
+    source.emit({ kind: "transcript", transcript })
+    await source.release("send")
+    await sent
+  })
+  expect(host.querySelector(".provider-sign-in")).toBeNull()
+})

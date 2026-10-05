@@ -54,6 +54,7 @@ export function beginSend(
     receipt: "sending",
     executionId: input.executionId,
     actionId: input.actionId,
+    observedInput: conv.remote?.latestInputId ?? null,
     mode: input.mode,
   }
   return replaceConversation(taken.tabs, {
@@ -330,6 +331,26 @@ export function failSend(
       turn.executionId === executionId &&
       turn.receipt === "sending"
         ? { ...turn, receipt: uncertain ? "unknown" : "failed", error: detail }
+        : turn,
+    ),
+  })
+}
+
+/** An explicit replay observes the current published input before sending the retained identity. */
+export function reattemptSend(
+  tabs: LocalTabs,
+  conversationId: string,
+  executionId: string,
+): LocalTabs {
+  const conv = findConversation(tabs, conversationId)
+  if (!conv) return tabs
+  return replaceConversation(tabs, {
+    ...conv,
+    turns: conv.turns.map((turn) =>
+      turn.from === "user" &&
+      turn.executionId === executionId &&
+      turn.receipt === "unknown"
+        ? { ...turn, observedInput: conv.remote?.latestInputId ?? null }
         : turn,
     ),
   })

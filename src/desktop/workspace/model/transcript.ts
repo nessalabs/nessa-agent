@@ -47,6 +47,8 @@ export interface Message {
   readonly role: "user" | "agent"
   readonly at: number
   readonly parts: readonly Part[]
+  /** Latest published execution observed when this local message began. */
+  readonly observedInput?: string | null
   readonly delivery?: Delivery
 }
 
@@ -78,7 +80,9 @@ export interface Transcript {
   readonly activity: Activity | null
   readonly approval: Approval | null
   /** A provider's typed authentication refusal on the latest turn. */
-  readonly authenticationRequired?: boolean
+  readonly authenticationRefusal?: string
+  /** Raw execution identity of the latest published input, including pending. */
+  readonly latestInputId?: string
   /** Authoritative runtime agent; never inferred from the model catalogue. */
   readonly agent?: string
   /** The source's count of changes to this conversation; see `revision.ts`. */

@@ -1,3 +1,4 @@
+import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
 import { retryTranscript } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -170,8 +171,11 @@ export const Transcript = memo(function Transcript({
             isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
           />
         ))}
-        {transcript?.authenticationRequired &&
-        outbox.length === 0 &&
+        {offersAuthenticationRecovery(
+          transcript?.authenticationRefusal,
+          transcript?.latestInputId,
+          outbox,
+        ) &&
         (provider === "claude" || provider === "codex") ? (
           <ProviderSignIn key={provider} provider={provider} />
         ) : null}

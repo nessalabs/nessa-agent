@@ -538,3 +538,45 @@ it("carries authentication-required evidence separately from its diagnostic", ()
     status: "OAuth session expired",
   })
 })
+
+it("keeps the observed input boundary through pending acknowledgement and an incomplete replacement", () => {
+  const base = emptyLocalTabs()
+  const before = applyView(base.conversations[0]!, {
+    ...view,
+    messages: [{ ...view.messages[0]!, executionId: "B" }],
+    pending: [],
+  })
+  const sent = beginSend(
+    { ...base, conversations: [before] },
+    {
+      conversationId: "c0",
+      executionId: "A",
+      actionId: "action",
+      mode: "queued",
+      content: textContent("local"),
+    },
+  )
+  const acknowledged = applyView(sent.conversations[0]!, {
+    ...view,
+    messages: [],
+    pending: [
+      { executionId: "A", text: "local", attachments: [], files: [], mode: "queued" },
+    ],
+  })
+  expect(acknowledged.turns[0]).toMatchObject({
+    executionId: "A",
+    observedInput: "B",
+    receipt: "queued",
+  })
+  const omitted = applyView(acknowledged, {
+    ...view,
+    queueComplete: false,
+    messages: [],
+    pending: [],
+  })
+  expect(omitted.turns[0]).toMatchObject({
+    executionId: "A",
+    observedInput: "B",
+    receipt: "queued",
+  })
+})

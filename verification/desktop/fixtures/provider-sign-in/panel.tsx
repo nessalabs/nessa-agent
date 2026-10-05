@@ -2,7 +2,12 @@
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
-import { conversation } from "../../../../src/conversation/model"
+import {
+  beginSend,
+  failSend,
+} from "../../../../src/conversation/application/usecases/send-draft"
+import { emptyLocalTabs } from "../../../../src/conversation/application/local-tabs"
+import { conversation, textContent } from "../../../../src/conversation/model"
 import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
 import { Transcript } from "../../../../src/conversation/ui/transcript"
 import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
@@ -53,12 +58,29 @@ const store = {
 }
 let resolve: (() => void) | undefined
 let recover = () => {}
+let olderFailure = () => {}
+let newerFailure = () => {}
+let repeatRefusal = () => {}
+let newRefusal = () => {}
+let localTabs = emptyLocalTabs()
 const fixture = {
   calls: [] as string[],
   fail: false,
   release() {
     resolve?.()
     resolve = undefined
+  },
+  olderFailure() {
+    olderFailure()
+  },
+  newerFailure() {
+    newerFailure()
+  },
+  repeatRefusal() {
+    repeatRefusal()
+  },
+  newRefusal() {
+    newRefusal()
   },
   recover() {
     recover()
@@ -67,20 +89,71 @@ const fixture = {
 Object.assign(window, { __providerSignIn: fixture })
 function PanelTranscript() {
   const [current, setCurrent] = useState(value)
-  recover = () =>
-    setCurrent({
-      ...value,
-      turns: [
-        ...value.turns,
-        {
-          id: "new-prompt",
-          from: "user",
-          executionId: "retry",
-          receipt: "delivered",
-          content: [{ type: "text", text: "Try again" }],
-        },
-      ],
+  const refusal = (executionId: string) => ({
+    ...wire,
+    runtime: {
+      agent: provider,
+      model: "model",
+      modelName: provider,
+      provider,
+      workspace: "/tmp",
+      contextWindowTokens: 200000,
+      reasoning: true,
+    },
+    messages: [
+      { ...wire.messages[0]!, executionId, parts: [], userText: "Later wire input" },
+    ],
+  })
+  olderFailure = () => {
+    let tabs = beginSend(emptyLocalTabs(), {
+      conversationId: "c0",
+      executionId: "A",
+      actionId: "action-A",
+      mode: "queued",
+      content: textContent("Older local failure"),
     })
+    tabs = failSend(tabs, "c0", "A", "Offline", { kind: "uncertain" })
+    localTabs = tabs
+    setCurrent(
+      applyView(tabs.conversations[0]!, { ...refusal("B"), conversationId: "c0" }),
+    )
+  }
+  newerFailure = () =>
+    setCurrent((held) => {
+      let tabs = beginSend(
+        { ...localTabs, conversations: [held] },
+        {
+          conversationId: held.id,
+          executionId: "C",
+          actionId: "action-C",
+          mode: "queued",
+          content: textContent("Newer local input"),
+        },
+      )
+      tabs = failSend(tabs, held.id, "C", "Offline", { kind: "uncertain" })
+      localTabs = tabs
+      return tabs.conversations[0]!
+    })
+  repeatRefusal = () =>
+    setCurrent((held) => applyView(held, { ...refusal("B"), conversationId: held.id }))
+  newRefusal = () =>
+    setCurrent((held) => applyView(held, { ...refusal("D"), conversationId: held.id }))
+  recover = () =>
+    setCurrent((held) =>
+      applyView(held, {
+        ...refusal("D"),
+        conversationId: held.id,
+        pending: [
+          {
+            executionId: "retry",
+            text: "Try again",
+            attachments: [],
+            files: [],
+            mode: "queued",
+          },
+        ],
+      }),
+    )
   return (
     <div
       style={{
