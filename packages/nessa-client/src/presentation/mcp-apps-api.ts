@@ -36,37 +36,21 @@ import {
 import type { ConversationActionOptions } from "./conversation-api.js"
 
 /**
- * The longest each of {@link McpAppsApi}'s calls can take the gateway, in
- * milliseconds, as the protocol publishes it (`x-mcpAppCallTiming`, and the
- * ticket's lifetime); nothing else spells them. They bound a request to a
- * conversation that is open. One that is closed is opened first — the
- * agent's launch and startup, which no published deadline covers — and only
- * then does the request's own budget, a review's among them, begin; so a
- * host that gives up after these may still drop an answer the gateway sends
- * later. The design records that limit (`docs/design/mcp-app-calls.md`,
- * "An app in its conversation: the client").
+ * How long this client waits on each of {@link McpAppsApi}'s calls, in
+ * milliseconds, as the protocol publishes it; nothing else spells them. What
+ * the call deadlines cover, and what they do not, is the description of
+ * `x-mcpAppCallTiming` (generated as `mcpAppCallTiming`), its one statement.
  */
 export const mcpAppDeadlines = Object.freeze({
   /**
-   * `callTool`: a destructive tool's review waits for the person, then the
-   * call has its budget, and the client's allowance covers audit writes, the
-   * response and scheduling. The client waits at least this long — longer
-   * when it is configured for longer — since giving up sooner would drop an
-   * answer the gateway may still send, and would not withdraw the review:
-   * only `releaseApp`, or the socket closing, does. `sendMessage` and
-   * `updateModelContext` wait as long: every new message waits on the
-   * person's review as a destructive tool's call does (a retry of one the
-   * conversation holds is not asked again, `docs/design/mcp-app-calls.md`
-   * M6), and an update, which waits on no review, as a read does: its own
-   * steps fit within a call's budget. None of the three budgets covers
-   * opening a closed conversation first; no published deadline does (above).
+   * `callTool`, `sendMessage` and `updateModelContext`: the published
+   * `callDeadlineMs`. The client waits at least this long, longer when it is
+   * configured for longer.
    */
   callToolMs: mcpAppCallTiming.callDeadlineMs,
   /**
-   * `readResource`: as long as a call. The server's read (`readTimeoutMs`)
-   * and the steps the gateway records fit within a call's budget; opening a
-   * closed conversation first does not, which no published deadline covers
-   * (above). The client waits at least this long, as for `callTool`.
+   * `readResource`: the published `callDeadlineMs`, as for `callTool`. The
+   * client waits at least this long.
    */
   readResourceMs: mcpAppCallTiming.callDeadlineMs,
   /**
@@ -107,9 +91,9 @@ export type McpAppsApi = {
    * `permissions` with `origin: {kind: "app", server, tool}`. The call is
    * answered when they answer, when the review expires
    * (`x-mcpAppCallTiming.reviewDeadlineMs`), or when it is withdrawn; this
-   * client waits for it (`mcpAppDeadlines.callToolMs`, and what it does not
-   * cover). At most 4 app calls run at once per socket; past that they are
-   * refused `temporarily_unavailable`.
+   * client waits `mcpAppDeadlines.callToolMs` for it. At most 4 app calls
+   * run at once per socket; past that they are refused
+   * `temporarily_unavailable`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
@@ -141,10 +125,8 @@ export type McpAppsApi = {
   ) => Promise<McpCallToolResult>
   /**
    * Read a resource of the app's own server: once, held by the gateway as
-   * exactly those bytes, and described with a ticket to fetch them. The server
-   * has `x-mcpAppCallTiming.readTimeoutMs` to answer the read, but the gateway
-   * may open the conversation first, so this client waits as long as for a
-   * call (`mcpAppDeadlines.readResourceMs`).
+   * exactly those bytes, and described with a ticket to fetch them. This
+   * client waits `mcpAppDeadlines.readResourceMs`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
@@ -175,8 +157,7 @@ export type McpAppsApi = {
    * person's turn, written by the app, and shown in the transcript as the
    * app's (`ConversationMessage.app`). Every new message waits on its own
    * review in the conversation's `permissions`, `origin: {kind: "app",
-   * server, tool}`, so this client waits as long as for a call
-   * (`mcpAppDeadlines.callToolMs`, and what it does not cover). The same
+   * server, tool}`; this client waits `mcpAppDeadlines.callToolMs`. The same
    * `requestId` again, from the same mount, is the same turn: the agent
    * settles it without anyone being asked again
    * (`docs/design/mcp-app-calls.md` M6).
@@ -215,8 +196,8 @@ export type McpAppsApi = {
    * runs and no input waits takes it, as it is read, to the agent; it is
    * never part of the transcript. When it is lost or dropped instead is
    * `McpUpdateModelContextParams`' to say, and the design's
-   * (`docs/design/mcp-app-calls.md`). This client waits as long as for a
-   * call (`mcpAppDeadlines.callToolMs`).
+   * (`docs/design/mcp-app-calls.md`). This client waits
+   * `mcpAppDeadlines.callToolMs`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app giving it: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1 to

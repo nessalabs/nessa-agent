@@ -346,11 +346,11 @@ origin, as `upload` does, with the ticket in the `x-nessa-resource-ticket`
 header and never in the URL, and hands back the bytes only once their size and
 SHA-256 are the ones `readResource` described. A destructive tool waits for the
 person's answer to a review with `origin: {kind: "app", server, tool}`, and
-`callTool` waits for the review, the call and an allowance:
-`mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds the longest each call can
-take the gateway in a conversation that is open, as the protocol publishes it
-(`x-mcpAppCallTiming`), for a host that bounds an app's requests; its own
-documentation says what it does not cover. `argumentsJson` is at most
+`callTool` waits `mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds how long
+this client waits on each call, as the protocol publishes it, for a host that
+bounds an app's requests; what those deadlines cover, and what they do not, is
+the description of `x-mcpAppCallTiming`, in
+[the protocol](../../protocol/README.md). `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
 bound throw `TypeError` before anything is sent. What an app sends — a tool's
 name, a resource's URI, the arguments' text — is held to its bounds, and to
@@ -379,8 +379,8 @@ const { executionId } = await client.mcpApps.sendMessage(
 
 `sendMessage` puts the text into the conversation as the person's turn,
 shown as the app's (`ConversationMessage.app`), and answers the turn it
-became. Every new message waits on its own review, so it waits as long as a
-call (`mcpAppDeadlines.callToolMs`); while a turn runs or input waits it is
+became. Every new message waits on its own review, and this client waits
+`mcpAppDeadlines.callToolMs` for it; while a turn runs or input waits it is
 refused `turn_running`, never queued. The same `requestId` from the same
 mount is the same turn, and is not reviewed again (the design's M6). `updateModelContext` holds what a mount gives the
 model in place of what it gave; `{}`, or only an empty text, clears it. The

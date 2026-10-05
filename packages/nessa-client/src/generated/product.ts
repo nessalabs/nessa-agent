@@ -1762,7 +1762,7 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
-/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it. These bound a request to an open conversation: no published deadline covers opening a closed one first. */
+/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. callDeadlineMs is reviewDeadlineMs + callTimeoutMs + clientAllowanceMs. A client waits at least callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it; giving up sooner would drop an answer the gateway may still send, and would not withdraw a review. These bound a request to an open conversation. A closed one is opened first, the agent's launch and startup, and only then does the request's own budget, a review's among them, begin. No published deadline covers that opening, so a client that gives up after callDeadlineMs may still drop an answer the gateway sends later. */
 export const mcpAppCallTiming = {
   reviewDeadlineMs: 300000,
   callTimeoutMs: 60000,

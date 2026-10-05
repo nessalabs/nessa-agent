@@ -106,16 +106,14 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   its socket closes — the app is torn down (`mcp.releaseApp`), or the
   conversation ends. A client that stops waiting withdraws nothing: the
   review stays open, and the call is still made if the person allows it.
-- **How long a call can take is published once**, as `x-mcpAppCallTiming`:
-  `reviewDeadlineMs` for a review to be answered, then `callTimeoutMs` for
-  the server to answer a call (`mcp_timed_out`); `readTimeoutMs` for it to
-  answer a resource read; and `clientAllowanceMs` for opening the
-  conversation and recording each step. The schema holds their values;
-  nothing here repeats them. A client waits at least
-  `reviewDeadlineMs + callTimeoutMs + clientAllowanceMs` (`callDeadlineMs`)
-  before giving up on `mcp.callTool`, and as long on `mcp.readResource`,
-  which may open the conversation first and never outlasts a call. The
-  gateway, the SDK's caller and the client read the generated values
+- **How long a call can take is published once**, as `x-mcpAppCallTiming`.
+  The schema holds its values, and the generator's description of it
+  (`mcpAppCallTiming` in `scripts/generate-product-protocol.mjs`, emitted
+  into the generated TypeScript) is the one statement of what each covers,
+  what a client waits, and what no published deadline covers; nothing here
+  repeats either. A server that does not answer a call within
+  `callTimeoutMs` is `mcp_timed_out`. The gateway, the SDK's caller and the
+  client read the generated values
   (`MCP_APP_REVIEW_DEADLINE_MS`, `MCP_APP_CALL_TIMEOUT_MS` and
   `MCP_APP_READ_TIMEOUT_MS` in Rust, `mcpAppCallTiming` in TypeScript); no
   layer writes its own.

@@ -802,27 +802,25 @@ requests; what they may carry is `mcpAppRequestProblem.message` and
 `maxMcpNameBytes` and `maxExecutionIdBytes` rather than restating them. The
 client refuses early only what the schema refuses at the wire; blank text,
 both parts together and the structure's shape stay the gateway's (M3, C3,
-C4). Both wait `mcpAppDeadlines.callToolMs`, the deadline of a call that can
-wait on a review. Whether a refusal is certain is `rejectedBeforeDispatch`'s
-one reading of each code (`application/conversation-mutation-error.ts`), the
-same for every method: `turn_running` and `mcp_cancelled` are certain, and
+C4). Both wait `mcpAppDeadlines.callToolMs`. Whether a refusal is certain is
+`rejectedBeforeDispatch`'s one reading of each code
+(`application/conversation-mutation-error.ts`), the same for every method: `turn_running` and `mcp_cancelled` are certain, and
 `mcp_cancelled` from either method means nothing was sent or held.
 
-**Recorded limit.** `mcpAppDeadlines` bounds a request to a conversation that
-is open. Each of the four requests opens a closed conversation first — the
-agent's launch and startup, which no published deadline covers — and only
-then do its own steps begin; a new message then waits up to
-`reviewDeadlineMs` on its review. A host that gives up after
-`mcpAppDeadlines.callToolMs` may therefore drop an answer the gateway still sends,
-and the outcome is the uncertain one a lost answer always is. `callTool` was
-already so. No new deadline is added for it (gate 16).
+**Recorded limit.** No published deadline covers opening a closed
+conversation before an app's request; what the deadlines cover and what they
+do not is stated once, in the description of `x-mcpAppCallTiming`
+(`mcpAppCallTiming` in `scripts/generate-product-protocol.mjs`). The decision
+recorded here is to add no deadline for that opening (gate 16): a host that
+gives up first gets the uncertain outcome a lost answer always is, as
+`callTool` already did.
 
 | # | Event | Effect | PR |
 | --- | --- | --- | --- |
-| K1 | `sendMessage` text not a string, empty (the schema's `minLength`), past `MAX_MCP_MESSAGE_BYTES`, or ill-formed | `TypeError` before any request; the byte bound is checked first, and the minimum counts no further than itself, so a text far past the bound is not read character by character (`K1: refuses a text far past its bound without reading it`) | 2b |
+| K1 | `sendMessage` text not a string, empty (the schema's `minLength`), past `MAX_MCP_MESSAGE_BYTES`, or ill-formed | `TypeError` before any request; the byte bound is checked first, and the minimum counts no further than itself, so a text far past the bound is not read character by character (`K1: refuses a text far past its bound without reading it`), and a lone-surrogate text past it is refused for its bytes (`K1: refuses a lone-surrogate text past its bound for its bytes, the bound checked first`) | 2b |
 | K2 | a context `null`, not an object, an array, or no plain object; one made with no prototype (`Object.create(null)`) is plain | `TypeError` before any request; a context with no prototype is sent | 2b |
 | K3 | a context with an own key other than `text` / `structuredContentJson` (symbol or hidden ones too); a part it only inherits is not read (`Object.hasOwn`) | `TypeError` before any request | 2b |
-| K4 | a part not a string, past `MAX_MCP_CONTEXT_BYTES`, or ill-formed | `TypeError` before any request; a part far past the bound is refused without being encoded (`K4: refuses a context %s far past its bound without encoding it`); both together, and the structure, are the gateway's (C3, C4) | 2b |
+| K4 | a part not a string, past `MAX_MCP_CONTEXT_BYTES`, or ill-formed | `TypeError` before any request; a part far past the bound is refused without being encoded (`K4: refuses a context %s far past its bound without encoding it`), and a lone-surrogate part past it for its bytes, the bound checked first; both together, and the structure, are the gateway's (C3, C4) | 2b |
 | K5 | `{}`, or a part given as `undefined` | sent with neither part: a clear (C7); an empty text is sent as given | 2b |
 | K6 | a server name outside 1 to `maxMcpNameBytes` UTF-8 bytes | `TypeError` before any request | 2b |
 | K7 | a message answer without `executionId`, an empty one, one past `maxExecutionIdBytes`, one with a lone surrogate, or with an unknown field | `NessaMcpAppError{code: undefined, uncertain: true}` | 2b |
@@ -835,16 +833,16 @@ already so. No new deadline is added for it (gate 16).
 All in `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`, under
 "an app speaking in its conversation (#390)", each named after its row:
 
-- K1 `K1: sends a message of one character, and of exactly its bound in UTF-8 bytes`, `K1: refuses a message that is %s before asking the gateway` (no string, undefined, empty, one byte past, a lone surrogate), `K1: says why a message is outside its bounds before a host sends it`, `K1: refuses a text far past its bound without reading it`, `K1: counts a message's characters no further than its minimum`
+- K1 `K1: sends a message of one character, and of exactly its bound in UTF-8 bytes`, `K1: refuses a message that is %s before asking the gateway` (no string, undefined, empty, one byte past, a lone surrogate), `K1: says why a message is outside its bounds before a host sends it`, `K1: refuses a text far past its bound without reading it`, `K1: refuses a lone-surrogate text past its bound for its bytes, the bound checked first`, `K1: says a message that is %s is no string, as sendMessage refuses it` (a `String` object, an array, `null`), `K1: counts a message's characters no further than its minimum`
 - K2 `K2: refuses a context that is %s before asking the gateway` (null, a number, a string, an array, an array carrying a part, a class instance), `K2: takes a context with no prototype, as {} is, and sends its parts`
 - K3 `K3: refuses a context with %s before asking the gateway` (another field, a part beside another field, a symbol key, a hidden key), `K3: reads a context's own parts only, never one every object inherits`
-- K4 `K4: sends each part at exactly its own bound, and both together for the gateway to judge`, `K4: refuses a context with %s before asking the gateway`, `K4: checks and sends one read of each part, so a part that changes as it is read sends what was checked`
+- K4 `K4: sends each part at exactly its own bound, and both together for the gateway to judge`, `K4: refuses a context with %s before asking the gateway`, `K4: refuses a context %s far past its bound without encoding it`, `K4: refuses a lone-surrogate context %s past its bound for its bytes, the bound checked first`, `K4: checks and sends one read of each part, so a part that changes as it is read sends what was checked`
 - K5 `K5: sends {} as an update with neither part, a clear, and an empty text as given`
 - K6 `K6: refuses a server name that is %s before asking the gateway`, `K6: takes a server name of exactly its bound`
 - K7 `K7: refuses a message answer with %s as uncertain` (a lone surrogate among them), `K7: takes a message answer whose turn is exactly its bound`
 - K8 `K8: refuses a context answer acknowledging %s as uncertain` (`applied: false` among them)
-- K9 `K9: is certain a message refused while a turn runs became no turn`, `K9: reports %s as certain for a message and a context`, `K9: reports %s as uncertain`
-- The request and its deadline: `sends a message as the app, waits as long as a call that waits on a review, and returns its turn`, and K5's
+- K9 `K9: is certain a message refused while a turn runs became no turn`, `K9: reports %s as certain for a message and a context`, `K9: reports %s as uncertain`, `K9: reports %s as uncertain for a context too` (`temporarily_unavailable`, `audit_unavailable`)
+- The request and its deadline: `sends a message as the app, waits a call's deadline, and returns its turn`, and K5's
 
 ## Lanes
 

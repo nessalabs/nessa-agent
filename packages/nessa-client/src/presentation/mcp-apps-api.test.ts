@@ -445,8 +445,6 @@ it("reads a resource and returns what the gateway holds, ticket and all", async 
       server: "charts",
       uri,
     },
-    // The gateway may open the conversation first: no shorter wait than a
-    // call's.
     { atLeastMs: mcpAppDeadlines.readResourceMs },
   )
   expect(mcpAppDeadlines.readResourceMs).toBe(mcpAppDeadlines.callToolMs)
@@ -897,7 +895,7 @@ describe("an app speaking in its conversation (#390)", () => {
   /** Exactly `bytes` UTF-8 bytes, two to a character. */
   const twoByte = (bytes: number) => "é".repeat(bytes / 2)
 
-  it("sends a message as the app, waits as long as a call that waits on a review, and returns its turn", async () => {
+  it("sends a message as the app, waits a call's deadline, and returns its turn", async () => {
     const request = taking()
     expect(
       await api(request).sendMessage(conversationId, app, "charts", "Plot May", {
@@ -997,6 +995,17 @@ describe("an app speaking in its conversation (#390)", () => {
     await expect(
       api(request).sendMessage(conversationId, app, "charts", text),
     ).rejects.toBeInstanceOf(TypeError)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("K1: refuses a lone-surrogate text past its bound for its bytes, the bound checked first", async () => {
+    const text = "\ud800".repeat(MAX_MCP_MESSAGE_BYTES + 1)
+    const bound = `Message must contain ${bounds.minMcpMessageCharacters} character to ${MAX_MCP_MESSAGE_BYTES} UTF-8 bytes`
+    expect(mcpAppRequestProblem.message(text)).toBe(bound)
+    const request = taking()
+    await expect(
+      api(request).sendMessage(conversationId, app, "charts", text),
+    ).rejects.toThrow(new TypeError(bound))
     expect(request).not.toHaveBeenCalled()
   })
 
@@ -1170,6 +1179,20 @@ describe("an app speaking in its conversation (#390)", () => {
       await expect(
         api(request).updateModelContext(conversationId, app, "charts", context),
       ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(["text", "structuredContentJson"])(
+    "K4: refuses a lone-surrogate context %s past its bound for its bytes, the bound checked first",
+    async (part) => {
+      const context = { [part]: "\ud800".repeat(MAX_MCP_CONTEXT_BYTES + 1) }
+      const bound = `Context ${part} must contain at most ${MAX_MCP_CONTEXT_BYTES} UTF-8 bytes`
+      expect(mcpAppRequestProblem.context(context)).toBe(bound)
+      const request = taking()
+      await expect(
+        api(request).updateModelContext(conversationId, app, "charts", context),
+      ).rejects.toThrow(new TypeError(bound))
       expect(request).not.toHaveBeenCalled()
     },
   )
@@ -1370,4 +1393,23 @@ describe("an app speaking in its conversation (#390)", () => {
     )
     expect(error).toMatchObject({ code, uncertain: true })
   })
+
+  // The gateway held nothing for either, yet neither code is one a command
+  // can be sure of, so a context's is uncertain as every method's is.
+  it.each(["temporarily_unavailable", "audit_unavailable"] as const)(
+    "K9: reports %s as uncertain for a context too",
+    async (code) => {
+      const cause = new NessaRpcError(code, "failed")
+      const error = await failure(
+        api(() => Promise.reject(cause)).updateModelContext(
+          conversationId,
+          app,
+          "charts",
+          { text: "x" },
+        ),
+      )
+      expect(error).toBeInstanceOf(NessaMcpAppError)
+      expect(error).toMatchObject({ code, uncertain: true, cause })
+    },
+  )
 })
