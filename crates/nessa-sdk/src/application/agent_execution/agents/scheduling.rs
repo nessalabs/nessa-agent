@@ -1358,8 +1358,10 @@ impl Agent {
     /// `actor`. Idle inputs run at the next invocation boundary. Unsupported native
     /// steering returns Unsupported; callers can explicitly choose enqueue_steering.
     ///
-    /// Input is saved before contacting the provider. If its target settles during
-    /// that save, the undispatched input enters the boundary queue. Once native
+    /// A message the selected model cannot take is refused before anything is
+    /// saved or steered. Input that passes that check is saved before
+    /// contacting the provider. If its target settles during that save, the
+    /// undispatched input enters the boundary queue. Once native
     /// delivery starts, only an explicit PromptRequired response allows queuing it
     /// as a new invocation. Timeouts, malformed replies and transport errors are
     /// never retried automatically.
@@ -1418,6 +1420,10 @@ impl Agent {
         actor: ActionContext,
         work_owner: &mut Option<WorkPermit>,
     ) -> Result<SteeringDelivery, AgentError> {
+        // The same check `invoke` and `accept_work` run before a save. A
+        // message the selected model cannot take is refused here, with
+        // nothing written and nothing handed to the provider.
+        validate_configured_input(self.capabilities(), &input)?;
         let mut scheduler = self.inner.scheduler.lock().await;
         if let Some(recovered) = submissions::recover(
             &self.inner.manager,
