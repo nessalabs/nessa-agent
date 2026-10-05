@@ -129,3 +129,5 @@ refined during review. Moving files or fixing links does not change a decision.
 Follow [Numbering: open the issue first](#numbering-open-the-issue-first),
 then copy [0000-template.md](0000-template.md) into `todo/<issue>-<slug>.md`.
 Keep it to one page. If it needs more than a page, the decision is probably two decisions.
+
+[501 — Provider authentication recovery](todo/501-provider-authentication-recovery.md) records typed ACP recovery and the remaining Claude internal-error limitation.

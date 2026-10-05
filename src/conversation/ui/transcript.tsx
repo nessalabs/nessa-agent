@@ -1,3 +1,4 @@
+import { offersAuthenticationRecovery } from "../../provider-authentication/model/recovery"
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
 import { WorkActivity, WorkDetails } from "./work-activity"
@@ -18,6 +19,7 @@ import {
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageContentView } from "./message-content"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
+import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
 import { type Conversation, type Receipt, type Turn } from "../model"
@@ -34,6 +36,8 @@ export function Transcript({
   statusLabel,
   gatewayAvailable,
   onOpenPaste,
+  onProviderSignIn,
+  canSignInToProvider,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
@@ -43,6 +47,8 @@ export function Transcript({
   statusLabel: string
   gatewayAvailable: boolean
   onOpenPaste: (text: string) => void
+  onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
+  canSignInToProvider?: () => Promise<boolean>
 }) {
   // Scoped to the conversation, so a key that happens to recur in the next
   // tab does not open that tab's sheet.
@@ -84,6 +90,12 @@ export function Transcript({
     (turn) =>
       turn.from === "user" && turn.receipt === "queued" && !linkedUserIds.has(turn.id),
   )
+  const localInputs = conversation.turns.flatMap((turn) =>
+    turn.from === "user" && turn.actionId && turn.receipt !== "delivered"
+      ? [{ observedInput: turn.observedInput }]
+      : [],
+  )
+  const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
 
   return (
@@ -157,7 +169,30 @@ export function Transcript({
                       )}
                     </React.Fragment>
                   ))}
-                  <TurnStatus key={`${row.key}:status`} status={row.status} />
+                  {(provider === "claude" || provider === "codex") &&
+                  offersAuthenticationRecovery(
+                    conversation.turns.find(
+                      (turn) =>
+                        turn.id === row.sourceTurnId &&
+                        turn.from === "assistant" &&
+                        turn.authenticationRequired,
+                    )?.executionId,
+                    conversation.remote?.latestInputId,
+                    localInputs,
+                  ) ? (
+                    <React.Fragment key={`${row.key}:auth`}>
+                      <ProviderSignInCard
+                        provider={provider}
+                        onSignIn={onProviderSignIn}
+                        canSignIn={canSignInToProvider}
+                      />
+                      {row.status !== "failed" ? (
+                        <TurnStatus status={row.status} />
+                      ) : null}
+                    </React.Fragment>
+                  ) : (
+                    <TurnStatus key={`${row.key}:status`} status={row.status} />
+                  )}
                 </React.Fragment>
               )
             })}

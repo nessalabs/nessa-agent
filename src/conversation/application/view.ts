@@ -39,6 +39,7 @@ export type ConversationView = {
     attachments: ImageReference[]
     /** Files this turn pointed the agent at, by path. */
     files: LinkedFile[]
+    authenticationRequired?: boolean
     error?: string
     status: string
   }[]

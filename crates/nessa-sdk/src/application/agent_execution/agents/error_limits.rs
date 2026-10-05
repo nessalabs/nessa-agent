@@ -37,7 +37,7 @@ impl AgentError {
                 | Self::InvalidInput(text)
                 | Self::Protocol(text)
                 | Self::Transport(text) => bytes = bytes.saturating_add(text.capacity()),
-                Self::Provider { diagnostic, .. } => {
+                Self::Provider { diagnostic, .. } | Self::AuthenticationRequired { diagnostic } => {
                     bytes = bytes
                         .saturating_add(diagnostic.as_ref().map_or(0, |value| value.as_str().len()))
                 }

@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import { bundleArchitecture, includesBundle } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
 import { runtimeExecutables } from "./runtime-layout.mjs"
+import { verifyTerminalAutomation } from "./terminal-automation.mjs"
 import { signingProblems } from "./runtime-signing.mjs"
 
 const root = resolve(import.meta.dirname, "../..")
@@ -27,6 +28,8 @@ verifyRuntimeFingerprint(runtime)
 execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], {
   stdio: "inherit",
 })
+verifyTerminalAutomation(app, execFileSync)
+
 /**
  * Whether this build was signed with a real identity rather than ad hoc.
  *

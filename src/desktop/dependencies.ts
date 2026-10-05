@@ -65,6 +65,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
 export function createDesktopDependencies(
   options: {
     workspace?: WorkspaceSource
+    signInToProvider?: WorkspaceDependencies["signInToProvider"]
+    providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -107,6 +109,8 @@ export function createDesktopDependencies(
   const workspace = options.workspace ?? source ?? inMemorySource({ now, after })
   return {
     workspace,
+    signInToProvider: options.signInToProvider,
+    providerLoginAvailable: options.providerLoginAvailable,
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,

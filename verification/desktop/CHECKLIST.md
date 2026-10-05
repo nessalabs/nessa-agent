@@ -867,3 +867,24 @@ while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
 for all six engine/scenario pairs. This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker.
+
+
+## Provider authentication recovery (#501)
+
+`node verification/desktop/scripts/provider-sign-in.mjs --engine chromium,webkit`
+also verifies optimistic sending/failed delivery, accepted pending inputs,
+user-only running and output without reviving recovery or duplicating the retry. It
+checks both workspace and floating panel against [ADR 501](../../docs/adr/todo/501-provider-authentication-recovery.md): at
+360px and 1000px the card fits its pane, height is at most 130px, its button stays
+within the card, keyboard activation opens the selected provider once, an
+acknowledged launch keeps the card, a failed launch says so, and a newer
+transcript removes the card. Both browser engines report geometry, launch counts,
+and zero page errors. The raw authentication diagnostic is absent and unrelated
+local notices remain.
+
+The same script drives an older failed local submission through a later wire
+refusal, a newer local submission after seeing that refusal, repeated replacement
+views, and two retained locals superseded by another refusal. Both surfaces read
+`src/provider-authentication/model/recovery.ts`: observed execution identity,
+including accepted pending inputs, owns recovery rather than array-tail position
+or clocks.

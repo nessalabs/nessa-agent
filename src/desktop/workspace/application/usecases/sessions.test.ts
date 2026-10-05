@@ -179,7 +179,7 @@ describe("sending", () => {
     expect(again.sessions.new.status).toBe("running")
     const resent = messageResent(refused, { sessionId: "new", messageId: "m1" })
     expect(resent.sessions.new.status).toBe("running")
-    expect(resent.outbox.new).toEqual([message("m1", "hi")])
+    expect(resent.outbox.new).toEqual([{ ...message("m1", "hi"), observedInput: null }])
   })
 
   it("keeps a session the source never began running while another message may still begin it", () => {

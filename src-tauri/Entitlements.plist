@@ -22,5 +22,8 @@
   -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
+  <!-- Provider sign-in asks Terminal to run its fixed CLI login command. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

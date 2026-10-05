@@ -129,9 +129,16 @@ pub(in crate::infrastructure::acp) fn provider_failure(phase: &str, error: RpcEr
             "provider refused without a message"
         ),
     }
-    AgentError::Provider {
-        code: error.code,
-        diagnostic,
+    // ACP protocol 1 assigns -32000 to Authentication required (the pinned
+    // ACP schema), unlike a generic JSON-RPC provider code. Keep that meaning
+    // at this adapter boundary; custom providers keep their generic errors.
+    if error.code == -32000 {
+        AgentError::AuthenticationRequired { diagnostic }
+    } else {
+        AgentError::Provider {
+            code: error.code,
+            diagnostic,
+        }
     }
 }
 
@@ -714,7 +721,21 @@ impl<P: AcpProfile> Worker<P> {
             unreachable!("finalized worker settlement always reports cleanup")
         };
         let cleanup = cleanup.clone();
-        let published_failure = if execution_reply.is_some() {
+        // The execution reply already carries an expected authentication refusal.
+        // Finalized facts and cleanup establish whether another failure exists;
+        // ending this stream cleanly avoids inventing a second observation fault.
+        let authentication_refusal_only = execution_reply.is_some()
+            && settlement.provider_result().is_some_and(|result| {
+                result
+                    .as_ref()
+                    .err()
+                    .is_some_and(AgentError::authentication_required)
+            })
+            && settlement.failure().is_none()
+            && cleanup.clone().into_result().is_ok();
+        let published_failure = if authentication_refusal_only {
+            None
+        } else if execution_reply.is_some() {
             settlement.clone().into_result().err()
         } else {
             cleanup.clone().into_result().err().or(failure)

@@ -1,3 +1,4 @@
+import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
 import type {
   ConversationMessage,
   ConversationPermission,
@@ -362,3 +363,82 @@ describe("the model a session runs on", () => {
     expect(modelFor(undefined)).toEqual(defaultModel())
   })
 })
+
+describe("provider authentication recovery", () => {
+  it("uses only the latest turn's typed refusal, never its diagnostic text", () => {
+    const source = view("auth")
+    source.messages = [turn({ status: "failed", authenticationRequired: true })]
+    expect(recovery(transcriptFrom(source, 1, at))).toBe(true)
+    source.messages.push(turn({ executionId: "later" }))
+    expect(recovery(transcriptFrom(source, 2, at))).toBe(false)
+    source.messages = [turn({ status: "failed", error: "OAuth session expired" })]
+    expect(recovery(transcriptFrom(source, 3, at))).toBe(false)
+  })
+})
+
+it("shows auth recovery without duplicating its diagnostic and preserves unrelated notices", () => {
+  const source = view("auth", {
+    messages: [
+      turn({
+        status: "failed",
+        authenticationRequired: true,
+        error: "Internal error: OAuth session expired",
+        parts: [
+          {
+            ...textPart("Nessa declined a tool review.", 0),
+            kind: "local_notice",
+            noticeId: "review-1",
+          },
+        ],
+      }),
+    ],
+  })
+  const transcript = transcriptFrom(source, 1, at)
+  expect(recovery(transcript)).toBe(true)
+  expect(transcript.messages.flatMap((message) => message.parts)).toEqual([
+    { kind: "text", text: "Chart the sales" },
+    { kind: "text", text: "Nessa declined a tool review." },
+  ])
+})
+
+it("recovery follows the latest mapped input across pending and dispatched turns", () => {
+  const refusal = turn({ status: "failed", authenticationRequired: true })
+  const pending = {
+    executionId: "retry",
+    text: "Try again",
+    attachments: [],
+    files: [],
+    mode: "queued" as const,
+  }
+  const source = view("auth", { messages: [refusal] })
+  expect(recovery(transcriptFrom(source, 1, at))).toBe(true)
+  source.pending = [{ ...pending, executionId: refusal.executionId }]
+  expect(recovery(transcriptFrom(source, 2, at))).toBe(true)
+  source.pending.push(pending)
+  expect(recovery(transcriptFrom(source, 3, at))).toBe(false)
+  source.messages.push(turn({ executionId: pending.executionId, status: "running" }))
+  expect(recovery(transcriptFrom(source, 4, at))).toBe(false)
+  source.pending = []
+  source.messages[1] = turn({
+    executionId: pending.executionId,
+    status: "completed",
+    parts: [textPart("Ready", 0)],
+  })
+  expect(recovery(transcriptFrom(source, 5, at))).toBe(false)
+})
+
+it("retains an unknown Codex runtime agent independently of catalogue fallback", () => {
+  const source = view("auth")
+  source.runtime = { ...source.runtime!, agent: "codex", model: "unknown-codex-model" }
+  source.messages = [turn({ status: "failed", authenticationRequired: true })]
+  expect(runningModel(source)).toBeUndefined()
+  expect(transcriptFrom(source, 1, at).agent).toBe("codex")
+})
+
+function recovery(transcript: ReturnType<typeof transcriptFrom>) {
+  return offersAuthenticationRecovery(
+    transcript.authenticationRefusal,
+    transcript.latestInputId,
+    [],
+  )
+}

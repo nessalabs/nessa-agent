@@ -76,7 +76,13 @@ export function messageSent(
         : started.composerText,
     outbox: {
       ...started.outbox,
-      [sessionId]: [...(entry(started.outbox, sessionId) ?? []), message],
+      [sessionId]: [
+        ...(entry(started.outbox, sessionId) ?? []),
+        {
+          ...message,
+          observedInput: entry(state.transcripts, sessionId)?.latestInputId ?? null,
+        },
+      ],
     },
   }
 }
@@ -151,7 +157,11 @@ export function messageResent(
 ): WorkspaceState {
   const resent = withSent(state, sessionId, messageId, (message) =>
     message.delivery?.state === "failed"
-      ? { ...message, delivery: { state: "sending" } }
+      ? {
+          ...message,
+          observedInput: entry(state.transcripts, sessionId)?.latestInputId ?? null,
+          delivery: { state: "sending" },
+        }
       : message,
   )
   return resent === state ? state : startingRun(resent, sessionId)

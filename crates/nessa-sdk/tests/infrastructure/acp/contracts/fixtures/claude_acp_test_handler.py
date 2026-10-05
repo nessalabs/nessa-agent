@@ -126,7 +126,7 @@ for line in sys.stdin:
                 time.sleep(20)
                 continue
             if mode == "resume-failure" or (mode == "resume-retry" and not (root / "resume-healthy").exists()):
-                send({"id": msg["id"], "error": {"code": -32000, "message": "restore failed"}})
+                send({"id": msg["id"], "error": {"code": -32001, "message": "restore failed"}})
                 continue
             if mode == "resume-wrong-id":
                 result(msg["id"], {"sessionId": "different-session", **configs()})
@@ -278,10 +278,12 @@ for line in sys.stdin:
             print("{broken", flush=True)
         elif mode == "oversize":
             print("x" * 20000, flush=True)
+        elif mode == "provider-auth-error":
+            send({"id": pending, "error": {"code": -32000, "message": "Authentication required"}})
         elif mode == "provider-error" or (mode == "provider-error-once" and len(launches) == 1):
             if mode == "provider-error-once":
                 text("retained-before-failure")
-            send({"id": pending, "error": {"code": -32000, "message": "provider plan does not allow this request"}})
+            send({"id": pending, "error": {"code": -32001, "message": "provider plan does not allow this request"}})
         elif mode == "unsupported-tool-content":
             update({"sessionUpdate": "tool_call", **tool(), "content": [
                 {"type": "content", "content": {"type": "text", "text": "before"}},
@@ -369,7 +371,7 @@ for line in sys.stdin:
                 result(pending, {"stopReason": "end_turn"})
                 pending = None
             elif mode == "permission-provider-error":
-                send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
+                send({"id": pending, "error": {"code": -32001, "message": "fixture provider failure"}})
         elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel", "ask-too-large"):
             def ask(ask_id):
                 send({"id": ask_id, "method": "elicitation/create", "params": {

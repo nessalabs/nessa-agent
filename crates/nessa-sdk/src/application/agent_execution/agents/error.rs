@@ -12,8 +12,8 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 
 /// Bounded provider-supplied context for a typed provider failure.
 ///
-/// This text is diagnostic only. Callers must use the provider error code and
-/// the surrounding typed lifecycle reports for decisions about retries,
+/// This text is diagnostic only. Callers must use the typed failure, any
+/// provider error code, and the surrounding typed lifecycle reports for decisions about retries,
 /// admission, settlement, and resource ownership.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderDiagnostic(Box<str>);
@@ -282,7 +282,12 @@ pub enum AgentError {
     StalePermission,
     /// The adapter received a representation inconsistent with its protocol contract.
     Protocol(String),
-    /// The provider returned a protocol error response.
+    /// The adapter confirmed authentication is required under its provider protocol.
+    AuthenticationRequired {
+        /// Bounded provider context, without lifecycle or cleanup authority.
+        diagnostic: Option<ProviderDiagnostic>,
+    },
+    /// The provider returned a generic protocol error response.
     Provider {
         /// Provider-supplied numeric error code, retained without string classification.
         code: i64,
@@ -334,3 +339,35 @@ impl fmt::Display for AgentError {
     }
 }
 impl Error for AgentError {}
+
+impl AgentError {
+    /// Whether the adapter published an explicit authentication refusal.
+    /// Generic provider codes and diagnostic text do not establish this fact.
+    pub fn authentication_required(&self) -> bool {
+        matches!(self, Self::AuthenticationRequired { .. })
+    }
+}
+
+#[cfg(test)]
+mod authentication_tests {
+    use super::{AgentError, ProviderDiagnostic};
+
+    #[test]
+    fn authentication_requires_the_adapter_owned_variant() {
+        assert!(AgentError::AuthenticationRequired { diagnostic: None }.authentication_required());
+        assert!(!AgentError::Provider {
+            code: -32000,
+            diagnostic: Some(ProviderDiagnostic::new(
+                "provider plan does not allow this request"
+            )),
+        }
+        .authentication_required());
+        assert!(!AgentError::Provider {
+            code: -32603,
+            diagnostic: Some(ProviderDiagnostic::new(
+                "Failed to authenticate: OAuth session expired"
+            )),
+        }
+        .authentication_required());
+    }
+}

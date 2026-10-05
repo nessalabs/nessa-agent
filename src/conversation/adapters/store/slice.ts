@@ -25,6 +25,7 @@ import type { LocalTabs } from "../../application/local-tabs"
 import { emptyLocalTabs } from "../../application/local-tabs"
 import {
   beginSend,
+  reattemptSend,
   declineReason,
   draftMessage,
   failSend,
@@ -473,6 +474,7 @@ export const controlConversation = createAsyncThunk<
           attachments: images.images,
           files: messageFiles(turn.content),
         }
+        dispatch(submissionReattempted({ id, executionId: control.executionId }))
         const receipt = await (turn.mode === "steering"
           ? extra.conversation.steer(input)
           : extra.conversation.send(input))
@@ -648,6 +650,12 @@ const conversationSlice = createSlice({
     submissionStarted(state, action: PayloadAction<Parameters<typeof beginSend>[1]>) {
       return beginSend(state, action.payload)
     },
+    submissionReattempted(
+      state,
+      action: PayloadAction<{ id: string; executionId: string }>,
+    ) {
+      return reattemptSend(state, action.payload.id, action.payload.executionId)
+    },
     submissionAccepted(
       state,
       action: PayloadAction<{ id: string; executionId: string }>,
@@ -777,6 +785,7 @@ export const {
   conversationReady,
   submissionStarted,
   submissionAccepted,
+  submissionReattempted,
   submissionFailed,
   showError,
   readStarted,

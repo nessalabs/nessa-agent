@@ -251,7 +251,9 @@ async fn exchange<P: AcpProfile>(
         .await
     {
         Ok(_) => return Ok(AcpSessionDeletion::Acknowledged),
-        Err(refusal @ AgentError::Provider { .. }) if advertises(&init, "list") => refusal,
+        Err(
+            refusal @ (AgentError::Provider { .. } | AgentError::AuthenticationRequired { .. }),
+        ) if advertises(&init, "list") => refusal,
         Err(error) => return Err(error),
     };
     // Only a refusal is read against the list, and only a list read in full

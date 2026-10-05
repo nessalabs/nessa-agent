@@ -256,9 +256,11 @@ export function transcriptFrom(
     )
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
   }
+  let latestInputId = view.messages.at(-1)?.executionId
   const listed = new Set(view.messages.map((turn) => turn.executionId))
   for (const waiting of view.pending) {
     if (listed.has(waiting.executionId)) continue
+    latestInputId = waiting.executionId
     const input = inputId(waiting.executionId)
     messages.push({
       id: input,
@@ -267,6 +269,7 @@ export function transcriptFrom(
       parts: [{ kind: "text", text: waiting.text }],
     })
   }
+  const latestTurn = view.messages.at(-1)
   // What runs is the tool and its exact input, which the gateway offers a
   // review only when it can show whole; why is the provider's title for it.
   const asked = view.permissions[0]
@@ -278,5 +281,16 @@ export function transcriptFrom(
         origin: approvalOrigins[asked.origin.kind](asked.origin),
       }
     : null
-  return { sessionId: view.conversationId, messages, activity, approval, revision }
+  return {
+    sessionId: view.conversationId,
+    messages,
+    activity,
+    approval,
+    revision,
+    agent: view.runtime?.agent,
+    authenticationRefusal: latestTurn?.authenticationRequired
+      ? latestTurn.executionId
+      : undefined,
+    latestInputId,
+  }
 }

@@ -185,7 +185,11 @@ impl<'de> Visitor<'de> for Seed {
         loop {
             self.limit.set(KEY_BYTES);
             let Some(key) = map.next_key_seed(Key)? else {
-                if matches!(self.shape, Shape::ProviderError) && !has_provider_diagnostic {
+                if matches!(
+                    self.shape,
+                    Shape::ProviderError | Shape::AuthenticationError
+                ) && !has_provider_diagnostic
+                {
                     return Err(de::Error::custom(
                         "saved provider error has no diagnostic field",
                     ));

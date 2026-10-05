@@ -386,7 +386,7 @@ async fn only_the_list_is_read_past_the_protocol_s_bound_on_values() {
 
 #[tokio::test]
 async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
-    // A list refused (with a code of its own, -32000), too large in bytes or
+    // A list refused (with a code of its own, -32001), too large in bytes or
     // in values, whose cursor repeats, longer than its page bound, or past its
     // budget: nothing
     // is known of the session, so the delete's own refusal (-32603) is the
@@ -542,4 +542,33 @@ async fn an_outstanding_deletion_is_reported_until_its_process_stops() {
     provider.settled().await;
     assert!(!provider.cleanup_outstanding(), "settled and released");
     assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn authentication_delete_refusal_is_reconciled_only_by_a_complete_listing() {
+    let _process_slot = process_test_slot().await;
+    for (mode, absent) in [
+        ("list-unlisted+auth", true),
+        ("list-listed+auth", false),
+        ("list-error+auth", false),
+    ] {
+        let (root, provider, _) = deleting(mode);
+        let result = provider.delete_session(session()).await;
+        if absent {
+            assert_eq!(result, Ok(ProviderSessionDeletion::NotListed), "{mode}");
+        } else {
+            assert_eq!(
+                result,
+                Err(AgentError::AuthenticationRequired {
+                    diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+                }),
+                "{mode}"
+            );
+        }
+        assert_eq!(
+            methods(&root),
+            ["initialize", "session/delete", "session/list"]
+        );
+        assert_gone(&root, "pid");
+    }
 }

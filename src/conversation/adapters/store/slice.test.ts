@@ -260,6 +260,53 @@ describe("gateway conversation projection", () => {
     })
   })
 
+  it("refreshes an uncertain replay boundary after observing a newer published input", async () => {
+    const effects = scenarioEffects("echo")
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          send: async () => {
+            throw new Error("connection lost")
+          },
+          read: async (id) => ({
+            ...view(id, "B"),
+            messages: [
+              {
+                executionId: "B",
+                userText: "Later",
+                attachments: [],
+                files: [],
+                parts: [],
+                status: "failed",
+                authenticationRequired: true,
+              },
+            ],
+          }),
+        },
+      }),
+    )
+    await store.dispatch(sendDraft({ content: textContent("local") }))
+    const turn = store.getState().conversation.conversations[0]?.turns[0]
+    if (!turn || turn.from !== "user" || !turn.executionId)
+      throw new Error("missing uncertain submission")
+    expect(turn.observedInput).toBeNull()
+    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: { kind: "retry", executionId: turn.executionId },
+      }),
+    )
+    expect(
+      store
+        .getState()
+        .conversation.conversations[0]?.turns.find(
+          (held) => held.from === "user" && held.executionId === turn.executionId,
+        ),
+    ).toMatchObject({ observedInput: "B", receipt: "unknown" })
+  })
+
   it("Stop names the captured turn and leaves the attachment open", async () => {
     const effects = scenarioEffects("echo")
     const gate = deferred<void>()

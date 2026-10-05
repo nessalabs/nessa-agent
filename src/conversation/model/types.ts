@@ -213,6 +213,8 @@ export type UserTurn = {
   steeringTarget?: string
   steeringOffset?: number
   actionId?: string
+  /** Latest published input observed when this local submission began. */
+  observedInput?: string | null
   mode?: "queued" | "steering"
   error?: string
 }
@@ -227,6 +229,8 @@ export type AgentPart = {
 }
 
 export type AssistantTurn = {
+  /** Provider-published authentication refusal, distinct from diagnostic status text. */
+  authenticationRequired?: boolean
   parts: AgentPart[]
   executionId?: string
   id: string
@@ -271,6 +275,8 @@ type ConversationState = {
   cancellationStatus?: "cancelling" | "cancelled"
   controlPending?: boolean
   remote?: {
+    /** Raw execution identity of the latest published input, including pending. */
+    latestInputId?: string
     runtime?: ConversationRuntime
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode

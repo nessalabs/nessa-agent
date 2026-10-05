@@ -93,6 +93,7 @@ pub(super) enum Shape {
     Result,
     Error,
     ProviderError,
+    AuthenticationError,
     ErrorBody(bool),
     Hooks,
     Hook,
@@ -223,7 +224,10 @@ impl Shape {
             (Decline, "reason" | "delivery") => Text(32),
             (Error, "BeforeInvocationHook") => Generic,
             (Error, "Provider") => ProviderError,
-            (ProviderError, "diagnostic") => Text(ProviderDiagnostic::MAX_BYTES),
+            (Error, "AuthenticationRequired") => AuthenticationError,
+            (ProviderError | AuthenticationError, "diagnostic") => {
+                Text(ProviderDiagnostic::MAX_BYTES)
+            }
             (Error, "ImageInputMediaType") => Text(MEDIA_TYPE_BYTES),
             (
                 Error,
@@ -261,6 +265,7 @@ impl Shape {
             AppModelContext => matches!(key, "app" | "update" | "text" | "structured_content"),
             McpTool => matches!(key, "server" | "tool"),
             ProviderError => matches!(key, "code" | "diagnostic"),
+            AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
             StorageError => matches!(
                 key,

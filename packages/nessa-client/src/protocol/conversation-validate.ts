@@ -238,12 +238,20 @@ export function conversationView(value: unknown, expected: string): Conversation
       "status",
       "error",
       "steeringTarget",
+      "authenticationRequired",
       "parts",
       "steeringOffset",
     ])
     const executionId = identity(message, "executionId")
     if (messageIds.has(executionId))
       throw new Error("Conversation response repeats a message execution")
+    if (
+      message.authenticationRequired !== undefined &&
+      typeof message.authenticationRequired !== "boolean"
+    )
+      throw new Error("Conversation response has invalid authenticationRequired")
+    if (message.authenticationRequired === true && message.status !== "failed")
+      throw new Error("Conversation authentication refusal requires a failed turn")
     if (message.steeringTarget !== undefined) {
       const target = identity(message, "steeringTarget")
       if (target === executionId)

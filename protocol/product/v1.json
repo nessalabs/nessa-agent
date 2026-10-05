@@ -994,6 +994,10 @@
           "x-utf8MaxBytes": 2048,
           "description": "Bounded diagnostic for this invocation."
         },
+        "authenticationRequired": {
+          "type": "boolean",
+          "description": "The provider adapter explicitly requires authentication for this failed turn. Generic provider codes and diagnostic text do not establish this fact."
+        },
         "steeringTarget": {
           "type": "string",
           "minLength": 1,

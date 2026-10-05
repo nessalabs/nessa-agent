@@ -41,7 +41,11 @@ fn actor(actor: &ActionContext) -> Value {
 /// startup step is the part a failed warm-up is usually read for, so it is a
 /// field rather than prose.
 fn failure(failure: &ProviderFailure) -> Value {
-    let error = match &failure.error {
+    json!({"error": error(&failure.error), "cleanupUnconfirmed": failure.cleanup_unconfirmed})
+}
+
+fn error(failure: &AgentError) -> Value {
+    match failure {
         AgentError::AttachmentUnavailable(AttachmentPhase::Failed(code)) => json!({
             "kind":"attachment_unavailable",
             "phase":"failed",
@@ -74,6 +78,26 @@ fn failure(failure: &ProviderFailure) -> Value {
         AgentError::Closed => json!({"kind": "closed"}),
         AgentError::CleanupUncertain => json!({"kind": "cleanup_uncertain"}),
         AgentError::AuditFailure => json!({"kind": "audit_failure"}),
+        AgentError::AuthenticationRequired { diagnostic } => json!({
+            "kind": "authentication_required",
+            "diagnostic": diagnostic.as_ref().map(|diagnostic| diagnostic.as_str()),
+        }),
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        } => json!({
+            "kind": "multiple_operation_failures",
+            "firstError": error(first_error),
+            "subsequentError": error(subsequent_error),
+        }),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => json!({
+            "kind": "operation_and_cleanup_failure",
+            "operationError": error(operation_error),
+            "cleanupError": error(cleanup_error),
+        }),
         AgentError::Provider { code, .. } => json!({"kind": "provider", "code": code}),
         AgentError::Storage(error) => {
             json!({"kind": "storage", "diagnostic": error.to_string()})
@@ -87,11 +111,31 @@ fn failure(failure: &ProviderFailure) -> Value {
         AgentError::InvalidInput(detail) => {
             json!({"kind": "invalid_input", "diagnostic": detail})
         }
-        // Reachable only if the SDK grows a failure a warm-up can hit; labelled
-        // as unclassified rather than silently rendered as one of the above.
-        other => json!({"kind": "other", "diagnostic": other.to_string()}),
-    };
-    json!({"error": error, "cleanupUnconfirmed": failure.cleanup_unconfirmed})
+        // Explicit dispositions keep new SDK variants from silently losing their
+        // classification. These categories have no warm-up-specific representation.
+        other @ (AgentError::OutputRetentionLimit
+        | AgentError::DiagnosticLimit
+        | AgentError::SubmissionConflict
+        | AgentError::SubmissionUnresolved
+        | AgentError::ExecutionObservation { .. }
+        | AgentError::Scheduling(_)
+        | AgentError::StorageDuringClose { .. }
+        | AgentError::StorageInitialization { .. }
+        | AgentError::StorageAfterExecution { .. }
+        | AgentError::UnknownApp(_)
+        | AgentError::UserImage(_)
+        | AgentError::ImageInputRefused(_)
+        | AgentError::MessageTooLarge { .. }
+        | AgentError::Busy
+        | AgentError::StalePermission
+        | AgentError::Backpressure
+        | AgentError::AuditAndCleanupFailure
+        | AgentError::PermissionAnswerDeliveryAndAuditFailure { .. }
+        | AgentError::BeforeInvocationHook(_)
+        | AgentError::AfterInvocationHooks { .. }) => {
+            json!({"kind": "other", "diagnostic": other.to_string()})
+        }
+    }
 }
 
 impl WarmUpAudit for DurableWarmUpAudit {

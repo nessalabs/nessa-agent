@@ -657,3 +657,18 @@ export function archiveSession({
     }
   }
 }
+
+/** Opens a provider's login, leaving the failed turn and its recovery notice intact. */
+export const signInToProvider =
+  (provider: "claude" | "codex"): WorkspaceCommand<Promise<void>> =>
+  async (_dispatch, _getState, dependencies) => {
+    if (!dependencies.signInToProvider)
+      throw new Error("Provider sign-in is unavailable on this host.")
+    await dependencies.signInToProvider(provider)
+  }
+
+/** Read the injected host's login capability without attempting a launch. */
+export const providerLoginAvailable =
+  (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>
+    !!dependencies.signInToProvider &&
+    (await (dependencies.providerLoginAvailable?.() ?? true))
