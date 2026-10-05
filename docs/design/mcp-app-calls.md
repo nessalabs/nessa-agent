@@ -415,8 +415,8 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 - **What a message is.** Text only. Empty is outside the schema's
   `minLength`, `invalid_request` at the wire with nothing recorded (M3).
   Blank — whitespace only — is within it, and is the conversation's own
-  rule: `invalid_request`, on record (M3). Past the schema's 8192 bytes — held equal to `ConversationSendParams.text`
-  by the generator, and published as the contract's `MAX_MCP_MESSAGE_BYTES`,
+  rule: `invalid_request`, on record (M3). Past the schema's 8192 bytes —
+  held equal to `ConversationSendParams.text` by the generator, and published as the contract's `MAX_MCP_MESSAGE_BYTES`,
   which the gateway's configuration of `max_input_bytes` is held to too — it
   is `invalid_request` at the wire. Past the service's own `max_input_bytes`
   (never larger) it is `mcp_request_too_large`, on record. Both of the

@@ -625,8 +625,9 @@ impl AppReviews {
 /// agent's refusal hands them back ([`Self::refused`]).
 ///
 /// Its fields are private, so a caller outside this module has no way to
-/// empty its records and silence a drop: what it reports is what it took. The message takes the contexts out with
-/// [`Self::take_contexts`]; the records stay.
+/// empty its records and silence a drop: what it reports is what it took.
+/// The message takes the contexts out with [`Self::take_contexts`]; the
+/// records stay.
 pub struct Taken {
     contexts: Vec<AppModelContext>,
     updates: Vec<McpAppAuditRecord>,

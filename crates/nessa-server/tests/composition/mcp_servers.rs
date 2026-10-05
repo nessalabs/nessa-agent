@@ -392,11 +392,12 @@ async fn recorders_finish_together_under_one_bound() {
     assert_eq!(started.elapsed(), super::RECORDERS_FINISH);
 }
 
-/// The drop sink `local_auth` wires into the conversation service's
+/// The drop sink `mcp_app_ports` builds for the conversation service's
 /// `McpAppPorts` is the composed recorder's: a context dropped by the
 /// service's own close is written to the audit that recorder was started
 /// with, by the closer, before the exit's finish returns. Any other sink
-/// wired there writes nothing to it.
+/// built there writes nothing to it. This pins the factory, not
+/// `local_auth`'s one-expression call of it.
 #[tokio::test]
 async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
     use crate::app_call_test_support::{caller, Fixture, INSTANCE, SERVER};
