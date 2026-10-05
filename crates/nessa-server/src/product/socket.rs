@@ -664,6 +664,12 @@ where
     // review, if it is waiting on one, is withdrawn rather than left standing
     // for nobody. One already sent finishes, and is recorded, on its own task.
     let mut app_calls: Vec<tokio::task::AbortHandle> = Vec::new();
+    // One app-lane refusal waiting for the single place on the refusal lane.
+    // A release answer is control, and the writer sends control before a
+    // refusal, so a second call past the lane used to find that place full
+    // and close the socket.
+    // `a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket`.
+    let mut app_refusal: Option<OutgoingMessage> = None;
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -777,6 +783,20 @@ where
                 refresh = Some(Box::pin(current_session(&state, &session)));
                 None
             }
+            permit = refusal_send.reserve(), if app_refusal.is_some() => {
+                match permit {
+                    Ok(permit) => {
+                        permit.send(
+                            app_refusal
+                                .take()
+                                .expect("refusal reserve is gated on a waiting app call"),
+                        );
+                        None
+                    }
+                    // The writer has dropped the lane.
+                    Err(_) => break,
+                }
+            }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
                 input_check = None;
                 if let Some(error) = error {
@@ -796,7 +816,7 @@ where
                     }
                 }
             }
-            message = incoming.next(), if pending_input.is_none() => {
+            message = incoming.next(), if pending_input.is_none() && app_refusal.is_none() => {
                 let Some(Ok(message)) = message else { break };
                 let Message::Text(text) = message else {
                     if matches!(message, Message::Close(_)) { break; }
@@ -853,6 +873,10 @@ where
                 ResponseClass::Ordinary => "socket.ordinary_slots",
             });
             let response = failure(&frame.id, "temporarily_unavailable");
+            if app {
+                app_refusal = Some(response);
+                continue;
+            }
             let refused = if record {
                 rejected_lane(
                     "socket.record_lane",

@@ -619,4 +619,223 @@ mod mcp_app_lane {
         drop(peer.input);
         task.await.unwrap();
     }
+
+    fn mount_id(n: u32) -> String {
+        format!("00000000-0000-4000-8000-{n:012x}")
+    }
+
+    fn read_of(fixture: &Fixture, request: &str, instance: &str) -> serde_json::Value {
+        json!({
+            "conversationId": fixture.id.to_string(),
+            "requestId": request,
+            "app": {
+                "executionId": fixture.execution_id,
+                "toolId": fixture.tool_id,
+                "instanceId": instance,
+            },
+            "server": SERVER,
+            "uri": crate::app_call_test_support::URI,
+        })
+    }
+
+    fn release_of(fixture: &Fixture, request: &str, instance: &str) -> serde_json::Value {
+        json!({
+            "conversationId": fixture.id.to_string(),
+            "requestId": request,
+            "app": {
+                "executionId": fixture.execution_id,
+                "toolId": fixture.tool_id,
+                "instanceId": instance,
+            },
+        })
+    }
+
+    /// Answers whose ids are `ids`, or fewer when the socket ends first.
+    async fn answers_for(peer: &mut TestPeer, ids: &[&str]) -> HashMap<String, serde_json::Value> {
+        let mut answered = HashMap::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while answered.len() < ids.len() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match timeout(remaining, peer.output.recv()).await {
+                Ok(Some(Message::Text(text))) => {
+                    let reply: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    answered.insert(reply["id"].as_str().unwrap().to_owned(), reply);
+                }
+                Ok(Some(Message::Close(close))) => panic!("close frame {close:?}"),
+                Ok(Some(other)) => panic!("unexpected frame {other:?}"),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        answered
+    }
+
+    /// Four reads fill the lane and stay there. `stall` parks the writer inside
+    /// its first frame, which a release answer occupies.
+    async fn fill_the_lane(stall: Option<tokio::sync::oneshot::Receiver<()>>) -> (Fixture, TestPeer, tokio::task::JoinHandle<()>) {
+        let fixture = owners_fixture().await;
+        fixture.apps.hold.store(true, Ordering::SeqCst);
+        *fixture.apps.resource.lock().unwrap() = Some(Ok(page()));
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, peer) = test_socket(stall);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        for n in 0..4 {
+            let instance = mount_id(n);
+            send_command(
+                &peer,
+                &format!("read-{n}"),
+                "mcp.readResource",
+                read_of(&fixture, &format!("read-{n}"), &instance),
+            );
+        }
+        until(async || fixture.apps.reads.load(Ordering::SeqCst) == 4).await;
+        (fixture, peer, task)
+    }
+
+    fn page() -> nessa_sdk::domain::mcp_apps::UiResource {
+        use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResource, UiResourceUri};
+        UiResource::new(
+            UiResourceUri::new(crate::app_call_test_support::URI).unwrap(),
+            "<p>chart</p>".into(),
+            UiCsp::default(),
+            UiPermissions::default(),
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket() {
+        // The writer is inside a release frame, the way control answers are
+        // preferred over refusals. Reads past the lane must still be refused,
+        // and the socket must stay up (#422).
+        let (release_stall, gate) = tokio::sync::oneshot::channel();
+        let (fixture, mut peer, task) = fill_the_lane(Some(gate)).await;
+        for n in 0..4 {
+            let instance = mount_id(n);
+            send_command(
+                &peer,
+                &format!("release-{n}"),
+                "mcp.releaseApp",
+                release_of(&fixture, &format!("release-{n}"), &instance),
+            );
+        }
+        timeout(Duration::from_secs(5), peer.writing.recv())
+            .await
+            .expect("a release answer reached the writer");
+        tokio::task::yield_now().await;
+        for n in 4..8 {
+            let instance = mount_id(n);
+            send_command(
+                &peer,
+                &format!("extra-{n}"),
+                "mcp.readResource",
+                read_of(&fixture, &format!("extra-{n}"), &instance),
+            );
+        }
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        release_stall.send(()).unwrap();
+
+        let ids = [
+            "release-0",
+            "release-1",
+            "release-2",
+            "release-3",
+            "extra-4",
+            "extra-5",
+            "extra-6",
+            "extra-7",
+        ];
+        let answered = answers_for(&mut peer, &ids).await;
+        assert_eq!(
+            answered.len(),
+            ids.len(),
+            "socket dropped or withheld an answer: {answered:?}"
+        );
+        for n in 0..4 {
+            let release = &answered[&format!("release-{n}")];
+            assert_eq!(release["payload"]["applied"], true, "{release}");
+        }
+        for n in 4..8 {
+            let extra = &answered[&format!("extra-{n}")];
+            assert_eq!(extra["error"]["code"], "temporarily_unavailable", "{extra}");
+        }
+        send_command(&peer, "still-up", "server.health", json!({}));
+        let health = response(&mut peer).await;
+        assert_eq!(health["id"], "still-up");
+        assert_eq!(health["ok"], true, "{health}");
+        drop(peer.input);
+        timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn releases_behind_a_burst_of_refused_reads_are_still_answered() {
+        // The releases are still unread when the refusal lane is full. Waiting
+        // for a place to refuse must not lose them, and more refusals than the
+        // lane's width must not close the socket.
+        let (release_stall, gate) = tokio::sync::oneshot::channel();
+        let (fixture, mut peer, task) = fill_the_lane(Some(gate)).await;
+        send_command(
+            &peer,
+            "release-0",
+            "mcp.releaseApp",
+            release_of(&fixture, "release-0", &mount_id(0)),
+        );
+        timeout(Duration::from_secs(5), peer.writing.recv())
+            .await
+            .expect("the release answer reached the writer");
+        tokio::task::yield_now().await;
+        for n in 4..12 {
+            let instance = mount_id(n);
+            send_command(
+                &peer,
+                &format!("extra-{n}"),
+                "mcp.readResource",
+                read_of(&fixture, &format!("extra-{n}"), &instance),
+            );
+        }
+        for n in 1..4 {
+            let instance = mount_id(n);
+            send_command(
+                &peer,
+                &format!("release-{n}"),
+                "mcp.releaseApp",
+                release_of(&fixture, &format!("release-{n}"), &instance),
+            );
+        }
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        release_stall.send(()).unwrap();
+
+        let mut ids = vec!["release-0".to_owned(), "release-1".to_owned(), "release-2".to_owned(), "release-3".to_owned()];
+        ids.extend((4..12).map(|n| format!("extra-{n}")));
+        let id_refs: Vec<_> = ids.iter().map(String::as_str).collect();
+        let answered = answers_for(&mut peer, &id_refs).await;
+        assert_eq!(
+            answered.len(),
+            ids.len(),
+            "socket dropped or withheld an answer: {answered:?}"
+        );
+        for n in 0..4 {
+            assert_eq!(answered[&format!("release-{n}")]["payload"]["applied"], true);
+        }
+        for n in 4..12 {
+            assert_eq!(
+                answered[&format!("extra-{n}")]["error"]["code"],
+                "temporarily_unavailable"
+            );
+        }
+        send_command(&peer, "still-up", "server.health", json!({}));
+        assert_eq!(response(&mut peer).await["ok"], true);
+        drop(peer.input);
+        timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+    }
 }
