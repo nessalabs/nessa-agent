@@ -214,7 +214,7 @@ fn a_missing_journal_is_not_recreated_while_cleanup_is_owed() {
     assert!(journal.is_file());
 
     std::fs::remove_file(&journal).unwrap();
-    let Err(error) = open_receiver_journal(&namespace, "policy", true) else {
+    let Err(error) = open_receiver_journal(&namespace, "policy", true, &OsJournalFiles) else {
         panic!("a journal was opened while cleanup is owed");
     };
     let RunError::ReceiverJournal(missing) = &error else {
@@ -228,15 +228,25 @@ fn a_missing_journal_is_not_recreated_while_cleanup_is_owed() {
     assert!(!conversation_root(&namespace).exists());
     assert!(
         matches!(
-            open_receiver_journal(&namespace, "policy", true),
+            open_receiver_journal(&namespace, "policy", true, &OsJournalFiles),
             Err(RunError::ReceiverJournal(_))
         ),
         "a second start created a journal"
     );
     assert!(!journal.exists());
 
-    opened(open_receiver_journal(&namespace, "policy", false));
-    opened(open_receiver_journal(&namespace, "policy", true));
+    opened(open_receiver_journal(
+        &namespace,
+        "policy",
+        false,
+        &OsJournalFiles,
+    ));
+    opened(open_receiver_journal(
+        &namespace,
+        "policy",
+        true,
+        &OsJournalFiles,
+    ));
     assert!(journal.is_file());
 }
 
@@ -288,7 +298,12 @@ fn a_journal_left_under_conversations_is_moved() {
     }
     // Cleanup owed would refuse a missing journal. The move has to happen
     // first, or this start would refuse and leave the file where it was.
-    opened(open_receiver_journal(&namespace, "policy", true));
+    opened(open_receiver_journal(
+        &namespace,
+        "policy",
+        true,
+        &OsJournalFiles,
+    ));
     let journal = receiver_journal(&namespace);
     assert!(journal.is_file());
     assert!(!legacy.exists());
@@ -316,7 +331,12 @@ fn a_journal_left_under_conversations_is_moved() {
     nessa_local_storage::create_directory(partial_journal.parent().unwrap()).unwrap();
     std::fs::rename(&partial_legacy, &partial_journal).unwrap();
     std::fs::write(partial_dir.join("receiver-access.sqlite3-journal"), b"x").unwrap();
-    opened(open_receiver_journal(&partial, "policy", true));
+    opened(open_receiver_journal(
+        &partial,
+        "policy",
+        true,
+        &OsJournalFiles,
+    ));
     assert!(!partial_dir.join("receiver-access.sqlite3-journal").exists());
     assert!(!partial_dir.exists());
 
@@ -329,7 +349,12 @@ fn a_journal_left_under_conversations_is_moved() {
         Err(error) => panic!("legacy journal did not open: {error}"),
     }
     std::fs::write(kept_dir.join("metadata.sqlite3"), b"keep").unwrap();
-    opened(open_receiver_journal(&kept, "policy", true));
+    opened(open_receiver_journal(
+        &kept,
+        "policy",
+        true,
+        &OsJournalFiles,
+    ));
     assert!(receiver_journal(&kept).is_file());
     assert!(!kept_journal.exists());
     assert!(kept_dir.join("metadata.sqlite3").is_file());
@@ -352,7 +377,7 @@ fn both_journals_present_leaves_the_current_file() {
         b"old-journal",
     )
     .unwrap();
-    adopt_legacy_journal(&namespace, &current).unwrap();
+    adopt_legacy_journal(&namespace, &current, &OsJournalFiles).unwrap();
     assert_eq!(std::fs::read(&current).unwrap(), b"current");
     assert_eq!(std::fs::read(&legacy).unwrap(), b"legacy");
     assert_eq!(
@@ -366,7 +391,7 @@ fn both_journals_present_leaves_the_current_file() {
 fn a_non_notfound_stat_is_agent_not_a_missing_journal() {
     let (_directory, namespace, _store) = namespace_with_registry();
     std::fs::write(namespace.join("receiver-access"), b"not-a-directory").unwrap();
-    let error = match open_receiver_journal(&namespace, "policy", true) {
+    let error = match open_receiver_journal(&namespace, "policy", true, &OsJournalFiles) {
         Err(error) => error,
         Ok(_) => panic!("a file where the journal directory should be was opened"),
     };
@@ -377,7 +402,7 @@ fn a_non_notfound_stat_is_agent_not_a_missing_journal() {
 
     let (_directory, blocked, _store) = namespace_with_registry();
     std::fs::write(conversation_root(&blocked), b"not-a-directory").unwrap();
-    let error = match open_receiver_journal(&blocked, "policy", true) {
+    let error = match open_receiver_journal(&blocked, "policy", true, &OsJournalFiles) {
         Err(error) => error,
         Ok(_) => panic!("a file where conversations/ should be was opened"),
     };
@@ -401,7 +426,7 @@ fn a_symlink_sidecar_is_left_and_keeps_conversations() {
     let sidecar = legacy_dir.join("receiver-access.sqlite3-journal");
     std::os::unix::fs::symlink(&target, &sidecar).unwrap();
     std::fs::write(legacy_dir.join("receiver-access.sqlite3-wal"), b"wal").unwrap();
-    adopt_legacy_journal(&namespace, &current).unwrap();
+    adopt_legacy_journal(&namespace, &current, &OsJournalFiles).unwrap();
     assert!(sidecar.symlink_metadata().unwrap().file_type().is_symlink());
     assert_eq!(std::fs::read(&target).unwrap(), b"linked");
     assert!(legacy_dir.is_dir());
@@ -417,4 +442,170 @@ fn a_symlink_sidecar_is_left_and_keeps_conversations() {
         b"wal"
     );
     assert_eq!(std::fs::read(&current).unwrap(), b"current");
+}
+
+/// Names the substitute keeps. `Dir` is a directory; `File` is a regular file;
+/// `Other` is anything a move must leave alone, a symlink included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryKind {
+    Dir,
+    File,
+}
+
+/// A journal filesystem with no disk. Moves, stats, and directory syncs are
+/// the records this holds, so a test can fail the sync after the rename.
+struct MemoryJournalFiles {
+    entries: std::sync::Mutex<std::collections::BTreeMap<std::path::PathBuf, MemoryKind>>,
+    synced: std::sync::Mutex<Vec<std::path::PathBuf>>,
+    fail_sync: bool,
+}
+
+impl MemoryJournalFiles {
+    fn new(fail_sync: bool) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            synced: std::sync::Mutex::new(Vec::new()),
+            fail_sync,
+        }
+    }
+
+    fn insert(&self, path: std::path::PathBuf, kind: MemoryKind) {
+        self.entries.lock().unwrap().insert(path, kind);
+    }
+
+    fn kind(&self, path: &std::path::Path) -> Option<MemoryKind> {
+        self.entries.lock().unwrap().get(path).copied()
+    }
+
+    fn synced(&self) -> Vec<std::path::PathBuf> {
+        self.synced.lock().unwrap().clone()
+    }
+}
+
+impl JournalFiles for MemoryJournalFiles {
+    fn metadata(&self, path: &std::path::Path) -> std::io::Result<JournalEntry> {
+        let entries = self.entries.lock().unwrap();
+        let mut ancestor = path.parent();
+        while let Some(directory) = ancestor {
+            if entries.get(directory) == Some(&MemoryKind::File) {
+                return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+            }
+            ancestor = directory.parent();
+        }
+        match entries.get(path) {
+            Some(MemoryKind::File) => Ok(JournalEntry::RegularFile),
+            Some(_) => Ok(JournalEntry::Other),
+            None => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        }
+    }
+
+    fn rename(&self, from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        let mut entries = self.entries.lock().unwrap();
+        let kind = entries
+            .remove(from)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        entries.insert(to.to_path_buf(), kind);
+        Ok(())
+    }
+
+    fn remove_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut entries = self.entries.lock().unwrap();
+        if entries.get(path) != Some(&MemoryKind::Dir) {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        }
+        if entries
+            .keys()
+            .any(|entry| entry.parent() == Some(path) && entry.as_path() != path)
+        {
+            return Err(std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty));
+        }
+        entries.remove(path);
+        Ok(())
+    }
+
+    fn sync_directory(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if self.fail_sync {
+            return Err(std::io::Error::other("directory sync failed"));
+        }
+        if self.entries.lock().unwrap().get(path) != Some(&MemoryKind::Dir) {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        }
+        self.synced.lock().unwrap().push(path.to_path_buf());
+        Ok(())
+    }
+
+    fn create_directory(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && entries.get(parent) != Some(&MemoryKind::Dir) {
+                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+            }
+        }
+        entries.insert(path.to_path_buf(), MemoryKind::Dir);
+        Ok(())
+    }
+}
+
+fn legacy_names(namespace: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let legacy_dir = conversation_root(namespace);
+    let legacy = legacy_dir.join("receiver-access.sqlite3");
+    (legacy_dir, legacy)
+}
+
+/// The move is not finished when the rename returns. Both directories, and
+/// the namespace after the empty old directory is removed, are synced first.
+/// Nothing here is a real directory.
+#[test]
+fn a_legacy_move_syncs_its_directories_before_it_finishes() {
+    let namespace = std::path::PathBuf::from("/namespace");
+    let files = MemoryJournalFiles::new(false);
+    files.insert(namespace.clone(), MemoryKind::Dir);
+    let (legacy_dir, legacy) = legacy_names(&namespace);
+    files.insert(legacy_dir.clone(), MemoryKind::Dir);
+    files.insert(legacy.clone(), MemoryKind::File);
+    files.insert(
+        legacy_dir.join("receiver-access.sqlite3-journal"),
+        MemoryKind::File,
+    );
+    let journal = receiver_journal(&namespace);
+    adopt_legacy_journal(&namespace, &journal, &files).unwrap();
+    assert_eq!(files.kind(&journal), Some(MemoryKind::File));
+    assert_eq!(files.kind(&legacy), None);
+    let sidecar = journal
+        .parent()
+        .unwrap()
+        .join("receiver-access.sqlite3-journal");
+    assert_eq!(files.kind(&sidecar), Some(MemoryKind::File));
+    assert_eq!(files.kind(&legacy_dir), None);
+    assert_eq!(
+        files.synced(),
+        vec![
+            journal.parent().unwrap().to_path_buf(),
+            legacy_dir,
+            namespace,
+        ]
+    );
+}
+
+/// A directory sync that fails is the move not finishing. The names may
+/// already have changed; startup does not report success or remove the old
+/// directory.
+#[test]
+fn a_directory_sync_failure_leaves_the_move_unfinished() {
+    let namespace = std::path::PathBuf::from("/namespace");
+    let files = MemoryJournalFiles::new(true);
+    files.insert(namespace.clone(), MemoryKind::Dir);
+    let (legacy_dir, legacy) = legacy_names(&namespace);
+    files.insert(legacy_dir.clone(), MemoryKind::Dir);
+    files.insert(legacy, MemoryKind::File);
+    let journal = receiver_journal(&namespace);
+    let error = adopt_legacy_journal(&namespace, &journal, &files).unwrap_err();
+    assert!(matches!(error, RunError::Agent(_)), "{error}");
+    assert!(
+        error.to_string().contains("directory sync failed"),
+        "{error}"
+    );
+    assert_eq!(files.kind(&journal), Some(MemoryKind::File));
+    assert_eq!(files.kind(&legacy_dir), Some(MemoryKind::Dir));
+    assert!(files.synced().is_empty());
 }

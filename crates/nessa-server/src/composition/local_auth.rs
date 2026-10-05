@@ -89,6 +89,7 @@ use nessa_sync::replication::domain::Id as RecordId;
 use std::collections::HashSet;
 use std::{
     collections::HashMap,
+    io,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -477,31 +478,83 @@ fn receiver_access(
     store: &LocalCredentialStore,
     policy_revision: &str,
 ) -> Result<Arc<LocalReceiverAuthority>, RunError> {
-    open_receiver_journal(namespace, policy_revision, receiver_cleanup_owed(store)?)
+    open_receiver_journal(
+        namespace,
+        policy_revision,
+        receiver_cleanup_owed(store)?,
+        &OsJournalFiles,
+    )
 }
 
 fn open_receiver_journal(
     namespace: &Path,
     policy_revision: &str,
     cleanup_owed: bool,
+    files: &dyn JournalFiles,
 ) -> Result<Arc<LocalReceiverAuthority>, RunError> {
     let path = receiver_journal(namespace);
     // Also when the database is already at `path`: a previous start may have
     // moved it and left the rollback file under `conversations/`.
-    adopt_legacy_journal(namespace, &path)?;
+    adopt_legacy_journal(namespace, &path, files)?;
     if cleanup_owed {
         return open_owed_journal(&path, policy_revision);
     }
-    if journal_absent(&path)? {
+    if journal_absent(&path, files)? {
         let root = path
             .parent()
             .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
-        nessa_local_storage::create_directory(root)
+        files
+            .create_directory(root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
     }
     LocalReceiverAuthority::open(&path, policy_revision, Arc::new(SystemClock))
         .map(Arc::new)
         .map_err(|cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &path, cause))
+}
+
+/// What startup needs from the journal's directories. Composition passes
+/// [`OsJournalFiles`]; a test passes a substitute that never touches a disk
+/// (`a_legacy_move_syncs_its_directories_before_it_finishes`).
+trait JournalFiles {
+    fn metadata(&self, path: &Path) -> io::Result<JournalEntry>;
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    fn remove_dir(&self, path: &Path) -> io::Result<()>;
+    fn sync_directory(&self, path: &Path) -> io::Result<()>;
+    fn create_directory(&self, path: &Path) -> io::Result<()>;
+}
+
+enum JournalEntry {
+    RegularFile,
+    Other,
+}
+
+struct OsJournalFiles;
+
+impl JournalFiles for OsJournalFiles {
+    fn metadata(&self, path: &Path) -> io::Result<JournalEntry> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        Ok(if metadata.is_file() {
+            JournalEntry::RegularFile
+        } else {
+            JournalEntry::Other
+        })
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_dir(path)
+    }
+
+    fn sync_directory(&self, path: &Path) -> io::Result<()> {
+        nessa_local_storage::sync_directory(path)
+    }
+
+    fn create_directory(&self, path: &Path) -> io::Result<()> {
+        nessa_local_storage::create_directory(path)
+    }
 }
 
 /// Open the journal that cleanup still has to read. The file is opened as it
@@ -542,36 +595,38 @@ const JOURNAL_SIDECARS: &[&str] = &["-journal", "-wal", "-shm"];
 /// conversation data. A directory that still holds anything else is left.
 /// When the current file is already present, the old database is left where
 /// it is, sidecars included.
-fn adopt_legacy_journal(namespace: &Path, path: &Path) -> Result<(), RunError> {
+fn adopt_legacy_journal(
+    namespace: &Path,
+    path: &Path,
+    files: &dyn JournalFiles,
+) -> Result<(), RunError> {
     let legacy_dir = conversation_root(namespace);
     let legacy = legacy_dir.join("receiver-access.sqlite3");
-    let legacy_is_file = match std::fs::symlink_metadata(&legacy) {
-        Ok(metadata) if metadata.is_file() => true,
-        Ok(_) => false,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(RunError::Agent(format!(
-                "receiver access at {}: {error}",
-                legacy.display()
-            )));
-        }
+    let legacy_is_file = match files.metadata(&legacy) {
+        Ok(JournalEntry::RegularFile) => true,
+        Ok(JournalEntry::Other) => false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(journal_io(&legacy, error)),
     };
     // Both files present: the current journal is the one to open. Do not
     // lay the old file's rollback over it.
-    if legacy_is_file && !journal_absent(path)? {
+    if legacy_is_file && !journal_absent(path, files)? {
         return Ok(());
     }
     let root = path
         .parent()
         .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
+    let mut moved = false;
     if legacy_is_file {
-        nessa_local_storage::create_directory(root)
+        files
+            .create_directory(root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
-        std::fs::rename(&legacy, path).map_err(|error| {
-            RunError::Agent(format!("receiver access at {}: {error}", legacy.display()))
-        })?;
+        files
+            .rename(&legacy, path)
+            .map_err(|error| journal_io(&legacy, error))?;
+        moved = true;
     }
-    if journal_absent(path)? {
+    if journal_absent(path, files)? {
         return Ok(());
     }
     let file_name = path
@@ -579,18 +634,27 @@ fn adopt_legacy_journal(namespace: &Path, path: &Path) -> Result<(), RunError> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
     for suffix in JOURNAL_SIDECARS {
-        move_regular_file(
+        moved |= move_regular_file(
+            files,
             &legacy_dir.join(format!("{file_name}{suffix}")),
             &root.join(format!("{file_name}{suffix}")),
         )?;
     }
+    // The rename is not finished until both directories that held the names
+    // are durable. A power loss before that can drop the new link, the old
+    // unlink, or both (`a_legacy_move_syncs_its_directories_before_it_finishes`).
+    // A start that moved nothing has no directory entry to make durable.
+    if moved {
+        sync_journal_directory(files, root)?;
+        sync_journal_directory(files, &legacy_dir)?;
+    }
     // Empty only. A directory that still holds conversation records stays,
     // and that is not a failure to move the journal.
-    match std::fs::remove_dir(&legacy_dir) {
-        Ok(()) => {}
+    match files.remove_dir(&legacy_dir) {
+        Ok(()) => sync_journal_directory(files, namespace)?,
         Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                || error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
         Err(error) => {
             return Err(RunError::Agent(format!(
                 "conversations directory at {}: {error}",
@@ -601,21 +665,29 @@ fn adopt_legacy_journal(namespace: &Path, path: &Path) -> Result<(), RunError> {
     Ok(())
 }
 
+fn sync_journal_directory(files: &dyn JournalFiles, path: &Path) -> Result<(), RunError> {
+    files
+        .sync_directory(path)
+        .map_err(|error| journal_io(path, error))
+}
+
+fn journal_io(path: &Path, error: io::Error) -> RunError {
+    RunError::Agent(format!("receiver access at {}: {error}", path.display()))
+}
+
 /// Rename a regular file. Anything else, including a missing path, is left.
-fn move_regular_file(from: &Path, to: &Path) -> Result<(), RunError> {
-    match std::fs::symlink_metadata(from) {
-        Ok(metadata) if metadata.is_file() => {}
-        Ok(_) => return Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(RunError::Agent(format!(
-                "receiver access at {}: {error}",
-                from.display()
-            )));
-        }
+/// `true` when a file was renamed.
+fn move_regular_file(files: &dyn JournalFiles, from: &Path, to: &Path) -> Result<bool, RunError> {
+    match files.metadata(from) {
+        Ok(JournalEntry::RegularFile) => {}
+        Ok(JournalEntry::Other) => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(journal_io(from, error)),
     }
-    std::fs::rename(from, to)
-        .map_err(|error| RunError::Agent(format!("receiver access at {}: {error}", from.display())))
+    files
+        .rename(from, to)
+        .map_err(|error| journal_io(from, error))?;
+    Ok(true)
 }
 
 /// Whether any enrollment still has to fence a receiver through the journal.
@@ -630,13 +702,10 @@ fn receiver_cleanup_owed(store: &LocalCredentialStore) -> Result<bool, RunError>
 
 /// The journal file is not there. A stat that fails any other way is that
 /// failure, not an absent journal. A path that exists is opened as it is.
-fn journal_absent(path: &Path) -> Result<bool, RunError> {
-    match std::fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(RunError::Agent(format!(
-            "receiver access at {}: {error}",
-            path.display()
-        ))),
+fn journal_absent(path: &Path, files: &dyn JournalFiles) -> Result<bool, RunError> {
+    match files.metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(journal_io(path, error)),
         Ok(_) => Ok(false),
     }
 }
