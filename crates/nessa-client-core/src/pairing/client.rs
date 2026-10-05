@@ -56,12 +56,37 @@ pub enum NativeClientError {
     WorkerFault(PairingWorkerFault),
 }
 /// Original canonical NOT-CLAIMED receipt and resulting same-enrollment receipt.
+/// Values are borrowed through accessors, so neither retained receipt is mutable.
+/// ```compile_fail
+/// use nessa_client_core::pairing::NativeRetryOutcome;
+/// use nessa_protocol::pairing::wire::NativePairingStatus;
+/// fn replace(outcome: &mut NativeRetryOutcome, status: NativePairingStatus) {
+///     outcome.original = status;
+/// }
+/// ```
+/// ```compile_fail
+/// use nessa_client_core::pairing::NativeRetryOutcome;
+/// use nessa_protocol::pairing::wire::NativePairingStatus;
+/// fn replace(outcome: &mut NativeRetryOutcome, status: NativePairingStatus) {
+///     outcome.retried = status;
+/// }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeRetryOutcome {
     /// The original attempt's outcome as the gateway reported it before the retry.
-    pub original: NativePairingStatus,
+    original: NativePairingStatus,
     /// New attempt's historical enrollment state, not product authority.
-    pub retried: NativePairingStatus,
+    retried: NativePairingStatus,
+}
+impl NativeRetryOutcome {
+    /// Original attempt outcome reported before retry, borrowed without mutation.
+    pub fn original(&self) -> &NativePairingStatus {
+        &self.original
+    }
+    /// Same-enrollment retry receipt, borrowed; it is not product read authority.
+    pub fn retried(&self) -> &NativePairingStatus {
+        &self.retried
+    }
 }
 /// Enrollment and pinned status. When the gateway reports Active, the issued
 /// credential replaces the pending record before the status is returned. The

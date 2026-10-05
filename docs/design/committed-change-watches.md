@@ -201,9 +201,9 @@ sequenceDiagram
 
 Every step is one operation on the one connection the example already owns (`Session`): registration, each wait for a hint, and each pass. Hints that arrive while a registration or pass waits for its response are kept in the session's `WatchInbox` (one dirty bit, plus the watch's end reason) and never count toward the per-operation unexpected-event capacity. A watch event naming any other identity is a protocol failure, because identities are minted per connection (row U2). stdout carries one JSON object per line: `registered`, `pass` (its `report` is the same object `sync-records` writes, `enrollment` and `recheck` included), `hint` and a final `ended`; a refusal before registration (rows W1, W16) is instead the one object `sync-records` writes for it. Exit status is 0 only when the run ends `passesExhausted` or `idle` (owner's decision).
 
-Placement: the loop is `read_only_sync/application/watch.rs` over two ports (`WatchSession`, `WatchEvents`); `Session::{watch_records, wait_hint}` and the inbox are in `infrastructure/gateway/session.rs`; the lines are `entrypoint/watch.rs`; `composition/read_only_example/online.rs` adapts the connection, driver and cache to the session port and runs the PC5 status recheck.
+Placement: the loop is `read_only_sync/application/watch.rs` over two ports (`WatchSession`, `WatchEvents`); `Session::{watch_records, wait_hint}` and the inbox are in `infrastructure/gateway/session.rs`; the lines are `entrypoint/watch.rs`; `crates/nessa-client-core/src/composition/online.rs` adapts the connection, driver and cache to the session port and runs the PC5 status recheck.
 
-`app::` is `crates/nessa-server/tests/read_only_sync/application/watch.rs`, `session::` is `…/tests/read_only_sync/gateway/session/watch.rs`, `args::` is `…/tests/read_only_sync/entrypoint/arguments.rs`, `device::` is `…/tests/read_only_sync/application/device.rs`, and `online::` is `tests/composition/read_only_online.rs`.
+`app::` is `crates/nessa-client-core/tests/read_only_sync/application/watch.rs`, `session::` is `…/tests/read_only_sync/gateway/session/watch.rs`, `args::` is `…/tests/read_only_sync/entrypoint/arguments.rs`, `device::` is `…/tests/read_only_sync/application/device.rs`, and `online::` is `tests/composition/read_only_online.rs`.
 
 | # | State / event / ordering | Result | Tests |
 |---|---|---|---|

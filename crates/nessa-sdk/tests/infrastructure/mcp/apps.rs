@@ -129,6 +129,12 @@ async fn a_listed_tool_is_found_with_who_its_server_said_may_call_it() {
             // asking for it is told it is not for apps.
             json!({ "name": "app_string", "_meta": { "ui": { "visibility": "app" } } }),
             json!({ "name": "null", "_meta": { "ui": { "visibility": null } } }),
+            // A `_meta.ui` that is not an object is no one's (#424).
+            json!({ "name": "ui_string", "_meta": { "ui": "app" } }),
+            json!({ "name": "ui_array", "_meta": { "ui": ["app"] } }),
+            json!({ "name": "ui_number", "_meta": { "ui": 1 } }),
+            json!({ "name": "ui_boolean", "_meta": { "ui": true } }),
+            json!({ "name": "ui_null", "_meta": { "ui": null } }),
         ]],
         ..Behaviour::default()
     });
@@ -149,6 +155,15 @@ async fn a_listed_tool_is_found_with_who_its_server_said_may_call_it() {
     assert_eq!(visibility("app_only"), Some(UiVisibility::new(false, true)));
     assert_eq!(visibility("app_string"), Some(nobody));
     assert_eq!(visibility("null"), Some(nobody));
+    for name in [
+        "ui_string",
+        "ui_array",
+        "ui_number",
+        "ui_boolean",
+        "ui_null",
+    ] {
+        assert_eq!(visibility(name), Some(nobody), "{name}");
+    }
 }
 
 #[tokio::test]

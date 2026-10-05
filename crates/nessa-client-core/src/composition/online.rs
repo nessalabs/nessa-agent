@@ -12,8 +12,7 @@
 //! fresh Active status, and nothing is purged without a Terminal one.
 use super::device::{self, client_failure, pinned, status_json, Device};
 use super::profile::{Profile, ProfileError};
-use crate::app::dependencies::RuntimeDependencies;
-use crate::composition::local_auth::SystemClock;
+use crate::composition::clock::{MonotonicClock, SystemClock};
 use crate::read_only_sync::application::device::{
     asks_status, CachePurges, PinnedStatus, PurgeBeforeEnd, PurgeReceipt,
 };
@@ -37,18 +36,10 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::PASSIVE_MIN_REQUEST_TIMEOUT_MS;
 use nessa_sync::replication::domain::Id;
 use serde_json::{json, Value};
-#[cfg(test)]
-use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-#[cfg(test)]
-thread_local! {
-    // One-shot scheduling witness for actual composition saved-output races.
-    static BEFORE_SAVED_REFRESH: RefCell<Option<Box<dyn FnOnce() + Send>>> = const { RefCell::new(None) };
-}
 
 struct CommandCancellation;
 impl Cancellation for CommandCancellation {
@@ -213,7 +204,7 @@ pub(super) fn execute(
         },
         "read-only-example",
         &LocalConnector,
-        RuntimeDependencies::default().clock,
+        Arc::new(MonotonicClock::new()),
         Arc::new(CommandCancellation),
         default_gateway_policy().map_err(CommandError::Gateway)?,
     ) {
@@ -579,27 +570,13 @@ impl WatchSession for ConnectionWatch<'_> {
     }
 }
 
-#[cfg(test)]
-#[path = "../../../tests/composition/read_only_online.rs"]
-mod tests;
-
 fn open_cache(
     path: &Path,
     policy: CachePolicy,
     output: &mut dyn Write,
 ) -> Result<ReadOnlyCache, CommandError> {
     match ReadOnlyCache::open(path, policy, Arc::new(SystemClock)) {
-        Ok(cache) => {
-            #[cfg(test)]
-            let mut cache = cache;
-            #[cfg(test)]
-            BEFORE_SAVED_REFRESH.with(|hook| {
-                if let Some(proceed) = hook.borrow_mut().take() {
-                    cache.before_projection_refresh(proceed);
-                }
-            });
-            Ok(cache)
-        }
+        Ok(cache) => Ok(cache),
         Err(error) => {
             online::write(
                 json!({"successful":false,"connectionCheck":"performed","cacheRefusal":online::cache_failure(&error)}),
