@@ -1308,9 +1308,12 @@ impl ConversationService {
                             let clock = service.inner.message_commit_clock.clone();
                             // The stopped agent's last handles may still hold
                             // this history. Wait them out, within the lease
-                            // bound, instead of answering Busy once.
-                            let manager = service
-                                .while_history_busy(|| {
+                            // bound, instead of answering Busy once. A stop
+                            // ends that wait: the opening must not sit out the
+                            // lease and then launch a provider
+                            // (`an_opening_waiting_on_a_history_lease_stops_with_the_service`).
+                            let opened = tokio::select! {
+                                opened = service.while_history_busy(|| {
                                     let storage = storage.clone();
                                     let clock = clock.clone();
                                     let session_id = session_id.clone();
@@ -1318,9 +1321,15 @@ impl ConversationService {
                                         SessionManager::open(Some(session_id), storage, clock)
                                             .await
                                     }
-                                })
-                                .await
-                                .map_err(|error| {
+                                }) => opened,
+                                _ = stops.changed() => {
+                                    return Err(OpeningFailure {
+                                        cause: ConversationError::Unavailable,
+                                        holds: false,
+                                    });
+                                }
+                            };
+                            let manager = opened.map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),

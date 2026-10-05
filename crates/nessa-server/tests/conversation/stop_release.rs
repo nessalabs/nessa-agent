@@ -626,3 +626,40 @@ async fn a_pending_mode_close_past_its_budget_still_asks_to_let_the_uploads_go_w
     assert_closer(&fixture, "close", &release);
     fixture.service.shutdown().await.unwrap();
 }
+
+/// A stop signaled while an opening is waiting out a held history lease ends
+/// that wait. The opening answers unavailable instead of sitting out the lease.
+#[tokio::test]
+async fn an_opening_waiting_on_a_history_lease_stops_with_the_service() {
+    let fixture = Fixture::new(ConversationDeletionBudgets {
+        history_lease: Duration::from_secs(30),
+        ..DELETION_BUDGETS
+    })
+    .await;
+    let live = fixture.live().await;
+    fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await
+        .unwrap();
+    let opens = fixture.storage.opens();
+    let service = fixture.service.clone();
+    let id = fixture.id.clone();
+    let reader = fixture.caller("read");
+    let reading = tokio::spawn(async move { service.read(id, reader).await });
+    fixture.open_attempted(opens).await;
+    tokio::time::timeout(Duration::from_secs(2), fixture.service.stop_active_agents())
+        .await
+        .expect("a stop does not sit out the history lease")
+        .expect("the stop finishes");
+    let answered = tokio::time::timeout(Duration::from_secs(2), reading)
+        .await
+        .expect("the opening does not sit out the history lease")
+        .unwrap();
+    assert!(
+        matches!(answered, Err(ConversationError::Unavailable)),
+        "{answered:?}"
+    );
+    drop(live);
+    fixture.service.shutdown().await.unwrap();
+}

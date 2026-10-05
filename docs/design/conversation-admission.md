@@ -369,6 +369,7 @@ held after the bound is `Busy` (#542).
 | The same, then a send | Waits, then the send is admitted | `a_send_right_after_a_persons_close_is_not_busy` |
 | A desktop stop, then a read at once | Waits, then answers | `a_read_right_after_a_desktop_stop_is_not_busy` |
 | The lease is still held when `history_lease` ends | `Busy` | `an_opening_stops_waiting_for_a_history_lease_at_its_bound` |
+| A stop is signaled while that wait is running | The opening ends and answers `Unavailable`. It does not sit out the lease | `an_opening_waiting_on_a_history_lease_stops_with_the_service` |
 
 A close that retires a pending mode change, and mode recovery's retirement,
 are stops while admission is open. Past `stopMs` each answers over budget, and
