@@ -1238,11 +1238,14 @@ fn action_for_method(method: &str) -> Option<&'static str> {
     }
 }
 
-// Which request to blame for a frame that did not decode. A nested duplicate
-// still leaves one unambiguous `id`, so that frame is answered; a frame that
-// named `id` twice has no single request to answer, and the server does not pick
-// one. That frame gets no reply, as any other uncorrelatable text does, and the
-// client's own request timeout settles it.
+// Which request to blame for a frame that did not decode. Answer
+// `invalid_request` when the envelope parser reads one JSON object, no decoded
+// envelope name appears twice, `type` is `req`, and `id` is one Unicode string
+// of 1 to 256 bytes. An envelope name that is not Unicode is skipped, so two
+// of them are not a duplicate. A repeated name inside a nested value, or a
+// nested string that is not Unicode, still leaves that id. Deeper than 127
+// containers, the envelope is not read. Anything else gets no reply, and the
+// caller's own timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
     let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
@@ -2767,6 +2770,113 @@ mod tests {
         assert!(correlatable_invalid_request("not json").is_none());
     }
 
+    #[test]
+    fn a_nested_lone_surrogate_is_answered_invalid_request() {
+        for (method, id_first) in [
+            ("mcp.callTool", true),
+            ("mcp.callTool", false),
+            ("server.health", true),
+            ("server.health", false),
+        ] {
+            let params = r#"{"nested":"\ud800"}"#;
+            let text = if id_first {
+                format!(
+                    r#"{{"type":"req","id":"request-9","method":"{method}","params":{params}}}"#
+                )
+            } else {
+                format!(
+                    r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+                )
+            };
+            assert!(
+                RequestFrame::decode(&text).is_err(),
+                "{method} decoded; the refusal path was not reached"
+            );
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} id_first={id_first} got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        for (method, params) in [
+            ("mcp.callTool", r#"{"a":"\ud800\x"}"#),
+            ("server.health", r#"{"a":"\udfff\x"}"#),
+        ] {
+            let text = format!(
+                r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+            );
+            assert!(RequestFrame::decode(&text).is_err());
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} with a byte after the surrogate got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"\ud800","method":"server.health","params":{}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"a","id":"b","method":"mcp.callTool","params":{"nested":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"a","method":"b","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"","method":"m","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let long_id = "x".repeat(257);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{long_id}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
+        // 128 é is 256 bytes and is answered. 200 é is 200 code points and 400
+        // bytes, so it is not: the table counts UTF-8 bytes.
+        let exact = "é".repeat(128);
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{exact}","method":"m","params":{{"a":"\ud800"}}}}"#
+        )) else {
+            panic!("256-byte id got no answer");
+        };
+        assert_eq!(response.id, exact);
+        let wide = "é".repeat(200);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{wide}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"event","id":"request-9","payload":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{},"\ud800":1,"\ud800":2}"#,
+        ) else {
+            panic!("two non-Unicode names hid the id");
+        };
+        assert_eq!(response.id, "request-9");
+        assert_eq!(response.error.unwrap().code, "invalid_request");
+        let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"m","params":{"p":1,"p":2}}"#,
+        ) else {
+            panic!("a repeated nested name hid the id");
+        };
+        assert_eq!(response.id, "request-9");
+        let mut nested = "0".to_string();
+        for _ in 0..127 {
+            nested = format!("[{nested}]");
+        }
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"request-9","method":"m","params":{nested}}}"#
+        ))
+        .is_none());
+    }
+
     #[tokio::test]
     async fn session_ready_reports_current_restrictions_and_registered_methods() {
         let (state, _) = fixture(MembershipRole::Member);
@@ -3402,11 +3512,14 @@ mod tests {
                 .into(),
             )))
             .unwrap();
-        let mut message = peer.message().await;
-        if matches!(message, Message::Text(_)) {
-            message = peer.message().await;
-        }
-        let Message::Close(Some(close)) = message else {
+        let Message::Text(text) = peer.message().await else {
+            panic!("unauthorized expected")
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "unauthorized");
+        let Message::Close(Some(close)) = peer.message().await else {
             panic!("close expected")
         };
         assert_eq!(close.code, 4001);

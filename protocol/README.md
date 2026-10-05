@@ -38,7 +38,19 @@ or schema version bump is needed merely to change this repository's current cont
 | `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
-its request. Mutations separately carry a stable `requestId` for explicit retries.
+its request. On the authenticated socket, a request the gateway cannot decode
+is answered when the first row holds:
+
+| What the frame holds | What the gateway does |
+| --- | --- |
+| The envelope parser reads one JSON object, no decoded envelope name appears twice, `type` is `req`, and `id` is one Unicode string of 1 to 256 bytes | `invalid_request` on that `id`. A string or an envelope name that is not Unicode, such as a lone surrogate, does not hide that id and is not a second name. A repeated name inside a nested value still leaves that id |
+| A decoded envelope name appears twice, `id` missing, not a string, or a string that is not Unicode, `id` empty or longer than 256 bytes, `type` not `req`, the text not one JSON object, or deeper than 127 containers | no reply; the caller's own timeout settles it |
+
+The handshake is not this table. A text frame that does not decode, and is read
+while the deadline still has time, is answered `unauthorized` on an empty id,
+and the socket closes `authentication_failed` (4001).
+
+Mutations separately carry a stable `requestId` for explicit retries.
 Credential and session `expiresAt` may be null; issuance defaults to no expiry.
 Authentication challenges advertise a Unix-second deadline rounded up from
 millisecond wall time. A single monotonic timeout covers challenge delivery and

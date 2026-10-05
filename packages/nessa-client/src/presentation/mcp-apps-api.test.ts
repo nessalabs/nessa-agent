@@ -150,9 +150,9 @@ it.each([
   ["arguments past 32 KiB", { argumentsJson: `{"a":"${over(32761)}"}` }],
   // Counted in UTF-8 bytes: 16,392 characters and 32,776 bytes.
   ["arguments past 32 KiB of UTF-8", { argumentsJson: `{"a":"${"é".repeat(16384)}"}` }],
-  // A lone surrogate is no Unicode: the gateway cannot decode the frame.
+  // A lone surrogate is not Unicode. This client refuses it before send.
   ["a tool with a lone surrogate", { tool: "get\ud800" }],
-  // Written into the arguments' text itself, it would break the frame too.
+  // The same refusal when the surrogate is written into the arguments text.
   ["arguments holding a lone surrogate", { argumentsJson: '{"a":"\ud800"}' }],
   ["a tool that is no string", { tool: 7 as unknown as string }],
   ["arguments that are no string", { argumentsJson: {} as unknown as string }],
