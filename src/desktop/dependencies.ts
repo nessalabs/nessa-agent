@@ -25,7 +25,10 @@
  */
 import type { McpAppsApi } from "@nessa/client"
 import {
+  linkedDevicesGateway,
   mcpServersGateway,
+  type LinkedDevicesClient,
+  type LinkedDevicesGateway,
   type McpServersClient,
   type McpServersGateway,
 } from "./settings"
@@ -60,6 +63,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly widgets: DesktopWidgetRegistry
   /** The gateway's stored MCP servers, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly mcpServers: McpServersGateway | undefined
+  /** Pairing and linked devices, for Settings; absent without a gateway. Provided by `main.tsx`. */
+  readonly linkedDevices: LinkedDevicesGateway | undefined
 }
 
 export function createDesktopDependencies(
@@ -114,6 +119,9 @@ export function createDesktopDependencies(
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,
+    linkedDevices: source
+      ? linkedDevicesGateway({ connected: () => source.connected(), after })
+      : undefined,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.
@@ -124,9 +132,10 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, and manage MCP servers through. */
+/** A gateway client the window can show conversations, draw apps, manage MCP servers, and pair devices through. */
 type WindowGatewayClient = GatewayClient &
-  McpServersClient & { readonly mcpApps: McpAppsApi }
+  McpServersClient &
+  LinkedDevicesClient & { readonly mcpApps: McpAppsApi }
 
 /**
  * The gateway's workspace, and — where apps are drawn — its servers' apps:

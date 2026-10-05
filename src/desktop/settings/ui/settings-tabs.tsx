@@ -46,6 +46,7 @@ import {
   usePrototype,
 } from "./settings-controls"
 import { IntegrationsTab } from "./integrations-tab"
+import { LinkedDevicesTab } from "./linked-devices-tab"
 
 /**
  * What each tab shows. Every setting the window owns is real and
@@ -56,6 +57,8 @@ import { IntegrationsTab } from "./integrations-tab"
  * catalogue (`pending`), and its row says so with its control disabled.
  * Integrations is the gateway's stored MCP servers where the window has a
  * gateway, and pending where it has none (`integrations-tab.tsx`).
+ * Linked devices pairs and revokes where the window has a gateway, and is
+ * pending where it has none (`linked-devices-tab.tsx`).
  */
 export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   general: GeneralTab,
@@ -72,6 +75,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   agents: AgentsTab,
   accounts: AccountsTab,
   integrations: IntegrationsTab,
+  devices: LinkedDevicesTab,
   access: AccessTab,
   data: DataTab,
   experimental: ExperimentalTab,

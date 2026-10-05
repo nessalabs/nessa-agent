@@ -27,11 +27,14 @@
  * turns, and an app's review is not one.
  */
 import type {
+  AuthApi,
   ConversationMessage,
   ConversationPermission,
   ConversationView,
+  CredentialApi,
   McpAppsApi,
   McpServersApi,
+  PairingApi,
 } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
@@ -193,6 +196,9 @@ const mcpApps = {
 // Settings' servers: this fixture never opens Settings, so nothing asks them.
 const settingsParts = {
   mcpServers: {} as McpServersApi,
+  pairing: {} as PairingApi,
+  credentials: {} as CredentialApi,
+  auth: {} as AuthApi,
 }
 
 const dependencies = createDesktopDependencies({

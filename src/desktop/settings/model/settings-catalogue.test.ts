@@ -116,6 +116,9 @@ describe("searchSettings", () => {
     expect(searchSettings("lucide").map((match) => match.setting)).toEqual([
       "icon-family",
     ])
+    expect(
+      searchSettings("fingerprint").some((match) => match.setting === "linked-devices"),
+    ).toBe(true)
   })
 
   it("ignores case and needs every word somewhere", () => {
