@@ -84,7 +84,7 @@ use std::{
 
 use tokio::{
     sync::{
-        watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
+        oneshot, watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
         RwLockReadGuard, Semaphore,
     },
     task::JoinHandle,
@@ -2795,7 +2795,7 @@ impl ConversationService {
                 match slot {
                     Some(slot) => {
                         let stopped = service
-                            .stop_and_release(&id, slot, &actor, &initiator_of(&actor))
+                            .finish_pending_close(&id, slot, &actor, &initiator_of(&actor), &caller)
                             .await
                             .map_err(|_| ConversationError::ApprovalModeUncertain);
                         let may_release = stopped.is_ok();
@@ -2831,27 +2831,16 @@ impl ConversationService {
                     Err(error) => (Err(error), false),
                 }
             };
-            let released = match (&service.inner.attachments, may_release) {
-                (Some(attachments), true) => {
-                    attachments
-                        .release(AttachmentRelease {
-                            organization_id: caller.organization_id.clone(),
-                            conversation_id: id.clone(),
-                            cause: AttachmentReleaseCause::ConversationClosed,
-                            initiator_principal_id: caller.principal_id.clone(),
-                            initiator_surface_id: caller.surface_id.clone(),
-                            correlation_id: caller.action_id.clone(),
-                        })
-                        .await
-                }
-                (Some(_), false) => {
-                    tracing::warn!(
-                        conversation_id = %id,
-                        "a conversation that did not close keeps its uploads"
-                    );
-                    Ok(())
-                }
-                (None, _) => Ok(()),
+            let released = if may_release {
+                service.release_closed_uploads(&id, &caller).await
+            } else if service.inner.attachments.is_some() {
+                tracing::warn!(
+                    conversation_id = %id,
+                    "a conversation that did not close keeps its uploads"
+                );
+                Ok(())
+            } else {
+                Ok(())
             };
             match (closed, released) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -3970,6 +3959,98 @@ impl ConversationService {
         let stop =
             tokio::spawn(async move { service.stopping(&id, slot, None, &actor, &ended_by).await });
         self.join_stop(stop).await
+    }
+
+    /// Stop one owner for a close that retires a pending mode change, as
+    /// [`Self::stop_and_release`] does. Past the budget the caller has already
+    /// answered and will not let the uploads go, so once the close is
+    /// confirmed this does, in that caller's name. A close that finishes
+    /// within the budget leaves the release to the caller, so the uploads are
+    /// let go once
+    /// (`a_pending_mode_close_within_its_budget_releases_uploads_once`,
+    /// `a_pending_mode_close_past_its_budget_lets_the_uploads_go`).
+    /// A release that fails after the caller has gone is logged with its
+    /// error: the attempt was made, and the failure is not discarded
+    /// (`a_pending_mode_close_past_its_budget_still_asks_to_let_the_uploads_go_when_that_fails`).
+    async fn finish_pending_close(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+        ended_by: &McpAppInitiator,
+        caller: &ConversationCaller,
+    ) -> Result<(), StopFailure> {
+        let (confirmed_tx, confirmed_rx) = oneshot::channel();
+        let (caller_releases_tx, caller_releases_rx) = oneshot::channel();
+        let stopping_service = self.clone();
+        let stop_id = id.clone();
+        let stop_actor = actor.clone();
+        let ended_by = ended_by.clone();
+        let stop = tokio::spawn(async move {
+            let stopped = stopping_service
+                .stopping(&stop_id, slot, None, &stop_actor, &ended_by)
+                .await;
+            let _ = confirmed_tx.send(stopped.is_ok());
+            stopped
+        });
+        let releasing = self.clone();
+        let release_id = id.clone();
+        let release_caller = caller.clone();
+        tokio::spawn(async move {
+            let confirmed = confirmed_rx.await.unwrap_or(false);
+            let caller_releases = caller_releases_rx.await.unwrap_or(false);
+            if confirmed && !caller_releases {
+                if let Err(error) = releasing
+                    .release_closed_uploads(&release_id, &release_caller)
+                    .await
+                {
+                    tracing::error!(
+                        conversation_id = %release_id,
+                        %error,
+                        "a close confirmed after its budget could not let its uploads go"
+                    );
+                }
+            }
+        });
+        match self.join_stop(stop).await {
+            Ok(()) => {
+                let _ = caller_releases_tx.send(true);
+                Ok(())
+            }
+            Err(failure @ StopFailure::OverBudget) => {
+                let _ = caller_releases_tx.send(false);
+                Err(failure)
+            }
+            Err(failure) => {
+                // The close did not confirm. The caller does not release, and
+                // neither does the follow-up: `confirmed` is false.
+                let _ = caller_releases_tx.send(true);
+                Err(failure)
+            }
+        }
+    }
+
+    /// Let go of the uploads `caller` closed `id` to hold. One release, used
+    /// by the caller when the close finishes within its budget and by the
+    /// carry-on when it confirms later.
+    async fn release_closed_uploads(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(), ConversationError> {
+        let Some(attachments) = &self.inner.attachments else {
+            return Ok(());
+        };
+        attachments
+            .release(AttachmentRelease {
+                organization_id: caller.organization_id.clone(),
+                conversation_id: id.clone(),
+                cause: AttachmentReleaseCause::ConversationClosed,
+                initiator_principal_id: caller.principal_id.clone(),
+                initiator_surface_id: caller.surface_id.clone(),
+                correlation_id: caller.action_id.clone(),
+            })
+            .await
     }
 
     /// Join `stop` for at most the owner's stop budget. Past that, this

@@ -2,10 +2,11 @@
 //! read or send after a stop (#541, #542). Rows of the tables in
 //! docs/design/conversation-admission.md.
 use super::*;
-use crate::conversation::application::SubmittedMessage;
+use crate::conversation::application::{AttachmentReleaseCause, SubmittedMessage};
 use crate::conversation_test_support::{
-    mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, MemoryListing,
-    MemoryRepository, MemorySummaries, ProviderFactory, TestClock, DELETION_BUDGETS,
+    mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
+    MemoryAttachments, MemoryListing, MemoryRepository, MemorySummaries, ProviderFactory,
+    TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
@@ -13,7 +14,9 @@ use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedSession, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
+use nessa_sdk::domain::agent_execution::prompts::ImageReference;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Mutex as StdMutex;
@@ -92,6 +95,7 @@ struct Fixture {
     provider: Arc<ProviderFactory>,
     repository: Arc<MemoryRepository>,
     storage: Arc<OpeningLog>,
+    attachments: Arc<MemoryAttachments>,
     id: ConversationId,
     organization: OrganizationId,
     principal: PrincipalId,
@@ -103,6 +107,7 @@ impl Fixture {
         let repository = Arc::new(MemoryRepository::default());
         let summaries = Arc::new(MemorySummaries::default());
         let storage = Arc::new(OpeningLog::new());
+        let attachments = Arc::new(MemoryAttachments::default());
         let organization = OrganizationId::new("org").unwrap();
         let principal = PrincipalId::new("person").unwrap();
         let service = ConversationService::new(
@@ -120,7 +125,7 @@ impl Fixture {
                 file_link_audit: Arc::new(
                     crate::conversation_test_support::RecordingFileLinkAudit::default(),
                 ),
-                attachments: None,
+                attachments: Some(attachments.clone()),
                 summaries: summaries.clone(),
                 listing: Arc::new(MemoryListing {
                     repository: repository.clone(),
@@ -152,6 +157,7 @@ impl Fixture {
             provider,
             repository,
             storage,
+            attachments,
             id,
             organization,
             principal,
@@ -500,5 +506,123 @@ async fn an_opening_stops_waiting_for_a_history_lease_at_its_bound() {
         waited + Duration::from_millis(40) >= lease && waited < lease + Duration::from_secs(1),
         "the wait is the lease bound: {waited:?}"
     );
+    fixture.service.shutdown().await.unwrap();
+}
+
+fn held_image() -> ImageReference {
+    ImageReference::new(Sha256Digest::from_bytes([7; 32]), ImageMediaType::Png, 1024).unwrap()
+}
+
+impl Fixture {
+    fn hold_upload(&self) {
+        self.attachments.held.lock().unwrap().push((
+            self.organization.clone(),
+            self.id.clone(),
+            held_image(),
+        ));
+    }
+}
+
+async fn one_close_release(
+    fixture: &Fixture,
+) -> crate::conversation::application::AttachmentRelease {
+    tokio::time::timeout(BOUND, async {
+        loop {
+            let found = {
+                let releases = fixture.attachments.releases.lock().unwrap();
+                (releases.len() == 1).then(|| releases[0].clone())
+            };
+            if let Some(release) = found {
+                return release;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the close lets the uploads go once")
+}
+
+fn assert_closer(
+    fixture: &Fixture,
+    action: &str,
+    release: &crate::conversation::application::AttachmentRelease,
+) {
+    assert_eq!(release.organization_id, fixture.organization);
+    assert_eq!(release.conversation_id, fixture.id);
+    assert_eq!(release.cause, AttachmentReleaseCause::ConversationClosed);
+    assert_eq!(release.initiator_principal_id, fixture.principal);
+    assert_eq!(release.initiator_surface_id, "panel");
+    assert_eq!(release.correlation_id, action);
+    assert!(fixture.attachments.held.lock().unwrap().is_empty());
+}
+
+/// Within the budget the caller lets the uploads go, and the carry-on does not
+/// do it again.
+#[tokio::test(start_paused = true)]
+async fn a_pending_mode_close_within_its_budget_releases_uploads_once() {
+    let fixture = Fixture::new(short_stop()).await;
+    fixture.live().await;
+    fixture.leave_mode_pending().await;
+    fixture.hold_upload();
+    fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await
+        .unwrap();
+    let release = one_close_release(&fixture).await;
+    assert_closer(&fixture, "close", &release);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Past the budget the caller has answered and kept the uploads. Once the
+/// close confirms, the same task lets them go in that caller's name.
+#[tokio::test(start_paused = true)]
+async fn a_pending_mode_close_past_its_budget_lets_the_uploads_go() {
+    let fixture = Fixture::new(short_stop()).await;
+    fixture.live().await;
+    fixture.leave_mode_pending().await;
+    fixture.hold_upload();
+    let release_gate = hold_close(&fixture.provider);
+    let stopped = fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await;
+    assert!(
+        matches!(stopped, Err(ConversationError::ApprovalModeUncertain)),
+        "{stopped:?}"
+    );
+    assert!(
+        fixture.attachments.releases.lock().unwrap().is_empty(),
+        "the uncertain answer has not let the uploads go"
+    );
+    release_gate.send(()).unwrap();
+    let release = one_close_release(&fixture).await;
+    assert_closer(&fixture, "close", &release);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// The release is still asked when it fails, so the failure is not skipped.
+#[tokio::test(start_paused = true)]
+async fn a_pending_mode_close_past_its_budget_still_asks_to_let_the_uploads_go_when_that_fails() {
+    let fixture = Fixture::new(short_stop()).await;
+    fixture.live().await;
+    fixture.leave_mode_pending().await;
+    fixture.hold_upload();
+    fixture
+        .attachments
+        .release_fails
+        .store(true, Ordering::SeqCst);
+    let release_gate = hold_close(&fixture.provider);
+    let stopped = fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await;
+    assert!(matches!(
+        stopped,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    release_gate.send(()).unwrap();
+    let release = one_close_release(&fixture).await;
+    assert_closer(&fixture, "close", &release);
     fixture.service.shutdown().await.unwrap();
 }
