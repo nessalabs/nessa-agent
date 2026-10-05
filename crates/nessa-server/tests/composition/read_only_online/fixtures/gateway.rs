@@ -478,12 +478,12 @@ async fn gateway_child() {
             storage.clone(),
             SessionId::new(setup.conversation.clone()).unwrap(),
             receivers.clone(),
-            auth.clone(),
-            [
-                setup.receiver.clone(),
-                setup.second_receiver.clone().unwrap(),
-            ],
-            setup.second_credential.clone().unwrap(),
+            LiveDevices {
+                auth: auth.clone(),
+                receiver: setup.receiver.clone(),
+                second_receiver: setup.second_receiver.clone().unwrap(),
+                second_credential: setup.second_credential.clone().unwrap(),
+            },
             PrincipalId::new(setup.owner.clone()).unwrap(),
             heads,
         ));
@@ -492,6 +492,14 @@ async fn gateway_child() {
     io::stdout().flush().unwrap();
     // Serve until the test kills this process.
     std::future::pending::<()>().await;
+}
+
+/// The two paired devices a live gateway accepts control lines for.
+struct LiveDevices {
+    auth: Arc<LocalCredentialStore>,
+    receiver: String,
+    second_receiver: String,
+    second_credential: String,
 }
 
 /// Live mode's control lines, each answered with `DONE <line>` once its effect
@@ -506,9 +514,12 @@ async fn live_control(
     storage: Arc<RecordStorage>,
     conversation: SessionId,
     receivers: Arc<LocalReceiverAuthority>,
-    auth: Arc<LocalCredentialStore>,
-    [receiver, second]: [String; 2],
-    second_credential: String,
+    LiveDevices {
+        auth,
+        receiver,
+        second_receiver: second,
+        second_credential,
+    }: LiveDevices,
     owner: PrincipalId,
     heads: Arc<HeadHold>,
 ) {
