@@ -29,10 +29,7 @@
     },
     {
       "when": "cancel the turn",
-      "steps": [
-        { "do": "text", "chunks": ["Before cancel."] },
-        { "do": "wait-cancel" }
-      ]
+      "steps": [{ "do": "text", "chunks": ["Before cancel."] }, { "do": "wait-cancel" }]
     }
   ]
 }
