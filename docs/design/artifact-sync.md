@@ -354,9 +354,10 @@ handed to the sink is not attempted. A durable write that has already taken
 its slot still finishes; the slot stays with that write until it returns.
 
 The count returned to the caller is how many records were not yet acknowledged
-when the caller stopped waiting. A sink that accepts a record after that is
-late. The caller's failure stays, and the stored record keeps the cause and
-caller it was built with. Nothing reconciles the two into exactly-once
+when the caller stopped waiting. That snapshot is taken under the same lock
+that records an acknowledgement, before the phase reaps an older task. A sink
+that accepts a record after that is late. The caller's failure stays, and the
+stored record keeps the cause and caller it was built with. Nothing reconciles the two into exactly-once
 delivery. A refusal and a deadline are the same count as a record the caller
 did not see acknowledged: not acknowledged in time. Storage failures stay a
 separate count.
@@ -404,3 +405,6 @@ sequenceDiagram
 | A delivery task panicked, then another phase has records | The new phase's task owns its records before the older panic is resumed, and those records are still handed to the sink | `a_panicked_delivery_does_not_drop_the_next_phase_s_records` |
 | A delivery task panicked, then an empty phase | The empty phase still resumes the panic | `an_empty_phase_surfaces_a_panicked_delivery` |
 | Upload while an expiry sweep is not yet acknowledged | The upload completes. The sweep's count does not fail it. The upload's own record does not take the sweep's slot | `an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged` |
+| Accept while the caller is still waiting, then the caller stops | The acknowledgement is in the count | `an_accept_while_the_caller_is_waiting_is_counted` |
+| Accept after the caller has stopped | The frozen count does not gain that acknowledgement | `a_late_accept_after_the_caller_stops_does_not_change_the_count` |
+| Bulk admission semaphore is closed | The record is not handed to the sink, and it counts as not acknowledged | `a_closed_admission_does_not_hand_the_record_to_the_sink` |

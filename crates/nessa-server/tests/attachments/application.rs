@@ -1280,6 +1280,25 @@ async fn a_zero_admission_still_attempts_every_record() {
 }
 
 #[tokio::test]
+async fn a_closed_admission_does_not_hand_the_record_to_the_sink() {
+    let fixture = fixture();
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    fixture.service.close_bulk_admission_for_test();
+
+    assert_eq!(
+        fixture.service.release(release_request(CONVERSATION)).await,
+        Err(ReleaseError::Incomplete {
+            storage_failures: 0,
+            audit_failures: 2
+        })
+    );
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts);
+    assert!(fixture.store.held().is_empty());
+}
+
+#[tokio::test]
 async fn dropping_the_service_stops_bulk_attempts_that_have_not_started() {
     let fixture = Fixture::new(AttachmentLimits {
         audit_deadline: Duration::from_secs(5),

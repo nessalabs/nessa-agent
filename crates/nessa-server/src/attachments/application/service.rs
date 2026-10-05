@@ -18,10 +18,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 use tokio::{
@@ -29,6 +26,30 @@ use tokio::{
     task::JoinHandle,
     time::timeout,
 };
+
+/// How many bulk records were acknowledged while the caller was still waiting.
+/// `stop` freezes the count; a later `acknowledge` does not move it.
+struct DeliveryTally {
+    waiting: bool,
+    acknowledged: usize,
+}
+impl DeliveryTally {
+    fn new() -> Self {
+        Self {
+            waiting: true,
+            acknowledged: 0,
+        }
+    }
+    fn acknowledge(&mut self) {
+        if self.waiting {
+            self.acknowledged += 1;
+        }
+    }
+    fn stop(&mut self) -> usize {
+        self.waiting = false;
+        self.acknowledged
+    }
+}
 
 /// A close is admitted by the conversation context and then has to be written
 /// down here, so the two bounds on a caller's identifiers are one rule. The
@@ -240,14 +261,14 @@ impl AttachmentService {
             self.reap_audit_tasks().await;
             return 0;
         }
-        let acknowledged = Arc::new(AtomicUsize::new(0));
+        let tally = Arc::new(Mutex::new(DeliveryTally::new()));
         let (finished_tx, finished_rx) = oneshot::channel();
         let audit = Arc::clone(&self.inner.audit);
         let slots = Arc::clone(&self.inner.audit_slots);
         let deadline = self.inner.limits.audit_deadline;
         let budget = self.inner.limits.audit_budget;
         let admission = self.inner.audit_admission;
-        let acknowledged_task = Arc::clone(&acknowledged);
+        let tally_task = Arc::clone(&tally);
         let supervisor = tokio::spawn(async move {
             let mut pending = records.into_iter();
             let mut in_flight = FuturesUnordered::new();
@@ -258,7 +279,7 @@ impl AttachmentService {
                     };
                     let audit = Arc::clone(&audit);
                     let slots = Arc::clone(&slots);
-                    let acknowledged_task = Arc::clone(&acknowledged_task);
+                    let tally_task = Arc::clone(&tally_task);
                     in_flight.push(async move {
                         // A closed semaphore has no slot to give. Do not call
                         // the sink: a call with no slot would be another write
@@ -272,7 +293,10 @@ impl AttachmentService {
                         )
                         .await;
                         if matches!(delivered, Ok(Ok(()))) {
-                            acknowledged_task.fetch_add(1, Ordering::SeqCst);
+                            tally_task
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .acknowledge();
                         }
                     });
                 }
@@ -289,8 +313,23 @@ impl AttachmentService {
         // Waiting on the signal, not the task. Dropping this wait — the budget,
         // or the caller — leaves the task parked on the service.
         let _ = timeout(budget, finished_rx).await;
+        // Taken under the same lock as acknowledge, before anything else here
+        // can await. An accept that lands after the caller has stopped does not
+        // change the count.
+        let unacknowledged = total
+            - tally
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .stop();
         self.reap_audit_tasks().await;
-        total - acknowledged.load(Ordering::SeqCst)
+        unacknowledged
+    }
+
+    /// Test-only: close bulk admission so a release can prove a closed
+    /// semaphore is not a reason to call the sink.
+    #[cfg(test)]
+    pub(crate) fn close_bulk_admission_for_test(&self) {
+        self.inner.audit_slots.close();
     }
 
     fn park_audit_task(&self, task: JoinHandle<()>) {
@@ -1044,4 +1083,24 @@ fn describe_upload(
         )
         .map_err(|_| BeginError::InvalidRequest)?,
     })
+}
+
+#[cfg(test)]
+mod delivery_tally_tests {
+    use super::DeliveryTally;
+
+    #[test]
+    fn an_accept_while_the_caller_is_waiting_is_counted() {
+        let mut tally = DeliveryTally::new();
+        tally.acknowledge();
+        assert_eq!(tally.stop(), 1);
+    }
+
+    #[test]
+    fn a_late_accept_after_the_caller_stops_does_not_change_the_count() {
+        let mut tally = DeliveryTally::new();
+        assert_eq!(tally.stop(), 0);
+        tally.acknowledge();
+        assert_eq!(tally.stop(), 0);
+    }
 }
