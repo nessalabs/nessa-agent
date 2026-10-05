@@ -26,10 +26,11 @@ const utf8 = new TextEncoder()
  * statement of them. `McpAppsApi` refuses a request past them before sending
  * anything, and a host may ask first, so it can refuse the app's request
  * itself rather than read a `TypeError` whose cause it cannot tell. Each
- * must also be Unicode text (`wellFormedText`): a lone surrogate makes the
- * whole frame one the gateway cannot read. What the arguments decode to — an
- * object, its strings — is the gateway's to judge, and it answers
- * `invalid_request`.
+ * must also be Unicode text (`wellFormedText`): this client refuses a lone
+ * surrogate before send. If one still reaches the gateway and the request id
+ * can be read, the gateway answers `invalid_request` (#403). What the
+ * arguments decode to — an object, its strings — is the gateway's to judge,
+ * and it answers `invalid_request`.
  *
  * Each answers the problem in words, or `undefined` within bounds.
  */

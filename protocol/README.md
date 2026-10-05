@@ -44,7 +44,7 @@ is answered when that `id` can still be read:
 | What the frame holds | What the gateway does |
 | --- | --- |
 | `type` is `req`, and `id` is one Unicode string of 1 to 256 bytes | `invalid_request` on that `id`. A string in the frame that is not Unicode, such as a lone surrogate, does not hide it |
-| An envelope name named twice, `id` missing or not a string, `id` empty or longer than 256 bytes, `type` not `req`, or the text not one JSON object | no reply; the caller's own timeout settles it |
+| An envelope key that appears twice, `id` missing, not a string, or a string that is not Unicode, `id` empty or longer than 256 bytes, `type` not `req`, or the text not one JSON object | no reply; the caller's own timeout settles it |
 
 The handshake is not this table: a frame that does not decode before
 authentication closes as unauthorized.
