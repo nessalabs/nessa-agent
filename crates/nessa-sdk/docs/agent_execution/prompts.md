@@ -129,23 +129,32 @@ gave `AcpConfig::images` a `UserImageSource`. And the connected agent must have
 advertised `promptCapabilities.image` at `initialize`, reported as
 `OperationCapabilities::image_input`.
 
-The model's recorded limits, the binding's image offer, the message size, an
-app the message names, and a context sent to a model with no text input are
-checked when a message is submitted, before it is accepted, by `Agent::invoke`,
-`enqueue`, `enqueue_steering`, and `steer`. A refusal saved nothing, queued
-nothing, and sent nothing. The connected agent's image answer is checked later,
-when the provider is called, at every one of those entries including `steer`,
-and that refusal is saved.
+The model's recorded limits, the binding's image offer, the retained text
+limit (4 MiB of UTF-8, `ExecutionRequest::validate_message_size`), an app the
+message names, and a context sent to a model with no text input are checked
+when a message is submitted, before it is accepted, by `Agent::invoke`,
+`enqueue`, `enqueue_steering`, and `steer`. A refusal there saved nothing,
+queued nothing, and sent nothing.
 
 | Refused because | Error |
 | --- | --- |
 | the model or the binding offers no image input | `ImageInputRefused(NotOffered)` |
 | an image's encoding is not one the model lists | `ImageInputRefused(MediaType(..))` |
 | an image is larger than the model's `max_raw_bytes()` | `ImageInputRefused(ImageTooLarge { .. })` |
-| the agent is known not to take images | `ImageInputRefused(AgentDoesNotAccept)` |
-| the encoded message cannot fit `max_frame_bytes` | `MessageTooLarge { .. }` |
 | an app the message names is no earlier recorded MCP tool call to the same server and tool | [`UnknownApp(..)`](../../src/application/agent_execution/sessions/app_sources.rs) |
 | the message carries app contexts and the model takes no text input | `InvalidInput(..)` |
+
+The connected agent's image answer, and whether the encoded message fits one
+frame (`max_frame_bytes`), are checked later, when the provider is called, at
+every one of those entries including `steer`. A message that passed the
+retained text limit can still be too large for that frame. That refusal is
+saved
+(`backend_refusal_is_retained_without_provider_execution`).
+
+| Refused because | Error |
+| --- | --- |
+| the agent is known not to take images | `ImageInputRefused(AgentDoesNotAccept)` |
+| the encoded message cannot fit `max_frame_bytes` | `MessageTooLarge { .. }` |
 
 Contexts reach the agent as a leading text block, so a message carrying them
 needs the model's text input even with no text of its own. Both rows are in
@@ -164,7 +173,7 @@ at dispatch if the restored agent turns out not to take images. A closed context
 keeps its last negotiation. The frame check counts the text as JSON, every image
 as base64, and about 2 KiB for the request around them; the largest message the
 domain allows (10 MiB of images with several mebibytes of text) does not fit the
-largest frame, and is refused here rather than after it was accepted.
+largest frame. It runs when the provider is called, after the message was saved.
 
 Just before dispatch the adapter reads each image through the source, checks its
 length and then its digest against the reference, and sends it as a base64 ACP
