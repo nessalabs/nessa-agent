@@ -24,10 +24,18 @@ import {
   showContent,
 } from "../../adapters/store/commands"
 import { selectFocusedSessionId } from "../../adapters/store/selectors"
-import { fakeSource, keptFilter, settle, summary, testStore } from "../../testing"
+import {
+  fakeSource,
+  keptFilter,
+  settle,
+  summary,
+  testStore,
+  type FakeSource,
+} from "../../testing"
 import { selectOverviewOpen } from "../../adapters/store/selectors"
 import type { ApprovalOrigin } from "../../model/transcript"
 import type { WorkspaceIndex } from "../../model/workspace-index"
+import { failureCopy, readFailureCopy } from "../failure-copy"
 import { OverviewRow } from "../source-list/overview-row"
 import { answerPause } from "../../model/overview/walk"
 import { peekParts } from "../../model/overview/peek"
@@ -78,12 +86,15 @@ async function mount({
   wrap = (tree: ReactNode) => tree,
   index = sampleIndex(),
   secondAsker = { kind: "agent" },
+  beforeLoad,
 }: {
   strict?: boolean
   wrap?: (tree: ReactNode) => ReactNode
   index?: WorkspaceIndex
   /** Who asks the second session's approval. */
   secondAsker?: ApprovalOrigin
+  /** Runs after the source is built, before the workspace reads it. */
+  beforeLoad?: (source: FakeSource) => void
 } = {}) {
   const source = fakeSource(index)
   for (const [sessionId, command] of [
@@ -130,6 +141,7 @@ async function mount({
       ],
       activity: { label: "Running the tests", since: 990 },
     })
+  beforeLoad?.(source)
   const filter = keptFilter()
   const store = testStore(source, undefined, filter)
   await store.dispatch(loadWorkspace())
@@ -406,6 +418,23 @@ describe("the agents overview", () => {
     expect(source.calls.filter((call) => call[0] === "approve")).toHaveLength(1)
     await act(async () => source.release("approve"))
     expect(await fromPane).toBe("sent")
+  })
+
+  it("says what a conversation could not be read as, on the request and in its peek", async () => {
+    await mount({
+      beforeLoad: (source) => source.refuse("transcript", "unavailable"),
+    })
+    await open()
+    const unread = "Nessa couldn’t read this conversation just now."
+    expect(readFailureCopy("unavailable", "conversation")).toBe(unread)
+    expect(failureCopy("unavailable")).not.toBe(unread)
+    for (const id of ["first", "second"])
+      expect(card(id)?.querySelector(".agents-request-failure")?.textContent).toBe(unread)
+    await act(async () => card("first")?.click())
+    await act(async () => settle(10))
+    expect(
+      host.querySelector(".agents-inline-peek .agents-peek-failure")?.textContent,
+    ).toBe(unread)
   })
 
   it("says why an answer was not confirmed, and lets the person answer again", async () => {
