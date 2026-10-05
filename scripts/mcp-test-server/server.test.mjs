@@ -11,6 +11,7 @@ import {
   REVIEW_URI,
   TOOLS,
   answer,
+  initializeDelayMs,
 } from "./server.mjs"
 
 const call = (name, args) =>
@@ -288,4 +289,36 @@ test("the stdio loop answers each line, including a parse error, in order", asyn
     ],
   )
   assert.equal(Object.keys(TOOLS).length, 9)
+})
+
+test("--initialize-delay-ms holds initialize's answer, and keeps every answer in order", async () => {
+  assert.equal(initializeDelayMs([]), 0)
+  assert.equal(initializeDelayMs(["--initialize-delay-ms", "250"]), 250)
+  assert.throws(() => initializeDelayMs(["--initialize-delay-ms", "soon"]))
+  assert.throws(() => initializeDelayMs(["--initialize-delay-ms"]))
+  const child = spawn(process.execPath, [
+    fileURLToPath(new URL("./server.mjs", import.meta.url)),
+    "--initialize-delay-ms",
+    "400",
+  ])
+  const started = Date.now()
+  const arrived = []
+  child.stdout.setEncoding("utf8")
+  let buffered = ""
+  child.stdout.on("data", (chunk) => {
+    buffered += chunk
+    const parts = buffered.split("\n")
+    buffered = parts.pop()
+    for (const part of parts) arrived.push([JSON.parse(part).id, Date.now() - started])
+    if (arrived.length === 2) child.stdin.end()
+  })
+  child.stdin.write(
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n',
+  )
+  await once(child, "close")
+  assert.deepEqual(
+    arrived.map(([id]) => id),
+    [1, 2],
+  )
+  assert.ok(arrived[0][1] >= 400, `initialize answered after ${arrived[0][1]} ms`)
 })

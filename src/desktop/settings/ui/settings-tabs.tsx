@@ -45,6 +45,7 @@ import {
   Toggle,
   usePrototype,
 } from "./settings-controls"
+import { IntegrationsTab } from "./integrations-tab"
 
 /**
  * What each tab shows. Every setting the window owns is real and
@@ -53,6 +54,8 @@ import {
  * the session list, ⌘-click, running first. What lives outside the window —
  * the host, the gateway, an account — is marked not available yet in the
  * catalogue (`pending`), and its row says so with its control disabled.
+ * Integrations is the gateway's stored MCP servers where the window has a
+ * gateway, and pending where it has none (`integrations-tab.tsx`).
  */
 export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   general: GeneralTab,
@@ -493,21 +496,6 @@ function AccountsTab() {
         <PendingAction>Connect…</PendingAction>
       </Row>
     </Group>
-  )
-}
-
-function IntegrationsTab() {
-  return (
-    <SettingGroup
-      id="mcp-servers"
-      footnote="Servers added here are offered to every agent that supports MCP."
-    >
-      <div className="settings-empty">
-        <DesktopIcon name="connections" />
-        <p>No servers yet</p>
-        <PendingAction>Add server…</PendingAction>
-      </div>
-    </SettingGroup>
   )
 }
 
