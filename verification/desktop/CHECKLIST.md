@@ -820,8 +820,9 @@ measures release at the ten-second request deadline (9.9–12 seconds including
 browser scheduling), verifies the aborted first request, an enabled and painted
 Check again control, and exactly one healthy retry that makes Claude ready.
 Both cases require zero page errors. The rule is owned by
-`src/onboarding/adapters/agents.ts`; ordering and unit regressions are linked in
-`docs/mapping/features/startup.md#startup-recovery-ordering-design`.
+`src/onboarding/adapters/agents.ts`; ordering and unit regressions are in the
+[adapter tests](../../src/onboarding/adapters/agents.test.ts) and
+[setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
 
 ### Attachment admission races
 

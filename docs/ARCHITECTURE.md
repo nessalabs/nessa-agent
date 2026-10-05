@@ -8,6 +8,10 @@ For extension and dependency rules, see [AGENTS.md](../AGENTS.md),
 [coding standards](../CODING_STANDARDS.md), and
 [codebase structure](codebase-structure.md).
 
+For lifecycle diagrams and user flows, browse the [system state atlas](state/README.md).
+Its component maps lead to scoped statecharts with source and regression links;
+this document remains the owner of the implementation ownership map.
+
 Every change must meet the [repository-wide organization gate](../CODING_STANDARDS.md#organization-across-the-repository).
 Keep ownership maps, tests, and documentation aligned with the implementation;
 this applies equally to host, shell, server, SDK, and supporting scripts.

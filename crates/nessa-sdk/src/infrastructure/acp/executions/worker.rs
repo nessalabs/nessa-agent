@@ -2144,6 +2144,7 @@ impl<P: AcpProfile> Worker<P> {
         let input = match self.profile.permission_input(&params) {
             Ok(input) => input,
             Err(error) => {
+                self.profile.note_declined_permission(&params);
                 return self
                     .decline_review(
                         execution,
@@ -2152,7 +2153,7 @@ impl<P: AcpProfile> Worker<P> {
                         decline_reason(&error),
                         response_deadline,
                     )
-                    .await
+                    .await;
             }
         };
         let tool = match self.profile.tool_call(call) {

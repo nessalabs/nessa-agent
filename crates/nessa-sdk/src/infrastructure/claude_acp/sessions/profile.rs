@@ -8,7 +8,7 @@ use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
-use crate::infrastructure::acp::fields::{identifier, string};
+use crate::infrastructure::acp::fields::string;
 use crate::infrastructure::acp::profile::AcpProfile;
 use crate::infrastructure::acp::sessions::{thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
@@ -248,29 +248,9 @@ impl AcpProfile for ClaudeProfile {
         wire::tool_call(value, &mut self.tool_names, &self.mcp_prefixes)
     }
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
-        let tool = request
-            .get("toolCall")
-            .ok_or_else(|| protocol("missing permission tool"))?;
-        let id = identifier(tool, "toolCallId")?;
-        let name = match self
-            .tool_names
-            .get(id)
-            .ok_or_else(|| protocol("permission has no observed tool"))?
-        {
-            wire::ObservedTool::Reviewable(name) => name,
-            // Observed, and refused. Answering the review is the caller's, and
-            // it is an answer about this tool rather than about the execution.
-            wire::ObservedTool::Declined => {
-                return Err(AgentError::Unsupported(
-                    "tool is outside the configured tool profile".into(),
-                ))
-            }
-        };
-        wire::tool_input(
-            name,
-            tool.get("rawInput")
-                .ok_or_else(|| protocol("missing tool input"))?,
-            &self.mcp_prefixes,
-        )
+        wire::permission_input(request, &self.tool_names, &self.mcp_prefixes)
+    }
+    fn note_declined_permission(&mut self, request: &Value) {
+        wire::note_declined_permission(request, &mut self.tool_names, &self.mcp_prefixes);
     }
 }
