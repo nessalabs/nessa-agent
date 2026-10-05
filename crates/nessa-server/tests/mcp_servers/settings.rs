@@ -775,7 +775,10 @@ async fn s10_an_invalid_or_reserved_server_is_refused_with_its_problem() {
 /// place with its kept variables; an unknown previous name is `not_found`.
 #[tokio::test]
 async fn s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found() {
-    let mut old_entry = entry("old");
+    // The same launch under a new name, so its value is kept (a changed
+    // launch must give it again: `a_kept_value_is_refused_when_the_command_or_arguments_change`).
+    let mut old_entry = entry("new");
+    old_entry["name"] = json!("old");
     old_entry["env"] = json!({"TOKEN": "kept"});
     let files = MemoryFiles::holding(config(vec![old_entry, entry("other")]));
     let (settings, servers) = settings_for(files.clone(), Arc::new(RecordingAudit::default()));
@@ -990,7 +993,8 @@ async fn the_audit_records_the_targets_before_and_after_on_save_rename_disable_a
             save_with(
                 "b",
                 Some("a"),
-                vec![("TOKEN", None), ("NEW", Some("secret-new"))],
+                // The launch changes with the name, so its value is given again.
+                vec![("TOKEN", Some("secret-a")), ("NEW", Some("secret-new"))],
             ),
         )
         .await

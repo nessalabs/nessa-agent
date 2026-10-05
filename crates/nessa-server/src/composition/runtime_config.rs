@@ -60,7 +60,7 @@ impl RuntimeConfig {
             }
             Err(error) => return Err(invalid(error)),
         }
-        let file = nessa_local_storage::open(&path, nessa_local_storage::OpenMode::Read)
+        let file = nessa_local_storage::open(&path, nessa_local_storage::OpenMode::ReadNonblocking)
             .map_err(invalid)?;
         let mut bytes = Vec::new();
         file.take(MAX_CONFIG_BYTES as u64 + 1)

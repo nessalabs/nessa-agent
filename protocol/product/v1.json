@@ -2408,7 +2408,7 @@
         },
         "value": {
           "type": ["string", "null"],
-          "description": "Its value, or null to keep the value stored for this name on the server being saved. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing)."
+          "description": "Its value, or null to keep the value stored for this name on the server being saved, when the save keeps that server's command and arguments; a save that changes either must give every value again. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing)."
         }
       },
       "required": ["name", "value"]

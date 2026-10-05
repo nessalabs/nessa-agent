@@ -250,7 +250,17 @@ impl ServerEdit {
                         name: name.to_owned(),
                     });
                 }
-                let kept = replaced.map(|index| &stored[index].env);
+                // A stored value is kept only for the same launch: a save
+                // that changes the command or arguments must give every value
+                // again, so a new command cannot be pointed at a secret it
+                // was never given (#480 adversarial review).
+                let kept = replaced
+                    .map(|index| &stored[index])
+                    .filter(|stored| {
+                        stored.server.command == save.server.command
+                            && stored.server.args == save.server.args
+                    })
+                    .map(|stored| &stored.env);
                 let env =
                     save.env
                         .iter()
