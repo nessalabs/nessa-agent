@@ -15,19 +15,33 @@
  * before anything is sent: past them the answer is `invalid`, in the client's
  * words, and nothing is logged (D3, D13).
  *
- * What the gateway answers with a code is read through the one table the
- * server port reads (`outcomes` in `mcp-app-server.ts`, by `answerFor`);
- * anything else — no answer, one the client did not believe, a fault around
- * the call — is `failed`, and logged there (D7).
+ * Whether the gateway may have taken it all the same is the client's to say
+ * (`NessaMcpAppError.uncertain`), and is asked first: what may have been
+ * taken is `uncertain`, never a refusal, so a message that may already be the
+ * conversation's turn is not sent again as if it were not (D5, D6). Only
+ * then is a code read, through the one table the server port reads
+ * (`outcomes` in `mcp-app-server.ts`, by `answerFor`), for its words and for
+ * whether the server is gone; anything else — no answer, one the client did
+ * not believe, a fault around the call — is `failed`, and logged there (D7).
  *
  * One mount's context updates go one after another, in the order the app
  * gave them, each once the one before has answered, whatever it answered:
  * two sent at once could reach the gateway the other way round, and the one
  * recorded last stands (D15, the gateway's C8). Another mount's are not held
- * back. A message is not queued: every one waits on its own review.
+ * back. An update whose signal is aborted before its turn — the bridge has
+ * answered it, a timeout among those, or its mount was released — is never
+ * sent, and the next goes in its place: the queue holds no more than the
+ * bridge has requests waiting (`pendingLimit`). A message is not queued:
+ * every one waits on its own review.
  */
-import { mcpAppDeadlines, mcpAppRequestProblem, type McpAppsApi } from "@nessa/client"
+import {
+  mcpAppDeadlines,
+  mcpAppRequestProblem,
+  NessaMcpAppError,
+  type McpAppsApi,
+} from "@nessa/client"
 import type { ConversationAnswer, McpAppConversation } from "../../application/ports"
+import type { JsonObject } from "../../model/json-rpc"
 import { contentText } from "../../model/messages"
 import { answerFor } from "./mcp-app-server"
 
@@ -37,6 +51,42 @@ export type AppConversationApi = Pick<McpAppsApi, "sendMessage" | "updateModelCo
 /** Taken: a message is the conversation's turn, a context is recorded (C17). */
 const taken: ConversationAnswer = { kind: "ok", result: {} }
 
+/**
+ * An update dropped unsent, its turn come after its request was over. No
+ * one reads it: the bridge has answered the request, or the mount is gone.
+ */
+const unsent: ConversationAnswer = { kind: "failed" }
+
+/**
+ * What a request that threw comes to: `uncertain` when the client says it
+ * may have been taken and the table would otherwise say it was refused,
+ * busy, or met a server gone; otherwise the code's outcome in the server
+ * port's table — a certain refusal, or `failed`, which claims nothing.
+ */
+function answered(error: unknown): ConversationAnswer {
+  const answer = answerFor(error, "conversation")
+  const uncertain = error instanceof NessaMcpAppError && error.uncertain
+  if (!uncertain || answer.kind === "failed") return answer
+  return { kind: "uncertain", serverGone: answer.kind === "server-gone" }
+}
+
+/**
+ * The one text an app's message blocks are sent as, or why they cannot be:
+ * the client's words when it is outside its bounds (D3). Every conversation
+ * an app's message reaches asks this before taking it — the gateway's here,
+ * and the sample's (`fixture/fixture-plugin.ts`) — so neither takes a message
+ * the other would refuse.
+ */
+export function appMessageText(
+  content: readonly JsonObject[],
+):
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "invalid"; readonly reason: string } {
+  const text = contentText(content)
+  const problem = mcpAppRequestProblem.message(text)
+  return problem ? { kind: "invalid", reason: problem } : { kind: "text", text }
+}
+
 /** The app's conversation, through the gateway's `client.mcpApps`. */
 export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConversation {
   // Each mount's last update, sent or waiting to be, by its `instanceId`;
@@ -44,9 +94,12 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
   const updating = new Map<string, Promise<unknown>>()
   const inTurn = (
     mount: string,
+    signal: AbortSignal,
     update: () => Promise<ConversationAnswer>,
   ): Promise<ConversationAnswer> => {
-    const sent = (updating.get(mount) ?? Promise.resolve()).then(update)
+    const sent = (updating.get(mount) ?? Promise.resolve()).then(() =>
+      signal.aborted ? unsent : update(),
+    )
     const settled = sent.then(
       () => undefined,
       () => undefined,
@@ -63,18 +116,22 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
     within: mcpAppDeadlines.callToolMs,
 
     async sendMessage(address, content) {
-      const text = contentText(content)
-      const problem = mcpAppRequestProblem.message(text)
-      if (problem) return { kind: "invalid", reason: problem }
+      const message = appMessageText(content)
+      if (message.kind === "invalid") return message
       try {
-        await mcpApps.sendMessage(address.sessionId, address.app, address.server, text)
+        await mcpApps.sendMessage(
+          address.sessionId,
+          address.app,
+          address.server,
+          message.text,
+        )
         return taken
       } catch (error) {
-        return answerFor(error, "conversation")
+        return answered(error)
       }
     },
 
-    async updateModelContext(address, context) {
+    async updateModelContext(address, context, signal) {
       const text = contentText(context.content ?? [])
       // Absent parts are left out: with neither, the update is a clear.
       const update = {
@@ -85,7 +142,7 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
       }
       const problem = mcpAppRequestProblem.context(update)
       if (problem) return { kind: "invalid", reason: problem }
-      return inTurn(address.app.instanceId, async () => {
+      return inTurn(address.app.instanceId, signal, async () => {
         try {
           await mcpApps.updateModelContext(
             address.sessionId,
@@ -95,7 +152,7 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
           )
           return taken
         } catch (error) {
-          return answerFor(error, "conversation")
+          return answered(error)
         }
       })
     },

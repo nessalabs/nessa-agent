@@ -124,7 +124,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   // The host context the app was last given, to send only what changed.
   let given: JsonObject | undefined
   let cancelDeadline: (() => void) | undefined
-  // Each request waiting on a port, by id, with its deadline's cancel.
+  // Each request waiting on a port, by id, with what ends it: its deadline's
+  // cancel, and the abort of the signal its port was given.
   const pending = new Map<RequestId, () => void>()
   let logged = 0
 
@@ -298,11 +299,23 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   }
 
   /**
+   * A request to the conversation that may have been taken all the same
+   * (#390, D5–D7): never told as a refusal, which says nothing was, so the
+   * app does not send again what may already be the conversation's turn. A
+   * server the table places as gone is still shown as gone.
+   */
+  function answerUncertain(id: RequestId, serverGone: boolean) {
+    if (serverGone && !view.serverGone) show({ serverGone: true })
+    return send(refuse(id, errorCodes.internal, "The request failed"))
+  }
+
+  /**
    * `ui/message`'s answer (#390, D-B): whether the message was taken. What
-   * the gateway refused — the person's denial, a turn running, a request it
-   * judged — is `isError`, as a tool's refusal is to `tools/call`; nothing
-   * was sent for any of them. Past the client's bounds, it is the app's
-   * request that is wrong (D3).
+   * the gateway certainly refused — the person's denial, a turn running, a
+   * request it judged — is `isError`, as a tool's refusal is to `tools/call`;
+   * nothing was sent for any of them. What may have been taken is a failure
+   * (D5–D7). Past the client's bounds, it is the app's request that is wrong
+   * (D3).
    */
   function answerMessage(id: RequestId, answer: ConversationAnswer) {
     switch (answer.kind) {
@@ -310,6 +323,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         return ok(id)
       case "invalid":
         return send(refuse(id, errorCodes.invalidParams, answer.reason))
+      case "uncertain":
+        return answerUncertain(id, answer.serverGone)
       case "refused":
       case "busy":
         return declined(id)
@@ -323,8 +338,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
 
   /**
    * `ui/update-model-context`'s answer (#390, D-B): `{}` once taken, and
-   * otherwise what a `tools/call` is answered for the same outcome, in the
-   * same words; past the client's bounds, the app's request is wrong (D13).
+   * otherwise what a `tools/call` is answered for the same certain outcome,
+   * in the same words; what may have been taken is a failure, as for a
+   * message (D14); past the client's bounds, the app's request is wrong (D13).
    */
   function answerContext(id: RequestId, answer: ConversationAnswer) {
     switch (answer.kind) {
@@ -332,6 +348,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         return ok(id)
       case "invalid":
         return send(refuse(id, errorCodes.invalidParams, answer.reason))
+      case "uncertain":
+        return answerUncertain(id, answer.serverGone)
       default:
         return answerServer(id, answer)
     }
@@ -341,27 +359,34 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
    * Waits for a port, then answers `id` once: with what the port said, or —
    * past the request deadline — that it timed out, freeing its slot; the
    * port's answer after that is dropped. `send` posts nothing once the view
-   * is gone.
+   * is gone. The port is given a signal aborted once `id` is answered, or the
+   * view is gone, or the mount is released, whichever is first: what it has
+   * not sent for the request by then, it does not send (D15).
    */
   function settle<T>(
     id: RequestId,
-    work: Promise<T>,
+    work: (signal: AbortSignal) => Promise<T>,
     answer: (value: T) => void,
     within: number = deadlines.request,
   ) {
-    const settled = () => {
+    const request = new AbortController()
+    const released = () => request.abort()
+    mount.signal.addEventListener("abort", released, { once: true })
+    const stopDeadline = ports.timers.after(within, () => {
+      if (settled()) send(refuse(id, errorCodes.internal, "The request timed out"))
+    })
+    function settled() {
       if (!pending.has(id)) return false
       pending.get(id)?.()
       pending.delete(id)
       return true
     }
-    pending.set(
-      id,
-      ports.timers.after(within, () => {
-        if (settled()) send(refuse(id, errorCodes.internal, "The request timed out"))
-      }),
-    )
-    work
+    pending.set(id, () => {
+      stopDeadline()
+      mount.signal.removeEventListener("abort", released)
+      request.abort()
+    })
+    work(request.signal)
       .catch((error: unknown) => {
         console.error("An MCP App port failed", error)
         return undefined
@@ -388,20 +413,22 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       case "tools/call":
         return settle(
           id,
-          toServer.callTool(message.tool, message.arguments),
+          () => toServer.callTool(message.tool, message.arguments),
           (answer) => answerServer(id, answer),
           ports.server.callWithin,
         )
       case "resources/read":
-        return settle(id, toServer.readResource(message.uri), (answer) =>
-          answerServer(id, answer),
+        return settle(
+          id,
+          () => toServer.readResource(message.uri),
+          (answer) => answerServer(id, answer),
         )
       case "ui/message": {
         const conversation = ports.conversation
         if (!conversation) return unsupported(id)
         return settle(
           id,
-          conversation.sendMessage(address, message.content),
+          () => conversation.sendMessage(address, message.content),
           (answer) => answerMessage(id, answer),
           conversation.within,
         )
@@ -417,7 +444,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         }
         return settle(
           id,
-          conversation.updateModelContext(address, update),
+          (signal) => conversation.updateModelContext(address, update, signal),
           (answer) => answerContext(id, answer),
           conversation.within,
         )
@@ -428,15 +455,19 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         const url = webUrl(message.url)
         if (url === undefined)
           return send(refuse(id, errorCodes.invalidParams, "Invalid URL"))
-        return settle(id, links.open(url), (done) =>
-          done === "done" ? ok(id) : declined(id),
+        return settle(
+          id,
+          () => links.open(url),
+          (done) => (done === "done" ? ok(id) : declined(id)),
         )
       }
       case "ui/download-file": {
         const downloads = ports.downloads
         if (!downloads) return unsupported(id)
-        return settle(id, downloads.download(message.contents), (done) =>
-          done === "done" ? ok(id) : declined(id),
+        return settle(
+          id,
+          () => downloads.download(message.contents),
+          (done) => (done === "done" ? ok(id) : declined(id)),
         )
       }
       case "ui/request-display-mode": {

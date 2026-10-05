@@ -59,6 +59,9 @@ function refusal(code: string): NessaMcpAppError {
 
 const text = (value: string) => ({ type: "text", text: value })
 const taken = { kind: "ok", result: {} }
+/** The signal of a request the bridge has not answered yet, its mount live. */
+const live = new AbortController().signal
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -130,30 +133,38 @@ describe("an app's message", () => {
     )
   })
 
-  it("D5: is busy when the gateway has no room, and may be sent again", async () => {
-    const apps = fakeApps({
-      sendMessage: vi.fn(() => Promise.reject(refusal("temporarily_unavailable"))),
-    })
+  it("D5: is uncertain, not busy, for temporarily_unavailable: the client cannot say the agent does not have it", async () => {
+    const error = refusal("temporarily_unavailable")
+    expect(error.uncertain).toBe(true)
+    const apps = fakeApps({ sendMessage: vi.fn(() => Promise.reject(error)) })
     expect(await gatewayAppConversation(apps).sendMessage(address, [text("hi")])).toEqual(
-      {
-        kind: "busy",
-      },
+      { kind: "uncertain", serverGone: false },
     )
   })
 
-  it.each([
-    "conversation_not_found",
-    "conversation_deleted",
-    "conversation_closed",
-    "mcp_session_unavailable",
-  ])("D6: finds the server gone when the gateway answers %s", async (code) => {
-    const apps = fakeApps({ sendMessage: vi.fn(() => Promise.reject(refusal(code))) })
-    expect(await gatewayAppConversation(apps).sendMessage(address, [text("hi")])).toEqual(
-      {
-        kind: "server-gone",
-      },
-    )
-  })
+  it.each(["conversation_closed", "mcp_session_unavailable"])(
+    "D6: is uncertain, with the server gone, for %s: the turn may have been taken before it went",
+    async (code) => {
+      const error = refusal(code)
+      expect(error.uncertain).toBe(true)
+      const apps = fakeApps({ sendMessage: vi.fn(() => Promise.reject(error)) })
+      expect(
+        await gatewayAppConversation(apps).sendMessage(address, [text("hi")]),
+      ).toEqual({ kind: "uncertain", serverGone: true })
+    },
+  )
+
+  it.each(["conversation_not_found", "conversation_deleted"])(
+    "D6: finds the server gone, certainly, when the gateway answers %s before anything was taken",
+    async (code) => {
+      const error = refusal(code)
+      expect(error.uncertain).toBe(false)
+      const apps = fakeApps({ sendMessage: vi.fn(() => Promise.reject(error)) })
+      expect(
+        await gatewayAppConversation(apps).sendMessage(address, [text("hi")]),
+      ).toEqual({ kind: "server-gone" })
+    },
+  )
 
   it("D7: fails, logged, for no code, an answer the client did not believe, or a fault", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
@@ -178,19 +189,30 @@ describe("an app's message", () => {
     expect(error).toHaveBeenCalledTimes(4)
   })
 
-  it("D-B: reads every gateway code through the server port's one table: a code is the same outcome whatever the app asked", async () => {
+  it("D-B: asks the client's certainty first, then reads every gateway code through the server port's one table: a certain code is the same outcome whatever the app asked, an uncertain one never a refusal", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
     for (const code of Object.values(ConversationErrorCode)) {
       const refused = () => Promise.reject(refusal(code))
       const message = await gatewayAppConversation(
         fakeApps({ sendMessage: vi.fn(refused) }),
       ).sendMessage(address, [text("hi")])
+      const context = await gatewayAppConversation(
+        fakeApps({ updateModelContext: vi.fn(refused) }),
+      ).updateModelContext(address, {}, live)
       const call = await gatewayAppServer(
         { callTool: vi.fn(refused) } as unknown as McpAppsApi,
         () => () => {},
         () => "release",
       ).callTool(address, "t", {})
-      expect(message.kind, code).toBe(call.kind)
+      const expected =
+        refusal(code).uncertain && call.kind !== "failed"
+          ? { kind: "uncertain", serverGone: call.kind === "server-gone" }
+          : call
+      // The same outcome; its words are by what was asked.
+      const kindOf = ({ kind, ...rest }: { kind: string; serverGone?: boolean }) =>
+        "serverGone" in rest ? { kind, serverGone: rest.serverGone } : { kind }
+      expect(kindOf(message), code).toEqual(kindOf(expected))
+      expect(kindOf(context), code).toEqual(kindOf(expected))
     }
   })
 })
@@ -199,10 +221,14 @@ describe("an app's context", () => {
   it("D11: is its text blocks and its structured content, encoded, sent as its mount", async () => {
     const apps = fakeApps()
     expect(
-      await gatewayAppConversation(apps).updateModelContext(address, {
-        content: [text("Showing April"), text(""), text("week 2")],
-        structuredContent: { month: 4 },
-      }),
+      await gatewayAppConversation(apps).updateModelContext(
+        address,
+        {
+          content: [text("Showing April"), text(""), text("week 2")],
+          structuredContent: { month: 4 },
+        },
+        live,
+      ),
     ).toEqual(taken)
     expect(apps.updateModelContext).toHaveBeenCalledExactlyOnceWith(
       conversationId,
@@ -216,7 +242,7 @@ describe("an app's context", () => {
     const apps = fakeApps()
     const conversation = gatewayAppConversation(apps)
     for (const context of [{}, { content: [] }, { content: [text(""), text("")] }])
-      expect(await conversation.updateModelContext(address, context)).toEqual(taken)
+      expect(await conversation.updateModelContext(address, context, live)).toEqual(taken)
     expect(apps.updateModelContext.mock.calls.map((call) => call[3])).toEqual([
       {},
       {},
@@ -240,16 +266,20 @@ describe("an app's context", () => {
         },
       ],
     ] as const)
-      expect(await conversation.updateModelContext(address, context)).toEqual({
+      expect(await conversation.updateModelContext(address, context, live)).toEqual({
         kind: "invalid",
         reason: mcpAppRequestProblem.context(update),
       })
     expect(apps.updateModelContext).not.toHaveBeenCalled()
     expect(
-      await conversation.updateModelContext(address, {
-        content: [text("x".repeat(MAX_MCP_CONTEXT_BYTES))],
-        structuredContent: { a: 1 },
-      }),
+      await conversation.updateModelContext(
+        address,
+        {
+          content: [text("x".repeat(MAX_MCP_CONTEXT_BYTES))],
+          structuredContent: { a: 1 },
+        },
+        live,
+      ),
     ).toEqual(taken)
     expect(apps.updateModelContext).toHaveBeenCalledTimes(1)
   })
@@ -264,17 +294,30 @@ describe("an app's context", () => {
       { kind: "refused", reason: "The gateway refused the request as invalid" },
     ],
     ["mcp_cancelled", { kind: "refused", reason: "The request was withdrawn" }],
-    ["temporarily_unavailable", { kind: "busy" }],
-  ])("D14: is answered for %s as a tool's call would be", async (code, answer) => {
-    const apps = fakeApps({
-      updateModelContext: vi.fn(() => Promise.reject(refusal(code))),
-    })
-    expect(
-      await gatewayAppConversation(apps).updateModelContext(address, {
-        content: [text("x")],
-      }),
-    ).toEqual(answer)
-  })
+    [
+      "mcp_app_unknown",
+      { kind: "refused", reason: "This app may not speak in this conversation" },
+    ],
+    ["conversation_not_found", { kind: "server-gone" }],
+    // The client cannot say these were not held: never told as a refusal.
+    ["temporarily_unavailable", { kind: "uncertain", serverGone: false }],
+    ["conversation_closed", { kind: "uncertain", serverGone: true }],
+    ["mcp_session_unavailable", { kind: "uncertain", serverGone: true }],
+  ])(
+    "D14: is answered for %s as a tool's call would be, once the client is certain",
+    async (code, answer) => {
+      const apps = fakeApps({
+        updateModelContext: vi.fn(() => Promise.reject(refusal(code))),
+      })
+      expect(
+        await gatewayAppConversation(apps).updateModelContext(
+          address,
+          { content: [text("x")] },
+          live,
+        ),
+      ).toEqual(answer)
+    },
+  )
 })
 
 describe("a mount's context updates (D15)", () => {
@@ -289,12 +332,22 @@ describe("a mount's context updates (D15)", () => {
       }),
     })
     const conversation = gatewayAppConversation(apps)
-    const first = conversation.updateModelContext(address, { content: [text("first")] })
-    const second = conversation.updateModelContext(address, { content: [text("second")] })
-    const clear = conversation.updateModelContext(address, {})
-    const other = conversation.updateModelContext(otherMount, {
-      content: [text("other mount")],
-    })
+    const first = conversation.updateModelContext(
+      address,
+      { content: [text("first")] },
+      live,
+    )
+    const second = conversation.updateModelContext(
+      address,
+      { content: [text("second")] },
+      live,
+    )
+    const clear = conversation.updateModelContext(address, {}, live)
+    const other = conversation.updateModelContext(
+      otherMount,
+      { content: [text("other mount")] },
+      live,
+    )
     await new Promise((resolve) => setTimeout(resolve, 0))
     // The second waits for the first; another mount's does not.
     expect(sent).toEqual(["first", "other mount"])
@@ -324,12 +377,49 @@ describe("a mount's context updates (D15)", () => {
       }),
     })
     const conversation = gatewayAppConversation(apps)
-    const first = conversation.updateModelContext(address, { content: [text("a")] })
-    const second = conversation.updateModelContext(address, { content: [text("b")] })
-    const third = conversation.updateModelContext(address, { content: [text("c")] })
-    expect(await first).toEqual({ kind: "busy" })
+    const first = conversation.updateModelContext(address, { content: [text("a")] }, live)
+    const second = conversation.updateModelContext(
+      address,
+      { content: [text("b")] },
+      live,
+    )
+    const third = conversation.updateModelContext(address, { content: [text("c")] }, live)
+    expect(await first).toEqual({ kind: "uncertain", serverGone: false })
     expect(await second).toEqual({ kind: "failed" })
     expect(await third).toEqual(taken)
+  })
+})
+
+describe("a context update whose request is over (D15, D-D)", () => {
+  it("is never sent once its signal is aborted before its turn, and the next goes in its place, in order", async () => {
+    const sent: string[] = []
+    const answers: (() => void)[] = []
+    const apps = fakeApps({
+      updateModelContext: vi.fn(async (_conversation, _app, _server, context) => {
+        sent.push(context.text ?? "(clear)")
+        await new Promise<void>((resolve) => answers.push(resolve))
+        return { requestId: "request-1", applied: true }
+      }),
+    })
+    const conversation = gatewayAppConversation(apps)
+    const over = new AbortController()
+    const first = conversation.updateModelContext(address, { content: [text("A")] }, live)
+    const dropped = conversation.updateModelContext(
+      address,
+      { content: [text("B")] },
+      over.signal,
+    )
+    const next = conversation.updateModelContext(address, { content: [text("C")] }, live)
+    await flush()
+    over.abort()
+    answers.shift()?.()
+    expect(await first).toEqual(taken)
+    // Unsent; no one reads it, as the bridge has answered it already.
+    expect(await dropped).toEqual({ kind: "failed" })
+    await flush()
+    expect(sent).toEqual(["A", "C"])
+    answers.shift()?.()
+    expect(await next).toEqual(taken)
   })
 })
 

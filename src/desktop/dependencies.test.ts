@@ -203,19 +203,24 @@ describe("the window's widget plugins", () => {
         server: "mcptest",
         app: { executionId: "run", toolId: "call-1", instanceId: "mount" },
       }
-      // A context, taken at once, waits on nobody: no read is started for it.
+      // A context waits on nobody: while the gateway has not answered it, as
+      // after, no read is started for it, however long it takes.
       await vi.advanceTimersByTimeAsync(3_000)
       const atRest = drawn.reads()
-      expect(
-        await port.updateModelContext(address, {
-          content: [{ type: "text", text: "Showing April" }],
-        }),
-      ).toEqual({ kind: "ok", result: {} })
-      await vi.advanceTimersByTimeAsync(3_000)
-      expect(drawn.reads()).toBe(atRest)
+      const given = port.updateModelContext(
+        address,
+        { content: [{ type: "text", text: "Showing April" }] },
+        new AbortController().signal,
+      )
+      await vi.advanceTimersByTimeAsync(10_000)
       expect(drawn.contexts).toEqual([
         [conversation, address.app, "mcptest", { text: "Showing April" }],
       ])
+      expect(drawn.reads()).toBe(atRest)
+      drawn.contexted.resolve({ requestId: "request", applied: true })
+      expect(await given).toEqual({ kind: "ok", result: {} })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(drawn.reads()).toBe(atRest)
       // A message waits on the person's review there: read each round until answered.
       const sent = port.sendMessage(address, [{ type: "text", text: "Plot May" }])
       await vi.advanceTimersByTimeAsync(3_000)
@@ -261,7 +266,9 @@ describe("the window's widget plugins", () => {
       transcript.messages.length,
     )
     // The sample has no model: a context is refused, never answered as taken.
-    expect(await port.updateModelContext(address, {})).toEqual({
+    expect(
+      await port.updateModelContext(address, {}, new AbortController().signal),
+    ).toEqual({
       kind: "refused",
       reason: "The sample has no model to give context to",
     })
@@ -307,9 +314,10 @@ function gatewayWithApp() {
   )
   const released: unknown[][] = []
   const contexts: unknown[][] = []
-  // Each tool call, and each message, waits until the test answers it.
+  // Each tool call, message and context waits until the test answers it.
   const called = deferred<unknown>()
   const messaged = deferred<unknown>()
+  const contexted = deferred<unknown>()
   const mcpApps = {
     releaseApp: (...args: unknown[]) => {
       released.push(args)
@@ -319,7 +327,7 @@ function gatewayWithApp() {
     sendMessage: () => messaged.promise,
     updateModelContext: (...args: unknown[]) => {
       contexts.push(args)
-      return Promise.resolve({ requestId: "request", applied: true })
+      return contexted.promise
     },
   } as unknown as McpAppsApi
   const { client } = gateway
@@ -329,6 +337,7 @@ function gatewayWithApp() {
     contexts,
     called,
     messaged,
+    contexted,
     reads: () => gateway.count("read"),
     connects: () => connects,
     connect: () => {

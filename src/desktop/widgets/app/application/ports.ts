@@ -113,11 +113,17 @@ export type Delivered = "done" | "refused"
 /**
  * What the conversation answered an app's request: the gateway's answer, in
  * the server's outcomes (`ServerAnswer`, the same table for both, #390 D-B),
- * or `invalid` when the request is outside the client's bounds and nothing
- * was sent, with the client's words for why.
+ * when the client is certain of it — a refusal, a server gone or a busy lane
+ * here is one made before anything was taken; `invalid` when the request is
+ * outside the client's bounds and nothing was sent, with the client's words
+ * for why; or `uncertain` when the request may have been taken all the same
+ * (the client's `NessaMcpAppError.uncertain`), with whether the table places
+ * its code as the server gone, so the view can say so.
  */
 export type ConversationAnswer =
-  ServerAnswer | { readonly kind: "invalid"; readonly reason: string }
+  | ServerAnswer
+  | { readonly kind: "invalid"; readonly reason: string }
+  | { readonly kind: "uncertain"; readonly serverGone: boolean }
 
 /**
  * The conversation an app's call was made in: the person's next message,
@@ -139,7 +145,10 @@ export interface McpAppConversation {
   /**
    * `ui/update-model-context`: replaces what this mount last gave the model;
    * an update with nothing in it clears it. `ok` once it is taken and
-   * recorded. A mount's updates are sent in the order it gave them.
+   * recorded. A mount's updates are sent in the order it gave them. `signal`
+   * is aborted once the bridge has answered the request — a timeout among
+   * those — or the mount is released: an update still waiting its turn then
+   * is never sent.
    */
   updateModelContext(
     address: AppAddress,
@@ -147,6 +156,7 @@ export interface McpAppConversation {
       readonly content?: readonly JsonObject[]
       readonly structuredContent?: JsonObject
     },
+    signal: AbortSignal,
   ): Promise<ConversationAnswer>
   /**
    * How long, in milliseconds, either request may take before the bridge

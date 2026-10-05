@@ -12,6 +12,10 @@ import { fixtureAppHtml } from "../fixture/fixture-app"
 import { fixtureCall, fixtureServerPort } from "../fixture/fixture-plugin"
 import { fixtureResourceUri } from "../fixture/fixture-widgets"
 import { frameTransport, type FrameTransport } from "../adapters/dom/frame-transport"
+import {
+  gatewayAppConversation,
+  type AppConversationApi,
+} from "../adapters/gateway/app-messages"
 import { appLines, type AppViewState } from "../model/app-view"
 import { frameOn } from "../model/lifecycle"
 import { errorCodes, type JsonObject, type Outgoing } from "../model/json-rpc"
@@ -1202,7 +1206,7 @@ describe("an app in its conversation (#390)", () => {
     ])
   })
 
-  it("D4, D5, D9: a message the gateway refused — denied, a turn running, busy — is isError, and nothing else is said", async () => {
+  it("D4, D9: a message the gateway certainly refused — denied, a turn running, busy — is isError, and nothing else is said", async () => {
     const { conversation } = speaking([
       { kind: "refused", reason: "The person declined this action" },
       { kind: "refused", reason: "The conversation is busy" },
@@ -1220,13 +1224,38 @@ describe("an app in its conversation (#390)", () => {
     expect(app.bridge.view().serverGone).toBeFalsy()
   })
 
-  it("D6: a message to a conversation gone is isError, and the view says the server has stopped", async () => {
+  it("D6: a message to a conversation certainly gone is isError, and the view says the server has stopped", async () => {
     const { conversation } = speaking([{ kind: "server-gone" }])
     const app = harness({ ports: { conversation } })
     await live(app)
     app.say(messageRequest(2))
     await flush()
     expect(app.take()).toEqual([{ jsonrpc: "2.0", id: 2, result: { isError: true } }])
+    expect(app.bridge.view().serverGone).toBe(true)
+  })
+
+  it("D5, D6, D14: what may have been taken is never isError nor a refusal: the request failed, and a server gone still shows the notice", async () => {
+    const { conversation } = speaking([
+      { kind: "uncertain", serverGone: false },
+      { kind: "uncertain", serverGone: false },
+      { kind: "uncertain", serverGone: true },
+    ])
+    const app = harness({ ports: { conversation } })
+    await live(app)
+    app.say(messageRequest(2))
+    await flush()
+    app.say(contextRequest(3, { content: [{ type: "text", text: "x" }] }))
+    await flush()
+    expect(app.bridge.view().serverGone).toBeFalsy()
+    app.say(messageRequest(4))
+    await flush()
+    expect(app.take()).toEqual(
+      [2, 3, 4].map((id) => ({
+        jsonrpc: "2.0",
+        id,
+        error: { code: errorCodes.internal, message: "The request failed" },
+      })),
+    )
     expect(app.bridge.view().serverGone).toBe(true)
   })
 
@@ -1374,6 +1403,121 @@ describe("an app in its conversation (#390)", () => {
       },
     ])
     expect(app.bridge.view().serverGone).toBe(true)
+  })
+
+  /**
+   * The gateway's adapter behind the bridge, over a `client.mcpApps` whose
+   * updates wait until the test answers them, each in the order sent.
+   */
+  function gatewayBehind() {
+    const sent: string[] = []
+    const answers: (() => void)[] = []
+    const mcpApps: AppConversationApi = {
+      sendMessage: async () => ({ executionId: "turn" }),
+      updateModelContext: async (_conversation, _app, _server, context) => {
+        sent.push(context.text ?? "(clear)")
+        await new Promise<void>((resolve) => answers.push(resolve))
+        return { requestId: "request", applied: true }
+      },
+    }
+    return { sent, answers, conversation: gatewayAppConversation(mcpApps) }
+  }
+  const update = (id: number, text: string) =>
+    contextRequest(id, { content: [{ type: "text", text }] })
+
+  it("D15, D-D: the signal a context is given is aborted once the bridge answers it, by the gateway or by its deadline, or the mount is released", async () => {
+    const signals: AbortSignal[] = []
+    const answers: ((answer: ConversationAnswer) => void)[] = []
+    const app = harness({
+      ports: {
+        conversation: {
+          sendMessage: async () => ({ kind: "ok", result: {} }),
+          updateModelContext: (_address, _context, signal) => {
+            signals.push(signal)
+            return new Promise((resolve) => answers.push(resolve))
+          },
+          within: deadlines.request,
+        },
+      },
+    })
+    await live(app)
+    app.say(update(2, "answered"))
+    app.say(update(3, "timed out"))
+    app.say(update(4, "released"))
+    expect(signals.map((signal) => signal.aborted)).toEqual([false, false, false])
+    answers[0]!({ kind: "ok", result: {} })
+    await flush()
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, false, false])
+    app.timers.filter((timer) => !timer.cancelled)[0]!.run()
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true, false])
+    app.bridge.remove()
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true, true])
+  })
+
+  it("D15, D-D: a mount released with updates queued: the gateway never sees one still waiting its turn", async () => {
+    const { sent, answers, conversation } = gatewayBehind()
+    const app = harness({ ports: { conversation } })
+    await live(app)
+    app.say(update(2, "A"))
+    app.say(update(3, "B"))
+    await flush()
+    expect(sent).toEqual(["A"])
+    app.bridge.remove()
+    answers.shift()?.()
+    await flush()
+    await flush()
+    expect(sent).toEqual(["A"])
+  })
+
+  it("D15, D-D: an update the app was told timed out is not sent when its turn comes; the next live one is, in order", async () => {
+    const { sent, answers, conversation } = gatewayBehind()
+    const app = harness({ ports: { conversation } })
+    await live(app)
+    app.say(update(2, "A"))
+    app.say(update(3, "B"))
+    await flush()
+    // B's deadline passes while A is still with the gateway.
+    const [, bDeadline] = app.timers.filter((timer) => !timer.cancelled)
+    bDeadline!.run()
+    app.say(update(4, "C"))
+    answers.shift()?.()
+    await flush()
+    await flush()
+    expect(sent).toEqual(["A", "C"])
+    answers.shift()?.()
+    await flush()
+    expect(app.take()).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: errorCodes.internal, message: "The request timed out" },
+      },
+      { jsonrpc: "2.0", id: 2, result: {} },
+      { jsonrpc: "2.0", id: 4, result: {} },
+    ])
+  })
+
+  it("D15, D-D: a flood of updates that time out behind one in flight sends no more than were live: the queue is bounded by the bridge's pendingLimit", async () => {
+    const { sent, answers, conversation } = gatewayBehind()
+    const app = harness({ ports: { conversation } })
+    await live(app)
+    app.say(update(1, "first"))
+    await flush()
+    let id = 100
+    // Five waves of as many as the bridge holds, each timed out before its turn.
+    for (let wave = 0; wave < 5; wave++) {
+      for (let each = 0; each < pendingLimit - 1; each++) app.say(update(id++, "flood"))
+      for (const timer of app.timers.filter((timer) => !timer.cancelled)) timer.run()
+      await flush()
+    }
+    expect(app.take().filter((message) => "error" in message)).toHaveLength(
+      5 * (pendingLimit - 1) + 1,
+    )
+    // One more, live, after the flood.
+    app.say(update(2, "last"))
+    answers.shift()?.()
+    for (let round = 0; round < 5; round++) await flush()
+    expect(sent).toEqual(["first", "last"])
   })
 
   it("D16: with no conversation port, both are not offered, and the capabilities say neither", async () => {
