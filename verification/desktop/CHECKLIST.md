@@ -670,6 +670,8 @@ says why where the conversations would be.
   `hostGateway`, `connectDevSession`, the gateway source — against a fake host
   whose endpoint and credential commands answer with a real gateway's, started
   by `lib/gateway-stack.mjs` with a real agent; needs the agent signed in).
+  With `--scripted` the same steps run signed out against
+  `scenarios/text-reply.json` (the reply is `Ready.`), including `--mode prod`.
   _Not in a browser:_ the native host's side — readiness, endpoint discovery,
   the credential file read and its refusals — is the Rust host tests'
   (`src-tauri/src/surface_credential.rs`,
@@ -680,6 +682,17 @@ says why where the conversations would be.
   window.** _By hand:_ `pnpm app` against a gateway with
   `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
   #436 lands.
+- [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
+  window shows it.** _Check:_ `scripted-scenarios.mjs` (and
+  `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and
+  `gateway-window --scripted` in Chromium and WebKit). The agent runs
+  `scenarios/window.json`: streamed text, an agent approval answered Allow
+  Once, a tool step, a turn that fails after speaking, and a turn that stays
+  cancelled after the conversation is closed. The strings come from that file.
+  `--mode prod` runs this check and `gateway-window --scripted` against a
+  production preview; MCP Apps stay on the dev server. One evidence directory
+  per run, and one verdict line.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
 
 ## Console errors
 

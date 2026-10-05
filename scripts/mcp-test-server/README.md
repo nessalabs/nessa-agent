@@ -128,3 +128,19 @@ a placeholder `ANTHROPIC_API_KEY` (which keeps the gateway from reading
 Claude's from the keychain). The desktop's real-gateway check runs it with
 `--scripted`. Its design table is on #418, and its tests are
 `scripted-frames.test.mjs` and `scripted-agent.test.mjs`.
+
+`scripted-agent.mjs codex|claude --scenario <file>` runs that file's steps
+instead of the recorded frames (`scripted-scenario.mjs`). A step emits text,
+asks a permission and follows the answer (allow once, deny once, or a
+withdrawn review), calls an MCP tool, fails the turn, waits for
+`session/cancel`, or ends it. The recorded frames stay the default, so a run
+without `--scenario` does not change. `scenarios/text-reply.json` is the
+plain reply `gateway-window.mjs --scripted` uses. `scenarios/window.json` is
+the permission, failure and cancel `scripted-scenarios.mjs` drives. The
+state table is in `scripted-scenario.mjs`, and its tests are
+`scripted-scenario.test.mjs`.
+
+`pnpm test:e2e:scripted` builds the gateway and runs the signed-out checks in
+Chromium and WebKit. It does not need harness `node_modules`. The summary it
+writes is what a pull request that changes UI, gateway, ACP, or MCP behavior
+shows ([Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)).
