@@ -399,6 +399,7 @@ const CONFIG_LIMIT: usize = 4096;
 /// [`settings_for`] over a store bounded as the gateway's is (64 KiB), so
 /// a stored list can outgrow a frame
 /// (`w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers`).
+#[cfg(unix)]
 pub(crate) fn settings_at_full_size(
     files: Arc<MemoryFiles>,
     audit: Arc<RecordingAudit>,
