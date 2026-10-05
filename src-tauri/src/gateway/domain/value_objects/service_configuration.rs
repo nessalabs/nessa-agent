@@ -45,6 +45,7 @@ impl ServiceConfiguration {
     /// The directory rule stays in [`claude_config_directory_is_durable`]; this
     /// rebuilds through [`Self::new`] so a caller cannot store a path that
     /// construction would have refused.
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub fn with_claude_config_directory(
         self,
         claude_config_directory: Option<PathBuf>,
@@ -64,6 +65,7 @@ impl ServiceConfiguration {
     ///
     /// `Ok(None)` means that directory is already published, so the caller must
     /// not reconcile. Validity stays in [`Self::new`].
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn replacing_claude_config_directory(
         &self,
         directory: Option<PathBuf>,
@@ -82,6 +84,7 @@ impl ServiceConfiguration {
     /// already `previous`, so the caller must not write. A newer settings save
     /// keeps the directory it published
     /// (`a_failed_registration_does_not_restore_a_newer_directory`).
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub fn restoring_claude_config_directory(
         &self,
         expected: &Option<PathBuf>,
