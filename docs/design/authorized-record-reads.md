@@ -295,6 +295,11 @@ fault and fences subsequent reads; final shutdown joins every remaining handle.
 The process outcome preserves reader, deadline and conversation cleanup causes
 through one `ShutdownReport` with one outcome per cleanup owner, carried by
 `ShutdownFailure` when it does not confirm, so combined failures all survive.
+A browser serve error from the same run does not replace that report:
+`RunError::Serve` is the result only when shutdown confirmed, and
+`RunError::ServeAndShutdown` keeps the original browser error beside the same
+unconfirmed or unpublished shutdown evidence. That pairing is the combined
+serving table in [device pairing](auth/device-pairing.md#combined-serving-and-shutdown-outcome).
 `passive_cleanup` is the single composition ordering and report owner: it
 publishes the report before its first await and records each result in it
 before its next await. Interrupted cleanup owners preserve those known facts

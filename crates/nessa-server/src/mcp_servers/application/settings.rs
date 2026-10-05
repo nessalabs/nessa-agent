@@ -131,6 +131,15 @@ pub struct ServerList {
     pub servers: Vec<ListedServer>,
 }
 
+/// Whether `mcpServers.list` can answer this list in one frame, for any
+/// request id: the product layer's measure, which owns the wire
+/// (`product::mcp_servers::list_fits`). A save whose resulting list would
+/// not fit is refused [`McpServerSettingsError::ConfigTooLarge`]; a remove
+/// only shortens the list, so it is never refused for this, and stays the
+/// way out of a list that does not fit
+/// (`w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers`).
+pub type ListFits = fn(&ServerList) -> bool;
+
 /// Why an edit is invalid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditProblem {
@@ -156,6 +165,8 @@ pub enum McpServerSettingsError {
     /// inspection slot is taken.
     Busy,
     ConfigInvalid,
+    /// The configuration would pass its byte bound as written; or a save's
+    /// resulting list would not fit one frame ([`ListFits`]).
     ConfigTooLarge,
     /// The configuration could not be read, locked or published, and
     /// nothing was applied (`applied: false`) — or the task that owned the
@@ -258,6 +269,8 @@ struct Operations {
     audit: Arc<dyn McpServerAudit>,
     live: Arc<dyn LiveServerSet>,
     inspector: Arc<dyn ServerInspector>,
+    /// Whether a save's resulting list can still be listed.
+    list_fits: ListFits,
     /// One permit per inspection that may run at once
     /// (`i6_a_third_inspection_at_once_is_busy`).
     inspections: Arc<Semaphore>,
@@ -273,6 +286,7 @@ impl McpServerSettings {
         audit: Arc<dyn McpServerAudit>,
         live: Arc<dyn LiveServerSet>,
         inspector: Arc<dyn ServerInspector>,
+        list_fits: ListFits,
     ) -> Self {
         Self {
             operations: Arc::new(Operations {
@@ -280,6 +294,7 @@ impl McpServerSettings {
                 audit,
                 live,
                 inspector,
+                list_fits,
                 inspections: Arc::new(Semaphore::new(MCP_SERVER_INSPECT_MAX_CONCURRENT)),
                 stop: watch::channel(false).0,
             }),
@@ -542,8 +557,13 @@ impl Operations {
         let stored = blocking(move || store.read())
             .await
             .unwrap_or(Err(StoreError::Unavailable))?;
-        let mut servers: Vec<ListedServer> = stored
-            .servers
+        Ok(self.listing(stored.revision, &stored.servers))
+    }
+
+    /// `servers` at `revision` as `mcpServers.list` shows them: the stored
+    /// ones, then the managed one.
+    fn listing(&self, revision: String, servers: &[ConfiguredMcpServer]) -> ServerList {
+        let mut listed: Vec<ListedServer> = servers
             .iter()
             .filter(|server| !server.managed())
             .map(|server| ListedServer {
@@ -557,17 +577,17 @@ impl Operations {
         // names: what counts towards the bound, whatever the file says now
         // (`a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off`).
         if let Some(managed) = self.live.managed() {
-            servers.push(ListedServer {
+            listed.push(ListedServer {
                 env_names: managed.env_names(),
                 enabled: managed.enabled(),
                 server: managed.server().clone(),
                 managed: true,
             });
         }
-        Ok(ServerList {
-            revision: stored.revision,
-            servers,
-        })
+        ServerList {
+            revision,
+            servers: listed,
+        }
     }
 
     async fn edit(
@@ -820,6 +840,13 @@ impl Operations {
             return Err(McpServerSettingsError::Invalid(EditProblem::Server(
                 problem,
             )));
+        }
+        // The new revision is a digest of the same length as the stored one,
+        // so the stored one stands in for it in the measure.
+        if matches!(edit, ServerEdit::Save(_))
+            && !(self.list_fits)(&self.listing(stored.revision.clone(), &edited))
+        {
+            return Err(McpServerSettingsError::ConfigTooLarge);
         }
         let store = self.store.clone();
         let written = edited.clone();

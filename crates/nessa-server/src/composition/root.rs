@@ -11,7 +11,10 @@ use crate::product::{ProductRouteState, WatchTaskFault};
 use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
-    core::{Launch, NativeFailure, NativeShutdownFailure, RunError, ShutdownReport},
+    core::{
+        Launch, NativeFailure, NativeShutdownFailure, RunError, ServeAndShutdown, ShutdownFailure,
+        ShutdownReport,
+    },
     env::UptimeBackend,
 };
 use axum::{serve::Listener, Extension, Router};
@@ -421,14 +424,29 @@ impl CompositionRoot {
             .await;
         })
         .await;
-        let cleanup = cleanup.map_err(|error| {
-            tracing::error!(%error, "gateway cleanup owner failed");
-            RunError::Shutdown(None)
-        });
         let native_failed = *native_failed.borrow();
-        serve_outcome(served, native_failed, &report)?;
-        cleanup
+        compose_run_result(served, native_failed, &report, cleanup)
     }
+}
+
+/// The process result from browser serving, the native listener, the shutdown
+/// report, and the cleanup task's join.
+///
+/// A join failure is [`RunError::Shutdown`]`(None)` only when [`serve_outcome`]
+/// succeeded. An unconfirmed report is returned instead, so the join does not
+/// replace it.
+fn compose_run_result(
+    served: std::io::Result<()>,
+    native_failed: Option<std::io::ErrorKind>,
+    report: &ReportSlot,
+    cleanup: Result<(), JoinError>,
+) -> Result<(), RunError> {
+    let cleanup = cleanup.map_err(|error| {
+        tracing::error!(%error, "gateway cleanup owner failed");
+        RunError::Shutdown(None)
+    });
+    serve_outcome(served, native_failed, report)?;
+    cleanup
 }
 
 /// Signal Axum before waiting for cleanup; retain and join the cleanup task.
@@ -455,23 +473,36 @@ async fn serve_with_cleanup(
 /// This process's result, from serving, from the native listener, and from
 /// what shutdown reported.
 ///
-/// The report is read before either failure is propagated, so neither can
-/// discard it. Axum 0.8's graceful-shutdown future always ends in `Ok(())`, so
-/// `served` is vestigial today; it is taken and propagated rather than ignored
-/// in case a later axum gives the serve loop an error path again. A native
-/// listener failure is what stopped the gateway (design row S14), so it is the
-/// result ahead of the report.
+/// The report is read before either failure is propagated. A browser serve
+/// error keeps an unconfirmed shutdown beside it as
+/// [`RunError::ServeAndShutdown`]; a confirmed shutdown leaves only the
+/// browser error, because there is no shutdown failure to keep. Axum 0.8's
+/// graceful-shutdown future always ends in `Ok(())`, so `served` is vestigial
+/// today; it is taken and propagated rather than ignored in case a later axum
+/// gives the serve loop an error path again. A native listener failure is what
+/// stopped the gateway when browser serving itself succeeded (design row S14),
+/// so it is the result ahead of the report. An unconfirmed report is taken, so
+/// a later read is [`RunError::Shutdown`]`(None)` and cannot claim success.
 fn serve_outcome(
     served: std::io::Result<()>,
     native_failed: Option<std::io::ErrorKind>,
     report: &ReportSlot,
 ) -> Result<(), RunError> {
-    let unconfirmed = shutdown_result(report);
-    served?;
-    if let Some(kind) = native_failed {
-        return Err(RunError::Native(NativeFailure::Listener(kind)));
+    match (served, native_failed) {
+        (Ok(()), None) => shutdown_result(report),
+        (Err(serve), _) => Err(match take_shutdown(report) {
+            ShutdownRead::Confirmed => RunError::Serve(serve),
+            ShutdownRead::Unconfirmed(shutdown) => {
+                RunError::ServeAndShutdown(Box::new(ServeAndShutdown::new(serve, shutdown)))
+            }
+        }),
+        (Ok(()), Some(kind)) => {
+            // Read the report even though the listener failure is the result,
+            // so a later read cannot treat an unconfirmed shutdown as success.
+            let _ = take_shutdown(report);
+            Err(RunError::Native(NativeFailure::Listener(kind)))
+        }
     }
-    unconfirmed
 }
 
 /// Resolves on a process signal, or when the native listener's channel changes:
@@ -500,6 +531,13 @@ async fn stop_signal(
 /// What the joined cleanup owner has published: `None` until it starts, then
 /// one report it updates as each owner returns.
 type ReportSlot = Mutex<Option<ShutdownReport>>;
+
+/// What [`take_shutdown`] found. A confirmed report stays in the slot.
+enum ShutdownRead {
+    Confirmed,
+    /// Not confirmed. The report was taken; `None` means it was never published.
+    Unconfirmed(Option<ShutdownFailure>),
+}
 
 /// Normal host consumer: close watch admission before polling physical cleanup.
 /// ProductRouteState retains the original WatchOwners throughout this owned future.
@@ -618,23 +656,30 @@ fn update_report(slot: &ReportSlot, update: impl FnOnce(&mut ShutdownReport)) {
 /// Turn what graceful shutdown reported into this process's result.
 ///
 /// Serving finishing is not the same fact as conversations confirming their
-/// cleanup and audit delivery. A poisoned slot is read through rather than
-/// discarded: the value is still whatever was last written, and throwing away a
-/// recorded failure to report "never reported" would be a worse answer than the
-/// one it replaced.
+/// cleanup and audit delivery. See [`take_shutdown`] for how the slot is read.
+fn shutdown_result(report: &ReportSlot) -> Result<(), RunError> {
+    match take_shutdown(report) {
+        ShutdownRead::Confirmed => Ok(()),
+        ShutdownRead::Unconfirmed(failure) => Err(RunError::Shutdown(failure)),
+    }
+}
+
+/// Read the shutdown report once.
+///
+/// A poisoned slot is read through rather than discarded: the value is still
+/// whatever was last written, and throwing away a recorded failure to report
+/// "never reported" would be a worse answer than the one it replaced.
 ///
 /// Taking an unconfirmed report leaves `None` behind. Only one read happens
 /// today, but a second one must not be able to call a run confirmed on the
 /// strength of having already reported that it was not — nor invent a failure
 /// for one that was confirmed, which is why a confirmed report is left alone.
-fn shutdown_result(report: &ReportSlot) -> Result<(), RunError> {
+fn take_shutdown(report: &ReportSlot) -> ShutdownRead {
     let mut slot = report.lock().unwrap_or_else(PoisonError::into_inner);
     if slot.as_ref().is_some_and(ShutdownReport::confirmed) {
-        return Ok(());
+        return ShutdownRead::Confirmed;
     }
-    Err(RunError::Shutdown(
-        slot.take().and_then(|report| report.into_result().err()),
-    ))
+    ShutdownRead::Unconfirmed(slot.take().and_then(|report| report.into_result().err()))
 }
 
 fn runtime_dependencies(config: &Environment) -> RuntimeDependencies {
@@ -1036,7 +1081,83 @@ mod tests {
         .unwrap();
         served.unwrap();
         assert!(shutdown_result(&report).is_ok());
-        assert!(cleanup.unwrap_err().is_panic());
+        let cleanup = cleanup.expect_err("the cleanup task panicked");
+        assert!(cleanup.is_panic());
+        // The report had confirmed, so the join is the process result, and
+        // the confirmed report stays in the slot.
+        let error = compose_run_result(Ok(()), None, &report, Err(cleanup)).unwrap_err();
+        assert!(matches!(error, RunError::Shutdown(None)));
+        assert!(shutdown_result(&report).is_ok());
+
+        // An unconfirmed report is the process result. The join does not
+        // replace it with "never reported".
+        let unconfirmed = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
+        let join = tokio::spawn(async { panic!("cleanup fault") })
+            .await
+            .expect_err("panic");
+        assert!(matches!(
+            only_conversations_failed(compose_run_result(Ok(()), None, &unconfirmed, Err(join))),
+            ConversationError::Audit
+        ));
+
+        // A browser serve error keeps the published failure. The join does not
+        // replace either fact.
+        let both = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
+        let join = tokio::spawn(async { panic!("cleanup fault") })
+            .await
+            .expect_err("panic");
+        let error = compose_run_result(
+            Err(std::io::Error::other("listener died")),
+            None,
+            &both,
+            Err(join),
+        )
+        .unwrap_err();
+        let RunError::ServeAndShutdown(failure) = &error else {
+            panic!("expected the browser error beside the published failure: {error:?}");
+        };
+        assert_eq!(failure.serve().to_string(), "listener died");
+        let Some(shutdown) = failure.shutdown() else {
+            panic!("the published failure must stay beside the browser error");
+        };
+        assert!(matches!(
+            shutdown.report().conversations().failed(),
+            Some(ConversationError::Audit)
+        ));
+
+        // A native listener failure is the result when browser serving
+        // succeeded, for a confirmed report and for one that is not. The join
+        // is discarded either way.
+        for (report, confirmed) in [
+            (confirmed_slot(), true),
+            (
+                Mutex::new(Some(report_with(Err(ConversationError::Audit)))),
+                false,
+            ),
+        ] {
+            let join = tokio::spawn(async { panic!("cleanup fault") })
+                .await
+                .expect_err("panic");
+            let error = compose_run_result(
+                Ok(()),
+                Some(std::io::ErrorKind::InvalidInput),
+                &report,
+                Err(join),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                RunError::Native(NativeFailure::Listener(std::io::ErrorKind::InvalidInput))
+            ));
+            if confirmed {
+                assert!(shutdown_result(&report).is_ok());
+            } else {
+                assert!(matches!(
+                    shutdown_result(&report),
+                    Err(RunError::Shutdown(None))
+                ));
+            }
+        }
     }
 
     #[tokio::test]
@@ -1459,15 +1580,85 @@ mod tests {
         let confirmed = confirmed_slot();
         assert!(serve_outcome(Ok(()), None, &confirmed).is_ok());
 
-        // A serve failure is the fault that stopped the process, so it wins —
-        // but the report is read first, so it cannot be skipped past.
-        let both = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
+        // A confirmed shutdown has no failure to keep beside the browser error.
+        let confirmed_serve = confirmed_slot();
         let served = Err(std::io::Error::other("listener died"));
         assert!(matches!(
-            serve_outcome(served, None, &both),
-            Err(RunError::Serve(_))
+            serve_outcome(served, None, &confirmed_serve),
+            Err(RunError::Serve(error)) if error.to_string() == "listener died"
+        ));
+        assert!(confirmed_serve.lock().unwrap().is_some());
+
+        // A reported conversation failure stays that failure, beside the
+        // original browser error. The slot is taken, so a second read cannot
+        // call the run confirmed.
+        let both = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
+        let served = Err(std::io::Error::other("listener died"));
+        let error = serve_outcome(served, None, &both).unwrap_err();
+        let RunError::ServeAndShutdown(failure) = &error else {
+            panic!("expected the browser error beside the conversation failure: {error:?}");
+        };
+        assert_eq!(failure.serve().to_string(), "listener died");
+        let Some(shutdown) = failure.shutdown() else {
+            panic!("the conversation failure must be the shutdown evidence");
+        };
+        assert!(matches!(
+            shutdown.report().conversations().failed(),
+            Some(ConversationError::Audit)
         ));
         assert!(both.lock().unwrap().is_none());
+        assert!(matches!(
+            shutdown_result(&both),
+            Err(RunError::Shutdown(None))
+        ));
+
+        // Native stop's typed failure is kept the same way.
+        let native = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
+        let mut native_report = ShutdownReport::default();
+        native_report.observe_record(Ok(()));
+        native_report.observe_catalogue(Ok(()));
+        native_report.observe_watches(Ok(()));
+        native_report.observe_conversations(Ok(()));
+        native_report.observe_servers(Ok(()));
+        native_report.observe_native(Err(native));
+        let native_slot = Mutex::new(Some(native_report));
+        let served = Err(std::io::Error::other("listener died"));
+        let error = serve_outcome(served, None, &native_slot).unwrap_err();
+        let RunError::ServeAndShutdown(failure) = &error else {
+            panic!("expected the browser error beside the native stop failure: {error:?}");
+        };
+        assert_eq!(failure.serve().to_string(), "listener died");
+        let Some(shutdown) = failure.shutdown() else {
+            panic!("the native stop failure must be the shutdown evidence");
+        };
+        assert_eq!(shutdown.report().native(), &Outcome::Failed(native));
+        assert!(shutdown.report().conversations().is_ok());
+    }
+
+    /// Browser serving failed and the cleanup owner never published. The
+    /// browser error and the unreported shutdown are both returned; the
+    /// missing report is not turned into a successful stop.
+    #[test]
+    fn serving_failure_preserves_unreported_shutdown() {
+        let unreported = Mutex::new(None);
+        let served = Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "listener died",
+        ));
+        let error = serve_outcome(served, None, &unreported).unwrap_err();
+        let RunError::ServeAndShutdown(failure) = &error else {
+            panic!("expected the browser error and an unreported shutdown: {error:?}");
+        };
+        assert_eq!(failure.serve().kind(), std::io::ErrorKind::ConnectionReset);
+        assert_eq!(failure.serve().to_string(), "listener died");
+        assert!(failure.shutdown().is_none());
+        let text = error.to_string();
+        assert!(text.contains("server stopped: listener died"));
+        assert!(text.contains("shutdown never reported whether cleanup completed"));
+        assert!(matches!(
+            shutdown_result(&unreported),
+            Err(RunError::Shutdown(None))
+        ));
     }
 
     #[tokio::test]

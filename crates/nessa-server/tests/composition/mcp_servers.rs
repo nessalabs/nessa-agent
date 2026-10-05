@@ -1004,8 +1004,10 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
         }
     }
     // A write: measure one save, then make the next land exactly on the
-    // edge. Eight long arguments (each at most 8192 bytes) and a last one
-    // whose length is the one that moves; and a small server beside it.
+    // edge. Eight long arguments (each at most 8192 bytes) and a variable
+    // whose value's length is the one that moves — stored, never listed, so
+    // the list stays within its frame while the file reaches its bound;
+    // and a small server beside it.
     let (root, config_path, composed, config) =
         composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
     let settings = settings(
@@ -1018,10 +1020,14 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     let size = || std::fs::metadata(&config_path).unwrap().len() as usize;
     let file = || std::fs::read(&config_path).unwrap();
     let compact = |bytes: &[u8]| !bytes[..bytes.len() - 1].contains(&b'\n');
-    let args = |last: usize| {
-        let mut args = vec!["x".repeat(7600); 8];
-        args.push("y".repeat(last));
-        args
+    let padded = |last: usize| {
+        let crate::mcp_servers::domain::ServerEdit::Save(mut save) =
+            saved("a", vec!["x".repeat(7600); 8])
+        else {
+            unreachable!("saved is a save")
+        };
+        save.env = vec![("PAD".into(), Some("y".repeat(last)))];
+        crate::mcp_servers::domain::ServerEdit::Save(save)
     };
     let revision = settings.list().await.unwrap().revision;
     let revision = settings
@@ -1029,20 +1035,20 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
         .await
         .unwrap();
     let revision = settings
-        .edit(caller(), revision, saved("a", args(1000)))
+        .edit(caller(), revision, padded(1000))
         .await
         .unwrap();
     // Pretty-printed, exactly at the edge.
     let edge = 1000 + MAX_CONFIG_BYTES - size();
     let revision = settings
-        .edit(caller(), revision, saved("a", args(edge)))
+        .edit(caller(), revision, padded(edge))
         .await
         .unwrap();
     assert_eq!(size(), MAX_CONFIG_BYTES);
     assert!(!compact(&file()));
     // A byte past it pretty-printed: written compact, within the bound.
     let revision = settings
-        .edit(caller(), revision, saved("a", args(edge + 1)))
+        .edit(caller(), revision, padded(edge + 1))
         .await
         .unwrap();
     assert!(compact(&file()));
@@ -1050,7 +1056,7 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     // Compact, exactly at the edge; then a byte past it is refused.
     let compact_edge = edge + 1 + MAX_CONFIG_BYTES - size();
     let revision = settings
-        .edit(caller(), revision, saved("a", args(compact_edge)))
+        .edit(caller(), revision, padded(compact_edge))
         .await
         .unwrap();
     assert_eq!(size(), MAX_CONFIG_BYTES);
@@ -1058,11 +1064,7 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     let at_edge = file();
     assert_eq!(
         settings
-            .edit(
-                caller(),
-                revision.clone(),
-                saved("a", args(compact_edge + 1))
-            )
+            .edit(caller(), revision.clone(), padded(compact_edge + 1))
             .await,
         Err(McpServerSettingsError::ConfigTooLarge)
     );
