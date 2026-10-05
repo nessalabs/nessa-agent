@@ -442,12 +442,16 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   from the lock's recheck or from a conversation no longer live), or the
   gateway retiring (`SubmitFailure::Retired`, told apart by type: admission
   and the resolve answer `Halt::Retired`), is M10, by the system. So is any
-  other refusal before the agent was asked once the message's own apps say
-  its opening ended or its mount was released (`apps.admit(epoch, mount)`,
-  asked by `submit_as` as it reads the failure): the stop or release came
-  first, whatever refused it — a stop followed by an opening that failed
-  among them. Anything else is `MessageNotSent` (M13): a refusal while the
-  message's own opening is still live. Only `submission_unresolved` (the
+  other refusal before the agent was asked when the message's own apps say
+  its opening had ended or its mount been released (`apps.admit(epoch,
+  mount)`, `Writer::opening_ended`, asked on the submission's own task as it
+  is refused, not once its caller reads the answer): the stop or release
+  came first, whatever refused it — a stop followed by an opening that
+  failed among them. A release or stop that lands after the refusal leaves
+  it as it was: a `turn_running` stays `turn_running`. Anything else is
+  `MessageNotSent` (M13): a refusal while the message's own opening is still
+  live. A stop that lands after the recheck and before the enqueue is the
+  agent's own refusal (M13b): it was asked. Only `submission_unresolved` (the
   agent's admission failing inside the enqueue), or the submission's own
   task failing once the agent was asked, is `MessageUnresolved` (M15):
   "unknown" is what the gateway knows of a task that failed after asking,
@@ -479,12 +483,16 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   takes the held contexts (`AppReviews::take_held`): they leave their mounts
   there and then, and free their room. Nothing is ever put back. Admitted,
   they went with the message; if the turn then fails they are lost, and the
-  app may give them again (C13). Refused after the take, or failed before
-  the agent was asked, they went nowhere: `submit_as` hands them back
-  (`AppReviews::not_sent`), and each is dropped as `not_sent`, by the
-  system (C11). If whether the agent has the message is unknown (M15), they
-  follow it, with no drop recorded: its `MessageUnresolved` covers them
-  (C11b). A mount's newer update given meanwhile is held as any update is.
+  app may give them again (C13). What was taken is held by one owner, the
+  `Taken` the submission's own task keeps: dropped before the agent was
+  asked — refused, failed, its task unwinding or let go of — it reports each
+  as `not_sent`, by the system (C11). Asking the agent disarms it
+  (`Taken::asking`): from then on they follow the message, so a message
+  whose fate is unknown (M15) — the agent could not say, or the task failed
+  mid-ask — drops nothing, its `MessageUnresolved` covering them (C11b).
+  Only the agent's own refusal re-arms it (`Taken::refused`, read by the one
+  `Reach::of_asked` that `SubmitFailure::reach` reads too), and it reports
+  as it goes. Nothing hands them back to a caller to record. A mount's newer update given meanwhile is held as any update is.
   A release, an opening's end, a new opening and a delete drop only what is
   still held, unsent: by the releaser, the person who closed or deleted, or
   the system on a stop or a gateway stop. A delete's drops are its
@@ -495,16 +503,19 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 - **One owner of a drop's record.** A held context is the one MCP App
   artifact that outlives its call with no call to record its end, so it has
   an owner of its own, as a resource ticket's end has. Whatever removes a
-  context — `release_app`, `end`, `begin`, `delete`, `not_sent` — it is
-  `AppReviews` that builds the `ContextDropped{cause}` record (the record of
+  context — `release_app`, `end`, `begin`, `delete`, or a `Taken` that went
+  nowhere — it is `AppReviews` that builds the `ContextDropped{cause}` record (the record of
   the update that held it, with the dropper as initiator) and reports it,
   synchronously and after its lock, to the injected `DroppedContexts` port —
   the twin of `TicketEvents`. Composition's implementation is an unbounded
   channel drained by `audit_context_drops`
   (`conversation/infrastructure/context_drops.rs`), modelled on
   `audit_ticket_ends`: a biased select writes every drop sent before it is
-  told to stop, and it is stopped beside the ticket recorder, after the
-  conversations, within a 10-second bound. A stop reports its drops as it
+  told to stop. Composition starts both recorders together
+  (`McpComposition::start_recorders`) and the gateway's exit finishes them
+  together, after the conversations, under one 10-second bound
+  (`finish_recorders`, `RECORDERS_FINISH`), so the exit waits at most that
+  long for both. A stop reports its drops as it
   ends the apps, before it first awaits the agent's close: no select, budget
   or panic around the stop can lose one, and none takes anything of the
   stop's budget. With no MCP servers there is no app, and the port is a
@@ -557,10 +568,11 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 | M7c | — | 16 app reviews open, or 16 000 bytes held | — | `Withdrawn(RequestCancelled)` by the system; `temporarily_unavailable` |
 | M8 | Waiting | the person allows | Sending | `Approved{permission_id}`, by that person |
 | M9 | Waiting | denied or cancelled / deadline / caller gone / release / close, delete, stop or gateway stop | — | `Denied` → `mcp_approval_denied` / `Expired` → `mcp_approval_expired` / `Withdrawn(cause)` → `mcp_cancelled` |
-| M10 | Sending, under the submission lock | the mount was released; the opening ended, was deleted, or the gateway stopped or retired it before the enqueue; or another epoch; or the submission fails before the agent was asked, and the writer's own apps say the opening ended or the mount was released (`apps.admit(epoch, mount)`) | — | `Refused(mcp_cancelled)`, by the system; not sent; no opening started; nothing taken. Only a refusal while the message's own opening is still live is M13 |
+| M10 | Sending, under the submission lock | the mount was released; the opening ended, was deleted, or the gateway stopped or retired it before the recheck; or another epoch; or the submission is refused before the agent was asked, and the writer's own apps say, as it is refused, that the opening had ended or the mount been released (`apps.admit(epoch, mount)`) | — | `Refused(mcp_cancelled)`, by the system; not sent; no opening started; nothing taken. Only a refusal while the message's own opening is still live is M13; a release or stop after the refusal leaves its code as it was |
 | M11 | Sending, under the lock | a turn runs or input waits (not for M6) | — | `Refused(turn_running)`; nothing taken |
 | M12 | Sending, under the lock | idle; the enqueue returns (`InputAccepted` saved) | — | carries the contexts it took (C9); `MessageSent{execution_id}`; answered `{executionId}`; the transcript shows the person's turn with `app` set |
 | M13 | Sending | the submission is refused while its opening is live (deadline, storage, invalid, conflict, …), or its task failed before the agent was asked | — | `MessageNotSent{execution_id, code}`, by the app — by the system for a task that failed; that code; what it took is C11 |
+| M13b | Sending, past the recheck | a desktop stop ends the opening after the recheck and before the enqueue | — | the agent was asked, and refuses it (`Closed`): `MessageNotSent{execution_id, code}`, by the app; what it took, if anything, is C11. Not M10: the recheck passed, and the agent's refusal is the answer |
 | M14 | Sending | taken, admission evidence failed | — | `MessageSent{execution_id, code}`; the evidence failure's code |
 | M15 | Sending | `SubmissionUnresolved` (the agent's admission failed inside the enqueue), or the submission's own task failed once the agent was asked | — | `MessageUnresolved{execution_id, code}`, by the app — by the system for a task that failed; that code; what it took is C11b. Of a task that failed once the agent was asked, the gateway knows only that it asked: "unknown" is literally true, and the SDK's own record of the turn settles it |
 | M16 | before the send | a record cannot be written | — | `audit_unavailable`; the step not taken |
@@ -583,7 +595,7 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 | C9 | held | a message admitted while idle (the person's or an app's) reads them under the submission lock | taken | they leave the mount at once and free its room; on the message, in the order given. Admitted: they went with the turn, and nothing more is recorded |
 | C9′ | taken | the mount gives a newer update during the admission | held | held as any update is; nothing removes it |
 | C10 | held | a message queued behind a running turn, or steered into one | held | carries none |
-| C11 | taken | that submission is refused, or fails before the agent was asked | — | lost. The apps report `ContextDropped{not_sent}` for each, by the system, to the drop recorder; the app may send them again. A refusal before the read (`turn_running`, M10) takes nothing, so they stay held |
+| C11 | taken | that submission is refused, or fails before the agent was asked | — | lost. The submission task's `Taken` reports `ContextDropped{not_sent}` for each as it goes, by the system, to the drop recorder — however the task ends, a panic among them; the app may send them again. A refusal before the read (`turn_running`, M10) takes nothing, so they stay held |
 | C11b | taken | that submission's outcome is unknown (M15) | — | they follow the turn, with no drop record; the message's `MessageUnresolved` covers it (recorded limit) |
 | C12 | held | a retry of an execution the agent has | held | carries what its saved record holds |
 | C13 | carried | the turn fails, or never reaches the agent | — | lost: it went with the turn; the app may give it again (recorded limit) |
@@ -624,8 +636,8 @@ sequenceDiagram
             Svc-->>App: executionId
         else refused
             SDK-->>Svc: error
-            Svc->>Apps: not_sent(taken)
-            Apps-)Rec: ContextDropped{not_sent} per taken context, by the system
+            Svc->>Svc: the refusal re-arms the task's Taken, which goes
+            Svc-)Rec: ContextDropped{not_sent} per taken context, by the system
             Rec->>Audit: record it (a failure is logged)
             Svc->>Audit: MessageNotSent
             Svc-->>App: that code
@@ -655,13 +667,15 @@ sequenceDiagram
 - A context's drop whose record fails is dropped all the same, and only
   logged, by the recorder (C15b): no release, close or delete answers for
   it, as no command answers for a ticket's end. A drop still unwritten when
-  the recorder's 10-second bound at shutdown passes is lost, said by a
+  the recorders' one 10-second bound at shutdown passes is lost, said by a
   warning.
 - A message whose fate is unknown (M15) keeps no record of the contexts it
   took beyond its own `MessageUnresolved` (C11b).
-- A stop that ends a message's opening before its enqueue is M10 whatever
+- A stop that ends a message's opening before it is refused is M10 whatever
   then refused it, a failed reopening among them: the message's own apps
-  are asked. A submission task that panicked before the agent was asked
+  are asked, as it is refused. One that ends it after the recheck and
+  before the enqueue is the agent's refusal, M13b, by the app: the agent
+  was asked. A submission task that panicked before the agent was asked
   stays M13, by the system, even if its opening also ended: a fault, not a
   refusal.
 
@@ -680,9 +694,10 @@ Each row has at least one test, named after it.
   - M7b `m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_opened`
   - M7c `m7c_with_the_reviews_full_a_message_is_withdrawn_and_unavailable`
   - M9 `m9_a_denied_message_is_not_sent_and_the_next_asks_again`, `m9_a_message_nobody_answers_expires_and_is_not_sent`, `m9_a_message_whose_caller_went_is_withdrawn_on_record`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_the_mounts_release`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_a_close`
-  - M10 `m10_a_release_before_the_submission_lock_refuses_the_message`, a stop then an opening that failed (G3-3) `m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`, `m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_it`, `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`, `m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing`, `m10_a_message_admitted_in_one_opening_is_not_sent_into_another`, `m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not_unresolved`, `m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message`
+  - M10 `m10_a_release_before_the_submission_lock_refuses_the_message`, a stop then an opening that failed (G3-3) `m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`, `m10_a_release_after_the_person_allowed_it_and_before_it_is_sent_stops_it`, `m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_opens_nothing`, `m10_an_agent_stopped_without_the_lock_refuses_the_message_and_opens_nothing`, `m10_a_message_admitted_in_one_opening_is_not_sent_into_another`, `m10_a_gateway_stop_after_the_person_allowed_it_sends_nothing_and_is_not_unresolved`, `m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message`; read as it is refused, so a release after a refusal keeps its code (G4-2): `m10_a_release_after_a_turn_running_refusal_keeps_turn_running`
   - M11 `m11_an_apps_message_waits_for_nobody_it_is_refused_while_a_turn_runs`, `m11_an_apps_message_is_refused_while_the_persons_input_waits_and_nothing_runs`
   - M13 `m13_a_message_the_conversation_refuses_is_on_record_as_not_sent` (and its code, in M6's conflict), `m13_a_message_whose_submission_task_failed_before_the_agent_was_asked_is_not_sent` (by the system)
+  - M13b: no test. The only await between the recheck and the enqueue is the SDK's `idle_for_approval_change`, on the agent's scheduler lock; the one thing the fixture can hold that lock with outside the conversation's own lock is a mode change made on the agent directly, held at the provider. Tried (round 4): a desktop stop that lands while that change holds the lock ends the apps, but the agent still admits the message once the change lets go, so it is sent rather than refused `Closed`, and the row cannot be reached that way. Its recording is M13's (`m13_a_message_the_conversation_refuses_is_on_record_as_not_sent`, by the app)
   - M14, C13 `m14_c13_a_message_taken_without_its_evidence_is_sent_and_what_it_carried_is_lost`
   - M15, C11b `m15_c11b_a_message_whose_enqueue_failed_once_the_agent_was_asked_is_unresolved` (inside the enqueue: the "asked" boundary), `m15_a_message_whose_submission_task_failed_once_the_agent_was_asked_is_unresolved` (by the system)
   - M16 `m16_a_message_whose_step_cannot_be_recorded_is_not_sent_or_shown`
@@ -699,7 +714,7 @@ Each row has at least one test, named after it.
   - C12 `c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`
   - C13 `c13_a_context_carried_by_a_turn_that_then_fails_is_lost`
   - C14 `c14_a_mounts_release_drops_its_context_unsent`, `c14_a_release_whose_drop_cannot_be_recorded_completes`
-  - C15 `c15_the_openings_end_drops_every_context_unsent` (close, stop, gateway stop, delete), a stop during an admission drops none of what it took: `c15_a_stop_during_an_admission_drops_nothing_the_message_took`; the deleter on the delete's own drops: `c15_a_delete_drops_what_is_still_held_as_the_deleters`; a delete cut short by retirement mid-close (G3-1): `c15_a_delete_cut_short_by_retirement_records_each_drop_once`; the deleter read from the tombstone, not the caller (G3-5): `c15_a_delete_finished_by_a_repeat_drops_as_the_first_deleter`, `c15_a_delete_finished_at_a_gateway_start_drops_as_its_deleter`
+  - C15 `c15_the_openings_end_drops_every_context_unsent` (close, stop, gateway stop, delete), a stop during an admission drops none of what it took: `c15_a_stop_during_an_admission_drops_nothing_the_message_took`; the deleter on the delete's own drops: `c15_a_delete_drops_what_is_still_held_as_the_deleters`; a delete cut short by retirement mid-close (G3-1): `c15_a_delete_cut_short_by_retirement_records_each_drop_once`; the deleter read from the tombstone, not the caller (G3-5): `c15_a_delete_finished_by_a_repeat_drops_as_the_first_deleter`, `c15_a_delete_finished_at_a_gateway_start_drops_as_its_deleter`; a close whose stop runs past its budget, where nothing else would end the apps, drops once as the closer's (G4-1, cited by `stop_slot`): `c15_a_close_whose_stop_runs_past_its_budget_drops_once_as_the_closers`
   - C15b `c15b_a_close_or_delete_whose_drops_cannot_be_recorded_answers_its_own_result`, and the recorder's log (below)
   - C15c `c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as_the_deleters`
   - C16 `c16_an_update_that_cannot_be_recorded_changes_nothing`
@@ -712,14 +727,27 @@ Each row has at least one test, named after it.
   `c14_c15_contexts_are_dropped_with_their_mount_the_openings_end_a_new_opening_and_a_delete`,
   which also holds each drop, as reported to the `DroppedContexts` double,
   to the update that held it and to its dropper; `not_sent` in `c9_…`,
-  `c17_an_update_whose_mount_was_released_…`); the executions in flight
+  `c17_an_update_whose_mount_was_released_…`); a `Taken` that is dropped
+  before the agent was asked, or unwound through, reports `not_sent`, one
+  the agent was asked for reports nothing, and one the agent refused
+  reports once
+  (`c11_what_a_message_took_is_reported_dropped_as_it_goes_unless_the_agent_was_asked`); the executions in flight
   (`m6b_a_messages_turn_is_in_flight_once_until_its_call_ends`).
 - `crates/nessa-server/tests/conversation/context_drops.rs`: the drop
   recorder writes every drop reported before it stops, in order
   (`a_stopping_recorder_writes_every_drop_already_reported_in_order`,
   `a_recorder_ends_once_every_sender_is_gone_having_written_what_they_sent`),
-  and logs a failed record by its conversation and call, and writes the next
+  and logs a drop reported once it stopped, by its conversation and call
+  (the same test), and logs a failed record by its conversation and call,
+  and writes the next
   (`a_drop_whose_record_fails_is_logged_by_its_call_and_the_next_is_written`).
+- `crates/nessa-server/tests/composition/mcp_servers.rs`: the recorders as
+  composition starts them write a drop reported to the sink it hands the
+  conversation service, before the exit's finish returns
+  (`a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits`),
+  and the exit finishes both under the one bound, not one after the other
+  (`recorders_finish_together_under_one_bound`). The order — recorders after
+  the conversations — is `passive_cleanup`'s, by reading.
 - `crates/nessa-server/tests/conversation/mcp_app_audit.rs`: the new phases
   (`every_phase_of_one_request_is_its_own_record`), each drop's cause and
   each message outcome's code
