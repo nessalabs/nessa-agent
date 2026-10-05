@@ -12,7 +12,7 @@ instead of creating a competing copy.
 
 | Document | What it is for |
 | --- | --- |
-| [Feature flow map](mapping/features/README.md) | User journeys across the three repositories, linked sequence diagrams, source/test and PR evidence, and bug risks. |
+| [System state atlas](state/README.md) | System and service navigation, feature flows, scoped statecharts, source/test evidence, and gaps. Markdown here is the input to the separate local state browser. |
 | [../CODING_STANDARDS.md](../CODING_STANDARDS.md) | Repository-wide merge gates: organization, typed errors, boundaries, tests, and audit evidence. Every contributor checks these before merge. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
