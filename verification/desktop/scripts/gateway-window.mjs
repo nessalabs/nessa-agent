@@ -31,7 +31,10 @@
  * layout and engine still run.
  */
 import { randomUUID } from "node:crypto"
+import { mkdirSync } from "node:fs"
+import { join } from "node:path"
 
+import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
@@ -43,6 +46,7 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { lastTurn } from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
+import { writeView } from "./lib/scripted-evidence.mjs"
 import { css } from "./lib/selectors.mjs"
 import { inside, settled } from "./lib/workspace.mjs"
 
@@ -53,17 +57,28 @@ const meta = {
   summary:
     "the desktop app's window over a real gateway: its handshake, a conversation, a turn made elsewhere",
   defaults: { engine: "chromium,webkit", layout: "columns" },
-  options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
+  options: {
+    only: { type: "string" },
+    agent: { type: "string", default: "claude" },
+    scripted: { type: "boolean", default: false },
+    evidence: { type: "string" },
+  },
   help: `
 Usage: node verification/desktop/scripts/gateway-window.mjs [options]
 
 Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA),
 the agent's harness installed (crates/nessa-sdk/harnesses/<agent>-acp, or
-MCP_LIVE_HARNESSES), and the agent signed in on this machine. It starts its own
-gateway and dev server; --url and --mode are not used.
+MCP_LIVE_HARNESSES), and the agent signed in on this machine — or, with
+--scripted, neither. It starts its own gateway. --url is not used. --mode prod
+previews a production build; the default is a dev server.
 
 Options:
   --agent claude|codex  the agent the gateway runs (default: claude)
+  --scripted            run the text-reply scenario (scenarios/text-reply.json)
+                        as that agent: no model, no sign-in; each prompt is
+                        answered "Ready."
+  --evidence <dir>      with --scripted, write acp.jsonl, mcp.jsonl, gateway.log
+                        and view.json there
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
   handshake  on the window's own socket, to the host's endpoint, it
@@ -119,13 +134,25 @@ async function turn({ client, conversationId, gateway }, text, agent, create = f
 /** The gateway, the dev server, and a conversation with one finished turn. */
 async function startStack(options) {
   // The conversation is the panel's, as one the panel window began is: the
-  // window lists what its credential's principal holds.
-  const stack = await startGatewayStack(options, "gateway-window", { as: "panel" })
+  // window lists what its credential's principal holds. --scripted answers
+  // with the text-reply scenario, which the steps compare as any text reply.
+  const stack = await startGatewayStack(options, "gateway-window", {
+    as: "panel",
+    ...(options.scripted
+      ? { scenario: TEXT_REPLY_SCENARIO, evidence: options.evidence }
+      : {}),
+  })
   try {
     const started = Date.now()
     const conversationId = randomUUID()
     const marker = `W${randomUUID().slice(0, 8)}`
-    await turn({ ...stack, conversationId }, prompt(marker), options.agent, true)
+    const view = await turn(
+      { ...stack, conversationId },
+      prompt(marker),
+      options.agent,
+      true,
+    )
+    if (options.evidence) writeView(options.evidence, "view.json", view)
     stack.timings.agentTurnMs = Date.now() - started
     const { conversations } = await stack.client.conversation.list({})
     const title = conversations.find(
@@ -412,6 +439,21 @@ await main(
               // Could not run (an agent turn the steps cannot read, say), or
               // failed: either way the steps after it are not run.
               result = resultOfThrown({}, error)
+            }
+            if (
+              options.shots &&
+              !result.cannotRun &&
+              (result.failures ?? []).length === 0
+            ) {
+              mkdirSync(options.shots, { recursive: true })
+              await opened.page
+                .screenshot({
+                  path: join(
+                    options.shots,
+                    `gateway-window-${engine}-${layout}-${name}.png`,
+                  ),
+                })
+                .catch((error) => log(`screenshot ${name}: ${error.message}`))
             }
             const entry = rep.add({
               name,

@@ -4,15 +4,24 @@
  * gateway:
  *
  *   node scripted-agent.mjs codex|claude <tool>
+ *   node scripted-agent.mjs codex|claude --scenario <file>
  *
- * It answers the gateway's handshake as the harness pinned for `<agent>`
- * would, and to each prompt makes one real call of the test server's
- * `<tool>`, with the recorded call's arguments, through the stand-in the gateway gave it for
- * `mcptest`, then reports that call in the frames the harness was recorded
- * sending (`scripted-frames.mjs`), says DONE, and ends the turn. The
+ * With `<tool>`, it answers the gateway's handshake as the harness pinned
+ * for `<agent>` would, and to each prompt makes one real call of the test
+ * server's `<tool>`, with the recorded call's arguments, through the
+ * stand-in the gateway gave it for `mcptest`, then reports that call in the
+ * frames the harness was recorded sending (`scripted-frames.mjs`), says
+ * DONE, and ends the turn. That is the default: the recorded claude and
+ * codex frames, so the checks that already run it keep their behavior. The
  * desktop's real-gateway check runs it with `--scripted`
  * (`verification/desktop/scripts/mcp-apps-gateway.mjs`), so what reaches the
  * window is the gateway's own projection of a recorded call, every run alike.
+ *
+ * With `--scenario`, a prompt runs that file's steps instead
+ * (`scripted-scenario.mjs`): text, a permission and the answer's branch, an
+ * MCP call, a failure, a wait for cancel, or the end of the turn. The
+ * handshake is still the harness's. A prompt the file does not answer fails
+ * the turn.
  *
  * It keeps every stand-in it started for the session: the gateway's own
  * connection to the server, which the view's `resourceUri` and the app's
@@ -23,8 +32,9 @@
  * credential; the check starts the gateway signed out (`startLocalGateway`'s
  * `signedOut`).
  *
- * Not replayed: a harness's permission request for the call. The recordings
- * hold only `session/update` frames, so the scripted agent asks for none.
+ * Not replayed, on the recorded path: a harness's permission request for the
+ * call. The recordings hold only `session/update` frames, so that path asks
+ * for none. A scenario file can ask (`scripted-scenario.mjs`).
  *
  * Not from the recordings: where the call's `tools/call` names it. Claude's
  * harness puts the call's ACP `toolCallId` in its params'
@@ -38,7 +48,9 @@
  */
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { createInterface } from "node:readline"
+import { parseArgs } from "node:util"
 
 import {
   AGENTS,
@@ -51,18 +63,54 @@ import {
   recording,
   setOption,
 } from "./scripted-frames.mjs"
+import { promptText, runSteps, turnFor, parseScenario } from "./scripted-scenario.mjs"
 import { SERVER } from "./local-gateway.mjs"
 
 /** How long an MCP request waits for its stand-in's answer. */
 const MCP_DEADLINE_MS = 10_000
 
-const [agent, tool] = process.argv.slice(2)
-if (!AGENTS.includes(agent) || !tool) {
-  process.stderr.write(`usage: scripted-agent.mjs ${AGENTS.join("|")} <tool>\n`)
+let parsed
+try {
+  parsed = parseArgs({
+    args: process.argv.slice(2),
+    options: { scenario: { type: "string" } },
+    allowPositionals: true,
+  })
+} catch (error) {
+  process.stderr.write(`scripted-agent: ${error.message}\n`)
   process.exit(2)
 }
-const recorded = recording(agent)
-const args = recordedArguments(agent, recorded)
+const {
+  values: { scenario: scenarioPath },
+  positionals,
+} = parsed
+const [agent, tool, ...rest] = positionals
+if (
+  !AGENTS.includes(agent) ||
+  rest.length > 0 ||
+  (scenarioPath ? tool !== undefined : !tool)
+) {
+  process.stderr.write(
+    `usage: scripted-agent.mjs ${AGENTS.join("|")} <tool>\n       scripted-agent.mjs ${AGENTS.join("|")} --scenario <file>\n`,
+  )
+  process.exit(2)
+}
+let scenario = null
+if (scenarioPath) {
+  let file
+  try {
+    file = JSON.parse(readFileSync(scenarioPath, "utf8"))
+  } catch (error) {
+    process.stderr.write(`scripted-agent: ${error.message}\n`)
+    process.exit(2)
+  }
+  try {
+    scenario = parseScenario(file)
+  } catch (error) {
+    process.stderr.write(`scripted-agent: ${error.message}\n`)
+    process.exit(2)
+  }
+}
 
 const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
@@ -247,47 +295,119 @@ const handlers = {
     return { configOptions: configOptions(agent, values) }
   },
 
-  "session/prompt": async ({ sessionId }) => {
-    const session = sessionOf(sessionId)
-    const server = session.servers.get(SERVER)
-    if (!server) throw new Error(`the session has no ${SERVER} server`)
-    if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
-    const prompt = { cancelled: false }
-    session.prompt = prompt
-    // The call's id, chosen before the call: Claude's harness names the call
-    // by it in the `tools/call`, and the frames below carry the same one.
-    const id =
-      agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`
-    const call = {
-      name: tool,
-      arguments: args,
-      ...(agent === "claude" ? { _meta: { [CLAUDE_CALL_ID]: id } } : {}),
-    }
-    let result
-    try {
-      result = await server.request("tools/call", call)
-    } catch (error) {
-      // A cancel decides the turn however the call settles.
-      if (prompt.cancelled) return { stopReason: "cancelled" }
-      throw error
-    } finally {
-      session.prompt = null
-    }
-    // Cancelled while the call was in flight: the turn ends so, and reports
-    // nothing (the recordings hold no cancelled call). The stand-in may still
-    // keep the call's result under its id, unreported, until the SDK's bound
-    // of 32 kept results drops it or its grant goes
-    // (docs/design/mcp-connections.md, Forwarded results, S9).
+  "session/prompt": async (params) =>
+    scenario ? scenarioTurn(params) : recordedTurn(params),
+}
+
+/**
+ * The default turn: one recorded call of `tool`, then DONE. Loaded here, not
+ * at startup, so a scenario run does not need the recording on disk.
+ */
+async function recordedTurn({ sessionId }) {
+  const recorded = recording(agent)
+  const args = recordedArguments(agent, recorded)
+  const session = sessionOf(sessionId)
+  const server = session.servers.get(SERVER)
+  if (!server) throw new Error(`the session has no ${SERVER} server`)
+  if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
+  const prompt = { cancelled: false, waiters: [] }
+  session.prompt = prompt
+  // The call's id, chosen before the call: Claude's harness names the call
+  // by it in the `tools/call`, and the frames below carry the same one.
+  const id =
+    agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`
+  const call = {
+    name: tool,
+    arguments: args,
+    ...(agent === "claude" ? { _meta: { [CLAUDE_CALL_ID]: id } } : {}),
+  }
+  let result
+  try {
+    result = await server.request("tools/call", call)
+  } catch (error) {
+    // A cancel decides the turn however the call settles.
     if (prompt.cancelled) return { stopReason: "cancelled" }
-    const update = (update) =>
-      send({ method: "session/update", params: { sessionId, update } })
-    for (const frame of callFrames(agent, recorded, { id, tool, result })) update(frame)
-    update({
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "DONE" },
+    throw error
+  } finally {
+    session.prompt = null
+  }
+  // Cancelled while the call was in flight: the turn ends so, and reports
+  // nothing (the recordings hold no cancelled call). The stand-in may still
+  // keep the call's result under its id, unreported, until the SDK's bound
+  // of 32 kept results drops it or its grant goes
+  // (docs/design/mcp-connections.md, Forwarded results, S9).
+  if (prompt.cancelled) return { stopReason: "cancelled" }
+  const update = (frame) =>
+    send({ method: "session/update", params: { sessionId, update: frame } })
+  for (const frame of callFrames(agent, recorded, { id, tool, result })) update(frame)
+  update({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "DONE" },
+  })
+  return { stopReason: "end_turn" }
+}
+
+/** How long a permission request waits for the gateway's answer. */
+const PERMISSION_DEADLINE_MS = 120_000
+
+/** Replies the gateway owes this agent, by the request id it sent. */
+const replies = new Map()
+
+/** One prompt of the scenario: the turn `prompt` matches, or a failure when none does. */
+async function scenarioTurn({ sessionId, prompt: blocks }) {
+  const session = sessionOf(sessionId)
+  const server = session.servers.get(SERVER)
+  if (!server) throw new Error(`the session has no ${SERVER} server`)
+  if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
+  const matched = turnFor(scenario, promptText(blocks))
+  if (!matched) throw new Error("the scenario does not answer this prompt")
+  const state = { cancelled: false, waiters: [] }
+  session.prompt = state
+  const calls = new Map()
+  const update = (frame) =>
+    send({ method: "session/update", params: { sessionId, update: frame } })
+  try {
+    const outcome = await runSteps(matched.steps, {
+      agent,
+      sessionId,
+      cancelled: () => state.cancelled,
+      untilCancelled: () =>
+        state.cancelled
+          ? Promise.resolve()
+          : new Promise((resolve) => state.waiters.push(resolve)),
+      update,
+      requestPermission: (params) =>
+        new Promise((resolve, reject) => {
+          const id = `perm-${randomUUID()}`
+          const timer = setTimeout(() => {
+            replies.delete(id)
+            reject(
+              new Error(
+                `the gateway did not answer the permission request within ${PERMISSION_DEADLINE_MS} ms`,
+              ),
+            )
+          }, PERMISSION_DEADLINE_MS)
+          replies.set(id, (message) => {
+            clearTimeout(timer)
+            if (message.error)
+              reject(new Error(message.error.message ?? "the permission request failed"))
+            else resolve(message.result)
+          })
+          send({ id, method: "session/request_permission", params })
+        }),
+      callTool: (args) => server.request("tools/call", args),
+      messageId: () => `msg-${randomUUID()}`,
+      toolId: () =>
+        agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`,
+      openCall: (name) => calls.get(name),
+      rememberCall: (name, id) => calls.set(name, id),
+      clearCall: (name) => calls.delete(name),
     })
-    return { stopReason: "end_turn" }
-  },
+    if (outcome.fail) throw new Error(outcome.fail)
+    return { stopReason: outcome.stopReason }
+  } finally {
+    session.prompt = null
+  }
 }
 
 createInterface({ input: process.stdin })
@@ -298,11 +418,25 @@ createInterface({ input: process.stdin })
     } catch {
       return
     }
-    // A cancel marks the session's prompt in flight, if there is one; no
-    // notification is answered.
+    // A cancel marks the session's prompt in flight, if there is one, and
+    // wakes a step that is waiting for it. No notification is answered.
     if (message.method === "session/cancel") {
       const prompt = sessions.get(message.params?.sessionId)?.prompt
-      if (prompt) prompt.cancelled = true
+      if (prompt) {
+        prompt.cancelled = true
+        const waiting = prompt.waiters ?? []
+        prompt.waiters = []
+        for (const wake of waiting) wake()
+      }
+      return
+    }
+    // A reply to a permission request this agent sent. It has an id and no
+    // method; a request from the gateway has both.
+    if (message.id !== undefined && message.method === undefined) {
+      const reply = replies.get(message.id)
+      if (!reply) return
+      replies.delete(message.id)
+      reply(message)
       return
     }
     if (message.id === undefined || !message.method) return
