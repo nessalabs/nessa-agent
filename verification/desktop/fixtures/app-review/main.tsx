@@ -224,15 +224,24 @@ Object.assign(window, {
           settled = outcome.kind
         })
     },
-    snapshot: () => ({
-      settled,
-      reads: gateway.count("read"),
-      // Every answer the gateway was sent, whichever review it named.
-      answers: gateway.calls
-        .filter((call) => call.method === "answer")
-        .map((call) => [...call.args]),
-      openReview: gateway.views.get(conversation)?.permissions[0]?.permissionId ?? null,
-    }),
+    snapshot: () => {
+      const open = gateway.views.get(conversation)?.permissions[0]
+      return {
+        settled,
+        reads: gateway.count("read"),
+        // Every answer the gateway was sent, whichever review it named.
+        answers: gateway.calls
+          .filter((call) => call.method === "answer")
+          .map((call) => [...call.args]),
+        openReview: open?.permissionId ?? null,
+        // The open review's own options, which the card's buttons must be.
+        openOptions:
+          open?.options.map((option) => ({
+            label: option.label,
+            effect: option.effect,
+          })) ?? [],
+      }
+    },
     /** A tool's name with no break in it, as long as the gateway allows. */
     longestTool: "x".repeat(bounds.maxMcpNameBytes),
     /** The most bytes a tool's name may have (`maxMcpNameBytes`). */

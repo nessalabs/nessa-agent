@@ -315,7 +315,7 @@ export function AgentsOverview({
     if (to !== null) focusItem(to)
   }
 
-  // ⌥ held turns every Allow into Always Allow, as it shows the other choice in a Mac menu.
+  // ⌥ held turns Allow into Always Allow where the review offers it, as ⌥ shows the other choice in a Mac menu.
   const [alt, setAlt] = useState(false)
   useEffect(() => {
     const follow = (event: KeyboardEvent) => setAlt(event.altKey)

@@ -60,8 +60,14 @@ import {
 import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { css, names } from "./lib/selectors.mjs"
-import { paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
+import { css, names, offeredLabel } from "./lib/selectors.mjs"
+import {
+  paneCount,
+  paneCountIs,
+  settled,
+  unofferedAnswers,
+  until,
+} from "./lib/workspace.mjs"
 
 /** The server's app tool, and the tools its app calls (`server.mjs`, `APP_CALLS`). */
 const APP_TOOL = "review_rows"
@@ -114,7 +120,7 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
             none). Its failure stops no step after it.
   allow     the app's call to the destructive tool waits on a review in the
             conversation's permissions, its origin the app, shown in the
-            window; Allow Once there, and the app shows the server's answer
+            window; the review's Allow there, and the app shows the server's answer
   deny      a second call: its review, Deny in the window, and the app shows
             that the person declined
   release   in a pane of its own (the app's fullscreen request), a third call
@@ -290,7 +296,12 @@ async function settleEarlier(page, stack, failures) {
       failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
       break
     }
-    await card.getByRole("button", { name: names.denyOnce, exact: true }).click()
+    const deny = offeredLabel(review.options, "deny")
+    if (!deny) {
+      failures.push("an earlier review offers no deny")
+      break
+    }
+    await card.getByRole("button", { name: deny, exact: true }).click()
     if (!(await reviewGone(stack, review, 10_000)))
       failures.push("an earlier review of the app's is still pending after Deny")
   }
@@ -299,11 +310,12 @@ async function settleEarlier(page, stack, failures) {
 
 /**
  * Waits for the app's review of a destructive call in the gateway's view and
- * in the window, answers it in the window with `button`, and returns what was
- * seen. `baseline` is the app's reviews pending before the call was made, so
- * the call's own is told apart from any left from before.
+ * in the window, answers it in the window with the option of `effect`, and
+ * returns what was seen. The button is that option's own label (#444).
+ * `baseline` is the app's reviews pending before the call was made, so the
+ * call's own is told apart from any left from before.
  */
-async function reviewAndAnswer(page, stack, baseline, button, failures) {
+async function reviewAndAnswer(page, stack, baseline, effect, failures) {
   const review = await reviewOpened(stack, baseline)
   if (!review) {
     failures.push(
@@ -336,9 +348,16 @@ async function reviewAndAnswer(page, stack, baseline, button, failures) {
     return seen
   }
   seen.card = (await card.innerText()).replace(/\s+/g, " ").trim()
-  await card.getByRole("button", { name: button, exact: true }).click()
+  const label = offeredLabel(review.options, effect)
+  failures.push(
+    ...(await unofferedAnswers(card, review.options)).map((line) => `the card ${line}`),
+  )
+  if (!label) failures.push(`the review offers no ${effect}`)
+  else if ((await card.getByRole("button", { name: label, exact: true }).count()) === 0)
+    failures.push(`no "${label}" button on the card`)
+  else await card.getByRole("button", { name: label, exact: true }).click()
   const gone = await reviewGone(stack, review, 10_000)
-  if (!gone) failures.push(`the review is still pending after ${button}`)
+  if (!gone) failures.push(`the review is still pending after ${label ?? effect}`)
   return seen
 }
 
@@ -541,7 +560,7 @@ const checks = {
       page,
       stack,
       opened.reviewsBefore,
-      names.allowOnce,
+      "allow",
       failures,
     )
     const answer = await output(app, "first")
@@ -562,7 +581,7 @@ const checks = {
       failures.push(
         `the second destructive call was answered before its review: "${before}"`,
       )
-    const review = await reviewAndAnswer(page, stack, baseline, names.denyOnce, failures)
+    const review = await reviewAndAnswer(page, stack, baseline, "deny", failures)
     const answer = await output(app, "again")
     if (answer !== `error: ${names.gatewayRefused.declined}`)
       failures.push(`after Deny the app shows "${answer}"`)

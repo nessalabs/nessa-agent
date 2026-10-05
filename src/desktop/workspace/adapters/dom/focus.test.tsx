@@ -143,7 +143,10 @@ it("picks the caret up when what held it in the pane goes away, as an answered a
           }),
         ),
     )
-  await asked({ id: "ap", command: "ls", reason: "look", origin: { kind: "agent" } }, 5)
+  await asked(
+    { id: "ap", command: "ls", reason: "look", origin: { kind: "agent" }, options: [] },
+    5,
+  )
   host.querySelector<HTMLButtonElement>("[data-pane-key] button")?.focus()
   expect(document.activeElement?.textContent).toBe("Approve")
   // Answered: the conversation no longer asks, and the button goes. The pane is as it was.

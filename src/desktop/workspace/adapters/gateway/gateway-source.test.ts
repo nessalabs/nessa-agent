@@ -2511,6 +2511,10 @@ describe("an app's review is read after its turn ended (#436)", () => {
           command: "app_delete_row {}",
           reason: "An app asks to run app_delete_row on mcptest",
           origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
         },
       }),
     })

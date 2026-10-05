@@ -267,6 +267,8 @@ describe("a conversation view as a transcript", () => {
       command: 'bash {"command":"rm -rf build"}',
       reason: "Tool permission",
       origin: { kind: "agent" },
+      // The review's own answers, and no always: the view offered none.
+      options: [{ id: "a", label: "Allow", choice: "once" }],
     })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",
@@ -296,6 +298,39 @@ describe("who asks for an approval (#436)", () => {
       1,
       at,
     ).approval
+
+  it("carries each offered answer in the view's order and words, and none it did not offer (#444)", () => {
+    const approval = asked({ kind: "harness" })
+    // The fixture lists only allow. A deny the view does not carry is not invented,
+    // and neither is always.
+    expect(approval?.options).toEqual([{ id: "allow", label: "Allow", choice: "once" }])
+    const both = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "completed" })],
+        permissions: [
+          {
+            executionId: "e1",
+            permissionId: "p",
+            toolId: "t1",
+            title: "Run it",
+            options: [
+              { id: "opt-b", label: "Nope", effect: "deny" },
+              { id: "opt-a", label: "Sure", effect: "allow" },
+            ],
+            toolName: "bash",
+            origin: { kind: "harness" },
+            argumentsJson: "{}",
+          },
+        ],
+      }),
+      1,
+      at,
+    ).approval
+    expect(both?.options).toEqual([
+      { id: "opt-b", label: "Nope", choice: "deny" },
+      { id: "opt-a", label: "Sure", choice: "once" },
+    ])
+  })
 
   it("O1: a review the agent's harness asked for is the agent's", () => {
     expect(asked({ kind: "harness" })?.origin).toEqual({ kind: "agent" })

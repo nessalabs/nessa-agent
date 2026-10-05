@@ -197,6 +197,7 @@ export const SessionPeek = memo(function SessionPeek({
             </p>
           ) : (
             <ApprovalActions
+              options={approval.options}
               disabled={!answerable}
               tips={{
                 deny: tooltip("Don’t run it", {

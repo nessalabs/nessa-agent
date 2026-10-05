@@ -11,7 +11,14 @@ import { resolve } from "node:path"
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
-import { ApprovalActions, ApprovalCommand, type ApprovalChoice } from "./approval-request"
+import type { ApprovalChoice, ApprovalOption } from "../../model/transcript"
+import { ApprovalActions, ApprovalCommand } from "./approval-request"
+
+const offered: readonly ApprovalOption[] = [
+  { id: "deny", label: "Deny", choice: "deny" },
+  { id: "always", label: "Always Allow", choice: "always" },
+  { id: "once", label: "Allow Once", choice: "once" },
+]
 
 let host: HTMLDivElement
 
@@ -53,21 +60,51 @@ it("keeps each word of the command whole, breaking only at its spaces", async ()
   await act(async () => root.unmount())
 })
 
-it("offers every answer, each giving its own", async () => {
+const byName = (name: string) =>
+  [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => (button.getAttribute("aria-label") ?? button.textContent) === name,
+  )
+
+it("offers every answer the review carries, each giving its own", async () => {
   const given: ApprovalChoice[] = []
   const root = createRoot(host)
   await act(async () =>
     root.render(
-      <ApprovalActions disabled={false} onAnswer={(choice) => given.push(choice)} />,
+      <ApprovalActions
+        options={offered}
+        disabled={false}
+        onAnswer={(choice) => given.push(choice)}
+      />,
     ),
   )
-  const byName = (name: string) =>
-    [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => (button.getAttribute("aria-label") ?? button.textContent) === name,
-    )
   for (const name of ["Deny", "Always Allow", "Allow Once"]) byName(name)?.click()
   expect(given).toEqual(["deny", "always", "once"])
   expect(byName("More Ways to Allow")).toBeDefined()
+  await act(async () => root.unmount())
+})
+
+it("offers only the answers the review carries, in the review's words (#444)", async () => {
+  const given: ApprovalChoice[] = []
+  const root = createRoot(host)
+  const review: readonly ApprovalOption[] = [
+    { id: "opt-b", label: "Nope", choice: "deny" },
+    { id: "opt-a", label: "Sure", choice: "once" },
+  ]
+  await act(async () =>
+    root.render(
+      <ApprovalActions
+        options={review}
+        disabled={false}
+        onAnswer={(choice) => given.push(choice)}
+      />,
+    ),
+  )
+  expect(byName("Always Allow")).toBeUndefined()
+  expect(byName("Allow Once")).toBeUndefined()
+  expect(byName("More Ways to Allow")).toBeUndefined()
+  expect(byName("Deny")).toBeUndefined()
+  for (const name of ["Nope", "Sure"]) byName(name)?.click()
+  expect(given).toEqual(["deny", "once"])
   await act(async () => root.unmount())
 })
 
@@ -138,7 +175,9 @@ it("takes the keyboard where a word is wider than the card, so the arrows scroll
 it("presses an answer once for a held key: its repeats press nothing", async () => {
   const root = createRoot(host)
   await act(async () =>
-    root.render(<ApprovalActions disabled={false} onAnswer={() => {}} />),
+    root.render(
+      <ApprovalActions options={offered} disabled={false} onAnswer={() => {}} />,
+    ),
   )
   const allow = host.querySelector<HTMLButtonElement>(".workspace-approval-once")
   if (!allow) throw new Error("no Allow Once")

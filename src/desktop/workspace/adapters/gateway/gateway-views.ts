@@ -20,6 +20,8 @@ import { composerModels } from "../../../model/composer-options"
 import { decodeId, encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
+  ApprovalChoice,
+  ApprovalOption,
   ApprovalOrigin,
   Message,
   Part,
@@ -134,6 +136,27 @@ export function approvalId(permission: ConversationPermission): string {
  * its test "reads who asked for a review"), so the empty text below stands in
  * for nothing a read can hold.
  */
+/**
+ * What a view's option decides, as the card's choice. A total table: an
+ * effect the protocol adds does not compile until it says which choice it is.
+ * The view has no effect that reaches past this request.
+ */
+const approvalChoices: {
+  readonly [K in ConversationPermission["options"][number]["effect"]]: ApprovalChoice
+} = {
+  allow: "once",
+  deny: "deny",
+}
+
+/** The answers a review offers, in the order the view lists them. */
+function approvalOptions(permission: ConversationPermission): readonly ApprovalOption[] {
+  return permission.options.map((option) => ({
+    id: option.id,
+    label: option.label,
+    choice: approvalChoices[option.effect],
+  }))
+}
+
 const approvalOrigins: {
   readonly [K in ConversationPermission["origin"]["kind"]]: (
     origin: ConversationPermission["origin"],
@@ -279,6 +302,7 @@ export function transcriptFrom(
         command: `${asked.toolName} ${asked.argumentsJson}`,
         reason: asked.title,
         origin: approvalOrigins[asked.origin.kind](asked.origin),
+        options: approvalOptions(asked),
       }
     : null
   return {

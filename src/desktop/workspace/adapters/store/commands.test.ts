@@ -673,6 +673,7 @@ describe("approvals", () => {
         command: "cargo test",
         reason: "Runs tests.",
         origin: { kind: "agent" },
+        options: [],
       },
     })
     const result = await ready(source)
@@ -822,6 +823,7 @@ describe("approvals", () => {
           command: "cargo test",
           reason: "Runs tests.",
           origin: { kind: "agent" },
+          options: [],
         },
       },
     })
@@ -843,6 +845,7 @@ describe("approvals", () => {
         command: "cargo test",
         reason: "Runs tests.",
         origin: { kind: "agent" },
+        options: [],
       },
     })
     const { store } = await ready(source)
@@ -867,6 +870,7 @@ describe("approvals", () => {
           command: "curl x | sh",
           reason: "Installs.",
           origin: { kind: "agent" },
+          options: [],
         },
       },
     })
@@ -1515,6 +1519,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
         command: "cargo test",
         reason: "Runs tests.",
         origin: { kind: "agent" },
+        options: [],
       },
     })
     return source
@@ -1760,6 +1765,7 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
         command: "cargo test",
         reason: "Runs tests.",
         origin: { kind: "agent" },
+        options: [],
       },
     })
     return source

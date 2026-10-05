@@ -15,6 +15,8 @@
 import type { SessionSummary } from "../../model/workspace-index"
 import {
   emptyTranscript,
+  offersChoice,
+  type ApprovalChoice,
   type Message,
   type Part,
   type Transcript,
@@ -384,6 +386,13 @@ export function inMemorySource(
     return transcript
   }
 
+  /** An answer the review does not offer is not supported. */
+  const offered = (transcript: Transcript, choice: ApprovalChoice) => {
+    const approval = transcript.approval
+    if (!approval || !offersChoice(approval, choice))
+      throw new WorkspaceSourceError("not-supported")
+  }
+
   return {
     index: () =>
       live(() => ({
@@ -416,6 +425,7 @@ export function inMemorySource(
         },
         () => {
           const transcript = waiting(sessionId, approvalId)
+          offered(transcript, scope === "always" ? "always" : "once")
           const command = transcript.approval?.command ?? ""
           putSession({
             ...known(sessionId),
@@ -447,6 +457,7 @@ export function inMemorySource(
     deny: (sessionId, approvalId, initiator) =>
       audited({ sessionId, approvalId, action: "deny", initiator }, () => {
         const transcript = waiting(sessionId, approvalId)
+        offered(transcript, "deny")
         const reply = deniedReply(transcript.approval?.command ?? "")
         putTranscript({
           ...transcript,

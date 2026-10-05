@@ -60,12 +60,35 @@ export type ApprovalOrigin =
   | { readonly kind: "agent" }
   | { readonly kind: "app"; readonly server: string; readonly tool: string }
 
+/**
+ * An answer a review offers, as its button gives it. `once` allows this
+ * request; `always` reaches further. A gateway review has no `always`: the
+ * projection offers no choice that reaches past its request
+ * (`a_review_reaching_beyond_its_request_is_not_offered`).
+ */
+export type ApprovalChoice = "deny" | "always" | "once"
+
+/** One answer a review offers. The card draws these and no others. */
+export interface ApprovalOption {
+  readonly id: string
+  /** What the button says: the review's own words for this answer. */
+  readonly label: string
+  readonly choice: ApprovalChoice
+}
+
 /** A command the agent, or an MCP App, asks to run, waiting on the person's answer. */
 export interface Approval {
   readonly id: string
   readonly command: string
   readonly reason: string
   readonly origin: ApprovalOrigin
+  /** The answers this review offers, in the order it offers them. */
+  readonly options: readonly ApprovalOption[]
+}
+
+/** Whether `approval` offers `choice`. A button and an answer both ask this. */
+export function offersChoice(approval: Approval, choice: ApprovalChoice): boolean {
+  return approval.options.some((option) => option.choice === choice)
 }
 
 /** What a running agent is doing, and since when; absent while its reply streams in. */

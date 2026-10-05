@@ -22,6 +22,7 @@ import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
+import { offersChoice } from "../../model/transcript"
 import { approvalAsker } from "../transcript/approval-request"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
@@ -30,9 +31,10 @@ import { answeredLabels, type OnAnswer, type Settling } from "./settling"
 /**
  * One session waiting on the person, as a row of the list: its title, one
  * line of why, and the command itself — the only monospace on the page.
- * Deny and Allow wait at its end until the row is pointed at or has the
- * keyboard; holding ⌥ turns Allow into Always Allow, as ⌥ shows the other
- * choice in a Mac menu. Answered, the buttons give way to what became of it;
+ * The review's answers wait at its end until the row is pointed at or has
+ * the keyboard. Where the review offers always as well as once, holding ⌥
+ * turns the once button into that answer, as ⌥ shows the other choice in a
+ * Mac menu. Answered, the buttons give way to what became of it;
  * then the row fades, and the list closes over where it was.
  */
 export const RequestRow = memo(function RequestRow({
@@ -85,6 +87,17 @@ export const RequestRow = memo(function RequestRow({
   const answerable = approval !== null && !settling && !answering(answer, approval.id)
   const refused = settling ? undefined : answer?.failure
   const unreadable = request.kind === "unreadable" ? request.reason : null
+  const denies = approval?.options.filter((option) => option.choice === "deny") ?? []
+  const onceOptions = approval?.options.filter((option) => option.choice === "once") ?? []
+  // Always folds into the first once button, where the review offers both.
+  const foldedAlways =
+    onceOptions.length > 0
+      ? approval?.options.find((option) => option.choice === "always")
+      : undefined
+  const standaloneAlways =
+    approval?.options.filter(
+      (option) => option.choice === "always" && option !== foldedAlways,
+    ) ?? []
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     const binding = overviewKeys.find((candidate) =>
@@ -121,7 +134,9 @@ export const RequestRow = memo(function RequestRow({
     if (command !== "once" && command !== "always" && command !== "deny") return
     event.preventDefault()
     event.stopPropagation()
-    if (answerable) onAnswer(summary, approval, command, event.timeStamp)
+    // A chord answers only an answer this review offers.
+    if (answerable && offersChoice(approval, command))
+      onAnswer(summary, approval, command, event.timeStamp)
   }
 
   // A click peeks at the session, a double-click opens it; the buttons answer.
@@ -138,6 +153,9 @@ export const RequestRow = memo(function RequestRow({
         role="group"
         tabIndex={current ? 0 : -1}
         aria-label={`${summary.title}. ${approval ? `${approvalAsker(approval.origin, agent)} wants to run ${approval.command}` : `${agent} is waiting for you`}.`}
+        data-offers-always={
+          approval && offersChoice(approval, "always") ? true : undefined
+        }
         data-selected={selected || undefined}
         aria-expanded={expanded}
         onFocus={() => onFocus(sessionId)}
@@ -185,42 +203,77 @@ export const RequestRow = memo(function RequestRow({
           </time>
           {approval ? (
             <span className="agents-request-actions">
-              <button
-                type="button"
-                className="workspace-button agents-request-button"
-                tabIndex={current && answerable ? 0 : -1}
-                disabled={!answerable}
-                {...tooltip("Don’t run it", { shortcut: labelOf(overviewKeys, "deny") })}
-                onClick={(event) => {
-                  if (answerable) onAnswer(summary, approval, "deny", event.timeStamp)
-                }}
-              >
-                Deny
-              </button>
-              <button
-                type="button"
-                className="workspace-button agents-request-button"
-                data-primary
-                tabIndex={current && answerable ? 0 : -1}
-                disabled={!answerable}
-                {...tooltip("Run it once. Hold ⌥ to always allow it", {
-                  shortcut: labelOf(overviewKeys, "once"),
-                })}
-                onClick={(event) => {
-                  if (answerable)
-                    onAnswer(
-                      summary,
-                      approval,
-                      event.altKey ? "always" : "once",
-                      event.timeStamp,
-                    )
-                }}
-              >
-                <span className="agents-request-once">Allow</span>
-                <span className="agents-request-always" aria-hidden="true">
-                  Always Allow
-                </span>
-              </button>
+              {denies.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="workspace-button agents-request-button"
+                  data-answer={option.choice}
+                  tabIndex={current && answerable ? 0 : -1}
+                  disabled={!answerable}
+                  {...tooltip("Don’t run it", {
+                    shortcut: labelOf(overviewKeys, "deny"),
+                  })}
+                  onClick={(event) => {
+                    if (answerable)
+                      onAnswer(summary, approval, option.choice, event.timeStamp)
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+              {onceOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="workspace-button agents-request-button"
+                  data-answer={option.choice}
+                  data-primary
+                  tabIndex={current && answerable ? 0 : -1}
+                  disabled={!answerable}
+                  {...tooltip(
+                    foldedAlways && option === onceOptions[0]
+                      ? "Run it once. Hold ⌥ to always allow it"
+                      : option.label,
+                    { shortcut: labelOf(overviewKeys, "once") },
+                  )}
+                  onClick={(event) => {
+                    if (!answerable) return
+                    const choice =
+                      foldedAlways && option === onceOptions[0] && event.altKey
+                        ? "always"
+                        : option.choice
+                    onAnswer(summary, approval, choice, event.timeStamp)
+                  }}
+                >
+                  <span className="agents-request-once">{option.label}</span>
+                  {foldedAlways && option === onceOptions[0] ? (
+                    <span className="agents-request-always" aria-hidden="true">
+                      {foldedAlways.label}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+              {standaloneAlways.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="workspace-button agents-request-button"
+                  data-answer={option.choice}
+                  data-primary
+                  tabIndex={current && answerable ? 0 : -1}
+                  disabled={!answerable}
+                  {...tooltip(option.label, {
+                    shortcut: labelOf(overviewKeys, "always"),
+                  })}
+                  onClick={(event) => {
+                    if (answerable)
+                      onAnswer(summary, approval, option.choice, event.timeStamp)
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
             </span>
           ) : request.kind === "question" ? (
             <span className="agents-request-actions">

@@ -110,10 +110,11 @@
 
 /*
  * The answers (`approval-request.tsx`), arranged by the width they have, so
- * no button is ever left alone on a row: wide, Deny at the left and the two
- * ways to allow at the right; narrower, one row at the right with "Always";
- * narrowest, Allow Once across the width with Always Allow in its menu, and
- * Deny, quiet, across the width beneath.
+ * no button is ever left alone on a row. When the review also offers always:
+ * wide, Deny at the left and the two ways to allow at the right; narrower,
+ * one row at the right with "Always"; narrowest, the once answer across the
+ * width with Always in its menu, and Deny, quiet, across the width beneath.
+ * A review that does not offer always has no such button and no menu.
  */
 .workspace-approval-answers {
   container: approval-answers / inline-size;
@@ -180,6 +181,11 @@
 
   .workspace-approval-actions .workspace-approval-once {
     flex: 1;
+    border-radius: 999px;
+  }
+
+  /* Joined to the menu that holds Always, and only while that menu is there. */
+  .workspace-approval-actions:has(.workspace-approval-more) .workspace-approval-once {
     border-radius: 999px 4px 4px 999px;
   }
 

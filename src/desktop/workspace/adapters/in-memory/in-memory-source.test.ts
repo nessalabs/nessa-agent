@@ -3,6 +3,7 @@ import type { WorkspaceUpdate } from "../../application/ports"
 import { WorkspaceSourceError } from "../../application/ports"
 import { messageText, type Transcript } from "../../model/transcript"
 import { inMemorySource, type Schedule } from "./in-memory-source"
+import { sampleWorkspace } from "./sample-workspace"
 import { scriptTiming } from "./scripted-replies"
 
 /** A clock and timers the test moves by hand. */
@@ -166,6 +167,31 @@ describe("the in-memory source", () => {
     // Each change of it is the summary's next revision.
     const revisions = summaries().map((summary) => summary.revision)
     expect(revisions).toEqual(revisions.map((_, index) => index + 1))
+  })
+
+  it("refuses an answer the review does not offer, and records the refusal (#444)", async () => {
+    const clock = manualSchedule()
+    const seed = sampleWorkspace(clock.schedule.now())
+    const held = seed.transcripts.get("notarize")
+    if (!held?.approval) throw new Error("notarize asks for nothing")
+    seed.transcripts.set("notarize", {
+      ...held,
+      approval: {
+        ...held.approval,
+        options: held.approval.options.filter((option) => option.choice !== "always"),
+      },
+    })
+    const source = inMemorySource(clock.schedule, seed)
+    await expect(
+      source.approve("notarize", held.approval.id, "always", "person"),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(source.audit().at(-1)).toMatchObject({
+      action: "allow-always",
+      outcome: { refused: "not-supported" },
+    })
+    // What it does offer is still taken.
+    await source.approve("notarize", held.approval.id, "once", "person")
+    expect((await source.transcript("notarize")).approval).toBeNull()
   })
 
   it("says a waiting session waits, runs what was allowed, and says nothing once denied", async () => {

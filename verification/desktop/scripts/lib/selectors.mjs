@@ -448,6 +448,8 @@ export const names = {
   /** Its least level is None, which `modelWithoutFast` does not offer. */
   modelWithLeastLevel: "GPT-5.6 Sol",
   alwaysAllow: "Always Allow",
+  /** The card's menu for an always answer, drawn only when the review offers one. */
+  moreWaysToAllow: "More Ways to Allow",
   /** The sample session (in-memory source) whose conversation carries a widget of each state. */
   widgetSession: "Widget hosts, every state",
   /** The channel the sample session is in. */
@@ -488,6 +490,16 @@ export const names = {
   openInWindow: "Open in Window",
   closePane: "Close Pane",
   closeWindow: "Close",
+}
+
+/**
+ * The label of the option with `effect` on a conversation permission.
+ * A card's button says this (#444); a surface never invents "Allow Once".
+ * Null when the review offers no such option.
+ */
+export function offeredLabel(options, effect) {
+  const option = options?.find((each) => each.effect === effect)
+  return option ? option.label : null
 }
 
 /** Role and accessible-name selectors for the committed conversation fixture. */

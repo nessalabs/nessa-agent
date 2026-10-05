@@ -7,6 +7,7 @@ const approval: Approval = {
   command: "cargo test",
   reason: "Runs the tests.",
   origin: { kind: "agent" },
+  options: [],
 }
 
 describe("requestOf", () => {

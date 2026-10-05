@@ -33,13 +33,20 @@ import {
   type FakeSource,
 } from "../../testing"
 import { selectOverviewOpen } from "../../adapters/store/selectors"
-import type { ApprovalOrigin } from "../../model/transcript"
+import type { ApprovalOption, ApprovalOrigin } from "../../model/transcript"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { OverviewRow } from "../source-list/overview-row"
 import { answerPause } from "../../model/overview/walk"
 import { peekParts } from "../../model/overview/peek"
 import { OverviewLayer } from "./overview-layer"
+
+/** The answers the sample's reviews offer, so the overview's always chord has one to give. */
+const sampleAnswers: readonly ApprovalOption[] = [
+  { id: "deny", label: "Deny", choice: "deny" },
+  { id: "always", label: "Always Allow", choice: "always" },
+  { id: "once", label: "Allow Once", choice: "once" },
+]
 
 let root: Root
 let host: HTMLDivElement
@@ -86,6 +93,7 @@ async function mount({
   wrap = (tree: ReactNode) => tree,
   index = sampleIndex(),
   secondAsker = { kind: "agent" },
+  options = sampleAnswers,
   beforeLoad,
 }: {
   strict?: boolean
@@ -93,6 +101,8 @@ async function mount({
   index?: WorkspaceIndex
   /** Who asks the second session's approval. */
   secondAsker?: ApprovalOrigin
+  /** The answers each review offers. */
+  options?: readonly ApprovalOption[]
   /** Runs after the source is built, before the workspace reads it. */
   beforeLoad?: (source: FakeSource) => void
 } = {}) {
@@ -114,6 +124,7 @@ async function mount({
               : command,
           reason: `Why ${sessionId}.`,
           origin: sessionId === "second" ? secondAsker : { kind: "agent" },
+          options,
         },
       })
   }
@@ -551,6 +562,35 @@ describe("the agents overview", () => {
     })
     expect(selectFocusedSessionId(store.getState())).toBe("run")
     expect(host.querySelector(".agents-overview")).toBeNull()
+  })
+
+  it("does not offer always when the review does not (#444)", async () => {
+    const { source } = await mount({
+      options: [
+        { id: "deny", label: "Deny", choice: "deny" },
+        { id: "allow", label: "Allow", choice: "once" },
+      ],
+    })
+    await open()
+    const row = card("first")
+    expect(row?.querySelector("[data-answer='always']")).toBeNull()
+    expect(row?.textContent).not.toContain("Always Allow")
+    expect(row?.hasAttribute("data-offers-always")).toBe(false)
+    // ⌥⌘↩ is always, which this review does not offer: it answers nothing.
+    await press(row as HTMLElement, "Enter", { command: true, alt: true })
+    expect(
+      source.calls.filter((call) => call[0] === "approve" || call[0] === "deny"),
+    ).toEqual([])
+    // ⌥ on Allow does not invent an always answer either: it allows this request.
+    await act(async () => {
+      button(row, "Allow")?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, altKey: true }),
+      )
+      await settle(10)
+    })
+    expect(source.calls.filter((call) => call[2] === "first-ask")).toEqual([
+      ["approve", "first", "first-ask", "once", "person"],
+    ])
   })
 
   it("allows always when Allow is clicked with ⌥ held", async () => {

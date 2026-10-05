@@ -542,13 +542,13 @@ html:not(.dark) .agents-request {
   opacity: 1;
 }
 
-/* ⌥ held: Allow is Always Allow. */
+/* ⌥ held: Allow is Always Allow, on a row whose review offers that answer. */
 .agents-request-always,
-.agents-overview[data-alt] .agents-request-once {
+.agents-overview[data-alt] .agents-request[data-offers-always] .agents-request-once {
   display: none;
 }
 
-.agents-overview[data-alt] .agents-request-always {
+.agents-overview[data-alt] .agents-request[data-offers-always] .agents-request-always {
   display: inline;
 }
 

@@ -8,7 +8,7 @@
  */
 import type { Approval } from "../../model/transcript"
 import type { SessionSummary } from "../../model/workspace-index"
-import type { ApprovalChoice } from "../transcript/approval-request"
+import type { ApprovalChoice } from "../../model/transcript"
 
 export interface Settling {
   readonly sessionId: string

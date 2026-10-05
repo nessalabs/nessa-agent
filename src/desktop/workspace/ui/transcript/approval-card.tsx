@@ -50,6 +50,7 @@ export const ApprovalCard = memo(function ApprovalCard({
         </p>
       ) : null}
       <ApprovalActions
+        options={approval.options}
         disabled={waiting}
         onAnswer={(choice) =>
           void dispatch(

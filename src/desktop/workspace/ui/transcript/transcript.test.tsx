@@ -83,6 +83,11 @@ const conversation: TranscriptValue = {
     command: "cargo test",
     reason: "Runs the tests.",
     origin: { kind: "agent" },
+    options: [
+      { id: "deny", label: "Deny", choice: "deny" },
+      { id: "always", label: "Always Allow", choice: "always" },
+      { id: "once", label: "Allow Once", choice: "once" },
+    ],
   },
 }
 
@@ -347,11 +352,43 @@ describe("a transcript", () => {
         command: "app_delete_row {}",
         reason: "An app asks to run app_delete_row on mcptest",
         origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+        options: [
+          { id: "allow", label: "Allow", choice: "once" },
+          { id: "deny", label: "Deny", choice: "deny" },
+        ],
       },
     })
     expect(head()).toBe("The mcptest app wants to run app_delete_row")
     expect(head()).not.toContain(agent)
     expect(card()?.dataset.origin).toBe("app")
+  })
+
+  it("offers only the answers its review carries (#444)", async () => {
+    const source = fakeSource()
+    await shown(source, {
+      ...conversation,
+      approval: {
+        id: "app-ap",
+        command: "app_delete_row {}",
+        reason: "An app asks to run app_delete_row on mcptest",
+        origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+        options: [
+          { id: "allow", label: "Allow", choice: "once" },
+          { id: "deny", label: "Deny", choice: "deny" },
+        ],
+      },
+    })
+    // Deny stays at the left; the review's allow is the primary button, in the review's words.
+    expect(buttons()).toEqual([
+      ["Deny", false],
+      ["Allow", false],
+    ])
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
+    })
+    expect(
+      source.calls.filter((call) => call[0] === "approve" || call[0] === "deny"),
+    ).toEqual([["approve", "b", "app-ap", "once", "person"]])
   })
 
   it("asks again, saying why, when an answer does not reach the agent", async () => {
