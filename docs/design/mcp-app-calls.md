@@ -426,5 +426,4 @@ Each row above has a test, named after it:
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
   B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`,
   and at every entry, as a text message is refused, in `agents/messages.rs`
-  (`an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry`;
-  `steer` saves before the check, #477).
+  (`an_image_message_carrying_a_context_is_refused_by_a_model_without_text_at_every_entry`).

@@ -2,6 +2,7 @@
 
 #![deny(missing_docs)]
 
+use super::save_batch::RecordRuntime;
 use super::{
     record::RecordStorage,
     stream_fact,
@@ -15,8 +16,8 @@ use crate::{
     domain::agent_execution::sessions::SessionId,
 };
 use event_stream::{
-    infrastructure::SqliteStore, Cursor, Error as StreamError, EventReader, PageLimits,
-    Record as StreamRecord, Runtime, StreamId, StreamKey,
+    Cursor, Error as StreamError, EventReader, PageLimits, Record as StreamRecord, StreamId,
+    StreamKey,
 };
 use nessa_sync::replication::{
     application::{RecordSource, SourceError},
@@ -144,7 +145,7 @@ fn retire_receiver(
 }
 fn retire_invalid_receivers(
     cache: &Mutex<CommittedCache>,
-    runtime: &Runtime<SqliteStore>,
+    runtime: &RecordRuntime,
     handle: &Handle,
 ) -> Result<(), StorageError> {
     // At most 64 Arc slots; no semantic/history clone or lock held during metadata I/O.
@@ -381,7 +382,7 @@ impl Drop for SourceWorker {
 
 impl NessaRecordSource {
     fn start(
-        runtime: Runtime<SqliteStore>,
+        runtime: RecordRuntime,
         stream: StreamKey,
         origin: Id,
         handle: Handle,
@@ -582,7 +583,7 @@ impl RecordSource for NessaRecordSource {
 }
 
 struct ReaderState {
-    runtime: Runtime<SqliteStore>,
+    runtime: RecordRuntime,
     stream: StreamKey,
     origin: Id,
     head: u64,
@@ -1207,7 +1208,7 @@ mod tests {
     }
 
     async fn append_opening(
-        runtime: &Runtime<SqliteStore>,
+        runtime: &RecordRuntime,
         stream: &StreamKey,
         session: &SessionId,
     ) -> u64 {
@@ -1224,6 +1225,7 @@ mod tests {
         let receipt = writer
             .save(
                 runtime,
+                None,
                 original,
                 &observed,
                 &[SessionSaveUnit::new(vec![change]).unwrap()],
@@ -2191,6 +2193,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 binding,
                 &opening_snapshot,
                 &[SessionSaveUnit::new(vec![change]).unwrap()],
@@ -2228,6 +2231,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 binding,
                 &with_context,
                 &[SessionSaveUnit::new(vec![context]).unwrap()],
@@ -2264,6 +2268,7 @@ mod tests {
             writer
                 .save(
                     &runtime,
+                    None,
                     binding,
                     &snapshot,
                     &[SessionSaveUnit::new(vec![change]).unwrap()],
@@ -2289,6 +2294,7 @@ mod tests {
         writer
             .save(
                 &runtime,
+                None,
                 binding,
                 &last,
                 &[SessionSaveUnit::new(vec![later.clone()]).unwrap()],

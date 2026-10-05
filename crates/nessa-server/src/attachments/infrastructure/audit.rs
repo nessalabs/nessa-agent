@@ -1,6 +1,9 @@
 //! Durable attachment evidence: one private file per record, synced with its
 //! directory before the record is acknowledged. Separate files cannot tear
-//! each other, and concurrent records do not wait on one another.
+//! each other. Bulk admission is the service's permit. Dropping the wait at
+//! the deadline does not cancel a write already on the blocking pool, and
+//! that write does not hold the admission permit. The sink starts one
+//! blocking write at a time, so a stuck sync cannot fill the pool.
 //!
 //! The record's identity and the time it was observed are assigned here, from
 //! the injected clock. `requestedAtMs` is when the request that caused the
@@ -17,20 +20,75 @@ use crate::attachments::{
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
 use serde_json::{json, Value};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{io::Write, path::PathBuf, sync::Arc};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 /// Private host audit storage for attachment transitions.
 pub struct DurableAttachmentAudit {
     directory: PathBuf,
     clock: Arc<dyn Clock>,
+    /// One blocking write. Held by that write until it finishes, not by the
+    /// service's deadline.
+    write: Arc<Semaphore>,
+    /// How many blocking writes have entered. The cap test reads this.
+    #[cfg(test)]
+    writes_started: Arc<AtomicUsize>,
+    /// When set, a blocking write waits here after it has taken `write`.
+    /// The cap test reads the permit count while this is held.
+    #[cfg(test)]
+    pause_write: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
 }
 impl DurableAttachmentAudit {
     /// Use a private `directory`. An existing unsafe path fails here; it is
     /// never repaired.
     pub fn new(directory: PathBuf, clock: Arc<dyn Clock>) -> Result<Self, AuditUnavailable> {
         create_directory(&directory).map_err(|_| AuditUnavailable)?;
-        Ok(Self { directory, clock })
+        Ok(Self {
+            directory,
+            clock,
+            write: Arc::new(Semaphore::new(1)),
+            #[cfg(test)]
+            writes_started: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            pause_write: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn writes_started(&self) -> usize {
+        self.writes_started.load(Ordering::SeqCst)
+    }
+
+    /// How many write places are free. Zero while a blocking write holds the
+    /// only one.
+    #[cfg(test)]
+    pub(crate) fn write_permits_available(&self) -> usize {
+        self.write.available_permits()
+    }
+
+    /// The next blocking writes wait inside the pool, still holding the place.
+    #[cfg(test)]
+    pub(crate) fn pause_writes_for_test(&self) {
+        *self
+            .pause_write
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+
+    /// Let paused blocking writes finish and release the place.
+    #[cfg(test)]
+    pub(crate) fn resume_writes_for_test(&self) {
+        let mut hold = self
+            .pause_write
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *hold = false;
+        self.pause_write.1.notify_all();
     }
 }
 impl AttachmentAudit for DurableAttachmentAudit {
@@ -40,9 +98,33 @@ impl AttachmentAudit for DurableAttachmentAudit {
         value["recordId"] = json!(id);
         value["observedAtMs"] = json!(self.clock.unix_milliseconds());
         let directory = self.directory.clone();
+        let write = Arc::clone(&self.write);
+        #[cfg(test)]
+        let writes_started = Arc::clone(&self.writes_started);
+        #[cfg(test)]
+        let pause_write = Arc::clone(&self.pause_write);
         Box::pin(async move {
-            // The blocking task owns the write even if its caller stops waiting.
+            // Wait here, on the runtime, not on a blocking thread. The
+            // service's deadline can drop this wait. A write that already
+            // holds the permit keeps it until that write returns.
+            let Ok(permit) = write.acquire_owned().await else {
+                return Err(AuditUnavailable);
+            };
             tokio::task::spawn_blocking(move || {
+                // The place stays with this write. Dropping it before the
+                // pool runs lets the next record start another blocking write.
+                let _permit = permit;
+                #[cfg(test)]
+                {
+                    let (lock, wake) = &*pause_write;
+                    let mut paused = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    writes_started.fetch_add(1, Ordering::SeqCst);
+                    while *paused {
+                        paused = wake
+                            .wait(paused)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                }
                 let mut file = PrivateTempFile::new_in(&directory)?;
                 serde_json::to_writer(file.as_file_mut(), &value)?;
                 file.as_file_mut().write_all(b"\n")?;

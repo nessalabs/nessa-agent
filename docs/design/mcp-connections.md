@@ -557,12 +557,15 @@ params are read.
   brought back. Its file is written, and it always takes its server out of
   the live set: when the list it leaves cannot go live as a whole, the live
   set becomes the current one less that server — a subset of a valid set,
-  so always valid — and the outcome says `liveSet: withdrawn`
+  so always valid. The outcome says `liveSet: withdrawn` when that server
+  was live, and `liveSet: kept` when it was not (a server turned off, or
+  one only the hand-edited file named), since the live set did not change
   (`a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`,
   `a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
 - `live` (save and remove) is whether new conversations now get the stored
   list as written: `false` while the gateway stops, or after a remove that
-  only withdrew its server (`a_remove_answers_whether_the_list_went_live`).
+  could not make the list live, whether it withdrew its server or left the
+  live set as it was (`a_remove_answers_whether_the_list_went_live`).
 
 The revision is a digest of the stored block (`[]` when there is none),
 keyed with the process's `ConfigurationKey` — the one the stand-ins' digests
@@ -764,7 +767,7 @@ meet the stand-in and forwarded-result rows above.
 | LS17 | `save` keeps a variable with `value: null` | The stored value is kept only when the save launches the server as stored apart from the kept values: the same command and arguments, the same variable names, each other one `null` or its stored value. A changed command or argument, a variable added (`LD_PRELOAD`), swapped, left out, or given another value → `invalid` (`environment_value_missing`), so a secret never reaches code it was not given to; a null for a name with no stored value → the same; an entry with no `value` at all → `invalid_request`; a name given twice → `environment_name_repeated`, said before a missing value | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `a_kept_value_is_refused_when_anything_else_in_the_launch_changes`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`, `a_repeated_name_is_said_before_a_missing_value` |
 | LS19 | `remove` of a live server from a hand-edited list still past a bound after it | Written; the server leaves the live set and the rest stay; outcome `liveSet: withdrawn`; wire `live: false`. The remove that brings the list within its bounds answers `live: true`, outcome `replaced` | `a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`, `a_remove_from_a_list_past_its_bounds_is_written_and_recovers`, `a_remove_answers_whether_the_list_went_live` |
 | LS19a | `remove` of a server not live — turned off, or added by hand and never live — from a list still past a bound after it | Written; the live set as it was; outcome `liveSet: kept`, never `withdrawn` | `a_remove_of_a_server_not_live_from_a_list_past_a_bound_keeps_the_set` |
-| LS20 | A stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (64), by one byte or by most of the file | The configuration does not parse (`stored_servers`, the one reader for startup and the store): list, save, remove and inspect answer `config_invalid`, nothing written, so every request naming a stored server fits a frame. The `auth` CLI commands, which read the file through the same `RuntimeConfig::load`, refuse it too. The entry is logged by its index and its name's length, never the name or a value. 64 bytes is read | `a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`, `a_name_past_the_bound_is_logged_by_its_index_and_length_alone` |
+| LS20 | A stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (64), by one byte or by most of the file | The configuration does not parse (`stored_servers`, the one reader for startup and the store): list, save, remove and inspect answer `mcp_servers_config_invalid`, nothing written, so every request naming a stored server fits a frame. The `auth` CLI commands, which read the file through the same `RuntimeConfig::load`, refuse it too. The entry is logged by its index and its name's length, never the name or a value. 64 bytes is read | `a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`, `a_name_past_the_bound_is_logged_by_its_index_and_length_alone` |
 | LS21 | The running catalog or workspace path not UTF-8, which a first write to a file with no `agents` block would store | No settings composed, logged: every method answers `mcp_servers_not_configured`, with or without an `agents` block in the file; nothing written, never a lossy path the next start would use | `a_fallback_path_that_is_not_utf8_composes_no_settings` |
 | LS18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
 | — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |

@@ -22,11 +22,16 @@ use nessa_sdk::{
 use rusqlite::Connection;
 use std::{
     future::Future,
-    io::{BufRead, BufReader, Write},
-    path::PathBuf,
+    io::{BufRead, BufReader, Read, Seek, Write},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     task::{Context, Poll, Waker},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 fn watch_ready(watch: &mut CommittedChangeWatch) -> ChangeWatchState {
@@ -731,4 +736,272 @@ async fn predecessor_semantic_sqlite_record_refuses_without_mutation() {
     assert_eq!(loaded.binding(), receipt.next());
     drop(lease);
     accepted.shutdown().await.unwrap();
+}
+
+fn change_counter(root: &Path) -> u32 {
+    let mut header = [0u8; 28];
+    std::fs::File::open(root.join("records.sqlite3"))
+        .unwrap()
+        .read_exact(&mut header)
+        .unwrap();
+    u32::from_be_bytes(header[24..28].try_into().unwrap())
+}
+
+fn percentile(samples: &[Duration], pct: u8) -> Duration {
+    let mut ordered = samples.to_vec();
+    ordered.sort();
+    ordered[(ordered.len() - 1) * usize::from(pct) / 100]
+}
+
+async fn time_saves(root: &Path, label: &str) -> (Duration, Duration, i64) {
+    let storage = RecordStorage::new(root).unwrap();
+    let id = SessionId::new(label).unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let mut samples = Vec::with_capacity(31);
+    let mut versions = Vec::with_capacity(31);
+    for index in 0..31 {
+        let (change, snapshot) = if index == 0 {
+            opened(&id)
+        } else {
+            let input = SessionChange::InputAccepted(Box::new(super::fixtures::input_record(
+                &format!("{label}-{index}"),
+                32,
+            )));
+            let prior = lease.load().await.unwrap();
+            let snapshot = with_input(prior.snapshot().unwrap(), &input);
+            (input, snapshot)
+        };
+        let before = change_counter(root);
+        let started = Instant::now();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        samples.push(started.elapsed());
+        versions.push(i64::from(change_counter(root) - before));
+    }
+    drop(lease);
+    storage.shutdown().await.unwrap();
+    let p50 = percentile(&samples, 50);
+    let p95 = percentile(&samples, 95);
+    let version = versions.iter().copied().max().unwrap();
+    assert!(
+        versions.iter().all(|delta| *delta == 1),
+        "{label} save commits were not one transaction: {versions:?}"
+    );
+    eprintln!(
+        "save latency {label}: p50={}ms p95={}ms max_change_counter_delta={version}",
+        p50.as_secs_f64() * 1000.0,
+        p95.as_secs_f64() * 1000.0,
+    );
+    (p50, p95, version)
+}
+
+#[tokio::test]
+async fn save_commits_its_physical_events_in_one_transaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let storage = RecordStorage::new(&root).unwrap();
+    let id = SessionId::new("one-commit").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opened_change, snapshot) = opened(&id);
+    let before = change_counter(&root);
+    let before_rows = rows(&root);
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![opened_change]).unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(change_counter(&root) - before, 1);
+    assert_eq!(rows(&root), before_rows + 2);
+    let large = SessionChange::InputAccepted(Box::new(super::fixtures::input_record(
+        "framed-unit",
+        70_000,
+    )));
+    let framed = with_input(&snapshot, &large);
+    let before = change_counter(&root);
+    let before_rows = rows(&root);
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            framed.clone(),
+            vec![SessionSaveUnit::new(vec![large]).unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        change_counter(&root) - before,
+        1,
+        "framed unit and completion did not share one commit"
+    );
+    assert!(rows(&root) > before_rows + 2);
+    let chunked = SessionChange::InputAccepted(Box::new(super::fixtures::input_record(
+        "chunked-unit",
+        4 * 1024 * 1024,
+    )));
+    let wide = with_input(&framed, &chunked);
+    let before = change_counter(&root);
+    let before_rows = rows(&root);
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            wide,
+            vec![SessionSaveUnit::new(vec![chunked]).unwrap()],
+        )
+        .await
+        .unwrap();
+    let added = rows(&root) - before_rows;
+    let delta = i64::from(change_counter(&root) - before);
+    assert!(
+        added > 64,
+        "chunked unit did not exceed one append batch: {added} rows"
+    );
+    assert!(
+        delta > 1 && delta * 8 < added,
+        "chunked unit did not keep sharing commits across batches: {delta} commits for {added} rows"
+    );
+    drop(lease);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_opening_saves_on_two_sessions_both_publish() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+    let left_id = SessionId::new("left").unwrap();
+    let right_id = SessionId::new("right").unwrap();
+    let left = storage.open(left_id.clone()).await.unwrap();
+    let right = storage.open(right_id.clone()).await.unwrap();
+    let (left_change, left_snapshot) = opened(&left_id);
+    let (right_change, right_snapshot) = opened(&right_id);
+    let (left_saved, right_saved) = tokio::join!(
+        left.save_changes(
+            left.load().await.unwrap().binding().clone(),
+            left_snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![left_change]).unwrap()],
+        ),
+        right.save_changes(
+            right.load().await.unwrap().binding().clone(),
+            right_snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![right_change]).unwrap()],
+        ),
+    );
+    left_saved.unwrap();
+    right_saved.unwrap();
+    assert_eq!(
+        left.load().await.unwrap().state(),
+        SessionLoadState::Published
+    );
+    assert_eq!(
+        right.load().await.unwrap().state(),
+        SessionLoadState::Published
+    );
+    let left_follow = SessionChange::InputAccepted(Box::new(input_record("left-follow", 16)));
+    let right_follow = SessionChange::InputAccepted(Box::new(input_record("right-follow", 16)));
+    left.save_changes(
+        left.load().await.unwrap().binding().clone(),
+        with_input(&left_snapshot, &left_follow),
+        vec![SessionSaveUnit::new(vec![left_follow]).unwrap()],
+    )
+    .await
+    .unwrap();
+    right
+        .save_changes(
+            right.load().await.unwrap().binding().clone(),
+            with_input(&right_snapshot, &right_follow),
+            vec![SessionSaveUnit::new(vec![right_follow]).unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(left);
+    drop(right);
+    storage.shutdown().await.unwrap();
+}
+
+struct StopWriter {
+    flag: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for StopWriter {
+    fn drop(&mut self) {
+        self.flag.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[test]
+fn contention_writer_stops_when_its_guard_drops() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("fsync-contention");
+    let flag = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
+    let flag_worker = Arc::clone(&flag);
+    let started_worker = Arc::clone(&started);
+    let finished_worker = Arc::clone(&finished);
+    let worker = thread::spawn(move || {
+        let mut file = std::fs::File::create(&path).unwrap();
+        let bytes = vec![1u8; 1024];
+        while !flag_worker.load(Ordering::Relaxed) {
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap();
+            file.rewind().unwrap();
+            started_worker.store(true, Ordering::Relaxed);
+        }
+        finished_worker.store(true, Ordering::Relaxed);
+    });
+    let guard = StopWriter {
+        flag,
+        worker: Some(worker),
+    };
+    while !started.load(Ordering::Relaxed) {
+        thread::yield_now();
+    }
+    drop(guard);
+    assert!(finished.load(Ordering::Relaxed));
+}
+
+#[tokio::test]
+#[ignore = "latency measurement"]
+async fn save_commit_latency_sample() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let (idle_p50, idle_p95, idle_version) = time_saves(&root, "latency-idle").await;
+    let stop = Arc::new(AtomicBool::new(false));
+    let contention = directory.path().join("fsync-contention");
+    let flag = Arc::clone(&stop);
+    let worker = thread::spawn(move || {
+        let mut file = std::fs::File::create(&contention).unwrap();
+        let bytes = vec![1u8; 1024 * 1024];
+        while !flag.load(Ordering::Relaxed) {
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap();
+            file.rewind().unwrap();
+        }
+    });
+    let _guard = StopWriter {
+        flag: stop,
+        worker: Some(worker),
+    };
+    let (busy_p50, busy_p95, busy_version) = time_saves(&root, "latency-contention").await;
+    drop(_guard);
+    eprintln!(
+        "SAVE_LATENCY idle_p50_us={} idle_p95_us={} busy_p50_us={} busy_p95_us={} idle_delta={} busy_delta={}",
+        idle_p50.as_micros(),
+        idle_p95.as_micros(),
+        busy_p50.as_micros(),
+        busy_p95.as_micros(),
+        idle_version,
+        busy_version,
+    );
 }

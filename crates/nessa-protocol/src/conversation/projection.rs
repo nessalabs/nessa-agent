@@ -40,7 +40,17 @@ const MAX_REVIEW_BYTES: usize = 16_000;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
-fn record_status(record: &InvocationRecord, restoring: bool) -> ConversationMessageStatus {
+/// `restarted` is an execution that was already unfinished when this
+/// projection first accepted history, and that this process has not run.
+/// A result is that result even then.
+/// `a_restored_turn_takes_its_result_without_being_passed_as_active`.
+/// Injected and cancelled are the last stage, before that flag.
+/// `an_injected_or_cancelled_turn_keeps_that_status`.
+/// A missing result is otherwise still running: the turn was admitted here
+/// and is between being saved and being active, or between leaving active
+/// and its result being committed.
+/// `a_turn_admitted_after_open_stays_running_until_its_result`.
+fn record_status(record: &InvocationRecord, restarted: bool) -> ConversationMessageStatus {
     match &record.result {
         Some(Ok(value)) => outcome(*value),
         Some(Err(_))
@@ -55,10 +65,22 @@ fn record_status(record: &InvocationRecord, restoring: bool) -> ConversationMess
         None => match record.scheduling.last().map(|event| event.stage) {
             Some(InvocationStage::Injected) => ConversationMessageStatus::Injected,
             Some(InvocationStage::Cancelled) => ConversationMessageStatus::Cancelled,
-            _ if restoring => ConversationMessageStatus::Unresolved,
+            _ if restarted => ConversationMessageStatus::Unresolved,
             _ => ConversationMessageStatus::Running,
         },
     }
+}
+
+/// Unfinished executions in `snapshot` that this replacement is not running.
+fn unfinished_not_live(snapshot: &SessionSnapshot, live_here: &HashSet<String>) -> HashSet<String> {
+    snapshot
+        .invocations
+        .iter()
+        .filter(|record| {
+            record.result.is_none() && !live_here.contains(record.request.execution_id.as_str())
+        })
+        .map(|record| record.request.execution_id.as_str().to_owned())
+        .collect()
 }
 
 pub struct Projection {
@@ -76,9 +98,20 @@ pub struct Projection {
     /// leaves when its parts do: cleared for a replayed record, or its message
     /// let go.
     tool_parts: HashMap<String, HashSet<String>>,
-    /// Exact local execution identity supplied by Agent for this replacement.
-    /// It supplies action locality, never semantic completion or freshness.
+    /// The execution this replacement was told is active. It is who may be
+    /// offered an interaction. It does not, by itself, decide that every
+    /// other unfinished record was interrupted.
     live_here: HashSet<String>,
+    /// Unfinished executions present when this projection first accepted a
+    /// snapshot, except any this process has since run. A record admitted
+    /// later is absent, so a read while it is saved but not active — or no
+    /// longer active, before its result is committed — stays running.
+    /// `a_turn_admitted_after_open_stays_running_until_its_result`.
+    unfinished_at_fold: HashSet<String>,
+    /// Set once a snapshot has been accepted. Until then the next
+    /// replacement is that first acceptance, and its unfinished records are
+    /// restarts. `the_first_snapshot_folded_into_an_empty_projection_is_a_restart`.
+    history_accepted: bool,
     /// Where an MCP call's UI is looked up when the view is read.
     tool_uis: Arc<dyn McpToolUis>,
 }
@@ -168,6 +201,7 @@ pub fn retained_view(
         snapshot,
         HashSet::new(),
         revision,
+        None,
     );
     projection.transcript_state(status.view_state().into());
     bound_view(projection.read())
@@ -179,7 +213,7 @@ impl Projection {
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
     ) -> Self {
-        Self::from_snapshot(id, capabilities, snapshot, HashSet::new())
+        Self::from_snapshot(id, capabilities, snapshot, HashSet::new(), None)
     }
 
     fn from_snapshot(
@@ -187,8 +221,16 @@ impl Projection {
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
         live_here: HashSet<String>,
+        carried_unfinished: Option<HashSet<String>>,
     ) -> Self {
-        Self::from_snapshot_with_epoch(id, capabilities, snapshot, live_here, Uuid::new_v4())
+        Self::from_snapshot_with_epoch(
+            id,
+            capabilities,
+            snapshot,
+            live_here,
+            Uuid::new_v4(),
+            carried_unfinished,
+        )
     }
 
     fn from_snapshot_with_epoch(
@@ -197,7 +239,15 @@ impl Projection {
         snapshot: Option<&SessionSnapshot>,
         live_here: HashSet<String>,
         epoch: Uuid,
+        carried_unfinished: Option<HashSet<String>>,
     ) -> Self {
+        let history_accepted = carried_unfinished.is_some() || snapshot.is_some();
+        let unfinished_at_fold = match carried_unfinished {
+            Some(unfinished) => unfinished,
+            None => snapshot
+                .map(|snapshot| unfinished_not_live(snapshot, &live_here))
+                .unwrap_or_default(),
+        };
         let mut projection = Self {
             epoch,
             revision: 0,
@@ -207,6 +257,8 @@ impl Projection {
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
             live_here: live_here.clone(),
+            unfinished_at_fold,
+            history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
             view: ConversationView {
                 selection: None,
@@ -251,10 +303,10 @@ impl Projection {
                 .into_iter()
                 .rev()
             {
-                projection.record(
-                    record,
-                    !live_here.contains(record.request.execution_id.as_str()),
-                );
+                let restarted = projection
+                    .unfinished_at_fold
+                    .contains(record.request.execution_id.as_str());
+                projection.record(record, restarted);
             }
         }
         projection.bump();
@@ -265,6 +317,11 @@ impl Projection {
     /// broadcast callbacks may prompt this read, but their provisional text or
     /// terminal status cannot become a replacement view. The SDK owns the
     /// lifecycle fold that produced `snapshot`; this method only bounds display.
+    ///
+    /// `active` is who may be offered an interaction. An execution admitted
+    /// after this projection first accepted history stays running while its
+    /// result is uncommitted, including when `active` is absent.
+    /// `a_turn_admitted_after_open_stays_running_until_its_result`.
     pub fn replace_committed(
         &mut self,
         committed: &CommittedSession,
@@ -287,15 +344,17 @@ impl Projection {
                 return false;
             }
         }
-        let active = active
+        let active_set = active
             .map(|id| id.as_str().to_owned())
             .into_iter()
             .collect();
+        let carried = self.continued_unfinished(active);
         let mut next = Self::from_snapshot(
             self.view.conversation_id.clone(),
             self.view.capabilities.clone(),
             snapshot,
-            active,
+            active_set,
+            carried,
         )
         .with_tool_uis(self.tool_uis.clone());
         next.epoch = self.epoch;
@@ -368,6 +427,25 @@ impl Projection {
         *self = next;
         true
     }
+
+    /// The restart set for a later replacement. `None` until history has been
+    /// accepted, so the first snapshot's unfinished records are restarts.
+    /// Once accepted, an execution this process runs leaves the set: the gap
+    /// after it stops being active is not a new restart. The other restored
+    /// turns stay in the set.
+    /// `a_turn_this_process_runs_stays_running_after_it_stops_being_active`,
+    /// `running_one_restored_turn_leaves_the_other_unresolved`.
+    fn continued_unfinished(&self, active: Option<&ExecutionId>) -> Option<HashSet<String>> {
+        if !self.history_accepted {
+            return None;
+        }
+        let mut unfinished = self.unfinished_at_fold.clone();
+        if let Some(active) = active {
+            unfinished.remove(active.as_str());
+        }
+        Some(unfinished)
+    }
+
     pub fn transcript_state(&mut self, state: ConversationTranscriptState) {
         if self.view.transcript_state != state {
             self.view.transcript_state = state;
@@ -463,11 +541,10 @@ impl Projection {
         self.bump();
     }
 
-    /// An execution's message has stopped running, so nothing it asked or
-    /// wanted reviewed is waiting any more. Removed here, on every path a
-    /// status leaves running, rather than only hidden when the view is read:
-    /// left in place, a stale entry still counted against the open limits and
-    /// crowded out an ask somebody could answer.
+    /// Nothing this execution asked or wanted reviewed is waiting. Called
+    /// when its message is not running, and when it is running but is not
+    /// the execution active here. Left in place, a stale entry still counted
+    /// against the open limits and crowded out an ask somebody could answer.
     fn stop_waiting(&mut self, execution: &str) {
         self.live_here.remove(execution);
         self.view
@@ -636,7 +713,10 @@ impl Projection {
     // The exact active record can precede the recent message window. Read only
     // its interactions; its prompt, attachments and output are never copied.
     fn active_interactions(&mut self, record: &InvocationRecord) {
-        if record_status(record, false) != ConversationMessageStatus::Running {
+        let restarted = self
+            .unfinished_at_fold
+            .contains(record.request.execution_id.as_str());
+        if record_status(record, restarted) != ConversationMessageStatus::Running {
             return;
         }
         for event in &record.events {
@@ -892,7 +972,7 @@ impl Projection {
         }
         self.bump();
     }
-    fn record(&mut self, record: &InvocationRecord, restoring: bool) {
+    fn record(&mut self, record: &InvocationRecord, restarted: bool) {
         let id = record.request.execution_id.as_str();
         let index = self.ensure_message(id);
         self.view.messages[index].steering_target = record
@@ -927,17 +1007,21 @@ impl Projection {
             self.observe(event);
         }
         let index = self.ensure_message(id);
-        self.view.messages[index].status = record_status(record, restoring);
+        self.view.messages[index].status = record_status(record, restarted);
         if self.view.messages[index].status == ConversationMessageStatus::Injected {
             if let Some(target) = self.view.messages[index].steering_target.clone() {
                 self.injected(id, &target);
             }
         }
         self.view.messages[index].error = failure_notice(record);
-        // An ask whose closure never reached storage — the gateway stopped
-        // while it was open — would otherwise come back beside a settled or
-        // unresolved message; the status is the authority, so it decides.
-        if self.view.messages[index].status != ConversationMessageStatus::Running {
+        // An ask is offered only while its execution is the one running here.
+        // A settled or restarted message drops it, and so does a turn that is
+        // running but not active: the gap around liveness is not an open ask.
+        // `an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart`,
+        // `a_turn_admitted_after_open_stays_running_until_its_result`.
+        let running_here = self.view.messages[index].status == ConversationMessageStatus::Running
+            && self.live_here.contains(id);
+        if !running_here {
             self.stop_waiting(id);
         }
         self.view.pending.retain(|value| value.execution_id != id);

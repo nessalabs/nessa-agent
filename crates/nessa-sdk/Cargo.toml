@@ -7,6 +7,7 @@ description = "Reusable agent application contracts for Nessa"
 publish = false
 
 [dependencies]
+async-trait = "=0.1.92"
 data-encoding = "2.11"
 sha2 = "0.10"
 base64 = "0.22"
