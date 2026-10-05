@@ -183,6 +183,27 @@ test("parse rejects a second turn with no when, which turnFor would never reach"
   )
 })
 
+test("parse rejects a later when that contains an earlier one", () => {
+  assert.throws(
+    () =>
+      parseScenario({
+        turns: [
+          { when: "turn", steps: [{ do: "end" }] },
+          { when: "fail the turn", steps: [{ do: "end" }] },
+        ],
+      }),
+    /a turn matching fail the turn already matches turn/,
+  )
+  const specificFirst = parseScenario({
+    turns: [
+      { when: "fail the turn", steps: [{ do: "end" }] },
+      { when: "turn", steps: [{ do: "text", chunks: ["General."] }] },
+    ],
+  })
+  assert.equal(turnFor(specificFirst, "fail the turn").when, "fail the turn")
+  assert.equal(turnFor(specificFirst, "the turn").when, "turn")
+})
+
 test("parse rejects two turns that match the same prompt, and an unknown answer", () => {
   assert.throws(() =>
     parseScenario({
@@ -398,10 +419,17 @@ test("allow runs the branch's tool call; deny does not; a cancel beats a later a
   deny.respond(denial.id, { outcome: { outcome: "selected", optionId: DENY_ONCE } })
   const denied = await denying
   assert.equal(denied.result.stopReason, "end_turn")
-  assert.equal(denied.notes.at(-1).params.update.content.text, "Denied.")
   assert.equal(
-    denied.notes.some((note) => note.params.update.status === "completed"),
-    false,
+    denied.notes.some((note) => note.params.update.content?.text === "Denied."),
+    true,
+  )
+  assert.equal(
+    denied.notes.some(
+      (note) =>
+        note.params.update.toolCallId === denial.params.toolCall.toolCallId &&
+        note.params.update.status === "failed",
+    ),
+    true,
   )
 
   const race = start("claude", scenario)
@@ -417,6 +445,76 @@ test("allow runs the branch's tool call; deny does not; a cancel beats a later a
     cancelled.notes.some((note) => note.params.update.content?.text === "Allowed."),
     false,
   )
+})
+
+test("an unusable permission answer fails the announced call", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          {
+            do: "permission",
+            tool: "report_rows",
+            arguments: {},
+            title: "Report",
+            on: { "allow-once": [{ do: "end" }] },
+          },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const turn = agent.request("session/prompt", { sessionId, prompt: [] })
+  const asked = await agent.nextRequest()
+  agent.respond(asked.id, { outcome: { outcome: "nope" } })
+  const done = await turn
+  assert.match(done.error.message, /not a selection or a cancellation/)
+  assert.equal(
+    done.notes.some(
+      (note) =>
+        note.params.update.toolCallId === asked.params.toolCall.toolCallId &&
+        note.params.update.status === "failed",
+    ),
+    true,
+  )
+})
+
+test("a tool step after a denial is a new call, and the denied call is failed", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          {
+            do: "permission",
+            tool: "report_rows",
+            arguments: {},
+            title: "Report",
+            on: { "deny-once": [{ do: "text", chunks: ["Denied."] }] },
+          },
+          { do: "tool", tool: "report_rows", arguments: {} },
+          { do: "end" },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const turn = agent.request("session/prompt", { sessionId, prompt: [] })
+  const asked = await agent.nextRequest()
+  agent.respond(asked.id, { outcome: { outcome: "selected", optionId: DENY_ONCE } })
+  const done = await turn
+  assert.equal(done.result.stopReason, "end_turn")
+  const updates = done.notes.map((note) => note.params.update)
+  const deniedId = asked.params.toolCall.toolCallId
+  assert.equal(
+    updates.some(
+      (update) => update.toolCallId === deniedId && update.status === "failed",
+    ),
+    true,
+  )
+  const completed = updates.find((update) => update.status === "completed")
+  assert.notEqual(completed.toolCallId, deniedId)
 })
 
 test("a withdrawn review with no branch ends cancelled, and one with a branch runs it", async () => {
@@ -470,7 +568,18 @@ test("a withdrawn review with no branch ends cancelled, and one with a branch ru
   branched.respond(branchedAsk.id, { outcome: { outcome: "cancelled" } })
   const withdrawn = await branchedTurn
   assert.equal(withdrawn.result.stopReason, "end_turn")
-  assert.equal(withdrawn.notes.at(-1).params.update.content.text, "Withdrawn.")
+  assert.equal(
+    withdrawn.notes.some((note) => note.params.update.content?.text === "Withdrawn."),
+    true,
+  )
+  assert.equal(
+    withdrawn.notes.some(
+      (note) =>
+        note.params.update.toolCallId === branchedAsk.params.toolCall.toolCallId &&
+        note.params.update.status === "failed",
+    ),
+    true,
+  )
 })
 
 test("a failure after text fails the turn and keeps the text; wait-cancel ends cancelled", async () => {
@@ -533,7 +642,18 @@ test("a second prompt while one is waiting is refused, and the first still answe
   agent.respond(asked.id, { outcome: { outcome: "selected", optionId: ALLOW_ONCE } })
   const answered = await first
   assert.equal(answered.result.stopReason, "end_turn")
-  assert.equal(answered.notes.at(-1).params.update.content.text, "Allowed.")
+  assert.equal(
+    answered.notes.some((note) => note.params.update.content?.text === "Allowed."),
+    true,
+  )
+  assert.equal(
+    answered.notes.some(
+      (note) =>
+        note.params.update.toolCallId === asked.params.toolCall.toolCallId &&
+        note.params.update.status === "failed",
+    ),
+    true,
+  )
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
 })

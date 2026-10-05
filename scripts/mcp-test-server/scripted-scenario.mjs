@@ -28,7 +28,10 @@
  * A permission offers two answers, the two the window can give: allow once
  * and deny once. A withdrawn review is the third answer, `cancelled`, not
  * an option. A branch holds text, a tool call, fail, and end — not another
- * permission, and not a wait for cancel, so a turn waits on one thing.
+ * permission, and not a wait for cancel, so a turn waits on one thing. The
+ * call announced for the review is the branch's tool call. When the branch
+ * does not complete it, that call is failed, and a tool step after the
+ * review is a new call.
  */
 import { SERVER } from "./local-gateway.mjs"
 import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
@@ -81,6 +84,9 @@ export function parseScenario(value) {
     } else if (seen.has(when)) {
       throw new Error(`two turns match ${when}`)
     } else {
+      for (const earlier of seen)
+        if (when.includes(earlier))
+          throw new Error(`a turn matching ${when} already matches ${earlier}`)
       seen.add(when)
     }
     const unknown = Object.keys(turn).filter((key) => key !== "when" && key !== "steps")
@@ -398,20 +404,40 @@ async function ask(step, ctx) {
   })
   ctx.update(call.update)
   ctx.rememberCall(step.tool, id)
+  // The branch did not complete the announced call. Fail it before a later
+  // step can reuse its id, and leave a cancelled turn's call alone.
+  const abandon = () => {
+    if (ctx.cancelled() || ctx.openCall(step.tool) !== id) return
+    ctx.update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: id,
+      status: "failed",
+    })
+    ctx.clearCall(step.tool)
+  }
   let result
   try {
     result = await ctx.requestPermission(call.request(ctx.sessionId))
   } catch (error) {
     if (ctx.cancelled()) return { stopReason: "cancelled" }
+    abandon()
     return { fail: error.message }
   }
   const decision = branchFor(result, ctx.cancelled(), step.on)
   if (decision.kind === "stop") return { stopReason: decision.stopReason }
-  if (decision.kind === "fail") return { fail: decision.message }
-  for (const branch of decision.steps) {
-    if (ctx.cancelled()) return { stopReason: "cancelled" }
-    const outcome = await runStep(branch, ctx)
-    if (outcome) return outcome
+  if (decision.kind === "fail") {
+    abandon()
+    return { fail: decision.message }
   }
-  return null
+  let outcome = null
+  for (const branch of decision.steps) {
+    if (ctx.cancelled()) {
+      outcome = { stopReason: "cancelled" }
+      break
+    }
+    outcome = await runStep(branch, ctx)
+    if (outcome) break
+  }
+  abandon()
+  return outcome
 }
