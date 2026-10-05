@@ -217,6 +217,38 @@ describe("a conversation view as a transcript", () => {
     ])
   })
 
+  it("D17 (#390): says which app wrote a turn, waiting or not, and nothing of the person's own", () => {
+    const app = { executionId: "e0", toolId: "t0", server: "charts", tool: "show" }
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", app }),
+          turn({ executionId: "e2", userText: "mine" }),
+        ],
+        pending: [
+          {
+            executionId: "e3",
+            text: "Plot May",
+            attachments: [],
+            files: [],
+            app,
+            mode: "queued",
+          },
+        ],
+      }),
+      1,
+      at,
+    )
+    const users = transcript.messages.filter((message) => message.role === "user")
+    expect(users.map((message) => [message.parts, message.app])).toEqual([
+      [[{ kind: "text", text: "Chart the sales" }], { server: "charts", tool: "show" }],
+      [[{ kind: "text", text: "mine" }], undefined],
+      [[{ kind: "text", text: "Plot May" }], { server: "charts", tool: "show" }],
+    ])
+    // Waiting, it has its label, and no delivery state of its own.
+    expect(users[2]).not.toHaveProperty("delivery")
+  })
+
   it("says what a running turn does until its reply streams, then nothing", () => {
     const working = transcriptFrom(
       view("c", {
@@ -255,6 +287,7 @@ describe("a conversation view as a transcript", () => {
             options: [{ id: "a", label: "Allow", effect: "allow" }],
             toolName: "bash",
             origin: { kind: "harness" },
+            ask: "tool",
             argumentsJson: '{"command":"rm -rf build"}',
           },
         ],
@@ -269,6 +302,7 @@ describe("a conversation view as a transcript", () => {
       origin: { kind: "agent" },
       // The review's own answers, and no always: the view offered none.
       options: [{ id: "a", label: "Allow", choice: "once" }],
+      ask: "tool",
     })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",
@@ -278,7 +312,10 @@ describe("a conversation view as a transcript", () => {
 })
 
 describe("who asks for an approval (#436)", () => {
-  const asked = (origin: ConversationPermission["origin"]) =>
+  const asked = (
+    origin: ConversationPermission["origin"],
+    ask: ConversationPermission["ask"] = "tool",
+  ) =>
     transcriptFrom(
       view("c", {
         messages: [turn({ status: "completed" })],
@@ -291,6 +328,7 @@ describe("who asks for an approval (#436)", () => {
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
             toolName: "app_delete_row",
             origin,
+            ask,
             argumentsJson: "{}",
           },
         ],
@@ -340,6 +378,13 @@ describe("who asks for an approval (#436)", () => {
     expect(
       asked({ kind: "app", server: "mcptest", tool: "app_delete_row" })?.origin,
     ).toEqual({ kind: "app", server: "mcptest", tool: "app_delete_row" })
+  })
+
+  it("D19 (#390): carries what the review asks as the gateway says it", () => {
+    const app = { kind: "app", server: "mcptest", tool: "show_rows" } as const
+    expect(asked(app, "message")?.ask).toBe("message")
+    expect(asked(app, "tool")?.ask).toBe("tool")
+    expect(asked({ kind: "harness" }, "tool")?.ask).toBe("tool")
   })
 })
 

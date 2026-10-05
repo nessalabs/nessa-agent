@@ -24,6 +24,7 @@ import {
 } from "../../model/transcript"
 import { fakeSource, settle, testStore } from "../../testing"
 import { failureCopy, readFailureCopy } from "../failure-copy"
+import { approvalHead } from "./approval-request"
 import { Transcript } from "./transcript"
 
 class Observer {
@@ -88,6 +89,7 @@ const conversation: TranscriptValue = {
       { id: "always", label: "Always Allow", choice: "always" },
       { id: "once", label: "Allow Once", choice: "once" },
     ],
+    ask: "tool",
   },
 }
 
@@ -211,6 +213,39 @@ describe("a transcript", () => {
     expect(
       [...(failed?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
     ).toEqual(["Send Again", "Discard"])
+  })
+
+  it("D17 (#390): says above a message of the person's which app wrote it, and nothing above their own", async () => {
+    await shown(fakeSource(), {
+      ...conversation,
+      messages: [
+        ...conversation.messages,
+        {
+          id: "m3",
+          role: "user",
+          at: 3,
+          parts: [{ kind: "text", text: "Plot May" }],
+          app: { server: "charts", tool: "show" },
+        },
+      ],
+    })
+    const authors = [...host.querySelectorAll<HTMLElement>(".workspace-message-author")]
+    // Named as the app's own view names it: its tool, from its server; once.
+    expect(authors.map((author) => author.textContent)).toEqual([
+      "Sent by show, from charts",
+    ])
+    const [author] = authors
+    expect(author?.getAttribute("title")).toBe("Sent by show, from charts")
+    expect(author?.dataset.messageApp).toBe("show")
+    const message = author?.closest<HTMLElement>(".workspace-message")
+    expect(message?.dataset.role).toBe("user")
+    // Plain text in reading order: the label, then the bubble it names.
+    expect(author?.nextElementSibling?.classList.contains("workspace-bubble")).toBe(true)
+    expect(message?.querySelector(".workspace-bubble")?.textContent).toBe("Plot May")
+    // The person's own messages carry none.
+    expect(host.querySelectorAll('.workspace-message[data-role="user"]').length).toBe(
+      conversation.messages.filter((each) => each.role === "user").length + 1,
+    )
   })
 
   it("keeps messages sent while the conversation was read in place when it loads", async () => {
@@ -381,6 +416,7 @@ describe("a transcript", () => {
           { id: "allow", label: "Allow", choice: "once" },
           { id: "deny", label: "Deny", choice: "deny" },
         ],
+        ask: "tool",
       },
     })
     expect(head()).toBe("The mcptest app wants to run app_delete_row")
@@ -401,6 +437,7 @@ describe("a transcript", () => {
           { id: "allow", label: "Allow", choice: "once" },
           { id: "deny", label: "Deny", choice: "deny" },
         ],
+        ask: "tool",
       },
     })
     // Deny stays at the left; the review's allow is the primary button, in the review's words.
@@ -414,6 +451,46 @@ describe("a transcript", () => {
     expect(
       source.calls.filter((call) => call[0] === "approve" || call[0] === "deny"),
     ).toEqual([["approve", "b", "app-ap", "once", "person", "allow"]])
+  })
+
+  it("D19 (#390): says what is asked — an app's message is not a tool to run — total over who asks and what", async () => {
+    const app = { kind: "app", server: "mcptest", tool: "show_rows" } as const
+    expect(approvalHead({ origin: app, ask: "message" }, "Claude")).toBe(
+      "The mcptest app wants to send a message as you",
+    )
+    expect(approvalHead({ origin: app, ask: "tool" }, "Claude")).toBe(
+      "The mcptest app wants to run show_rows",
+    )
+    expect(approvalHead({ origin: { kind: "agent" }, ask: "message" }, "Claude")).toBe(
+      "Claude wants to send a message as you",
+    )
+    expect(approvalHead({ origin: { kind: "agent" }, ask: "tool" }, "Claude")).toBe(
+      "Claude wants to run a command",
+    )
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: {
+        id: "app-message",
+        command: 'show_rows {"text":"Plot May next to April"}',
+        reason: "The show_rows app on mcptest asks to send a message as you",
+        origin: app,
+        options: [
+          { id: "allow", label: "Allow", choice: "once" },
+          { id: "deny", label: "Deny", choice: "deny" },
+        ],
+        ask: "message",
+      },
+    })
+    const card = host.querySelector<HTMLElement>(".workspace-approval")
+    expect(card?.querySelector(".workspace-approval-head")?.textContent).toBe(
+      "The mcptest app wants to send a message as you",
+    )
+    expect(card?.dataset.origin).toBe("app")
+    expect(card?.dataset.ask).toBe("message")
+    // What is sent is shown whole: the app's tool and the message's words.
+    expect(card?.querySelector(".workspace-approval-command")?.textContent).toContain(
+      '{"text":"Plot May next to April"}',
+    )
   })
 
   it("asks again, saying why, when an answer does not reach the agent", async () => {

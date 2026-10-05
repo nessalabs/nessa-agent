@@ -383,6 +383,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   filling it. _Check:_ `mcp-apps.mjs --only inline,pane,window`.
 - [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
   one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
+- [ ] **An app's message lands in its conversation as the person's, saying
+  which app wrote it** (#390, rows D1, D4, D17 of the desktop's table in
+  [`docs/design/mcp-app-calls.md`](../../docs/design/mcp-app-calls.md#an-app-in-its-conversation-the-desktop-390)):
+  `ui/message` is answered `{}`, and the transcript gains exactly one message
+  of the person's with the app's words, labelled "Sent by show_fixture, from
+  nessa-fixture" (and its `title` the same) above its bubble, over the
+  bubble's right edge (within 6 px) and inside the column; the person's own
+  messages carry none; another while the sample's reply runs is refused
+  (`isError: true`) and adds nothing; `ui/update-model-context` is refused
+  "The sample has no model to give context to" (gate 7). The gateway's own
+  path is `app-messages.test.ts`, `bridge.test.ts` and `app-review.mjs
+  --only message`. _Check:_ `mcp-apps.mjs --only message`.
 - [ ] **A request to an origin the app did not declare is blocked by its CSP,
   and the host says so** above the app. _Check:_ `mcp-apps.mjs --only csp`.
 - [ ] **The app is on an opaque origin**: no parent or top document, no
@@ -469,6 +481,25 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
   _Check:_ `app-review.mjs --shots <dir>`.
+- [ ] **An app's message is reviewed as a message, and lands labelled** (#390,
+  rows D9, D17, D18, D19), in the same fixture: a context the app gives is
+  taken at once, draws no card and starts no read; the app's message is read
+  each round until its review is drawn, its head "The <server> app wants to
+  send a message as you" (`data-ask="message"`, `data-origin="app"`) and its
+  command the app's tool and `{"text":…}`, the message whole; Allow Once sends
+  one answer, Allow for that review, the app is answered ok, the message lands
+  labelled "Sent by <tool>, from <server>" over its bubble's right edge
+  (within 6 px), and the reads stop; a second message denied is refused and
+  lands nothing. With a message as long as the gateway takes
+  (`maxMcpMessageBytes`), of words and of one unbroken word, at 280, 340,
+  420, 600 and 900 px, the head stays inside the card, the card does not
+  overflow, and Allow Once stays reachable (scrolled to, it is what the page
+  hits at its centre). The overview row is named "<title>. The <server> app
+  wants to send a message as you.". (`ask` from the gateway's `ReviewAsk`;
+  `approvalHead` and `approvalRequest` in `approval-request.tsx`; the
+  `sendMessage` routing in `dependencies.ts`.) The real gateway's message
+  path in a browser is #550.
+  _Check:_ `app-review.mjs --only message,message-card,message-overview --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.

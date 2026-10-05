@@ -34,6 +34,7 @@ import {
 } from "../../../ui/menu"
 import type { TooltipAttributes } from "../../../ui/tooltip"
 import type {
+  Approval,
   ApprovalChoice,
   ApprovalOption,
   ApprovalOrigin,
@@ -56,14 +57,44 @@ export function approvalAsker(origin: ApprovalOrigin, agent: string): string {
   }
 }
 
-/** The card's head: who asks, and to run what — a command, or the tool an app named. */
-export function approvalHead(origin: ApprovalOrigin, agent: string): string {
+/**
+ * The card's head: who asks, and what — to run a command, or the tool an app
+ * named, or to send a message as the person. Total over who asks and what is
+ * asked (`transcript.test.tsx` D19, on #390).
+ */
+export function approvalHead(
+  approval: Pick<Approval, "origin" | "ask">,
+  agent: string,
+): string {
+  const { origin, ask } = approval
   const asker = approvalAsker(origin, agent)
-  switch (origin.kind) {
-    case "agent":
-      return `${asker} wants to run a command`
-    case "app":
-      return `${asker} wants to run ${origin.tool}`
+  switch (ask) {
+    case "message":
+      return `${asker} wants to send a message as you`
+    case "tool":
+      switch (origin.kind) {
+        case "agent":
+          return `${asker} wants to run a command`
+        case "app":
+          return `${asker} wants to run ${origin.tool}`
+      }
+  }
+}
+
+/**
+ * What the Agents overview's row says is asked: a command or tool written out
+ * whole, as the row has no card to show it in; a message as the card's head
+ * says it (`overview.test.tsx` O3 and D19).
+ */
+export function approvalRequest(
+  approval: Pick<Approval, "origin" | "ask" | "command">,
+  agent: string,
+): string {
+  switch (approval.ask) {
+    case "message":
+      return approvalHead(approval, agent)
+    case "tool":
+      return `${approvalAsker(approval.origin, agent)} wants to run ${approval.command}`
   }
 }
 

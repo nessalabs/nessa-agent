@@ -9,13 +9,18 @@
  * nothing for either: `fixture_refresh` answers, `fixture_secret` is refused
  * as the gateway refuses a tool hidden from apps, and any other tool is
  * refused too. Its one call is finished, with arguments and a result. A
- * release holds nothing to let go of.
+ * release holds nothing to let go of. Its conversation, where composition
+ * gives it one, is the sample workspace's (`fixtureConversation`, #390): a
+ * message lands there written by the app, or is refused while the sample's
+ * agent is at work; a context is refused, as the sample has no model to give
+ * it to.
  */
 import type { JsonObject } from "../model/json-rpc"
 import type { AppCall } from "../model/tool-call"
 import type { AppWidgetPlugin } from "../../ui/plugin"
 import type {
   CallRead,
+  McpAppConversation,
   McpAppPorts,
   McpAppServer,
   SandboxOrigin,
@@ -23,6 +28,7 @@ import type {
 } from "../application/ports"
 import type { PageContext } from "../model/host-context"
 import { deadlines } from "../application/bridge"
+import { contentText } from "../model/messages"
 import { appMimeType } from "../model/resource"
 import { appPlugin } from "../ui/app-plugin"
 import { fixtureAppHtml } from "./fixture-app"
@@ -67,6 +73,39 @@ export function fixtureServerPort(html = fixtureAppHtml): McpAppServer {
   }
 }
 
+/** What the fixture's conversation answers a context: the sample has no model (gate 7). */
+export const noModelForContext = "The sample has no model to give context to"
+
+/**
+ * The fixture app's conversation: its message given to `write` as the
+ * fixture server's app, its blocks' text as `contentText` makes it. A message
+ * `write` refuses is the app's message refused (`isError`), and nothing was
+ * written. The sample's replies are scripted, so a context is refused, never
+ * answered as if a model had it.
+ */
+export function fixtureConversation(
+  write: (
+    sessionId: string,
+    app: { readonly server: string; readonly tool: string },
+    text: string,
+  ) => Promise<void>,
+): McpAppConversation {
+  return {
+    within: deadlines.request,
+    sendMessage: (address, content) =>
+      write(
+        address.sessionId,
+        { server: address.server, tool: fixtureCall(address.sessionId).tool },
+        contentText(content),
+      ).then(
+        () => ({ kind: "ok", result: {} }) as const,
+        () =>
+          ({ kind: "refused", reason: "The sample did not take the message" }) as const,
+      ),
+    updateModelContext: async () => ({ kind: "refused", reason: noModelForContext }),
+  }
+}
+
 /** The fixture's one call, finished, in session `sessionId`. */
 export function fixtureCall(sessionId: string): AppCall {
   const result: JsonObject = {
@@ -90,6 +129,8 @@ export function fixtureAppPlugin(options: {
   readonly timers: Timers
   readonly newId: () => string
   readonly page: () => PageContext
+  /** Its conversation; without one, `ui/message` and its context are not offered. */
+  readonly conversation?: McpAppConversation
 }): AppWidgetPlugin {
   const known: CallRead = { kind: "known", call: fixtureCall(options.sessionId) }
   const missing: CallRead = { kind: "missing" }
@@ -104,6 +145,7 @@ export function fixtureAppPlugin(options: {
     ...(options.sandbox ? { sandbox: options.sandbox } : {}),
     hostInfo: { name: "Nessa", version: "fixture" },
     page: options.page,
+    ...(options.conversation ? { conversation: options.conversation } : {}),
   }
   return appPlugin({ server: fixtureServer, name: "Fixture", ports })
 }

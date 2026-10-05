@@ -10,6 +10,15 @@
  * widths from 280 to 900 px, with the tool's name short and as long as the
  * gateway allows; the Agents overview's row is named for the app too.
  *
+ * An app's message (#390) is read and drawn the same way: its card says the
+ * app wants to send a message as the person — not a tool to run — and shows
+ * the message whole; allowed, the message lands labelled with the app that
+ * wrote it; denied, the app's request is refused and nothing lands. A
+ * context asks nobody and starts no read. With a message as long as the
+ * gateway takes, of words or of one unbroken word, the card's head stays
+ * inside the card at the same five widths, the card does not overflow, and
+ * its answers stay reachable.
+ *
  * The fixture is a page of the dev server's, not of the production build:
  * this script runs against the dev server only.
  */
@@ -41,7 +50,23 @@ Checks, per engine and layout (--only <names> to pick):
   card       at 280/340/420/600/900 px, with the tool's name short and as one
              word as long as the gateway allows, the head stays inside the
              card and the card does not overflow
-  overview   the overview row's accessible name names the app and its call`,
+  overview   the overview row's accessible name names the app and its call
+  message    (#390) a context is taken at once and starts no read; the app's
+             message is read each round until its review is drawn, its head
+             "The mcptest app wants to send a message as you", data-ask
+             message, its command the app's tool and the message; Allow Once
+             answers that review, the app's request is answered ok, and the
+             message lands labelled "Sent by show_rows, from mcptest" over its
+             bubble's right edge; the reads stop; a second message denied is
+             refused and lands nothing
+  message-card
+             (#390) with a message as long as the gateway takes — words, then
+             one unbroken word — at 280/340/420/600/900 px the head stays inside
+             the card, the card does not overflow, and Allow Once is reachable
+             (scrolled to, it is what the page hits at its centre)
+  message-overview
+             (#390) the overview row's accessible name says the app wants to
+             send a message as you`,
 }
 
 // What page.evaluate is handed: plain strings (`css` holds functions, #441).
@@ -49,6 +74,7 @@ const card = {
   card: css.approvalCard,
   head: css.approvalHead,
   headWords: css.approvalHeadWords,
+  command: css.approvalCommand,
 }
 
 // The source polls each second (`defaultGatewayTiming.pollMs`): two and a
@@ -91,13 +117,77 @@ async function asked(page, tool) {
 
 const notDrawn = `no card within ${drawnWithinMs / 1000} s of the app's call`
 
+/** The app sends `text`; whether the review it asks for is drawn in time. */
+async function messaged(page, text) {
+  await page.evaluate((text) => window.__appReview.message(text), text)
+  const drawn = await until(
+    page,
+    (sel) => document.querySelector(sel) !== null,
+    css.approvalCard,
+    drawnWithinMs,
+  )
+  if (drawn) await settled(page)
+  return drawn
+}
+
+/** What became of the app's request, once it is no longer waiting (or `waiting` after 5 s). */
+async function settledAs(page) {
+  await until(
+    page,
+    () => window.__appReview.snapshot().settled !== "waiting",
+    null,
+    5_000,
+  )
+  return (await snapshot(page)).settled
+}
+
+const rect = (locator) =>
+  locator.evaluate((e) => {
+    const r = e.getBoundingClientRect()
+    return { x: r.left, y: r.top, w: r.width, h: r.height }
+  })
+
 /** What the card says: who asked, by its origin and its head. */
 const cardSays = (page) =>
   page.evaluate((sel) => {
     const element = document.querySelector(sel.card)
     return {
       origin: element?.dataset.origin ?? null,
+      ask: element?.dataset.ask ?? null,
       head: element?.querySelector(sel.head)?.textContent.trim() ?? null,
+      command: element?.querySelector(sel.command)?.textContent ?? null,
+    }
+  }, card)
+
+/** Sets the card's width, and waits for its container queries to apply. */
+async function cardWidth(page, width) {
+  await page.evaluate(
+    ([sel, width]) => {
+      let style = document.getElementById("__verify_card")
+      if (!style) {
+        style = document.createElement("style")
+        style.id = "__verify_card"
+        document.head.append(style)
+      }
+      style.textContent = `${sel.card} { width: ${width}px; box-sizing: border-box; }`
+    },
+    [card, width],
+  )
+  await frames(page, 2)
+}
+
+/** The card's head against its inner edge, and whether the card overflows. */
+const cardFits = (page) =>
+  page.evaluate((sel) => {
+    const element = document.querySelector(sel.card)
+    const box = element.getBoundingClientRect()
+    const inner = box.right - (parseFloat(getComputedStyle(element).paddingRight) || 0)
+    const words = element.querySelector(sel.headWords).getBoundingClientRect()
+    return {
+      card: Math.round(box.width),
+      cardHeight: Math.round(box.height),
+      headPastCard: Math.max(0, Math.round(words.right - inner)),
+      overflow: element.scrollWidth > element.clientWidth + 1,
     }
   }, card)
 
@@ -215,32 +305,8 @@ const checks = {
         if (now.head !== appReview.head(tool))
           failures.push(`the head says "${now.head}", not "${appReview.head(tool)}"`)
         for (const width of [280, 340, 420, 600, 900]) {
-          await page.evaluate(
-            ([sel, width]) => {
-              let style = document.getElementById("__verify_card")
-              if (!style) {
-                style = document.createElement("style")
-                style.id = "__verify_card"
-                document.head.append(style)
-              }
-              style.textContent = `${sel.card} { width: ${width}px; box-sizing: border-box; }`
-            },
-            [card, width],
-          )
-          // The container queries apply in the next frames' style and layout.
-          await frames(page, 2)
-          const r = await page.evaluate((sel) => {
-            const element = document.querySelector(sel.card)
-            const box = element.getBoundingClientRect()
-            const inner =
-              box.right - (parseFloat(getComputedStyle(element).paddingRight) || 0)
-            const words = element.querySelector(sel.headWords).getBoundingClientRect()
-            return {
-              card: Math.round(box.width),
-              headPastCard: Math.max(0, Math.round(words.right - inner)),
-              overflow: element.scrollWidth > element.clientWidth + 1,
-            }
-          }, card)
+          await cardWidth(page, width)
+          const r = await cardFits(page)
           const tag = `${width}px${long ? " long tool" : ""}`
           seen.push({ width, long, toolBytes: bytes, ...r })
           if (r.headPastCard)
@@ -344,6 +410,224 @@ const checks = {
     }
   },
 }
+
+Object.assign(checks, {
+  async message({ browser, url, layout }) {
+    const opened = await onConversation(browser, url, layout)
+    const { page } = opened
+    try {
+      const failures = []
+      const authors = page.locator(css.messageAuthor)
+      if (await authors.count()) failures.push("a label before the app wrote anything")
+      // D18: a context is taken at once, asks nobody, and starts no read.
+      const rest = await snapshot(page)
+      await page.evaluate(() => window.__appReview.context("Showing April"))
+      const context = await settledAs(page)
+      if (context !== "ok") failures.push(`the context came back ${context}, not ok`)
+      await page.waitForTimeout(roundsMs)
+      const rested = await snapshot(page)
+      if (rested.contexts !== 1)
+        failures.push(`the gateway was given ${rested.contexts} contexts, not 1`)
+      if (rested.reads !== rest.reads)
+        failures.push(`read ${rested.reads - rest.reads} times for a context`)
+      if (await page.locator(css.approvalCard).count())
+        failures.push("a card is drawn for a context")
+      // D9, D19: the message's review is read and drawn as the app's message.
+      const askedAt = Date.now()
+      const drawn = await messaged(page, appReview.message)
+      const drawnMs = Date.now() - askedAt
+      if (!drawn) failures.push(notDrawn)
+      const said = await cardSays(page)
+      const waiting = await snapshot(page)
+      const command = `${appReview.appTool} ${JSON.stringify({ text: appReview.message })}`
+      if (drawn) {
+        if (said.origin !== "app") failures.push(`the card's origin is ${said.origin}`)
+        if (said.ask !== "message")
+          failures.push(`the card asks ${said.ask}, not message`)
+        if (said.head !== appReview.messageHead)
+          failures.push(`the head says "${said.head}", not "${appReview.messageHead}"`)
+        if (!said.command?.includes(command))
+          failures.push(`the command says "${said.command}", not "$ ${command}"`)
+      }
+      // D1: allowed, the app is answered, and its message lands labelled.
+      let answered = waiting
+      let landed = {}
+      if (drawn) {
+        await page
+          .getByRole("button", { name: names.allowOnce, exact: true })
+          .first()
+          .click()
+        const gone = await until(
+          page,
+          (sel) => document.querySelector(sel) === null,
+          css.approvalCard,
+          5_000,
+        )
+        if (!gone) failures.push("the card is still drawn 5 s after Allow Once")
+        const outcome = await settledAs(page)
+        answered = await snapshot(page)
+        const expected = [[appReview.sessionId, "run", waiting.openReview, "allow"]]
+        if (JSON.stringify(answered.answers) !== JSON.stringify(expected))
+          failures.push(
+            `the gateway was sent ${JSON.stringify(answered.answers)}, not ${JSON.stringify(expected)}`,
+          )
+        if (outcome !== "ok")
+          failures.push(`the app's message came back ${outcome}, not ok`)
+        await authors
+          .first()
+          .waitFor({ timeout: 5000 })
+          .catch(() => {})
+        const count = await authors.count()
+        if (count !== 1) failures.push(`${count} app labels, not 1`)
+        const author = authors.first()
+        const label = (await author.textContent().catch(() => null)) ?? ""
+        const expectedLabel = names.sentBy(appReview.appTool, appReview.server)
+        if (label !== expectedLabel)
+          failures.push(`the label says "${label}", not "${expectedLabel}"`)
+        const message = author.locator("xpath=..")
+        const bubble = message.locator(css.bubble)
+        const words = (await bubble.textContent().catch(() => null)) ?? ""
+        if (words !== appReview.message) failures.push(`the bubble says "${words}"`)
+        if (count === 1) {
+          const labelRect = await rect(author)
+          const bubbleRect = await rect(bubble)
+          const edge = Math.abs(labelRect.x + labelRect.w - (bubbleRect.x + bubbleRect.w))
+          landed = { label, words, rightEdgeApart: edge, labelRect, bubbleRect }
+          if (labelRect.y + labelRect.h > bubbleRect.y + 0.5)
+            failures.push("the label is not above the bubble")
+          if (edge > 6)
+            failures.push(`the label is ${edge}px off the bubble's right edge`)
+        }
+      }
+      // The reads stop once it is answered.
+      const after = await snapshot(page)
+      await page.waitForTimeout(roundsMs)
+      const later = await snapshot(page)
+      if (later.reads !== after.reads)
+        failures.push(
+          `read ${later.reads - after.reads} times after the message was answered`,
+        )
+      // D9: denied, the app's request is refused and nothing lands.
+      let denied = null
+      if (await messaged(page, "Not this one")) {
+        await page.getByRole("button", { name: "Deny", exact: true }).first().click()
+        denied = await settledAs(page)
+        if (denied !== "refused") failures.push(`a denied message came back ${denied}`)
+        await page.waitForTimeout(500)
+        if ((await authors.count()) !== 1)
+          failures.push("a denied message appeared in the transcript")
+      } else failures.push(`second message: ${notDrawn}`)
+      return {
+        measured: {
+          contextReads: rested.reads - rest.reads,
+          drawnMs: drawn ? drawnMs : null,
+          readsUntilDrawn: waiting.reads - rested.reads,
+          readsAfter: later.reads - after.reads,
+          answers: answered.answers,
+          denied,
+          ...said,
+          command: said.command?.slice(0, 80),
+          landed,
+        },
+        failures: [...failures, ...opened.errors],
+      }
+    } finally {
+      await opened.close()
+    }
+  },
+
+  async "message-card"({ browser, url, layout, engine, options }) {
+    const failures = []
+    const seen = []
+    for (const which of ["longestMessage", "longestWord"]) {
+      const opened = await onConversation(browser, url, layout)
+      const { page } = opened
+      try {
+        const text = await page.evaluate((which) => window.__appReview[which], which)
+        const bound = await page.evaluate(() => window.__appReview.messageBound)
+        const bytes = Buffer.byteLength(text, "utf8")
+        if (bytes !== bound)
+          failures.push(`${which} is ${bytes} UTF-8 bytes, not the ${bound} allowed`)
+        if (!(await messaged(page, text))) {
+          failures.push(`${which}: ${notDrawn}`)
+          continue
+        }
+        const now = await cardSays(page)
+        if (now.head !== appReview.messageHead)
+          failures.push(`${which}: the head says "${now.head}"`)
+        if (now.ask !== "message") failures.push(`${which}: the card asks ${now.ask}`)
+        for (const width of [280, 340, 420, 600, 900]) {
+          await cardWidth(page, width)
+          const r = await cardFits(page)
+          // Its answers stay reachable: scrolled to, Allow Once is what the
+          // page hits at its centre.
+          const allow = page
+            .getByRole("button", { name: names.allowOnce, exact: true })
+            .first()
+          await allow.scrollIntoViewIfNeeded().catch(() => {})
+          await frames(page, 2)
+          const reachable = await allow
+            .evaluate((button) => {
+              const r = button.getBoundingClientRect()
+              if (!r.width || !r.height) return false
+              const hit = document.elementFromPoint(
+                r.left + r.width / 2,
+                r.top + r.height / 2,
+              )
+              return hit !== null && (hit === button || button.contains(hit))
+            })
+            .catch(() => false)
+          const tag = `${width}px ${which}`
+          seen.push({ width, which, bytes, reachable, ...r })
+          if (r.headPastCard)
+            failures.push(`${tag}: the head runs ${r.headPastCard}px past the card`)
+          if (r.overflow) failures.push(`${tag}: the card overflows`)
+          if (!reachable) failures.push(`${tag}: Allow Once is not reachable`)
+          if (options.shots) {
+            mkdirSync(options.shots, { recursive: true })
+            await page
+              .locator(css.approvalCard)
+              .first()
+              .screenshot({
+                path: join(
+                  options.shots,
+                  `app-review-message-${engine}-${layout}-${which}-${width}.png`,
+                ),
+              })
+          }
+        }
+      } finally {
+        failures.push(...opened.errors)
+        await opened.close()
+      }
+    }
+    return { widths: seen, failures }
+  },
+
+  async "message-overview"({ browser, url, layout }) {
+    const opened = await onConversation(browser, url, layout)
+    const { page } = opened
+    try {
+      if (!(await messaged(page, appReview.message)))
+        return { failures: [notDrawn, ...opened.errors] }
+      const failures = []
+      await page.keyboard.press(keys.overview)
+      await need(page, css.overview, "the Agents overview")
+      const name = await page
+        .locator(`${css.overviewItem}[data-overview-item="${appReview.sessionId}"]`)
+        .first()
+        .getAttribute("aria-label", { timeout: 5000 })
+        .catch(() => null)
+      if (name !== appReview.messageRow)
+        failures.push(
+          `the overview row is named "${name}", not "${appReview.messageRow}"`,
+        )
+      return { measured: { rowName: name }, failures: [...failures, ...opened.errors] }
+    } finally {
+      await opened.close()
+    }
+  },
+})
 
 await main(meta, async ({ options, rep, url }) => {
   // A production build has no such page and answers any path with its own:

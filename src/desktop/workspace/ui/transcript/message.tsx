@@ -4,7 +4,11 @@ import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
 import { InlineWidget, type WidgetRef } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import { groupSteps, type Message as MessageValue } from "../../model/transcript"
+import {
+  groupSteps,
+  type Message as MessageValue,
+  type MessageApp,
+} from "../../model/transcript"
 import { RichText } from "./rich-text"
 import { ToolSteps } from "./tool-steps"
 import type { WorkspaceFailureReason } from "../../model/failure"
@@ -12,10 +16,16 @@ import { failureCopy } from "../failure-copy"
 
 /**
  * One message. The person's is a bubble, saying so when it has not reached
- * the agent; the agent's is prose, steps, code, lists and widgets, each a
+ * the agent, and saying above it which MCP App wrote it when one did
+ * (`messageAuthor`, #390); the agent's is prose, steps, code, lists and widgets, each a
  * card its plugin draws (`InlineWidget`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
+/** Who wrote a message of the person's on their behalf: the app's tool, from its server. */
+export function messageAuthor(app: MessageApp): string {
+  return `Sent by ${app.tool}, from ${app.server}`
+}
+
 export const Message = memo(function Message({
   sessionId,
   message,
@@ -35,6 +45,16 @@ export const Message = memo(function Message({
         data-new={isNew || undefined}
         data-sending={message.delivery?.state === "sending" || undefined}
       >
+        {message.app ? (
+          <p
+            className="workspace-message-author"
+            data-message-app={message.app.tool}
+            // The whole of it, where the line is too narrow to show it.
+            title={messageAuthor(message.app)}
+          >
+            {messageAuthor(message.app)}
+          </p>
+        ) : null}
         <div className="workspace-bubble">
           {message.parts.map((part, index) =>
             part.kind === "text" ? (

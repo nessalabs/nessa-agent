@@ -53,7 +53,7 @@ import {
 } from "../model/tool-call"
 import { blockedOrigins, firstView, type AppViewState } from "../model/app-view"
 import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-state"
-import type { AppAddress, McpAppPorts, ServerAnswer } from "./ports"
+import type { AppAddress, ConversationAnswer, McpAppPorts, ServerAnswer } from "./ports"
 
 /** The protocol version this host speaks. */
 export const protocolVersion = "2026-01-26"
@@ -140,8 +140,11 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   const gone = () => lifecycle.kind === "gone"
   // Aborted when the mount is released: a read in flight fetches nothing more.
   const mount = new AbortController()
-  // Whether this mount asked the server anything: one that never did has
-  // nothing to release (M2).
+  // Whether this mount asked its server anything: one that never did has
+  // nothing to release (M2). A mount is live only once its resource was
+  // read here, so one that speaks to its conversation has always asked, and
+  // its release withdraws the message it has in review and drops its
+  // context (#390, D-G; `bridge.test.ts` D10).
   let asked = false
   // This mount's requests to its server, each at its own address.
   const toServer = {
@@ -154,6 +157,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       return ports.server.callTool(address, tool, args)
     },
   }
+
   let cancelReadAgain: (() => void) | undefined
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
@@ -294,6 +298,46 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   }
 
   /**
+   * `ui/message`'s answer (#390, D-B): whether the message was taken. What
+   * the gateway refused — the person's denial, a turn running, a request it
+   * judged — is `isError`, as a tool's refusal is to `tools/call`; nothing
+   * was sent for any of them. Past the client's bounds, it is the app's
+   * request that is wrong (D3).
+   */
+  function answerMessage(id: RequestId, answer: ConversationAnswer) {
+    switch (answer.kind) {
+      case "ok":
+        return ok(id)
+      case "invalid":
+        return send(refuse(id, errorCodes.invalidParams, answer.reason))
+      case "refused":
+      case "busy":
+        return declined(id)
+      case "server-gone":
+        if (!view.serverGone) show({ serverGone: true })
+        return declined(id)
+      case "failed":
+        return send(refuse(id, errorCodes.internal, "The request failed"))
+    }
+  }
+
+  /**
+   * `ui/update-model-context`'s answer (#390, D-B): `{}` once taken, and
+   * otherwise what a `tools/call` is answered for the same outcome, in the
+   * same words; past the client's bounds, the app's request is wrong (D13).
+   */
+  function answerContext(id: RequestId, answer: ConversationAnswer) {
+    switch (answer.kind) {
+      case "ok":
+        return ok(id)
+      case "invalid":
+        return send(refuse(id, errorCodes.invalidParams, answer.reason))
+      default:
+        return answerServer(id, answer)
+    }
+  }
+
+  /**
    * Waits for a port, then answers `id` once: with what the port said, or —
    * past the request deadline — that it timed out, freeing its slot; the
    * port's answer after that is dropped. `send` posts nothing once the view
@@ -357,8 +401,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         if (!conversation) return unsupported(id)
         return settle(
           id,
-          conversation.sendMessage(address.sessionId, message.content),
-          (done) => (done === "done" ? ok(id) : declined(id)),
+          conversation.sendMessage(address, message.content),
+          (answer) => answerMessage(id, answer),
+          conversation.within,
         )
       }
       case "ui/update-model-context": {
@@ -372,11 +417,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         }
         return settle(
           id,
-          conversation.updateModelContext(address.sessionId, update),
-          (done) =>
-            done === "done"
-              ? ok(id)
-              : send(refuse(id, errorCodes.refused, "Context update denied")),
+          conversation.updateModelContext(address, update),
+          (answer) => answerContext(id, answer),
+          conversation.within,
         )
       }
       case "ui/open-link": {

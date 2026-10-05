@@ -35,11 +35,12 @@ export const ApprovalCard = memo(function ApprovalCard({
       role="group"
       aria-label="Approval needed"
       data-origin={approval.origin.kind}
+      data-ask={approval.ask}
     >
       <div className="workspace-approval-head">
         <DesktopIcon name="needsYou" />
         <span className="workspace-approval-head-words">
-          {approvalHead(approval.origin, agentName(agentOf(model)))}
+          {approvalHead(approval, agentName(agentOf(model)))}
         </span>
       </div>
       <ApprovalCommand command={approval.command} />

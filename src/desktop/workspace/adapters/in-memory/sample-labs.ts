@@ -49,6 +49,7 @@ export const labsSamples: readonly SampleSession[] = [
       reason: "Runs the reconnect tests, including the new budget-exhaustion case.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,
+      ask: "tool",
     },
     messages: [
       [
@@ -155,6 +156,7 @@ export const labsSamples: readonly SampleSession[] = [
       reason: "Restarts the local gateway and opens 200 connections.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,
+      ask: "tool",
     },
     messages: exchange(
       "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",

@@ -23,7 +23,7 @@ import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { offersChoice, optionOf } from "../../model/transcript"
-import { approvalAsker } from "../transcript/approval-request"
+import { approvalRequest } from "../transcript/approval-request"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
@@ -152,7 +152,7 @@ export const RequestRow = memo(function RequestRow({
         data-answer={settling?.choice}
         role="group"
         tabIndex={current ? 0 : -1}
-        aria-label={`${summary.title}. ${approval ? `${approvalAsker(approval.origin, agent)} wants to run ${approval.command}` : `${agent} is waiting for you`}.`}
+        aria-label={`${summary.title}. ${approval ? approvalRequest(approval, agent) : `${agent} is waiting for you`}.`}
         data-offers-always={
           approval && offersChoice(approval, "always") ? true : undefined
         }

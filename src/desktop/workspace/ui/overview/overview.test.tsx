@@ -35,7 +35,7 @@ import {
   type FakeSource,
 } from "../../testing"
 import { selectOverviewOpen } from "../../adapters/store/selectors"
-import type { ApprovalOption, ApprovalOrigin } from "../../model/transcript"
+import type { ApprovalAsk, ApprovalOption, ApprovalOrigin } from "../../model/transcript"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { OverviewRow } from "../source-list/overview-row"
@@ -111,6 +111,7 @@ async function mount({
   secondAsker = { kind: "agent" },
   options = sampleAnswers,
   beforeLoad,
+  secondAsks = "tool",
 }: {
   strict?: boolean
   wrap?: (tree: ReactNode) => ReactNode
@@ -121,6 +122,8 @@ async function mount({
   options?: readonly ApprovalOption[]
   /** Runs after the source is built, before the workspace reads it. */
   beforeLoad?: (source: FakeSource) => void
+  /** What the second session's approval asks. */
+  secondAsks?: ApprovalAsk
 } = {}) {
   const source = fakeSource(index)
   for (const [sessionId, command] of [
@@ -141,6 +144,7 @@ async function mount({
           reason: `Why ${sessionId}.`,
           origin: sessionId === "second" ? secondAsker : { kind: "agent" },
           options,
+          ask: sessionId === "second" ? secondAsks : "tool",
         },
       })
   }
@@ -315,6 +319,20 @@ describe("the agents overview", () => {
       /\. The mcptest app wants to run app_delete_row \{\}\.$/,
     )
     expect(label("second")).not.toContain(`${agent} wants`)
+  })
+
+  it("D19 (#390): a row says an app asks to send a message as the person, not to run its tool", async () => {
+    await mount({
+      secondAsker: { kind: "app", server: "mcptest", tool: "show_rows" },
+      secondAsks: "message",
+    })
+    await open()
+    expect(card("second")?.getAttribute("aria-label")).toMatch(
+      /\. The mcptest app wants to send a message as you\.$/,
+    )
+    expect(card("first")?.getAttribute("aria-label")).toMatch(
+      / wants to run security import build\.p12\.$/,
+    )
   })
 
   it("answers from the keyboard as the person, and moves on to the next request", async () => {

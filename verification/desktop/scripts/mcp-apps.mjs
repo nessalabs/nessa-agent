@@ -4,7 +4,9 @@
  * registers (`src/desktop/widgets/app/fixture/`): it renders inline, in a pane
  * (its own fullscreen request) and in the window, each place told its
  * display mode and given its tool call; `tools/call` is answered for an
- * allowed tool and refused for a hidden one; a request to an origin its CSP
+ * allowed tool and refused for a hidden one; `ui/message` lands in the
+ * transcript labelled with the app that wrote it, and a context is refused
+ * as the sample has no model (#390); a request to an origin its CSP
  * does not declare is blocked, and the host says so; the app runs on an
  * opaque origin that reaches neither the window nor storage; it cannot leave
  * its frame for a page without its policy, nor speak as the proxy; the
@@ -42,6 +44,13 @@ Checks, per engine and layout (--only <names> to pick):
   window       the pane's Open in Window shows the app in the window, live,
                told fullscreen, filling it
   tools-call   tools/call answered for the allowed tool, refused for the hidden one
+  message      ui/message answered {} and landing in the transcript as one message
+               of the person's with the app's words, labelled "Sent by
+               show_fixture, from nessa-fixture" above its bubble, over the
+               bubble's right edge (within 6 px), inside the column, and no label
+               on the person's own; another while the sample's reply runs is
+               isError and adds nothing; ui/update-model-context is refused, the
+               sample having no model to give it to (#390)
   csp          a fetch to an undeclared origin is blocked, and the host's notice
                names it
   isolation    the app's origin is opaque: no parent document, no storage; the
@@ -738,6 +747,68 @@ const checks = {
     if (hidden !== `error: ${names.hiddenToolRefused}`)
       failures.push(`the hidden tool was answered ${hidden}`)
     return { allowed, hidden, failures }
+  },
+
+  message: async (page) => {
+    const failures = []
+    const { app } = await appFrame(page, "inline")
+    await appState(app, "live")
+    const authors = page.locator(css.messageAuthor)
+    const before = await authors.count()
+    // The person's own messages in this session carry no label.
+    if (before !== 0) failures.push(`${before} labels before the app wrote anything`)
+    await app.click(css.fixtureControl("message"))
+    const sent = await output(app, css.fixtureOutput("message"))
+    if (sent !== "ok: {}") failures.push(`the message was answered ${sent}`)
+    await authors
+      .nth(before)
+      .waitFor({ timeout: 5000 })
+      .catch(() => {})
+    const count = await authors.count()
+    if (count !== before + 1) {
+      failures.push(`${count - before} app labels appeared, not 1`)
+      return { sent, failures }
+    }
+    const author = authors.last()
+    const label = (await author.textContent().catch(() => null)) ?? ""
+    const expected = names.sentBy(names.fixtureTool, names.fixtureServer)
+    if (label !== expected) failures.push(`the label says "${label}", not "${expected}"`)
+    const title = await author.getAttribute("title").catch(() => null)
+    if (title !== expected) failures.push(`the label's title is "${title}"`)
+    // The label sits over its own message: the person's, with the app's words.
+    const message = author.locator("xpath=..")
+    const bubble = message.locator(css.bubble)
+    const said = (await bubble.textContent().catch(() => null)) ?? ""
+    if (said !== names.fixtureMessage) failures.push(`the bubble says "${said}"`)
+    const role = await message.getAttribute("data-role").catch(() => null)
+    if (role !== "user") failures.push(`the labelled message is the ${role}'s`)
+    const labelRect = await rect(author)
+    const bubbleRect = await rect(bubble)
+    const column = await rect(message)
+    const geometry = { label: labelRect, bubble: bubbleRect, column }
+    if (labelRect.y + labelRect.h > bubbleRect.y + 0.5)
+      failures.push("the label is not above the bubble")
+    const edge = Math.abs(labelRect.x + labelRect.w - (bubbleRect.x + bubbleRect.w))
+    geometry.rightEdgeApart = edge
+    if (edge > 6) failures.push(`the label is ${edge}px off the bubble's right edge`)
+    if (
+      labelRect.x < column.x - 0.5 ||
+      labelRect.x + labelRect.w > column.x + column.w + 0.5
+    )
+      failures.push("the label leaves the column")
+    // The sample's agent is replying now: another is refused, and adds nothing.
+    await app.click(css.fixtureControl("message"))
+    const busy = await output(app, css.fixtureOutput("message"), sent)
+    if (busy !== 'ok: {"isError":true}')
+      failures.push(`a message while the reply runs was answered ${busy}`)
+    if ((await authors.count()) !== before + 1)
+      failures.push("a refused message appeared in the transcript")
+    await app.click(css.fixtureControl("context"))
+    const context = await output(app, css.fixtureOutput("context"))
+    // The sample has no model to give a context to, and says so.
+    if (context !== `error: ${names.noModelForContext}`)
+      failures.push(`the context was answered ${context}`)
+    return { sent, label, said, busy, context, geometry, failures }
   },
 
   csp: async (page) => {

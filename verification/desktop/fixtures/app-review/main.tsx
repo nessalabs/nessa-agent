@@ -23,18 +23,30 @@
  * second while one waits. Every view passes the client's own validation
  * (`conversationView`) before the fake serves it.
  *
+ * The app may send a message too (`__appReview.message`, #390): it goes
+ * through the conversation port composition gives the app
+ * (`app-messages.ts`) and the source's `appCall`, and the gateway opens its
+ * review — what it asks is a message (`ask: "message"`), its command the
+ * app's own tool and the message's words — the same rounds later. Allowed,
+ * the message is in the answer's own view as the person's turn written by
+ * the app (`app` set), and the app's request is answered with its turn;
+ * denied, it is refused as the gateway refuses it (`mcp_approval_denied`). A
+ * context (`__appReview.context`) is taken at once and asks nobody.
+ *
  * The sample workspace has no app reviews: its source scripts the agent's
  * turns, and an app's review is not one.
  */
-import type {
-  AuthApi,
-  ConversationMessage,
-  ConversationPermission,
-  ConversationView,
-  CredentialApi,
-  McpAppsApi,
-  McpServersApi,
-  PairingApi,
+import {
+  NessaMcpAppError,
+  NessaRpcError,
+  type AuthApi,
+  type ConversationMessage,
+  type ConversationPermission,
+  type ConversationView,
+  type CredentialApi,
+  type McpAppsApi,
+  type McpServersApi,
+  type PairingApi,
 } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
@@ -63,6 +75,8 @@ import "../../../../src/desktop/styles.css"
 
 const conversation = "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d"
 const server = "mcptest"
+// The tool whose UI the app is: what its own message's review names.
+const appTool = "show_rows"
 // The app's own call, which drew it.
 const app = { executionId: "run", toolId: "call-1", instanceId: "mount" }
 
@@ -91,21 +105,25 @@ const ended: ConversationMessage = {
   ],
 }
 
+// The conversation's turns: the one that drew the app, then each message the
+// app sent that the person allowed.
+const turns: ConversationMessage[] = [ended]
+
 /** The conversation's view at `revision`, with the app's review when one is open. */
 function viewWith(revision: number, review?: ConversationPermission): ConversationView {
   const value = view(conversation, {
     revision: String(revision),
-    messages: [ended],
+    messages: [...turns],
     tools: [
       {
         executionId: app.executionId,
         toolId: app.toolId,
-        title: "show_rows",
+        title: appTool,
         kind: "other",
         status: "completed",
         details: "",
         input: "{}",
-        mcp: { server, tool: "show_rows", resourceUri: "ui://mcptest/rows.html" },
+        mcp: { server, tool: appTool, resourceUri: "ui://mcptest/rows.html" },
       },
     ],
     permissions: review ? [review] : [],
@@ -127,6 +145,29 @@ function reviewOf(permissionId: string, tool: string): ConversationPermission {
     toolName: tool,
     argumentsJson: "{}",
     origin: { kind: "app", server, tool },
+    ask: "tool",
+    options: [
+      { id: "allow", label: "Allow", effect: "allow" },
+      { id: "deny", label: "Deny", effect: "deny" },
+    ],
+  }
+}
+
+/**
+ * The review the gateway opens for every message an app sends
+ * (`app_reviews.rs`, `ReviewAsk::SendMessage`): its own tool, and the
+ * message exactly as it would be sent.
+ */
+function messageReviewOf(permissionId: string, text: string): ConversationPermission {
+  return {
+    executionId: app.executionId,
+    permissionId,
+    toolId: app.toolId,
+    title: `The ${appTool} app on ${server} asks to send a message as you`,
+    toolName: appTool,
+    argumentsJson: JSON.stringify({ text }),
+    origin: { kind: "app", server, tool: appTool },
+    ask: "message",
     options: [
       { id: "allow", label: "Allow", effect: "allow" },
       { id: "deny", label: "Deny", effect: "deny" },
@@ -147,9 +188,17 @@ let settled: string | null = null
 let revision = 1
 let reviews = 0
 let waiting = false
+let contexts = 0
 
-/** Answers the app's call once the person answers its review, as the gateway does. */
-function onAnswer(review: ConversationPermission, done: (allowed: boolean) => void) {
+/**
+ * Answers the app's call once the person answers its review, as the gateway
+ * does; `landing` changes the conversation the answer's own view shows.
+ */
+function onAnswer(
+  review: ConversationPermission,
+  done: (allowed: boolean) => void,
+  landing: (allowed: boolean) => void = () => {},
+) {
   gateway.once("answer", async (normal) => {
     const args = gateway.calls.at(-1)?.args ?? []
     const [to, execution, permission, option] = args
@@ -160,9 +209,10 @@ function onAnswer(review: ConversationPermission, done: (allowed: boolean) => vo
     const chosen = review.options.find((each) => each.id === option)
     if (!ours || !chosen) {
       // Not this review's answer: it stays open, and the call waits.
-      onAnswer(review, done)
+      onAnswer(review, done, landing)
       return normal()
     }
+    landing(chosen.effect === "allow")
     gateway.views.set(conversation, viewWith(++revision))
     const answered = await normal()
     done(chosen.effect === "allow")
@@ -189,6 +239,59 @@ const mcpApps = {
         })
       }, 20)
     })
+  },
+  sendMessage: (_conversation: string, _app: unknown, _server: string, text: string) => {
+    if (waiting)
+      return Promise.reject(new Error("the fixture models one app call at a time"))
+    waiting = true
+    return new Promise((resolve, reject) => {
+      const review = messageReviewOf(`app-review-${++reviews}`, text)
+      const turn = `app-turn-${reviews}`
+      const readsAtCall = gateway.count("read")
+      const opening = window.setInterval(() => {
+        if (gateway.count("read") < readsAtCall + 2) return
+        window.clearInterval(opening)
+        gateway.views.set(conversation, viewWith(++revision, review))
+        onAnswer(
+          review,
+          (allowed) => {
+            waiting = false
+            if (allowed) resolve({ executionId: turn })
+            else
+              reject(
+                new NessaMcpAppError(
+                  conversation,
+                  review.permissionId,
+                  app,
+                  new NessaRpcError("mcp_approval_denied", "The person denied it"),
+                ),
+              )
+          },
+          // Allowed, the message is the person's turn, written by the app.
+          (allowed) => {
+            if (!allowed) return
+            turns.push({
+              executionId: turn,
+              userText: text,
+              attachments: [],
+              files: [],
+              status: "completed",
+              parts: [],
+              app: {
+                executionId: app.executionId,
+                toolId: app.toolId,
+                server,
+                tool: appTool,
+              },
+            })
+          },
+        )
+      }, 20)
+    })
+  },
+  updateModelContext: () => {
+    contexts++
+    return Promise.resolve({ requestId: `context-${contexts}`, applied: true })
   },
   releaseApp: () => Promise.resolve(),
 } as unknown as McpAppsApi
@@ -224,6 +327,29 @@ Object.assign(window, {
           settled = outcome.kind
         })
     },
+    /** The app sends `text` as the person (`ui/message`), as its bridge would. */
+    message(text: string) {
+      const port = conversationPort()
+      settled = "waiting"
+      void port
+        .sendMessage({ sessionId: conversation, server, app }, [{ type: "text", text }])
+        .then((outcome) => {
+          settled = outcome.kind
+        })
+    },
+    /** The app gives the model context (`ui/update-model-context`): taken at once. */
+    context(text: string) {
+      const port = conversationPort()
+      settled = "waiting"
+      void port
+        .updateModelContext(
+          { sessionId: conversation, server, app },
+          { content: [{ type: "text", text }] },
+        )
+        .then((outcome) => {
+          settled = outcome.kind
+        })
+    },
     snapshot: () => {
       const open = gateway.views.get(conversation)?.permissions[0]
       return {
@@ -240,14 +366,37 @@ Object.assign(window, {
             label: option.label,
             effect: option.effect,
           })) ?? [],
+        contexts,
       }
     },
     /** A tool's name with no break in it, as long as the gateway allows. */
     longestTool: "x".repeat(bounds.maxMcpNameBytes),
     /** The most bytes a tool's name may have (`maxMcpNameBytes`). */
     toolBound: bounds.maxMcpNameBytes,
+    /** A message of words as long as the gateway takes (`maxMcpMessageBytes`). */
+    longestMessage: longest(
+      "Plot May next to April, then June ",
+      bounds.maxMcpMessageBytes,
+    ),
+    /** A message of one word, with no break in it, as long as the gateway takes. */
+    longestWord: "x".repeat(bounds.maxMcpMessageBytes),
+    /** The most bytes a message may have (`maxMcpMessageBytes`). */
+    messageBound: bounds.maxMcpMessageBytes,
   },
 })
+
+/** The app's conversation port, as composition gives it the app. */
+function conversationPort() {
+  const plugin = dependencies.widgets.plugin(appPluginId(server))
+  if (plugin?.kind !== "app") throw new Error("the app's plugin is not registered")
+  if (!plugin.ports.conversation) throw new Error("the app has no conversation port")
+  return plugin.ports.conversation
+}
+
+/** `words` repeated to exactly `bytes` ASCII bytes, ending on a letter. */
+function longest(words: string, bytes: number): string {
+  return words.repeat(Math.ceil(bytes / words.length)).slice(0, bytes - 1) + "."
+}
 
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
