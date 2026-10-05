@@ -123,7 +123,8 @@ describe("Linked devices", () => {
         <LinkedDevicesTab />
       </LinkedDevicesProvider>,
     )
-    expect(host.textContent).toContain("No answer")
+    expect(host.textContent).toContain("No answer. The list is read again")
+    expect(host.textContent).not.toContain("Refresh")
     expect(host.textContent).not.toContain("Checking whether linking is on")
     expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
   })

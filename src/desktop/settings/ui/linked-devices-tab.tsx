@@ -27,6 +27,7 @@ import {
   approvable,
   canAct,
   canPair,
+  canPoll,
   canReplace,
   initialLinkedDevicesState,
   linkedDevicesReducer,
@@ -135,19 +136,14 @@ function requestOf(
 /**
  * While nothing is in flight, read again: linking is on, or the first read
  * failed and linking is still unknown. Off and refused are answers, not
- * pauses.
+ * pauses. The same rule is `canPoll`.
  */
 function usePoll(
   gateway: LinkedDevicesGateway,
   state: LinkedDevicesState,
   dispatch: Dispatch,
 ) {
-  const quiet =
-    gateway.pollMs > 0 &&
-    state.connection === "connected" &&
-    state.pending === null &&
-    state.confirmRevoke === null &&
-    (state.linking === "on" || (state.linking === "unknown" && state.notice !== null))
+  const quiet = gateway.pollMs > 0 && canPoll(state)
   useEffect(() => {
     if (!quiet) return
     const timer = window.setTimeout(() => dispatch({ type: "poll" }), gateway.pollMs)

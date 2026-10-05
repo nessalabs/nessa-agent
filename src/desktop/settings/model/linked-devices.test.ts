@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest"
 import {
   approvable,
   canPair,
+  canPoll,
   initialLinkedDevicesState,
   linkedDevicesReducer,
   noticeText,
@@ -212,6 +213,9 @@ describe("linked devices", () => {
     )
     expect(lost.code).toBeNull()
     expect(lost.pending?.kind).toBe("read")
+    expect(sentences.unanswered).toBe(
+      "No answer. The list is read again to show where it stands.",
+    )
     const found = reduce(lost, {
       type: "answered",
       seq: lost.seq,
@@ -485,6 +489,7 @@ describe("linked devices", () => {
     const failed = connected({ ok: false, failure: { kind: "unavailable" } })
     expect(failed.linking).toBe("unknown")
     expect(failed.notice?.kind).toBe("unavailable")
+    expect(canPoll(failed)).toBe(true)
     const retry = reduce(failed, { type: "poll" })
     expect(retry.pending).toEqual({ kind: "read", seq: failed.seq + 1 })
     const back = reduce(retry, {
@@ -495,6 +500,7 @@ describe("linked devices", () => {
     expect(back.linking).toBe("on")
     expect(back.notice).toBeNull()
     const off = connected({ ok: true, value: { kind: "off" } })
+    expect(canPoll(off)).toBe(false)
     expect(reduce(off, { type: "poll" })).toBe(off)
   })
 

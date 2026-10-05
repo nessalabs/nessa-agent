@@ -290,6 +290,19 @@ export function canAct(state: LinkedDevicesState): boolean {
   )
 }
 
+/**
+ * A quiet poll may read. Linking is on, or a failed first read left it
+ * unknown. Off and refused are answers. An open confirm is left alone.
+ */
+export function canPoll(state: LinkedDevicesState): boolean {
+  return (
+    state.connection === "connected" &&
+    state.pending === null &&
+    state.confirmRevoke === null &&
+    (state.linking === "on" || (state.linking === "unknown" && state.notice !== null))
+  )
+}
+
 /** Whether Pair a device may be sent: nothing is already open. */
 export function canPair(state: LinkedDevicesState): boolean {
   return (
@@ -764,19 +777,12 @@ export function linkedDevicesReducer(
       return begin(state, { kind: "revoke", credentialId: state.confirmRevoke }, null)
     }
     case "poll":
-      if (
-        state.connection !== "connected" ||
-        state.pending !== null ||
-        state.confirmRevoke !== null
-      )
-        return state
+      if (!canPoll(state)) return state
       // A quiet tab reads again. A poll must not clear what an action said.
       // A first read that failed left linking unknown: this one is an ordinary
       // read, so a success replaces that failure.
       if (state.linking === "on")
         return begin(state, { kind: "read", poll: true }, state.notice)
-      if (state.linking === "unknown" && state.notice !== null)
-        return begin(state, { kind: "read" }, state.notice)
-      return state
+      return begin(state, { kind: "read" }, state.notice)
   }
 }
