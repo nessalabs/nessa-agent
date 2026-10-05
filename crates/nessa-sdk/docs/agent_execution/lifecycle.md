@@ -305,6 +305,18 @@ subscriber.
 The panicking wait itself loses that one wake; the SDK does not retry it.
 Polling it again returns the retained result.
 
+The two `RecordStorage::runtime` tests hold the exclusive lock only until the
+caller waker is parked. `ready.send` is after `open_connection`, so their
+deadline includes that cold open. An expiry names the wait that is still
+active: `held_exclusive_lock_past_the_deadline_is_still_cold_open` reports
+open that has not published `ready`,
+`stored_ready_without_the_caller_waker_is_not_cold_open` reports `ready`
+stored without that caller waker, and
+`stored_identity_ready_without_the_caller_waker_is_a_later_statement`
+reports `ready` stored while the call is pending on a later statement. The
+other `caller_wakes` tests open the runtime first and then time one locked
+statement.
+
 Not covered:
 
 - A panic from *dropping* the caller's waker. The wrapper owns a clone of it,
