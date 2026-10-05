@@ -170,6 +170,19 @@ test("parse rejects a step the table does not have, and a branch that waits agai
   )
 })
 
+test("parse rejects a second turn with no when, which turnFor would never reach", () => {
+  assert.throws(
+    () =>
+      parseScenario({
+        turns: [
+          { steps: [{ do: "end" }] },
+          { steps: [{ do: "text", chunks: ["later"] }] },
+        ],
+      }),
+    /two turns match any prompt/,
+  )
+})
+
 test("parse rejects two turns that match the same prompt, and an unknown answer", () => {
   assert.throws(() =>
     parseScenario({

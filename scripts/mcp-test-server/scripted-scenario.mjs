@@ -6,7 +6,8 @@
  *
  * One prompt is one turn. A scenario's `turns` each name the prompt they
  * answer (`when`, a substring of the prompt's text) or answer any prompt
- * that named no turn. The first named match wins.
+ * that named no turn. The first named match wins. One unnamed turn is the
+ * fallback; a second is rejected, as two turns with the same `when` are.
  *
  * | state | event | next |
  * | --- | --- | --- |
@@ -67,14 +68,21 @@ export function parseScenario(value) {
   const extra = Object.keys(value).filter((key) => key !== "turns")
   if (extra.length > 0) throw new Error(`unknown scenario field ${extra[0]}`)
   const seen = new Set()
+  let fallback = false
   const turns = value.turns.map((turn, index) => {
     if (!plain(turn) || !Array.isArray(turn.steps))
       throw new Error(`turn ${index + 1} has no steps`)
     const when = Object.hasOwn(turn, "when") ? turn.when : undefined
     if (when !== undefined && (typeof when !== "string" || when === ""))
       throw new Error(`turn ${index + 1} has an empty when`)
-    if (when !== undefined && seen.has(when)) throw new Error(`two turns match ${when}`)
-    if (when !== undefined) seen.add(when)
+    if (when === undefined) {
+      if (fallback) throw new Error("two turns match any prompt")
+      fallback = true
+    } else if (seen.has(when)) {
+      throw new Error(`two turns match ${when}`)
+    } else {
+      seen.add(when)
+    }
     const unknown = Object.keys(turn).filter((key) => key !== "when" && key !== "steps")
     if (unknown.length > 0) throw new Error(`unknown turn field ${unknown[0]}`)
     return {
