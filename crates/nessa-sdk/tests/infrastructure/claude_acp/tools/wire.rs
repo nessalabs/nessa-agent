@@ -928,6 +928,42 @@ fn a_finished_call_drops_its_cached_input() {
     assert_cached_query(&names, &old, "rejected finished rename");
 }
 
+/// A permission the review declines still applies its input rule.
+///
+/// A non-object `rawInput` is declined before the shared runtime records the
+/// frame as a tool update. The previous query must not stay approvable. A
+/// frame for a call that was never observed must not create that call.
+#[test]
+fn a_declined_non_object_permission_drops_the_cached_query() {
+    let mut names = HashMap::new();
+    let old = json!({"query": "old"});
+    tool_call(
+        &json!({"toolCallId":"search-1","name":"WebSearch","rawInput":old}),
+        &mut names,
+    )
+    .unwrap();
+    let request = json!({"toolCall":{"toolCallId":"search-1","name":"WebSearch",
+        "rawInput":"not an object"}});
+    assert!(matches!(
+        permission(
+            &names,
+            json!({"toolCallId":"search-1","name":"WebSearch","rawInput":"not an object"})
+        ),
+        Err(AgentError::Protocol(_))
+    ));
+    super::note_declined_permission(&request, &mut names, &[]);
+    assert_no_cached_query(&names, "non-object permission");
+    super::note_declined_permission(
+        &json!({"toolCall":{"toolCallId":"never-observed","name":"WebSearch","rawInput":"x"}}),
+        &mut names,
+        &[],
+    );
+    assert!(
+        !names.contains_key("never-observed"),
+        "a declined frame admitted a call"
+    );
+}
+
 /// A rejected identity change is not an accepted input update.
 #[test]
 fn a_rejected_identity_change_keeps_the_cached_query() {

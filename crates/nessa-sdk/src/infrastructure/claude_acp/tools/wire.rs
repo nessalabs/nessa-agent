@@ -365,6 +365,29 @@ fn cache_input(
 /// are the request's object `rawInput` when present, and otherwise the object
 /// input already observed for the same call. A request that still has no object
 /// input cannot be described to a host.
+/// Apply a declined permission frame to a call this binding has already observed.
+///
+/// The review is declined before the shared runtime records the frame as a
+/// tool update. A supplied non-object would otherwise leave the previous query
+/// cached for a later sparse review. A call that was never observed is left
+/// unobserved: this must not admit it.
+pub(in crate::infrastructure::claude_acp) fn note_declined_permission(
+    request: &Value,
+    names: &mut HashMap<String, ObservedTool>,
+    mcp_prefixes: &[String],
+) {
+    let Some(tool) = request.get("toolCall") else {
+        return;
+    };
+    let Ok(id) = identifier(tool, "toolCallId") else {
+        return;
+    };
+    if !names.contains_key(id) {
+        return;
+    }
+    let _ = tool_call(tool, names, mcp_prefixes);
+}
+
 pub(in crate::infrastructure::claude_acp) fn permission_input(
     request: &Value,
     names: &HashMap<String, ObservedTool>,

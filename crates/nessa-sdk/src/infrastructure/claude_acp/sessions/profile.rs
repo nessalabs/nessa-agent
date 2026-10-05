@@ -250,4 +250,7 @@ impl AcpProfile for ClaudeProfile {
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
         wire::permission_input(request, &self.tool_names, &self.mcp_prefixes)
     }
+    fn note_declined_permission(&mut self, request: &Value) {
+        wire::note_declined_permission(request, &mut self.tool_names, &self.mcp_prefixes);
+    }
 }

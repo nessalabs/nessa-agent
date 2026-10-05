@@ -76,7 +76,9 @@ cleanup. An already-settled invocation keeps its earlier result.
   retention budget is not cached, and neither is a supplied non-object. Either
   one clears any input already cached for that call, so a later sparse review
   cannot approve the previous query. A `completed` or `failed` update drops
-  that call's cached input; a pending or running update keeps it. Only
+  that call's cached input; a pending or running update keeps it. A declined
+  permission that supplies a non-object drops the cached input for a call
+  already observed, and it does not admit a call that was never observed. Only
   supplied `allow_once` and `reject_once` choices are exposed. Ambiguous
   permission options fail closed.
 - Denied tools are the whole of that boundary, since admission is otherwise

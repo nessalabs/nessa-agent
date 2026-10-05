@@ -749,6 +749,42 @@ async fn websearch_permission_is_reviewed_and_can_be_denied() {
     }
 }
 
+/// A non-object permission must not leave the previous query approvable.
+#[tokio::test]
+async fn a_non_object_permission_does_not_leave_the_cached_query_reviewable() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("websearch-nonobject-then-sparse", 16);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "search").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let (_, first, _) = declined_updates(&mut opened).await;
+    assert_eq!(first.reason(), ReviewDeclineReason::UnreadableRequest);
+    let (_, second, _) = declined_updates(&mut opened).await;
+    assert_eq!(second.reason(), ReviewDeclineReason::UnreadableRequest);
+    let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
+        panic!("expected the turn to continue after the second decline");
+    };
+    assert_eq!(chunk.as_str(), "search denied");
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    drop(root);
+}
+
 /// A review this binding will not put to a host costs that tool, not the turn.
 ///
 /// This is the shape of the bug that started it: a tool the adapter would not
