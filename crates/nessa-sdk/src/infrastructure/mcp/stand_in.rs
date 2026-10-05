@@ -83,16 +83,14 @@ impl Visibility {
     pub(crate) fn ask(&self) -> u64 {
         self.asked.fetch_add(1, Ordering::Relaxed) + 1
     }
-    /// What list `order` said of each tool it named: hidden or not. A name
-    /// the list gives twice is hidden if either says so.
+    /// What list `order` said of each tool it named: hidden or not. Each
+    /// name is given once. A name the list gave twice was already folded
+    /// ([`wire::one_visibility_per_name`]): a side may see it only when
+    /// every entry says so.
     pub(crate) fn listed(&self, order: u64, tools: impl IntoIterator<Item = (String, bool)>) {
-        let mut said: HashMap<String, bool> = HashMap::new();
-        for (name, hidden) in tools {
-            *said.entry(name).or_default() |= hidden;
-        }
         let mut known = self.known.lock().expect("visibility");
         known.listed = true;
-        for (name, hidden) in said {
+        for (name, hidden) in tools {
             let entry = known.tools.entry(name).or_insert((order, hidden));
             if entry.0 <= order {
                 *entry = (order, hidden);
@@ -324,21 +322,35 @@ fn for_harness(initialized: &Value) -> Value {
 }
 
 /// A `tools/list` result without the tools the model may not see
-/// ([`wire::model_may_see`]), and each listed tool's name with whether it is
-/// hidden — none for a result with no tools array, which says nothing.
+/// ([`wire::tool_visibility`]), and each listed tool's name with whether it
+/// is hidden — none for a result with no tools array, which says nothing.
+/// A name given twice is hidden when any entry hides it, and then left out
+/// entirely ([`wire::one_visibility_per_name`]).
 fn for_model(mut result: Value) -> (Value, Option<Vec<(String, bool)>>) {
     let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) else {
         return (result, None);
     };
-    let mut listed = Vec::new();
-    tools.retain(|tool| {
-        let visible = wire::model_may_see(tool);
-        if let Some(name) = tool.get("name").and_then(Value::as_str) {
-            listed.push((name.to_owned(), !visible));
-        }
-        visible
+    let combined = wire::one_visibility_per_name(tools.iter().filter_map(|tool| {
+        let name = tool.get("name").and_then(Value::as_str)?;
+        Some((name.to_owned(), wire::tool_visibility(tool)))
+    }));
+    let hidden: HashMap<&str, bool> = combined
+        .iter()
+        .map(|(name, who)| (name.as_str(), !who.model()))
+        .collect();
+    tools.retain(|tool| match tool.get("name").and_then(Value::as_str) {
+        Some(name) => hidden.get(name).is_some_and(|is_hidden| !is_hidden),
+        None => wire::tool_visibility(tool).model(),
     });
-    (result, Some(listed))
+    (
+        result,
+        Some(
+            combined
+                .into_iter()
+                .map(|(name, who)| (name, !who.model()))
+                .collect(),
+        ),
+    )
 }
 
 /// The harness's answer under its own `id`. One that would not fit a frame

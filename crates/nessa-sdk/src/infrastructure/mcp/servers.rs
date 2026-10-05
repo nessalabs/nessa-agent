@@ -2,9 +2,10 @@ use super::connection::Connection;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
 use super::stand_in::{self, Visibility};
 use super::{wire, McpError};
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
-use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
+use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri, UiVisibility};
 use crate::infrastructure::acp::sessions::{ForwardedResults, StandInGrant, StdioMcpServer};
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
@@ -299,6 +300,14 @@ impl McpServers {
     /// grant is revoked — before it launches anything, or while it opens. The
     /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
+        contain_caller_wake(
+            format!("MCP open of {server}"),
+            self.open_session(server, owner),
+        )
+        .await
+    }
+
+    async fn open_session(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
         let inner = &self.inner;
         let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;
         if *inner.stopping.borrow() {
@@ -412,7 +421,9 @@ impl McpServers {
 
     /// The tool `name` exactly as `session`'s own newest open session of
     /// `server` last listed it, or `None` when that list does not have it —
-    /// or there is no list yet, which an app cannot be acting on.
+    /// or there is no list yet, which an app cannot be acting on. A name
+    /// listed more than once is one tool: a side may see it only when every
+    /// entry says so, and the `resourceUri` and hints are the first entry's.
     ///
     /// # Errors
     ///
@@ -427,11 +438,19 @@ impl McpServers {
         let own = self.newest(session, server).ok_or(McpError::NoSession)?;
         let listed = own.tools.read().expect("tool list").clone();
         Ok(listed.and_then(|listed| {
-            listed
+            let combined = wire::one_visibility_per_name(
+                listed
+                    .tools
+                    .iter()
+                    .filter(|each| each.tool().tool() == name)
+                    .map(|each| (name.to_owned(), each.ui().visibility())),
+            );
+            let visibility = combined.first()?.1;
+            let first = listed
                 .tools
                 .iter()
-                .find(|each| each.tool().tool() == name)
-                .cloned()
+                .find(|each| each.tool().tool() == name)?;
+            Some(listed_as(first, visibility))
         }))
     }
 
@@ -451,6 +470,21 @@ impl McpServers {
     /// [`McpError::Malformed`] for an answer that is not an object,
     /// [`McpError::Busy`], and the session's end cause once it has ended.
     pub async fn call_tool(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+        arguments: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value, McpError> {
+        contain_caller_wake(
+            format!("MCP tool call on {server}"),
+            self.call_tool_on_session(session, server, name, arguments, timeout),
+        )
+        .await
+    }
+
+    async fn call_tool_on_session(
         &self,
         session: &SessionId,
         server: &str,
@@ -484,6 +518,20 @@ impl McpServers {
     /// [`McpError::NoSession`], [`McpError::Timeout`] past `timeout`, and what
     /// [`McpSession::read_ui_resource`] fails with.
     pub async fn read_app_resource(
+        &self,
+        session: &SessionId,
+        server: &str,
+        uri: &UiResourceUri,
+        timeout: Duration,
+    ) -> Result<UiResource, McpError> {
+        contain_caller_wake(
+            format!("MCP app resource read on {server}"),
+            self.read_app_resource_on_session(session, server, uri, timeout),
+        )
+        .await
+    }
+
+    async fn read_app_resource_on_session(
         &self,
         session: &SessionId,
         server: &str,
@@ -553,6 +601,10 @@ impl McpServers {
     /// killed with its process group — and refuse every later open with
     /// [`McpError::Stopped`].
     pub async fn stop(&self) {
+        contain_caller_wake("MCP stop", self.stop_sessions()).await
+    }
+
+    async fn stop_sessions(&self) {
         let sessions: Vec<Arc<Session>> = {
             let live = self.inner.live.lock().expect("live sessions");
             self.inner.stopping.send_replace(true);
@@ -603,7 +655,11 @@ impl McpSession {
     /// [`MAX_TOOLS`], [`McpError::Malformed`] for a page of the wrong shape,
     /// and the session's end cause once it has ended.
     pub async fn list_tools(&self) -> Result<Vec<ListedTool>, McpError> {
-        list(&self.owner.0).await
+        contain_caller_wake(
+            format!("MCP tool list of {}", self.server()),
+            list(&self.owner.0),
+        )
+        .await
     }
 
     /// Read the MCP App at `uri` from this session's server.
@@ -617,6 +673,14 @@ impl McpSession {
     /// [`McpError::Timeout`] past [`REQUEST_TIMEOUT`], and the session's end
     /// cause once it has ended.
     pub async fn read_ui_resource(&self, uri: &UiResourceUri) -> Result<UiResource, McpError> {
+        contain_caller_wake(
+            format!("MCP UI resource read of {}", self.server()),
+            self.read_ui_resource_now(uri),
+        )
+        .await
+    }
+
+    async fn read_ui_resource_now(&self, uri: &UiResourceUri) -> Result<UiResource, McpError> {
         let params = json!({ "uri": uri.as_str() });
         let result = self
             .owner
@@ -638,17 +702,21 @@ impl McpSession {
     /// under the harness's id for the call, with this server's name, before
     /// the harness is answered.
     pub async fn serve(self, input: impl AsyncRead + Unpin, output: impl AsyncWrite + Unpin) {
-        stand_in::serve(
-            self.owner.0.connection.clone(),
-            self.owner.0.initialized.clone(),
-            self.owner.0.visibility.clone(),
-            self.owner.0.owned_by.forwarded(),
-            &self.owner.0.server,
-            input,
-            output,
-        )
+        let server = self.server().to_owned();
+        contain_caller_wake(format!("MCP serve of {server}"), async move {
+            stand_in::serve(
+                self.owner.0.connection.clone(),
+                self.owner.0.initialized.clone(),
+                self.owner.0.visibility.clone(),
+                self.owner.0.owned_by.forwarded(),
+                &self.owner.0.server,
+                input,
+                output,
+            )
+            .await;
+            close(self.owner.0.clone(), McpError::Closed).await;
+        })
         .await;
-        close(self.owner.0.clone(), McpError::Closed).await;
     }
 
     /// Close the session: calls waiting on it end with
@@ -657,7 +725,11 @@ impl McpSession {
     /// once the server is stopped, whichever close — this one, another
     /// clone's, or [`McpServers::stop`] — is stopping it.
     pub async fn close(&self) {
-        close(self.owner.0.clone(), McpError::Closed).await;
+        contain_caller_wake(
+            format!("MCP close of {}", self.server()),
+            close(self.owner.0.clone(), McpError::Closed),
+        )
+        .await;
     }
 }
 
@@ -744,7 +816,9 @@ async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
         match page.next {
             Some(next) => cursor = Some(next),
             None => {
-                session.visibility.listed(order, hidden);
+                session
+                    .visibility
+                    .listed(order, wire::hidden_for_model(&tools, &hidden));
                 let mut kept = session.tools.write().expect("tool list");
                 if kept.as_ref().is_none_or(|kept| kept.order < order) {
                     *kept = Some(Arc::new(Listed {
@@ -757,4 +831,14 @@ async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
         }
     }
     Err(McpError::TooLarge("tools/list"))
+}
+
+/// `first` with `visibility` in place of its own. The URI and hints stay
+/// `first`'s; who may see the name does not.
+fn listed_as(first: &ListedTool, visibility: UiVisibility) -> ListedTool {
+    ListedTool::new(
+        first.tool().clone(),
+        ToolUi::new(first.ui().resource_uri().cloned(), visibility),
+    )
+    .with_hints(first.hints())
 }

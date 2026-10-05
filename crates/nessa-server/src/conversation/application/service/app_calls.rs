@@ -171,17 +171,15 @@ impl ConversationService {
             .clone()
     }
 
-    /// The conversation `id` was deleted, and its agent's stop tried: its
-    /// apps take no more work, ever, and keep nothing. Kept as that — made
-    /// so if it had none in this run — not removed, so that a release or an
-    /// opening racing the delete finds them deleted, and cannot build them
-    /// afresh.
-    pub(super) fn close_apps_for_good(&self, id: &ConversationId) {
-        self.apps_of(id).delete(|| {
+    /// The conversation `id` was deleted by `by`, and its agent's stop tried:
+    /// its apps take no more work, ever, and keep nothing. Kept as that —
+    /// made so if it had none in this run — not removed, so that a release
+    /// or an opening racing the delete finds them deleted, and cannot build
+    /// them afresh. Reviews still open, and tickets still held, end as `by`.
+    pub(super) fn close_apps_for_good(&self, id: &ConversationId, by: &McpAppInitiator) {
+        self.apps_of(id).delete(by, || {
             if let Some(ports) = &self.inner.mcp_apps {
-                ports
-                    .tickets
-                    .release_conversation(id, &McpAppInitiator::System);
+                ports.tickets.release_conversation(id, by);
             }
         });
     }
