@@ -1004,7 +1004,7 @@ async fn conversations(
     let dependencies = ConversationDependencies {
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
-        storage,
+        storage: storage.clone(),
         metadata: metadata.clone(),
         creation_audit,
         mode_audit,
@@ -1064,6 +1064,7 @@ async fn conversations(
         ),
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
+    service.bind_commands(storage.clone());
     if warm_current_opencode {
         warm_ups.push(StartupWarmUp::Current(resolver.clone()));
     }

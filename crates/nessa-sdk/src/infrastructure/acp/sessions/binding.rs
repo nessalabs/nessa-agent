@@ -738,6 +738,30 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             outcome
         })
     }
+    fn supports_turn_cancel(&self) -> bool {
+        true
+    }
+    fn cancel_turn(&self, turn: ExecutionId) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            let commands = {
+                let generation = self.live_generation().await.map_err(|error| {
+                    ProviderOperationFailure::new(
+                        error.cause,
+                        ProviderSessionState::CleanupRequired,
+                    )
+                })?;
+                generation.commands.clone()
+            };
+            enqueue(&commands, Command::CancelTurn(turn, sender)).map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+            })?;
+            receiver.await.unwrap_or(Err(ProviderOperationFailure::new(
+                AgentError::Closed,
+                ProviderSessionState::CleanupRequired,
+            )))
+        })
+    }
     fn permission_authority(
         &self,
     ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
@@ -1139,6 +1163,8 @@ pub(crate) enum Command {
         PermissionCancellationRequest,
         oneshot::Sender<ProviderOperationResult<PermissionCancellation>>,
     ),
+    /// Cancel one active turn without closing the session.
+    CancelTurn(ExecutionId, oneshot::Sender<ProviderOperationResult<()>>),
     /// An answer to one question the agent asked.
     AnswerQuestion(QuestionAnswer, oneshot::Sender<ProviderOperationResult<()>>),
     Answer(

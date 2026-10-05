@@ -149,6 +149,31 @@ mod gateway {
         };
         response
     }
+    /// The socket admits creation, submit, and stop only through the shared
+    /// command store. The directory is retained for the process: these tests
+    /// keep the service, and dropping the directory under it would make later
+    /// commands fail for a reason they are not asserting.
+    fn bind_command_store(service: &crate::conversation::application::ConversationService) {
+        let directory = tempfile::tempdir().expect("command store");
+        let storage = Arc::new(
+            nessa_sdk::infrastructure::session_storage::RecordStorage::new(
+                directory.path().join("records"),
+            )
+            .expect("command store"),
+        );
+        service.bind_commands(storage);
+        std::mem::forget(directory);
+    }
+    fn chat_fixture() -> (
+        crate::conversation::application::ConversationService,
+        Arc<conversation_support::ProviderFactory>,
+        Arc<conversation_support::MemoryRepository>,
+        Arc<nessa_sdk::infrastructure::session_storage::InMemoryStorage>,
+    ) {
+        let built = conversation_support::fixture(ConversationLimits::default());
+        bind_command_store(&built.0);
+        built
+    }
     #[tokio::test]
     async fn conversation_requires_chat_grant_and_a_gateway_that_runs_conversations() {
         let state = chat_state();
@@ -169,6 +194,8 @@ mod gateway {
                 "conversation.answer",
                 "conversation.cancel",
                 "conversation.close",
+                "conversation.stop",
+                "conversation.receipt",
                 "conversation.archive",
                 "conversation.unarchive",
                 "conversation.delete",
@@ -240,6 +267,7 @@ mod gateway {
         // of its own.
         for method in [
             "conversation.close",
+            "conversation.stop",
             "conversation.archive",
             "conversation.unarchive",
             "conversation.delete",
@@ -360,25 +388,35 @@ mod gateway {
     #[tokio::test]
     async fn authenticated_surfaces_share_one_agent_but_other_owners_cannot_read() {
         let (service, provider, repository, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let id = "00000000-0000-4000-8000-000000000002";
-        for credential in ["owner-phone", "owner-panel"] {
-            let session = chat_session(&state, credential).await;
+        let phone = chat_session(&state, "owner-phone").await;
+        assert!(
+            chat_request(
+                &state,
+                &phone,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"owner-phone"})
+            )
+            .await
+            .ok
+        );
+        let panel = chat_session(&state, "owner-panel").await;
+        let conflict = chat_request(
+            &state,
+            &panel,
+            "conversation.create",
+            json!({"conversationId":id,"requestId":"owner-panel"}),
+        )
+        .await;
+        assert!(!conflict.ok);
+        assert_eq!(conflict.error.unwrap().code, "approval_request_conflict");
+        for session in [&phone, &panel] {
             assert!(
                 chat_request(
                     &state,
-                    &session,
-                    "conversation.create",
-                    json!({"conversationId":id,"requestId":credential})
-                )
-                .await
-                .ok
-            );
-            assert!(
-                chat_request(
-                    &state,
-                    &session,
+                    session,
                     "conversation.read",
                     json!({"conversationId":id})
                 )
@@ -418,7 +456,7 @@ mod gateway {
     #[tokio::test]
     async fn read_joins_the_fixed_selection_to_the_authenticated_catalog() {
         let (_, provider, repository, storage) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let service = crate::conversation::application::ConversationService::new(
             crate::conversation::application::ConversationDependencies {
                 agents: conversation_support::only(Arc::new(conversation_support::Provider::new(
@@ -445,6 +483,7 @@ mod gateway {
             Some("/workspace".into()),
         )
         .unwrap();
+        bind_command_store(&service);
         let state = chat_state().with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000010";
@@ -474,7 +513,7 @@ mod gateway {
     #[tokio::test]
     async fn listing_answers_each_caller_with_their_own_conversations_only() {
         let (service, provider, _, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000007";
@@ -560,7 +599,7 @@ mod gateway {
     #[tokio::test]
     async fn archive_and_delete_answer_as_mutations_and_a_deleted_id_is_refused_by_name() {
         let (service, provider, _, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000009";
@@ -669,7 +708,7 @@ mod gateway {
 
     #[tokio::test]
     async fn conversation_wire_enforces_canonical_and_utf8_byte_limits() {
-        let (service, _, _, _) = conversation_support::fixture(ConversationLimits::default());
+        let (service, _, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let session = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000004";
@@ -725,7 +764,7 @@ mod gateway {
     #[tokio::test]
     async fn disconnect_keeps_admitted_open_after_request_capacity_is_released() {
         let (service, provider, _, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let (release, gate) = oneshot::channel();
         *provider.open_gate.lock().unwrap() = Some(gate);
@@ -742,24 +781,12 @@ mod gateway {
         timeout(Duration::from_secs(1), provider.opening.notified())
             .await
             .unwrap();
-        let created = response(&mut peer).await;
-        assert_eq!(created["id"], "create");
-        assert_eq!(created["ok"], true);
-        assert_eq!(state.requests.available_permits(), 128);
-        // The provider's opening future is blocked, but this socket remains responsive.
+        // Readiness waits for the original attachment, so this response is
+        // still outstanding. The socket stays responsive, and the request
+        // permit stays with the creation task.
         send_command(&peer, "health", "server.health", json!({}));
         assert_eq!(response(&mut peer).await["id"], "health");
-        drop(peer.input);
-        timeout(Duration::from_secs(1), task)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            state.requests.available_permits(),
-            128,
-            "durable creation releases request capacity before provider startup"
-        );
-        release.send(()).unwrap();
+        assert_eq!(state.requests.available_permits(), 127);
         let second = chat_session(&state, "owner-panel").await;
         let read = timeout(
             Duration::from_secs(1),
@@ -773,7 +800,17 @@ mod gateway {
         .await
         .unwrap();
         assert!(read.ok);
-        assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+        drop(peer.input);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state.requests.available_permits(),
+            127,
+            "dropping the socket leaves the original creation task holding its permit"
+        );
+        release.send(()).unwrap();
         timeout(Duration::from_secs(1), async {
             while state.requests.available_permits() != 128 {
                 tokio::task::yield_now().await;
@@ -781,12 +818,13 @@ mod gateway {
         })
         .await
         .unwrap();
+        assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn same_socket_stalled_response_does_not_hold_close_effect() {
         let (service, provider, _, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let session = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000009";
@@ -849,7 +887,7 @@ mod gateway {
     #[tokio::test]
     async fn reads_during_startup_return_without_consuming_control_capacity() {
         let (service, provider, _, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let (release, gate) = oneshot::channel();
         *provider.open_gate.lock().unwrap() = Some(gate);
@@ -866,7 +904,7 @@ mod gateway {
         timeout(Duration::from_secs(1), provider.opening.notified())
             .await
             .unwrap();
-        assert_eq!(response(&mut peer).await["id"], "create");
+        assert_eq!(state.requests.available_permits(), 127);
         for n in 0..15 {
             send_command(
                 &peer,
@@ -880,7 +918,7 @@ mod gateway {
             assert_eq!(read["id"], format!("read-{n}"));
             assert_eq!(read["ok"], true);
         }
-        assert_eq!(state.requests.available_permits(), 128);
+        assert_eq!(state.requests.available_permits(), 127);
         send_command(&peer, "full", "server.health", json!({}));
         assert_eq!(response(&mut peer).await["id"], "full");
         // An unrelated missing conversation proves the control is dispatched,
@@ -894,22 +932,19 @@ mod gateway {
         let control = response(&mut peer).await;
         assert_eq!(control["id"], "close");
         assert_eq!(control["error"]["code"], "conversation_not_found");
+        assert_eq!(state.requests.available_permits(), 127);
+        release.send(()).unwrap();
+        let created = response(&mut peer).await;
+        assert_eq!(created["id"], "create");
+        assert_eq!(created["ok"], true);
         drop(peer.input);
         task.await.unwrap();
         assert_eq!(state.requests.available_permits(), 128);
-        release.send(()).unwrap();
-        timeout(Duration::from_secs(1), async {
-            while state.requests.available_permits() != 128 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
     }
     #[tokio::test]
     async fn authenticated_reorder_changes_provider_dispatch_order_atomically() {
         let (service, provider, _, _) =
-            conversation_support::fixture(ConversationLimits::default());
+            chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let session = chat_session(&state, "owner-phone").await;
         let (socket, mut peer) = test_socket(None);
@@ -1019,5 +1054,110 @@ mod gateway {
         );
         drop(peer.input);
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_withdraws_the_named_queued_turn_without_closing() {
+        let (service, provider, _, _) = chat_fixture();
+        let state = chat_state().with_conversations(Arc::new(service));
+        let session = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-000000000011";
+        assert!(
+            chat_request(
+                &state,
+                &session,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"create"}),
+            )
+            .await
+            .ok
+        );
+        let (release, gate) = oneshot::channel();
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        assert!(
+            chat_request(
+                &state,
+                &session,
+                "conversation.send",
+                json!({"conversationId":id,"requestId":"running","executionId":"running","text":"running","attachments":[],"files":[]}),
+            )
+            .await
+            .ok
+        );
+        timeout(
+            Duration::from_secs(1),
+            provider.execution_started.notified(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            chat_request(
+                &state,
+                &session,
+                "conversation.send",
+                json!({"conversationId":id,"requestId":"queued","executionId":"queued","text":"queued","attachments":[],"files":[]}),
+            )
+            .await
+            .ok
+        );
+        let absent = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"stop-queued","operation":"stop","executionId":"queued"}),
+        )
+        .await;
+        assert!(absent.ok, "{absent:?}");
+        assert_eq!(
+            absent.payload.unwrap(),
+            json!({"found": false, "requestId": "stop-queued"})
+        );
+        let stopped = chat_request(
+            &state,
+            &session,
+            "conversation.stop",
+            json!({"conversationId":id,"requestId":"stop-queued","executionId":"queued"}),
+        )
+        .await;
+        assert!(stopped.ok, "{stopped:?}");
+        let withdrawn = json!({"requestId":"stop-queued","stage":"settled","outcome":"withdrawn"});
+        assert_eq!(stopped.payload.unwrap(), withdrawn);
+        let again = chat_request(
+            &state,
+            &session,
+            "conversation.stop",
+            json!({"conversationId":id,"requestId":"stop-queued","executionId":"queued"}),
+        )
+        .await;
+        assert_eq!(again.payload.unwrap(), withdrawn);
+        let found = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"stop-queued","operation":"stop","executionId":"queued"}),
+        )
+        .await;
+        assert_eq!(
+            found.payload.unwrap(),
+            json!({"found": true, "requestId": "stop-queued", "stage": "settled", "outcome": "withdrawn"})
+        );
+        assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 0);
+        let read = chat_request(
+            &state,
+            &session,
+            "conversation.read",
+            json!({"conversationId":id}),
+        )
+        .await;
+        let pending = read.payload.unwrap()["pending"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["executionId"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert!(pending.is_empty(), "{pending:?}");
+        assert_eq!(*provider.executions.lock().unwrap(), ["running"]);
+        release.send(()).unwrap();
     }
 }

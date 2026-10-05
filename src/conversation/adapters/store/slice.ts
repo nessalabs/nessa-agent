@@ -12,6 +12,7 @@ import {
   type FileAttachment,
   type MessageContent,
   type ReadFailure,
+  type Turn,
   type UploadFailure,
 } from "../../model"
 import {
@@ -355,6 +356,7 @@ export type Control =
       choices: { key: string; values: string[]; ownWords?: string }[] | null
     }
   | { kind: "cancel"; executionId: string; permissionId: string }
+  | { kind: "stop"; executionId: string }
   | { kind: "retry"; executionId: string }
 export const controlConversation = createAsyncThunk<
   void,
@@ -430,6 +432,9 @@ export const controlConversation = createAsyncThunk<
           control.permissionId,
         )
         break
+      case "stop":
+        await extra.conversation.stop(serverId, control.executionId)
+        break
       case "retry": {
         const turn = current.turns.find(
           (turn) => turn.from === "user" && turn.executionId === control.executionId,
@@ -494,15 +499,36 @@ export const controlConversation = createAsyncThunk<
     dispatch(controlFinished(id))
   }
 })
+function capturedTurn(turns: readonly Turn[]): string | undefined {
+  const running = [...turns]
+    .reverse()
+    .find((turn) => turn.from === "assistant" && turn.status === "running" && turn.executionId)
+  if (running?.executionId) return running.executionId
+  for (const turn of [...turns].reverse()) {
+    if (turn.from !== "user" || !turn.executionId) continue
+    if (
+      turn.receipt === "sending" ||
+      turn.receipt === "accepted" ||
+      turn.receipt === "queued" ||
+      turn.receipt === "unknown"
+    )
+      return turn.executionId
+  }
+  return undefined
+}
 export const stopGenerating = createAsyncThunk<
   void,
   { conversationId?: string } | undefined,
   ThunkConfig
 >("conversation/stop", async (input, { dispatch, getState }) => {
+  const id = input?.conversationId ?? getState().conversation.activeId
+  const current = getState().conversation.conversations.find((item) => item.id === id)
+  const executionId = current ? capturedTurn(current.turns) : undefined
+  if (!executionId) return
   await dispatch(
     controlConversation({
-      id: input?.conversationId ?? getState().conversation.activeId,
-      control: { kind: "close" },
+      id,
+      control: { kind: "stop", executionId },
     }),
   )
 })

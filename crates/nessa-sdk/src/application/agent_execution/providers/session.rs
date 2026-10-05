@@ -62,6 +62,12 @@ impl ProviderSession {
         }
         Ok(authority)
     }
+    pub(crate) fn supports_turn_cancel(&self) -> bool {
+        self.backend.supports_turn_cancel()
+    }
+    pub(crate) fn cancel_turn(&self, turn: ExecutionId) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move { self.backend.cancel_turn(turn).await })
+    }
     pub(crate) fn set_approval_mode(
         &self,
         mode: super::ApprovalMode,

@@ -16,9 +16,9 @@ use crate::{
         ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
     },
 };
+use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
-use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     commands::{
@@ -793,6 +793,85 @@ async fn deletion_refuses_each_creation_state_and_read_only_lookup() {
     }
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn deletion_refuses_finished_creation_lookup_and_retry_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    let ready = service
+        .create_command(
+            storage.clone(),
+            target.clone(),
+            caller("request"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ready.stage(), CreationStage::Ready);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    let control_rows = creation_rows(&root);
+    assert!(
+        control_rows >= 3,
+        "accepted, attempted and ready stay in the control stream"
+    );
+    metadata
+        .record_deletion(
+            &target,
+            ConversationDeletion::new(
+                OrganizationId::new("org").unwrap(),
+                PrincipalId::new("person").unwrap(),
+                "panel".into(),
+                "delete".into(),
+                1_700_000_000_200,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    retire(service, storage, metadata).await;
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    assert_eq!(creation_rows(&root), control_rows);
+    assert!(matches!(
+        service
+            .lookup_creation(
+                storage.clone(),
+                target.clone(),
+                caller("request"),
+                RequestedConversation::default(),
+            )
+            .await,
+        Err(CreationFailure::Target(ConversationError::Deleted))
+    ));
+    assert!(matches!(
+        service
+            .create_command(
+                storage.clone(),
+                target,
+                caller("request"),
+                RequestedConversation::default(),
+            )
+            .await,
+        Err(CreationFailure::Target(ConversationError::Deleted))
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(creation_rows(&root), control_rows);
+    retire(service, storage, metadata).await;
+}
+
+fn creation_rows(root: &Path) -> i64 {
+    let db = nessa_local_database::rusqlite::Connection::open(root.join("records/records.sqlite3"))
+        .unwrap();
+    db.query_row(
+        "SELECT COUNT(*) FROM event_records WHERE schema_id = 'nessa.creation'",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
 }
 
 #[tokio::test]

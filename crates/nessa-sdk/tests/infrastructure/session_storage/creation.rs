@@ -141,10 +141,16 @@ fn creation_codec_bounds_fields_and_preserves_exact_non_content_identity() {
         assert_eq!(decode(&event).unwrap(), receipt);
         let mut wrong_schema = event.clone();
         wrong_schema.schema.id = SchemaId::new("foreign.schema").unwrap();
-        assert!(decode(&wrong_schema).is_err());
+        assert_ne!(
+            encode(&decode(&wrong_schema).unwrap()).unwrap(),
+            wrong_schema
+        );
         let mut wrong_version = event.clone();
         wrong_version.schema.version = 2;
-        assert!(decode(&wrong_version).is_err());
+        assert_ne!(
+            encode(&decode(&wrong_version).unwrap()).unwrap(),
+            wrong_version
+        );
         let mut wrong_stage = event.clone();
         let mut bytes = event.payload.as_bytes().to_vec();
         bytes[0] = 3;

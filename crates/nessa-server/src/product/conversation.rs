@@ -15,12 +15,14 @@ use nessa_protocol::conversation::view::{
 use nessa_protocol::product::generated::{
     ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
-    ConversationCreateParams, ConversationCreateResult, ConversationDeleteParams,
-    ConversationListParams, ConversationListResult, ConversationMutationResult,
-    ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
-    ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
+    ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
+    ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
+    ConversationDeleteParams, ConversationListParams, ConversationListResult,
+    ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
+    ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
+    ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
-    ConversationSummary, ConversationView as WireConversationView,
+    ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -30,6 +32,10 @@ use nessa_protocol::{
 };
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
+    commands::{
+        CreationFailure, CreationReceipt, CreationStage, CreationStorageError, MutationFailure,
+        MutationOutcome, MutationReceipt, MutationStage,
+    },
     permissions::PermissionSelectionState,
     providers::ImageInputRefusal,
     sessions::StorageError,
@@ -67,21 +73,16 @@ pub(super) async fn dispatch(
         match frame.method.as_str() {
             "conversation.create" => {
                 let params = params!(ConversationCreateParams);
+                let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 service
-                    .create(
+                    .create_command(
+                        store,
                         conversation_id(&params.conversation_id)?,
-                        caller(params.request_id),
-                        RequestedConversation {
-                            agent: requested_agent(params.agent.as_deref()),
-                            model: params.model,
-                            approval_mode: params.approval_mode.map(|mode| match mode {
-                                WireApprovalMode::Ask => ConversationApprovalMode::Ask,
-                                WireApprovalMode::Auto => ConversationApprovalMode::Auto,
-                                WireApprovalMode::Full => ConversationApprovalMode::Full,
-                            }),
-                        },
+                        caller(params.request_id.clone()),
+                        requested_conversation(&params),
                     )
-                    .await?;
+                    .await
+                    .map_err(creation_failure)?;
                 Ok(success(
                     &frame.id,
                     &ConversationCreateResult {
@@ -138,32 +139,112 @@ pub(super) async fn dispatch(
                 } else {
                     SubmissionMode::Queue
                 };
-                let receipt = service
-                    .submit(
-                        conversation_id(&params.conversation_id)?,
-                        caller(params.request_id),
-                        params.execution_id,
-                        SubmittedMessage {
-                            text: params.text,
-                            images: params
-                                .attachments
-                                .into_iter()
-                                .map(|image| SubmittedImage {
-                                    digest: image.digest,
-                                    media_type: image.mime_type,
-                                    size: image.size,
-                                })
-                                .collect(),
-                            files: params
-                                .files
-                                .into_iter()
-                                .map(|file| SubmittedFile { path: file.path })
-                                .collect(),
-                        },
+                let id = conversation_id(&params.conversation_id)?;
+                let caller = caller(params.request_id.clone());
+                let execution_id = params.execution_id.clone();
+                let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                let submitted = service
+                    .submit_command(
+                        store,
+                        id.clone(),
+                        caller.clone(),
+                        execution_id.clone(),
+                        submitted_message(&params),
                         mode,
                     )
-                    .await?;
+                    .await
+                    .map_err(mutation_failure)?;
+                let receipt = match submitted.delivery {
+                    Some(receipt) => receipt,
+                    None => service.current_submission(id, caller, execution_id).await?,
+                };
                 Ok(success(&frame.id, &receipt))
+            }
+            "conversation.stop" => {
+                let params = params!(ConversationStopParams);
+                let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                let receipt = service
+                    .stop_command(
+                        store,
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        params.execution_id,
+                    )
+                    .await
+                    .map_err(mutation_failure)?;
+                Ok(success(
+                    &frame.id,
+                    &command_receipt(&params.request_id, &receipt),
+                ))
+            }
+            "conversation.receipt" => {
+                let params = params!(ConversationReceiptParams);
+                let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                let id = conversation_id(&params.conversation_id)?;
+                let caller = caller(params.request_id.clone());
+                let result = match params.operation {
+                    ConversationCommandOperation::Create => service
+                        .lookup_creation(
+                            store,
+                            id,
+                            caller,
+                            requested_conversation_from_receipt(&params)?,
+                        )
+                        .await
+                        .map_err(creation_failure)?
+                        .map(|receipt| command_receipt_from_creation(&params.request_id, &receipt)),
+                    ConversationCommandOperation::Submit | ConversationCommandOperation::Steer => {
+                        let message = submitted_message_from_receipt(&params)?;
+                        let mode = if params.operation == ConversationCommandOperation::Steer {
+                            SubmissionMode::Steer
+                        } else {
+                            SubmissionMode::Queue
+                        };
+                        let execution_id = params
+                            .execution_id
+                            .clone()
+                            .ok_or(ConversationError::InvalidInput)?;
+                        let binding =
+                            crate::conversation::application::ConversationService::submit_lookup(
+                                &id,
+                                &caller,
+                                &execution_id,
+                                &message,
+                                mode,
+                            )?;
+                        service
+                            .lookup_command(store, id, caller, binding)
+                            .await
+                            .map_err(mutation_failure)?
+                            .map(|receipt| command_receipt(&params.request_id, &receipt))
+                    }
+                    ConversationCommandOperation::Stop => {
+                        let execution_id = params
+                            .execution_id
+                            .clone()
+                            .ok_or(ConversationError::InvalidInput)?;
+                        let binding =
+                            crate::conversation::application::ConversationService::stop_lookup(
+                                &id,
+                                &caller,
+                                &execution_id,
+                            )?;
+                        service
+                            .lookup_command(store, id, caller, binding)
+                            .await
+                            .map_err(mutation_failure)?
+                            .map(|receipt| command_receipt(&params.request_id, &receipt))
+                    }
+                };
+                Ok(success(
+                    &frame.id,
+                    &ConversationReceiptResult {
+                        found: result.is_some(),
+                        request_id: params.request_id,
+                        stage: result.as_ref().map(|receipt| receipt.stage),
+                        outcome: result.and_then(|receipt| receipt.outcome),
+                    },
+                ))
             }
             "conversation.reorder" => {
                 let params = params!(ConversationReorderParams);
@@ -513,6 +594,148 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         ConversationErrorCode::AuditUnavailable
     } else {
         ConversationErrorCode::ConversationErasureIncomplete
+    }
+}
+
+fn requested_conversation(params: &ConversationCreateParams) -> RequestedConversation {
+    RequestedConversation {
+        agent: requested_agent(params.agent.as_deref()),
+        model: params.model.clone(),
+        approval_mode: params.approval_mode.map(approval_mode),
+    }
+}
+fn requested_conversation_from_receipt(
+    params: &ConversationReceiptParams,
+) -> Result<RequestedConversation, ConversationError> {
+    if params.execution_id.is_some()
+        || params.text.is_some()
+        || params.attachments.is_some()
+        || params.files.is_some()
+    {
+        return Err(ConversationError::InvalidInput);
+    }
+    Ok(RequestedConversation {
+        agent: requested_agent(params.agent.as_deref()),
+        model: params.model.clone(),
+        approval_mode: params.approval_mode.map(approval_mode),
+    })
+}
+fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
+    match mode {
+        WireApprovalMode::Ask => ConversationApprovalMode::Ask,
+        WireApprovalMode::Auto => ConversationApprovalMode::Auto,
+        WireApprovalMode::Full => ConversationApprovalMode::Full,
+    }
+}
+fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
+    SubmittedMessage {
+        text: params.text.clone(),
+        images: params
+            .attachments
+            .iter()
+            .map(|image| SubmittedImage {
+                digest: image.digest.clone(),
+                media_type: image.mime_type.clone(),
+                size: image.size,
+            })
+            .collect(),
+        files: params
+            .files
+            .iter()
+            .map(|file| SubmittedFile {
+                path: file.path.clone(),
+            })
+            .collect(),
+    }
+}
+fn submitted_message_from_receipt(
+    params: &ConversationReceiptParams,
+) -> Result<SubmittedMessage, ConversationError> {
+    if params.agent.is_some() || params.model.is_some() || params.approval_mode.is_some() {
+        return Err(ConversationError::InvalidInput);
+    }
+    Ok(SubmittedMessage {
+        text: params.text.clone().ok_or(ConversationError::InvalidInput)?,
+        images: params
+            .attachments
+            .as_ref()
+            .ok_or(ConversationError::InvalidInput)?
+            .iter()
+            .map(|image| SubmittedImage {
+                digest: image.digest.clone(),
+                media_type: image.mime_type.clone(),
+                size: image.size,
+            })
+            .collect(),
+        files: params
+            .files
+            .as_ref()
+            .ok_or(ConversationError::InvalidInput)?
+            .iter()
+            .map(|file| SubmittedFile {
+                path: file.path.clone(),
+            })
+            .collect(),
+    })
+}
+fn command_receipt(request_id: &str, receipt: &MutationReceipt) -> ConversationCommandReceipt {
+    ConversationCommandReceipt {
+        request_id: request_id.to_owned(),
+        stage: match receipt.stage() {
+            MutationStage::Accepted => ConversationCommandStage::Accepted,
+            MutationStage::Attempted => ConversationCommandStage::Attempted,
+            MutationStage::Settled => ConversationCommandStage::Settled,
+        },
+        outcome: receipt.outcome().map(|outcome| match outcome {
+            MutationOutcome::Dispatched => ConversationCommandOutcome::Dispatched,
+            MutationOutcome::Withdrawn => ConversationCommandOutcome::Withdrawn,
+            MutationOutcome::Cancelled => ConversationCommandOutcome::Cancelled,
+            MutationOutcome::AlreadyFinal => ConversationCommandOutcome::AlreadyFinal,
+        }),
+    }
+}
+fn command_receipt_from_creation(
+    request_id: &str,
+    receipt: &CreationReceipt,
+) -> ConversationCommandReceipt {
+    ConversationCommandReceipt {
+        request_id: request_id.to_owned(),
+        stage: match receipt.stage() {
+            CreationStage::Accepted => ConversationCommandStage::Accepted,
+            CreationStage::Attempted => ConversationCommandStage::Attempted,
+            CreationStage::Ready => ConversationCommandStage::Ready,
+        },
+        outcome: None,
+    }
+}
+fn creation_failure(failure: CreationFailure<ConversationError>) -> ConversationError {
+    match failure {
+        CreationFailure::Target(error) => error,
+        CreationFailure::Conflict => ConversationError::Agent(AgentError::SubmissionConflict),
+        CreationFailure::Interrupted(_) => {
+            ConversationError::Agent(AgentError::SubmissionUnresolved)
+        }
+        CreationFailure::Storage(CreationStorageError::Storage(error)) => {
+            ConversationError::Storage(error)
+        }
+        CreationFailure::Storage(_) | CreationFailure::TaskFault(_) => {
+            ConversationError::Unavailable
+        }
+    }
+}
+fn mutation_failure(failure: MutationFailure<ConversationError>) -> ConversationError {
+    match failure {
+        MutationFailure::Target(error) => error,
+        MutationFailure::Conflict => ConversationError::Agent(AgentError::SubmissionConflict),
+        MutationFailure::Interrupted(_) => {
+            ConversationError::Agent(AgentError::SubmissionUnresolved)
+        }
+        MutationFailure::Storage(CreationStorageError::Storage(error)) => {
+            ConversationError::Storage(error)
+        }
+        MutationFailure::Storage(_) | MutationFailure::TaskFault(_) => {
+            ConversationError::Unavailable
+        }
     }
 }
 

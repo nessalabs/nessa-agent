@@ -17,7 +17,7 @@ import { textContent, type CommandFailure } from "../../model"
 import { conversationNotice } from "../../ui/notification"
 import { gatewayEffects } from "../gateway/effects"
 import { scenarioEffects } from "../scenario/effects"
-import { bindConversation, controlConversation, sendDraft, stopGenerating } from "./slice"
+import { bindConversation, controlConversation, sendDraft } from "./slice"
 
 /**
  * What a control's failure becomes on the tab, and what the panel then says.
@@ -40,7 +40,7 @@ async function stopAfterFailing(error: unknown) {
     }),
   )
   await store.dispatch(sendDraft({ content: textContent("hello") }))
-  await store.dispatch(stopGenerating({ conversationId: "c0" }))
+  await store.dispatch(controlConversation({ id: "c0", control: { kind: "close" } }))
   return store.getState().conversation.conversations[0]!
 }
 
@@ -159,7 +159,7 @@ it("carries a refused creation's reason through the control that asked for it", 
   )
   // Bound but never sent into, so no failed turn can be what answers below.
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
-  await store.dispatch(stopGenerating({ conversationId: "c0" }))
+  await store.dispatch(controlConversation({ id: "c0", control: { kind: "close" } }))
   const tab = store.getState().conversation.conversations[0]!
   expect(tab.turns).toEqual([])
   expect(tab.failure).toBe("agent-startup-deadline")
@@ -261,12 +261,12 @@ it("clears the previous failure when the next control starts, reason and sentenc
     }),
   )
   await store.dispatch(sendDraft({ content: textContent("hello") }))
-  await store.dispatch(stopGenerating({ conversationId: "c0" }))
+  await store.dispatch(controlConversation({ id: "c0", control: { kind: "close" } }))
   expect(store.getState().conversation.conversations[0]!.failure).toBe(
     "attachment-cleanup-unavailable",
   )
   refuse = false
-  await store.dispatch(stopGenerating({ conversationId: "c0" }))
+  await store.dispatch(controlConversation({ id: "c0", control: { kind: "close" } }))
   const tab = store.getState().conversation.conversations[0]!
   expect(tab.failure).toBeUndefined()
   expect(tab.error).toBeUndefined()

@@ -205,6 +205,27 @@
     "requestId": "action",
     "executionId": "execution"
   },
+  "ConversationStopParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution"
+  },
+  "ConversationCommandReceipt": {
+    "requestId": "action",
+    "stage": "settled",
+    "outcome": "cancelled"
+  },
+  "ConversationReceiptParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "operation": "stop",
+    "executionId": "execution"
+  },
+  "ConversationReceiptResult": {
+    "found": true,
+    "requestId": "action",
+    "stage": "attempted"
+  },
   "ConversationAnswerParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "action",

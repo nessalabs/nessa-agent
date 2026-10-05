@@ -1192,6 +1192,12 @@ impl<P: AcpProfile> Worker<P> {
                 Command::SetApprovalMode(_, reply) | Command::SetEffortLevel(_, reply) => {
                     let _ = reply.send(Err(AgentError::Closed));
                 }
+                Command::CancelTurn(_, reply) => {
+                    let _ = reply.send(Err(ProviderOperationFailure::new(
+                        AgentError::Closed,
+                        ProviderSessionState::CleanupRequired,
+                    )));
+                }
             }
         }
         failure.map_or(Ok(()), Err)
@@ -1326,7 +1332,54 @@ impl<P: AcpProfile> Worker<P> {
                 self.answer_permission(execution, answer, reply).await
             }
             Command::AnswerQuestion(answer, reply) => self.answer_question(answer, reply).await,
+            Command::CancelTurn(turn, reply) => self.cancel_turn(execution, turn, reply).await,
         }
+    }
+    async fn cancel_turn(
+        &mut self,
+        execution: &mut ExecutionController,
+        turn: ExecutionId,
+        reply: tokio::sync::oneshot::Sender<ProviderOperationResult<()>>,
+    ) -> Result<(), WorkerFailure> {
+        if self.closing {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::Closed,
+                ProviderSessionState::CleanupRequired,
+            )));
+            return Ok(());
+        }
+        let active = self
+            .active
+            .as_ref()
+            .map(|active| active.execution_id.clone());
+        if active.as_ref() != Some(&turn) {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn is not active".into()),
+                ProviderSessionState::Usable,
+            )));
+            return Ok(());
+        }
+        let frame = match json_rpc::encode(
+            json_rpc::notification(
+                "session/cancel",
+                json!({"sessionId": execution.id().as_str()}),
+            ),
+            self.config.max_frame_bytes,
+        ) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                )));
+                return Ok(());
+            }
+        };
+        let result = self.send_encoded(frame, None).await.map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        });
+        let _ = reply.send(result);
+        Ok(())
     }
     async fn set_approval_mode(
         &mut self,

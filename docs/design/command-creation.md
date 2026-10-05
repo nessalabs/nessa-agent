@@ -2,9 +2,8 @@
 
 Issue: [#268](https://github.com/nessalabs/nessa-agent/issues/268).
 Owner: SDK command coordinator; host conversation service owns target access,
-deleted status and configuration. This first slice supplies the actual
-`ConversationService::create_command` consumer; socket activation, allocated
-turn identities, exact-turn Stop and the client outbox remain separate increments.
+deleted status and configuration. Creation, queued submit and exact-turn Stop
+share one principal control stream. The phone client outbox remains [#269](https://github.com/nessalabs/nessa-agent/issues/269).
 
 The host supplies an already verified `ActionContext`, target session identity,
 and SHA-256 fingerprint of its canonical creation input. The principal's control
@@ -32,7 +31,7 @@ stream nor writes progress.
 | C3 | Same principal/request with different target, origin or fingerprint | Typed conflict before target calls or writes | `a_creation_identity_refuses_changed_target_origin_or_bytes`, `read_only_creation_refuses_a_conflicting_original_binding` |
 | C4 | Crash or caller loss after durable `Attempted`, before acknowledged `Ready` | Original target and binding remain; restart/retry returns `Interrupted`, no second initialization | `an_interrupted_creation_preserves_its_target_without_reinitialization`, `a_crash_after_provider_open_reopens_the_original_interrupted_receipt` (child publishes its complete effect marker atomically before parent kill) |
 | C5 | `Accepted` saved but no `Attempted` | Exact explicit retry may make the first attempt; read-only lookup performs no writes | `an_accepted_creation_can_make_its_first_attempt_after_reopen` |
-| C6 | Deleted target on new, accepted, attempted, ready or read-only lookup | Current host deletion refusal before initialization or returned readiness; control history remains non-content | `deletion_refuses_each_creation_state_and_read_only_lookup` |
+| C6 | Deleted target on new, accepted, attempted, ready or read-only lookup, including after shutdown and reopen of a finished creation | Current host deletion refusal before initialization or returned readiness; control history remains non-content | `deletion_refuses_each_creation_state_and_read_only_lookup`, `deletion_refuses_finished_creation_lookup_and_retry_after_reopen` |
 | C7 | Caller stops waiting while initialization runs | One supervised operation retains its original principal lease and initializer; duplicate request is Busy until completion, then returns the same receipt | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
 | C8 | Commit acknowledgement is uncertain | No initialization without acknowledged `Attempted`; exact event retry/replay establishes the retained fact, without an alternate ID | `an_uncertain_creation_commit_cannot_authorize_initialization` |
 | C9 | Target deleted while initialization or terminal save runs | Check current target again before returning the receipt; do not erase the original attempted/ready history | `deletion_during_initialization_refuses_the_returned_receipt` |
@@ -59,6 +58,83 @@ facts. Replay pages accommodate the shared runtime's published
 smaller, and retain at most 4,096 receipt bindings per principal. Full retained
 control-history scan cost is separate from page bounds.
 The first implementation does not garbage-collect those bindings.
+
+## Shared request identity
+
+One principal control stream (`nessa:commands:{sha256(principal)}`) holds every
+mutation. `requestId` is unique for that principal across creation, submit and
+Stop. A second operation, target, turn, origin or fingerprint under the same
+request is a typed conflict before any effect. Read-only lookup opens the stream
+only when it already exists, writes nothing, and still checks current deletion
+before returning a receipt.
+
+Submit and Stop use schema `nessa.command`. Creation keeps schema `nessa.creation`.
+Replay selects the family from the schema id. Canonical re-encoding owns event
+identity, schema version and payload equality.
+
+| Row | Saved state / ordering | Result and effects | Regression fixture |
+| --- | --- | --- | --- |
+| M1 | New submit | Bind principal/request, operation, target, turn and fingerprint; commit `Accepted`, then `Attempted`, enqueue once, then `Settled(Dispatched)` | `submit_commits_the_attempt_before_enqueue` |
+| M2 | Exact submit retry after `Settled`, including restart | Return the original receipt; no second enqueue | `a_settled_submit_reopens_without_enqueueing_again` |
+| M3 | Same request with different bytes, target, turn, origin, or a creation receipt | Typed conflict before enqueue | `a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request` |
+| M4 | Crash after durable submit `Attempted` | Restart returns `Interrupted`; no second enqueue | `an_interrupted_submit_does_not_enqueue_again` |
+| M5 | Deleted target on submit or read-only lookup, including after restart | Deletion refusal; control history remains | `deletion_refuses_submit_lookup_after_reopen` |
+
+## Exact-turn Stop
+
+Stop names the captured turn. It does not close the attachment and does not call
+session cleanup. The host classifies the turn before authorizing an effect.
+`AlreadyFinal` is saved from `Accepted` with no `Attempted`, because nothing is
+sent. A queued turn is withdrawn. An active turn is cancelled only when that
+same turn is active and the provider can cancel a turn without closing the
+session. `Unsupported` with a usable session means nothing was sent and is
+refused before `Attempted`, so a later retry is not permanently interrupted.
+`Attempted` is durable before withdraw or cancel. A restored `Attempted` returns
+`Interrupted` and does not send another cancel or withdraw. The receipt stores
+the verified actor (principal, surface, request) and the stop cause is the
+settled outcome.
+
+| Row | Saved state / ordering | Result and effects | Regression fixture |
+| --- | --- | --- | --- |
+| S1 | Stop names a queued turn | `Accepted`, `Attempted`, withdraw that turn, `Settled(Withdrawn)`; attachment stays open | `stop_withdraws_only_the_named_queued_turn` |
+| S2 | Stop names the active turn | `Attempted` is durable before `cancel_turn`; `Settled(Cancelled)`; `close` is not called | `stop_cancels_the_active_turn_without_closing_the_attachment` |
+| S3 | Exact retry after `Settled`, including restart | Original receipt; no second cancel | `a_settled_stop_reopens_without_cancelling_again` |
+| S4 | Same request with a different turn, target, origin or fingerprint, or a creation request | Typed conflict; no cancel | `a_stop_identity_conflicts_before_any_effect` |
+| S5 | Crash or restart after `Attempted` | `Interrupted`; no second cancel | `an_interrupted_stop_does_not_cancel_again` |
+| S6 | Turn already finished | `Settled(AlreadyFinal)` from `Accepted`; no cancel | `stop_of_a_finished_turn_sends_nothing` |
+| S7 | Provider cannot cancel a turn and the turn is active | Refusal before `Attempted`; nothing sent | `stop_refuses_an_unsupported_active_turn_before_attempting` |
+| S8 | Deleted target on finished stop, exact retry and read-only lookup, including after restart | Deletion refusal before a returned receipt | `deletion_refuses_stop_lookup_and_retry_after_reopen` |
+| S9 | Read-only lookup | No stream creation, no append, no cancel | `read_only_stop_lookup_writes_nothing` |
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant H as ConversationService
+    participant R as MutationCoordinator
+    participant S as Principal control stream
+    participant A as Agent
+    C->>H: Stop turn T with requestId
+    H->>R: Verified binding
+    R->>S: Load requestId
+    alt New stop
+        R->>S: Save Accepted
+        H->>H: Classify T and current deletion
+        alt Already final or deletion refusal
+            H-->>R: No effect, or deleted
+            R->>S: Save Settled AlreadyFinal only when T is final
+        else Effect required
+            R->>S: Save Attempted
+            R->>A: Withdraw queued T or cancel active T
+            Note over R,A: Session close is not called
+            R->>S: Save Settled outcome
+        end
+    else Attempted and not settled
+        R-->>C: Interrupted, no second effect
+    else Settled
+        H->>H: Recheck deletion
+        R-->>C: Original receipt
+    end
+```
 
 The existing host admission guard spans the whole supervised creation command,
 including its final receipt commit. Initialization consumes the private already-

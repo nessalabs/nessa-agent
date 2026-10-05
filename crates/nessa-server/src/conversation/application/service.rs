@@ -1,4 +1,5 @@
 mod creation;
+mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
@@ -44,7 +45,7 @@ use nessa_sdk::application::agent_execution::{
         AttachmentFailureCode, AttachmentPhase, AttachmentRequest, QueueAdmission, QueueRemoval,
         QueueReorder, SteeringDelivery, SteeringEvidence,
     },
-    commands::CreationTaskFault,
+    commands::{CreationStorage, CreationTaskFault},
     executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
@@ -518,6 +519,9 @@ struct Inner {
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
     app_calls: Arc<Semaphore>,
+    /// Principal command receipts. Composition binds the shared record runtime.
+    /// Absent storage refuses command admission rather than skipping the receipt.
+    commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -762,6 +766,7 @@ impl ConversationService {
                 mcp_apps,
                 apps: std::sync::Mutex::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
+                commands: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -1715,6 +1720,56 @@ impl ConversationService {
             }
         }
     }
+    /// The command bytes a receipt may name. Invalid input is refused here, before
+    /// any durable stage, because a request that was never sent must stay reusable
+    /// once its bytes are corrected.
+    fn canonical_user_message(
+        max_input_bytes: usize,
+        execution_id: &str,
+        message: SubmittedMessage,
+    ) -> Result<(ExecutionId, UserMessage), ConversationError> {
+        if message.text.len() > max_input_bytes {
+            return Err(ConversationError::InvalidInput);
+        }
+        let execution =
+            ExecutionId::new(execution_id).map_err(|_| ConversationError::InvalidInput)?;
+        // Blank text is no text. The message's own rules then decide whether
+        // what remains is a message: some text, some images, or both.
+        let prompt = (!message.text.trim().is_empty())
+            .then(|| PromptText::new(message.text))
+            .transpose()
+            .map_err(|_| ConversationError::InvalidInput)?;
+        let images = message
+            .images
+            .into_iter()
+            .map(|image| {
+                ImageReference::new(
+                    Sha256Digest::parse(&image.digest)
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                    ImageMediaType::parse(&image.media_type)
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                    image.size,
+                )
+                .map_err(|_| ConversationError::InvalidInput)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Nothing is opened, resolved, or followed here. Whether the file
+        // is there is only true or false when the agent opens it, which is
+        // later than this and behind a permission the reader answers, so a
+        // check now would prove nothing and would refuse a file the reader
+        // is about to create. What the gateway does check is the whole of
+        // what it can: that the path can be said faithfully, which is the
+        // domain's rule and which every path travels through.
+        let files = message
+            .files
+            .into_iter()
+            .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
+            .collect::<Result<Vec<_>, _>>()?;
+        let message =
+            UserMessage::new(prompt, images, files).map_err(|_| ConversationError::InvalidInput)?;
+        Ok((execution, message))
+    }
+
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
     pub async fn submit(
         &self,
@@ -1726,52 +1781,15 @@ impl ConversationService {
     ) -> Result<SubmissionReceipt, ConversationError> {
         let service = self.clone();
         supervised(async move {
-            let SubmittedMessage {
-                text,
-                images,
-                files,
-            } = message;
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
-            if text.len() > service.inner.limits.max_input_bytes {
-                return Err(ConversationError::InvalidInput);
-            }
-            let execution =
-                ExecutionId::new(&execution_id).map_err(|_| ConversationError::InvalidInput)?;
-            // Blank text is no text. The message's own rules then decide whether
-            // what remains is a message: some text, some images, or both.
-            let prompt = (!text.trim().is_empty())
-                .then(|| PromptText::new(text))
-                .transpose()
-                .map_err(|_| ConversationError::InvalidInput)?;
-            let images = images
-                .into_iter()
-                .map(|image| {
-                    ImageReference::new(
-                        Sha256Digest::parse(&image.digest)
-                            .map_err(|_| ConversationError::InvalidInput)?,
-                        ImageMediaType::parse(&image.media_type)
-                            .map_err(|_| ConversationError::InvalidInput)?,
-                        image.size,
-                    )
-                    .map_err(|_| ConversationError::InvalidInput)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            // Nothing is opened, resolved, or followed here. Whether the file
-            // is there is only true or false when the agent opens it, which is
-            // later than this and behind a permission the reader answers, so a
-            // check now would prove nothing and would refuse a file the reader
-            // is about to create. What the gateway does check is the whole of
-            // what it can: that the path can be said faithfully, which is the
-            // domain's rule and which every path travels through.
-            let files = files
-                .into_iter()
-                .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
-                .collect::<Result<Vec<_>, _>>()?;
-            let message = UserMessage::new(prompt, images, files)
-                .map_err(|_| ConversationError::InvalidInput)?;
+            let (execution, message) = Self::canonical_user_message(
+                service.inner.limits.max_input_bytes,
+                &execution_id,
+                message,
+            )?;
             let live = service.resolve(&id, &caller).await?;
             let non_default_mode = live
                 .projection

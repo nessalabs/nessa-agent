@@ -28,6 +28,7 @@ import {
   conversationList,
   conversationView,
   conversationReceipt,
+  conversationCommandReceipt,
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
@@ -71,7 +72,7 @@ export type ConversationSubmission = ConversationReceipt & {
 
 /** Agent conversation commands. Creation and message admission failures expose NessaConversationMutationError.retry(). Controls expose NessaConversationControlError with uncertain effect status and require a fresh read before another deliberate action. Read returns a bounded full replacement view, suitable for serialized polling. */
 export type ConversationApi = {
-  /** Create or reopen a conversation and start provider attachment in the background. IDs are generated when options are omitted; read `lifecycle` for attachment progress. */
+  /** Create or reopen a conversation. The gateway answers when the original attachment is ready. IDs are generated when options are omitted. */
   create: (options?: ConversationCreateOptions) => Promise<ConversationCreateResult>
   /** Change the provider preset only while this conversation has no running turn. */
   setApprovalMode: (
@@ -171,6 +172,12 @@ export type ConversationApi = {
     conversationId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /** Stop the named turn. A queued turn is withdrawn and the active turn is cancelled. The attachment stays open. */
+  stop: (
+    conversationId: string,
+    executionId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<{ requestId: string; stage: string; outcome?: string }>
   /** Archive a conversation: `list()` stops showing it unless archived ones are asked for. Nothing is stopped or removed, and a new message unarchives it. `applied` is false when it was already archived, or when the gateway has no summary for it (nothing was said in it, or its summary was never written) — such a conversation is never listed, so there is nothing to archive. */
   archive: (
     conversationId: string,
@@ -434,6 +441,17 @@ export function createConversationApi(
         options,
       ),
     close: (id, options) => action(ProductMethod.ConversationClose, id, {}, options),
+    stop: (id, executionId, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(executionId, "Execution ID", 256)
+      return mutate(
+        ProductMethod.ConversationStop,
+        { conversationId: id, requestId, executionId },
+        (value) => conversationCommandReceipt(value, requestId),
+        false,
+      )
+    },
     archive: (id, options) => action(ProductMethod.ConversationArchive, id, {}, options),
     unarchive: (id, options) =>
       action(ProductMethod.ConversationUnarchive, id, {}, options),

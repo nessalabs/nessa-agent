@@ -639,6 +639,106 @@ pub struct ConversationRemoveParams {
     pub request_id: String,
     pub execution_id: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationStopParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationCommandOperation {
+    Create,
+    Submit,
+    Steer,
+    Stop,
+}
+impl ConversationCommandOperation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Submit => "submit",
+            Self::Steer => "steer",
+            Self::Stop => "stop",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationCommandStage {
+    Accepted,
+    Attempted,
+    Ready,
+    Settled,
+}
+impl ConversationCommandStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Attempted => "attempted",
+            Self::Ready => "ready",
+            Self::Settled => "settled",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationCommandOutcome {
+    Dispatched,
+    Withdrawn,
+    Cancelled,
+    AlreadyFinal,
+}
+impl ConversationCommandOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dispatched => "dispatched",
+            Self::Withdrawn => "withdrawn",
+            Self::Cancelled => "cancelled",
+            Self::AlreadyFinal => "already_final",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCommandReceipt {
+    pub request_id: String,
+    pub stage: ConversationCommandStage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ConversationCommandOutcome>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReceiptParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub operation: ConversationCommandOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<ImageAttachment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<LinkedFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReceiptResult {
+    pub found: bool,
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<ConversationCommandStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ConversationCommandOutcome>,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionSelectionState {
@@ -1614,6 +1714,8 @@ pub mod product_method {
     pub const CONVERSATION_SEND: &str = "conversation.send";
     pub const CONVERSATION_STEER: &str = "conversation.steer";
     pub const CONVERSATION_REMOVE: &str = "conversation.remove";
+    pub const CONVERSATION_STOP: &str = "conversation.stop";
+    pub const CONVERSATION_RECEIPT: &str = "conversation.receipt";
     pub const CONVERSATION_ANSWER: &str = "conversation.answer";
     pub const CONVERSATION_ANSWER_QUESTION: &str = "conversation.answerQuestion";
     pub const CONVERSATION_CANCEL: &str = "conversation.cancel";
@@ -1800,7 +1902,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 45
+                items.len() <= 47
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1838,6 +1940,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.send",
     "conversation.steer",
     "conversation.remove",
+    "conversation.stop",
+    "conversation.receipt",
     "conversation.answer",
     "conversation.answerQuestion",
     "conversation.cancel",

@@ -31,6 +31,8 @@ pub enum CreationStorageError {
     Storage(StorageError),
     /// Unexpected task failure, without a fabricated backend diagnostic.
     TaskFault(CreationTaskFault),
+    /// This principal request already names a different command family.
+    ForeignRequest,
 }
 impl From<StorageError> for CreationStorageError {
     fn from(error: StorageError) -> Self {
@@ -155,12 +157,38 @@ pub trait CreationStorage: Send + Sync {
 
 /// Exclusive access to one principal's immutable command history.
 pub trait CreationStorageLease: Send + Sync {
-    /// Return the existing binding/progress for `request_id`, without writing.
+    /// Return the existing creation binding/progress for `request_id`, without writing.
+    ///
+    /// # Errors
+    /// [`CreationStorageError::ForeignRequest`] when the id belongs to submit or stop.
     fn load(&self, request_id: &str) -> CreationFuture<'_, Option<CreationReceipt>>;
-    /// Append one legal transition, or acknowledge an exact retained event.
+    /// Append one legal creation transition, or acknowledge an exact retained event.
     /// Conflicts and impossible histories are refused before replacement. Errors
     /// may mean an append committed without its answer; they do not prove rollback.
     fn save(&self, receipt: CreationReceipt) -> CreationFuture<'_, ()>;
+    /// Return the existing submit or stop receipt for `request_id`, without writing.
+    ///
+    /// # Errors
+    /// [`CreationStorageError::ForeignRequest`] when the id belongs to creation.
+    fn load_mutation(
+        &self,
+        _request_id: &str,
+    ) -> CreationFuture<'_, Option<super::mutation::MutationReceipt>> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "mutation is not on this lease".into(),
+            )))
+        })
+    }
+    /// Append one legal submit or stop transition, or acknowledge an exact retained event.
+    /// Leases that only store creation refuse the append.
+    fn save_mutation(&self, _receipt: super::mutation::MutationReceipt) -> CreationFuture<'_, ()> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "mutation is not on this lease".into(),
+            )))
+        })
+    }
 }
 
 /// Current target authority and actual initialization supplied by the host.
@@ -252,10 +280,11 @@ impl CreationCoordinator {
                         "creation stream absent".into(),
                     )))
                 })?;
-            let saved = lease
-                .load(binding.actor().request_id())
-                .await
-                .map_err(CreationFailure::Storage)?;
+            let saved = match lease.load(binding.actor().request_id()).await {
+                Ok(saved) => saved,
+                Err(CreationStorageError::ForeignRequest) => return Err(CreationFailure::Conflict),
+                Err(error) => return Err(CreationFailure::Storage(error)),
+            };
             let receipt = match saved {
                 Some(saved) if saved.binding() != &binding => {
                     return Err(CreationFailure::Conflict)
@@ -263,10 +292,7 @@ impl CreationCoordinator {
                 Some(saved) => saved,
                 None => {
                     let accepted = CreationReceipt::accepted(binding.clone());
-                    lease
-                        .save(accepted.clone())
-                        .await
-                        .map_err(CreationFailure::Storage)?;
+                    lease.save(accepted.clone()).await.map_err(stored)?;
                     accepted
                 }
             };
@@ -281,10 +307,7 @@ impl CreationCoordinator {
                     let attempted = receipt
                         .advance(CreationStage::Attempted)
                         .map_err(|error| CreationFailure::Storage(error.into()))?;
-                    lease
-                        .save(attempted.clone())
-                        .await
-                        .map_err(CreationFailure::Storage)?;
+                    lease.save(attempted.clone()).await.map_err(stored)?;
                     target
                         .initialize(&binding)
                         .await
@@ -299,10 +322,7 @@ impl CreationCoordinator {
                     let ready = attempted
                         .advance(CreationStage::Ready)
                         .map_err(|error| CreationFailure::Storage(error.into()))?;
-                    lease
-                        .save(ready.clone())
-                        .await
-                        .map_err(CreationFailure::Storage)?;
+                    lease.save(ready.clone()).await.map_err(stored)?;
                     target
                         .check(&binding, Some(ready.stage()))
                         .await
@@ -333,10 +353,11 @@ impl CreationCoordinator {
             .await
             .map_err(CreationFailure::Storage)?;
         let saved = match lease {
-            Some(lease) => lease
-                .load(binding.actor().request_id())
-                .await
-                .map_err(CreationFailure::Storage)?,
+            Some(lease) => match lease.load(binding.actor().request_id()).await {
+                Ok(saved) => saved,
+                Err(CreationStorageError::ForeignRequest) => return Err(CreationFailure::Conflict),
+                Err(error) => return Err(CreationFailure::Storage(error)),
+            },
             None => None,
         };
         if saved
@@ -350,5 +371,12 @@ impl CreationCoordinator {
             .await
             .map_err(CreationFailure::Target)?;
         Ok(saved)
+    }
+}
+
+fn stored<E>(error: CreationStorageError) -> CreationFailure<E> {
+    match error {
+        CreationStorageError::ForeignRequest => CreationFailure::Conflict,
+        other => CreationFailure::Storage(other),
     }
 }

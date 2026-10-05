@@ -335,6 +335,7 @@ impl ResponseClass {
     fn for_method(method: &str) -> Self {
         match method {
             "conversation.close"
+            | "conversation.stop"
             | "conversation.archive"
             | "conversation.unarchive"
             | "conversation.answer"
@@ -1211,6 +1212,8 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.list"
         | "conversation.send"
         | "conversation.steer"
+        | "conversation.stop"
+        | "conversation.receipt"
         | "conversation.remove"
         | "conversation.reorder"
         | "conversation.answer"

@@ -120,6 +120,38 @@ impl Agent {
     pub fn active_execution_id(&self) -> Option<ExecutionId> {
         self.inner.lifecycle.active()
     }
+    /// Whether the attached provider can cancel one turn without closing the session.
+    /// False when nothing is attached. This reads no provider I/O.
+    pub fn supports_turn_cancel(&self) -> bool {
+        self.inner.lifecycle.supports_turn_cancel()
+    }
+    /// Cancel `id` only when it is the active execution. A different or finished
+    /// turn, or a provider that cannot cancel one turn, returns
+    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`] and
+    /// sends nothing. This does not close the attachment.
+    pub async fn cancel_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
+        let waiter = CallerWaiter::TurnCancel(id.clone());
+        contain_caller_wake(waiter, self.cancel_active_turn(id)).await
+    }
+    async fn cancel_active_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
+        if self.inner.lifecycle.active().as_ref() != Some(&id) || !self.supports_turn_cancel() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn cancel".into()),
+                ProviderSessionState::Usable,
+            ));
+        }
+        let permit = self.inner.lifecycle.accept_control().map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        })?;
+        let attached = self
+            .inner
+            .lifecycle
+            .attached_provider(&permit)
+            .map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+            })?;
+        attached.session.cancel_turn(id).await
+    }
     /// Query a committed review against the exact live invocation's domain owner.
     /// This does not alter history or reserve an answer. Absent backend authority
     /// or a changed lifecycle returns false. Acquisition and membership are
