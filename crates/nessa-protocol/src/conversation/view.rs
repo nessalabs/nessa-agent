@@ -252,6 +252,17 @@ pub struct ConversationPermission {
     pub options: Vec<ConversationPermissionOption>,
     /// Who asked for the review: the agent, or an MCP App.
     pub origin: ConversationPermissionOrigin,
+    /// What the review asks the person to allow. The agent's reviews ask a
+    /// tool; an app's say what the gateway's `ReviewAsk` opened them for.
+    pub ask: ConversationPermissionAsk,
+}
+/// What a review asks the person to allow: running a tool, or an MCP App
+/// sending one message in the conversation as them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionAsk {
+    Tool,
+    Message,
 }
 /// Who asked for a review. For [`ConversationPermissionOrigin::Harness`],
 /// the review's execution and tool are the agent's call being reviewed; for

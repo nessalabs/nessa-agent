@@ -135,7 +135,9 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   into its conversation as the person's turn, written by the app: the
   transcript says so (`ConversationMessage.app`, `ConversationPending.app`),
   and the agent is given it as the person's. Every message waits on its own
-  review in `permissions`, as a destructive tool's call does. Text is at most
+  review in `permissions`, as a destructive tool's call does; the review says
+  what it asks, `ask: "message"` (a tool's, and every review the agent asks
+  for, `ask: "tool"`), so a surface words it without reading its title. Text is at most
   what `conversation.send` takes, and not empty; outside the schema's bounds
   it is `invalid_request`, refused before anything is recorded. Blank text,
   whitespace only, is within them, and is `invalid_request` on record, the

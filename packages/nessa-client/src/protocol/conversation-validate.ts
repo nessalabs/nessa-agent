@@ -13,6 +13,7 @@ import type {
 import {
   bounds,
   CompactionReportingSupport,
+  ConversationPermissionAsk,
   ConversationPermissionOptionEffect,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
@@ -426,8 +427,12 @@ export function conversationView(value: unknown, expected: string): Conversation
       "toolName",
       "argumentsJson",
       "origin",
+      "ask",
     ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
+    // What it asks the person to allow, a closed set: a surface words its
+    // review by it, so a value this build does not know refuses the view.
+    oneOf(text(permission, "ask", 16), Object.values(ConversationPermissionAsk))
     // Who asked: the agent, or an MCP App naming the tool it asked to call.
     const origin = record(permission.origin)
     exact(origin, ["kind", "server", "tool"])
