@@ -37,6 +37,10 @@ the gateway does with it (#348, part b).
 - **An app's messages and model context** (#390): the same flow and state,
   [below](#an-app-in-its-conversation-the-gateway-390).
 - **The client** (`packages/nessa-client`, `client.mcpApps`).
+- **The desktop** (`src/desktop/widgets/app/`): the `ui/*` bridge, the
+  server and conversation ports over `client.mcpApps`, and the review and
+  the label in the transcript (#390,
+  [below](#an-app-in-its-conversation-the-desktop-390)).
 
 ## Who the app is
 
@@ -239,8 +243,10 @@ agreement), then the client's API, then the desktop. This section is the
 SDK's part: the values, how they are saved and sent, and which apps a
 message may name. The gateway's part is
 ["An app in its conversation: the gateway"](#an-app-in-its-conversation-the-gateway-390)
-below, and the client's
-["An app in its conversation: the client"](#an-app-in-its-conversation-the-client-390).
+below, the client's
+["An app in its conversation: the client"](#an-app-in-its-conversation-the-client-390),
+and the desktop's
+["An app in its conversation: the desktop"](#an-app-in-its-conversation-the-desktop-390).
 
 **Decisions.**
 
@@ -845,6 +851,186 @@ All in `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`, under
 - K9 `K9: is certain a message refused while a turn runs became no turn`, `K9: reports %s as certain for a message and a context`, `K9: reports %s as uncertain`, `K9: reports %s as uncertain for a context too` (`temporarily_unavailable`, `audit_unavailable`)
 - The request and its deadline: `sends a message as the app, waits a call's deadline, and returns its turn`, and K5's
 
+## An app in its conversation: the desktop (#390)
+
+The window carries an app's `ui/message` and `ui/update-model-context` to
+the gateway through the app's conversation port (`McpAppConversation`,
+`src/desktop/widgets/app/application/ports.ts`), implemented over
+`client.mcpApps` by `app/adapters/gateway/app-messages.ts`. The bridge
+answers the app; the transcript says which app wrote a message; the review
+says what it asks. Whether the app may — consent, a turn running, the
+bounds — stays the gateway's and the client's to say.
+
+**Decisions.**
+
+- **D-A. `ui/message` is text.** Only text blocks are read
+  (`model/messages.ts`); a non-text block, no `role: "user"` or an empty list
+  is `invalidParams` as the request is read. `contentText` is the one place
+  blocks become a text: each block's text, a blank line between, empty
+  blocks dropped. Blank but not empty text is the gateway's to refuse (M3).
+- **D-B. One answer type, one table.** Both methods take the bridge's
+  `AppAddress` and answer `ConversationAnswer`: the server port's
+  `ServerAnswer`, or `invalid` with the client's words when
+  `mcpAppRequestProblem.message` / `.context` refuse it before anything is
+  sent. A code the gateway answers is read through `outcomes` in
+  `mcp-app-server.ts`, by `answerFor`, the same table `tools/call` reads;
+  `turn_running` is `{refused: "turn-running"}`, "The conversation is busy".
+  What the app is told:
+
+  | answer | `ui/message` | `ui/update-model-context` |
+  | --- | --- | --- |
+  | ok | `{}` | `{}` |
+  | invalid (client bounds) | `invalidParams`, the client's words | the same |
+  | refused / busy / server-gone | `{isError: true}`; nothing was sent for any of them; server-gone also shows the "server has stopped" notice | the refusal's words, as for `tools/call`; server-gone shows the notice |
+  | failed (no code, an answer not believed, a fault) | `internal` "The request failed", logged | the same |
+- **D-C. A context.** `text` from `contentText`, `structuredContentJson` as
+  `JSON.stringify(structuredContent)`, absent parts left out: `{}`,
+  `content: []` or only empty blocks send `{}`, a clear (C7). `{}` back means
+  taken and recorded (C17).
+- **D-D. One mount's updates in order.** The adapter keeps a queue per
+  `instanceId`: the next update is sent once the one before has answered,
+  whatever it answered. Another mount's are not held back; messages are not
+  queued.
+- **D-E. Routing** (`dependencies.ts`). `sendMessage` goes through the
+  source's `appCall`, as `callTool` does, so the conversation is read each
+  round while the message waits on its review (#436). `updateModelContext`
+  asks nobody and starts no read.
+- **D-F. Deadline.** Both wait `mcpAppDeadlines.callToolMs`
+  (`McpAppConversation.within`).
+- **D-G. Release.** A mount is released the first time its view fails or
+  ends, if it asked its server anything. A view is live only once its
+  resource was read through its server port, which marks it as having
+  asked, so a mount that speaks to its conversation is always released, and
+  the release withdraws its message in review (M9) and drops its context
+  (C14). No second mark is kept for the conversation's requests: it could
+  never be the one that decides (gate 13; the design comment's premise that
+  such a mount was never released does not hold on today's bridge).
+- **D-H. The label.** `Message.app` (`{server, tool}`) is set from a view's
+  `messages[].app` and `pending[].app`. Above the person's bubble, a line
+  "Sent by `<tool>`, from `<server>`" (`.workspace-message-author`,
+  `data-message-app`, its `title` the whole of it), plain text in reading
+  order. A waiting app message has the label and no delivery state.
+- **D-I. The review says what it asks.** `ConversationPermission.ask` is
+  `"tool" | "message"`, owned by the gateway's `ReviewAsk` (`review_of`);
+  the agent's reviews are `"tool"`. The client refuses a view whose review
+  has no `ask` or one it does not know. The desktop carries it as
+  `Approval.ask`; the card's head and the overview's row are total over who
+  asks and what (`approvalHead`, `approvalRequest`): an app's message reads
+  "The `<server>` app wants to send a message as you", its command the
+  app's tool and `{"text": …}`.
+- **D-J. Sample and fixtures.** The fixture app has `message` and `context`
+  controls. Beside the sample workspace its conversation is
+  `fixtureConversation`, which writes the message through
+  `InMemorySource.appMessage` (refused `not-waiting` unless the session is
+  idle) and refuses a context: "The sample has no model to give context to"
+  (gate 7). The review path runs on the fake-gateway `app-review` fixture.
+
+### The desktop's states
+
+| # | State | Event | Next | Effect |
+| --- | --- | --- | --- | --- |
+| D1 | live, conversation port present | `ui/message` with text blocks; client bounds hold; the gateway admits it | — | `{}`; the next read shows a user message with `app` |
+| D2 | live | a non-text block, no `role: user`, or an empty list | — | `invalidParams` when read; nothing sent |
+| D3 | live | text empty after the join, past `MAX_MCP_MESSAGE_BYTES`, or a lone surrogate | — | `invalidParams`, with the client's words; nothing sent |
+| D4 | live | `turn_running`, `mcp_approval_denied` / `_expired`, `mcp_cancelled`, `invalid_request`, `mcp_request_too_large`, `mcp_app_unknown`, `mcp_server_mismatch` | — | `{isError: true}`; nothing in the transcript |
+| D5 | live | `temporarily_unavailable` | — | `{isError: true}`; the app may try again |
+| D6 | live | conversation gone, or `mcp_session_unavailable` | — | `{isError: true}`, and the "server has stopped" notice |
+| D7 | live | no code, an unbelieved answer, a fault | — | `internal` "The request failed", logged |
+| D8 | waiting | `within` passes | — | `internal` "timed out". A review still open may still be allowed, and its message lands labelled without the app being told (recorded limit, as for `tools/call`) |
+| D9 | message in review | each poll round while it waits | — | the card is drawn (origin app, ask message, `<tool> {"text":…}`). Allow → `{}`; Deny → `{isError: true}` |
+| D10 | message in review, or context held | the view fails or ends (the first time) | gone | `release` is sent; the gateway withdraws the review and drops the context |
+| D11 | live | `ui/update-model-context` with text and/or `structuredContent` | — | `{text?, structuredContentJson?}` sent; `{}` |
+| D12 | live | `{}`, `content: []`, or only empty text blocks | — | `{}` sent (a clear); `{}` |
+| D13 | live | a part past `MAX_MCP_CONTEXT_BYTES`, or a lone surrogate | — | `invalidParams`; nothing sent |
+| D14 | live | `mcp_request_too_large`, `invalid_request`, `temporarily_unavailable`, `mcp_cancelled` | — | an error with the words, as for `tools/call` |
+| D15 | one update in flight for this mount | a second update, or a clear, from the same mount | queued | sent once the first answers; another mount's goes at once |
+| D16 | no conversation port | either request | — | `methodNotFound`; capabilities omit both |
+| D17 | — | a view message or pending entry with `app` | — | the label "Sent by `<tool>`, from `<server>`"; the person's own messages carry none |
+| D18 | idle, not polled | `sendMessage` | polled | read each round until it settles; `updateModelContext` starts no read |
+| D19 | — | a review whose `ask` is `message` | — | head and row: "The `<server>` app wants to send a message as you"; `ask` missing or unknown → the view is refused (client) |
+
+```mermaid
+sequenceDiagram
+    participant App as App frame
+    participant Bridge as Bridge for one mount
+    participant Conv as app-messages adapter
+    participant Src as Gateway source poll
+    participant GW as Gateway
+    participant Person
+    App->>Bridge: ui/message text blocks
+    Bridge->>Conv: sendMessage(address, content)
+    Conv->>Conv: contentText then mcpAppRequestProblem.message
+    alt invalid
+        Conv-->>Bridge: invalid with reason
+        Bridge-->>App: error invalidParams
+    else sent through appCall
+        Conv->>GW: mcp.sendMessage
+        Src->>GW: read each round while it waits
+        GW-->>Src: view with the review, ask message
+        Src-->>Person: card, the app wants to send a message as you
+        Person->>GW: conversation.answer allow
+        alt idle
+            GW-->>Conv: executionId
+            Bridge-->>App: result {}
+            GW-->>Src: view with the message, app set
+            Src-->>Person: bubble labelled Sent by tool, from server
+        else turn running, denied or cancelled
+            GW-->>Conv: code
+            Bridge-->>App: result isError true
+        end
+    end
+```
+
+**Recorded limits.**
+
+- D8: a message that timed out at the bridge, whose review is allowed later,
+  still lands.
+- Blank text is refused by the gateway (M3), and the app sees `isError`.
+- The overview's peek and the session's title show a message's text without
+  its label.
+- A message as long as the gateway takes makes a tall card (5,785 px at
+  280 px wide, in Chromium and WebKit alike), taller than the pane; its
+  answers stay reachable by scrolling, which `app-review.mjs --only
+  message-card` measures.
+- The real gateway's browser check for a message is #550: the test server's
+  app needs message controls and a second scripted turn. This slice checks
+  the sample workspace and the fake-gateway fixture, in Chromium and WebKit.
+
+### Tests (desktop)
+
+Each row has at least one test, named after it.
+
+- `src/desktop/widgets/app/application/bridge.test.ts`, "an app in its
+  conversation (#390)": D1, D2, D3 and D13, D4 with D5 and D9, D6, D7, D8,
+  D10 with D-G, D11 with D12, D14, D16.
+- `src/desktop/widgets/app/adapters/gateway/app-messages.test.ts`: D1, D3,
+  D4 (each code), D5, D6 (each code), D7, D-B (every code is the outcome a
+  `tools/call` gets), D11, D12, D13, D14 (each code), D15 (the order, and
+  going on after a refusal or a failure), D-F.
+- `src/desktop/widgets/app/adapters/gateway/mcp-app-server.test.ts`: the
+  shared table is total, `turn_running` among the refusals.
+- `src/desktop/widgets/app/model/messages.test.ts`: D-A (`contentText`).
+- `src/desktop/dependencies.test.ts`: D18 (a message read each round until
+  answered; a context starts no read), D-J (the fixture app's conversation
+  beside the sample workspace).
+- `src/desktop/workspace/adapters/gateway/gateway-views.test.ts`: D17 (a
+  turn's and a pending entry's `app`), D19 (`ask` carried).
+- `src/desktop/workspace/ui/transcript/transcript.test.tsx`: D17 (the label),
+  D19 (the head, total over who asks and what).
+- `src/desktop/workspace/ui/overview/overview.test.tsx`: D19 (the row).
+- `packages/nessa-client/src/protocol/conversation-validate.test.ts`: D19
+  (`ask` a closed set; missing or unknown refuses the view).
+- `crates/nessa-server/tests/conversation/app_reviews.rs`: D19, from
+  `ReviewAsk` (`a_review_is_shown_with_its_app_origin_and_ends_as_answered`,
+  `a_message_review_says_what_it_asks`);
+  `crates/nessa-protocol/tests/conversation/projection.rs`: the agent's
+  reviews ask a tool (`a_review_says_what_each_offered_option_decides`).
+- In a browser (Chromium and WebKit, both layouts): `mcp-apps.mjs --only
+  message` (D1, D4, D17, D-J) and `app-review.mjs --only
+  message,message-card,message-overview` (D9, D17, D18, D19, and the long
+  message's card at 280–900 px); their contracts are in
+  [`verification/desktop/CHECKLIST.md`](../../verification/desktop/CHECKLIST.md).
+
 ## Lanes
 
 App calls have 4 slots on each socket, and one mount holds at most 3 of them
@@ -909,7 +1095,8 @@ Each row above has a test, named after it:
   an app in its conversation, K1–K9, under
   ["Tests (client)"](#tests-client) above.
 - An app in its conversation, the gateway's rows: listed under
-  ["Tests (gateway)"](#tests-gateway) above.
+  ["Tests (gateway)"](#tests-gateway) above; the desktop's under
+  ["Tests (desktop)"](#tests-desktop).
 - An app in its conversation, the SDK's rows: "The app a message names",
   each row asked by admission, restoration and a replayed record log alike,
   in `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`
