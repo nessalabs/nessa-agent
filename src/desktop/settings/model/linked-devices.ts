@@ -237,7 +237,7 @@ export const sentences = {
   invalid: "The gateway refused that as it was sent.",
   temporarilyUnavailable: "The gateway is busy. Try again in a moment.",
   credentialMissing: "That device is no longer linked.",
-  unanswered: "No answer. Refresh to see where it stands.",
+  unanswered: "No answer. The list is read again to show where it stands.",
   revoked:
     "Revoked. The device can no longer sign in, and an open connection is closed the next time it reads.",
   revokeUncertain:
