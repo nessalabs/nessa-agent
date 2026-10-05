@@ -557,12 +557,15 @@ params are read.
   brought back. Its file is written, and it always takes its server out of
   the live set: when the list it leaves cannot go live as a whole, the live
   set becomes the current one less that server — a subset of a valid set,
-  so always valid — and the outcome says `liveSet: withdrawn`
+  so always valid. The outcome says `liveSet: withdrawn` when that server
+  was live, and `liveSet: kept` when it was not (a server turned off, or
+  one only the hand-edited file named), since the live set did not change
   (`a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`,
   `a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
 - `live` (save and remove) is whether new conversations now get the stored
   list as written: `false` while the gateway stops, or after a remove that
-  only withdrew its server (`a_remove_answers_whether_the_list_went_live`).
+  could not make the list live, whether it withdrew its server or left the
+  live set as it was (`a_remove_answers_whether_the_list_went_live`).
 
 The revision is a digest of the stored block (`[]` when there is none),
 keyed with the process's `ConfigurationKey` — the one the stand-ins' digests
