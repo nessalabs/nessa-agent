@@ -58,6 +58,37 @@ stateDiagram-v2
     end note
 ```
 
+## Confirming the process group
+
+`ProcessScope` closes the child's stdin, waits out `shutdown_grace`, then
+`SIGTERM` and `SIGKILL`, each followed by at most `kill_timeout`. Those bounds
+are real time. They are not what made macOS CI report `CleanupUncertain` on a
+harness that had already answered and then exited on EOF: a cooperative exit
+is reaped in well under `kill_timeout`, and `SIGKILL` does not wait for the
+child to be scheduled. The shared fixture keeps `kill_timeout` at two seconds
+because that wait is the escalation for a process that survives `SIGTERM`, not
+a slack factor for a slow runner.
+
+A `kill` or `waitpid` result is a verdict only when it says the group was
+signalled or that it is gone (`ESRCH` after the leader is reaped). Anything
+else keeps the same budget.
+
+| Call | Result | Verdict | Next |
+| --- | --- | --- | --- |
+| `kill` | 0 | delivered | wait for `ESRCH` or the budget |
+| `kill` | `ESRCH` | group already empty | reap; not a failure |
+| `kill` | `EPERM` | no verdict (macOS: exiting or unreaped leader; otherwise a real refusal) | keep waiting; `CleanupUncertain` only if `ESRCH` never arrives |
+| `kill` | `EINTR` | no verdict (macOS `kill(2)` when a caught signal interrupts the call) | retry, then the same as no verdict; not a failure |
+| `kill` | anything else | cannot tell | `CleanupUncertain` |
+| `waitpid` | exited or still running | observed | probe the group |
+| `waitpid` | `EINTR` | no verdict | keep polling inside the same budget |
+| `waitpid` | anything else | cannot tell | this phase is not confirmed |
+| probe `kill(0)` | 0 | a member exists | keep polling |
+| probe `kill(0)` | `ESRCH` | gone | confirmed |
+| probe `kill(0)` | `EPERM`, `EINTR`, or anything else | no verdict | keep polling until the budget |
+
+Held by `infrastructure::process::tests`: `an_interrupted_group_signal_is_not_a_cleanup_failure`, `a_group_probe_classifies_delivery_refusal_and_absence`, `an_interrupted_reap_keeps_the_same_cleanup_budget`, `signalling_an_exited_unreaped_group_is_not_a_cleanup_failure` (the macOS zombie), and `a_group_that_refuses_signals_is_never_confirmed_gone`.
+
 ## Further reading
 
 [Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/provider_sessions.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/process.rs)

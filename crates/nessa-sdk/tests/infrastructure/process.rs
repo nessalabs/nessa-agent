@@ -318,3 +318,61 @@ async fn panicking_cleanup_waiter_does_not_stop_later_cleanup() {
     .unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
 }
+
+#[test]
+fn an_interrupted_group_signal_is_not_a_cleanup_failure() {
+    assert_eq!(
+        classify_kill(-1, Some(libc::EINTR)).unwrap(),
+        GroupSignal::Interrupted
+    );
+    assert_eq!(
+        signal_verdict(GroupSignal::Interrupted),
+        SignalDelivery::NotDelivered
+    );
+    assert_eq!(
+        signal_verdict(GroupSignal::Empty),
+        SignalDelivery::NotDelivered
+    );
+    assert_eq!(
+        signal_verdict(GroupSignal::Refused),
+        SignalDelivery::NotDelivered
+    );
+    assert_eq!(
+        signal_verdict(GroupSignal::Reached),
+        SignalDelivery::Delivered
+    );
+}
+
+#[test]
+fn a_group_probe_classifies_delivery_refusal_and_absence() {
+    assert_eq!(classify_kill(0, None).unwrap(), GroupSignal::Reached);
+    assert_eq!(
+        classify_kill(-1, Some(libc::ESRCH)).unwrap(),
+        GroupSignal::Empty
+    );
+    assert_eq!(
+        classify_kill(-1, Some(libc::EPERM)).unwrap(),
+        GroupSignal::Refused
+    );
+    assert_eq!(
+        classify_kill(-1, Some(libc::EIO)),
+        Err(AgentError::CleanupUncertain)
+    );
+    assert_eq!(classify_kill(-1, None), Err(AgentError::CleanupUncertain));
+}
+
+#[test]
+fn an_interrupted_reap_keeps_the_same_cleanup_budget() {
+    let interrupted = io::Error::from_raw_os_error(libc::EINTR);
+    assert_eq!(
+        watch_scope(Err(interrupted), Ok(false)),
+        ScopeWatch::Pending,
+        "one interrupted reap must not end the wait"
+    );
+    let refused = Err(AgentError::CleanupUncertain);
+    assert_eq!(watch_scope(Ok(()), refused), ScopeWatch::Pending);
+    assert_eq!(watch_scope(Ok(()), Ok(true)), ScopeWatch::Pending);
+    assert_eq!(watch_scope(Ok(()), Ok(false)), ScopeWatch::Gone);
+    let lost = io::Error::from_raw_os_error(libc::EIO);
+    assert_eq!(watch_scope(Err(lost), Ok(false)), ScopeWatch::Lost);
+}
