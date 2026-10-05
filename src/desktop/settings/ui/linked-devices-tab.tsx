@@ -57,6 +57,17 @@ export function LinkedDevicesProvider({
 
 const orbSize = 168
 
+/**
+ * The gateway's code is eight symbols with a hyphen between the groups
+ * (`ABCD-2345`). PairingCode groups those eight itself, and an orb carries
+ * only them.
+ */
+function pairingSymbols(code: string): string {
+  return code.length === 9 && code[4] === "-"
+    ? `${code.slice(0, 4)}${code.slice(5)}`
+    : code
+}
+
 export function LinkedDevicesTab() {
   const gateway = useContext(LinkedDevicesContext)
   const found = useContext(FoundSetting) === "linked-devices"
@@ -204,7 +215,10 @@ function ManagedDevices({
           <DevicesGroup state={state} dispatch={dispatch} />
         </>
       ) : null}
-      {state.notice && state.linking !== "off" && state.linking !== "refused" ? (
+      {state.notice &&
+      state.linking !== "off" &&
+      state.linking !== "refused" &&
+      state.linking !== "unknown" ? (
         <p className="settings-footnote" role="status" data-linked-notice>
           {state.connection === "unreachable" && state.notice.kind === "unreachable"
             ? sentences.unreachable
@@ -223,7 +237,9 @@ function LinkingGroup({ state }: { state: LinkedDevicesState }) {
   const on = state.linking === "on"
   const detail =
     state.linking === "unknown"
-      ? sentences.checking
+      ? state.notice
+        ? noticeText[state.notice.kind]
+        : sentences.checking
       : state.linking === "off"
         ? sentences.notConfigured
         : state.linking === "refused"
@@ -262,7 +278,7 @@ function PairingGroup({
           detail="Enter it on the device, or scan either orb."
         >
           <PairingCode
-            code={state.code.code}
+            code={pairingSymbols(state.code.code)}
             expiresAt={state.code.expiresAtMs}
             state={state.code.state}
             onExpire={() => dispatch({ type: "expired" })}
@@ -292,12 +308,16 @@ function PairingGroup({
           {state.code.state === "open" ? (
             <span className="linked-orbs">
               <SignalOrb
-                code={state.code.code}
+                code={pairingSymbols(state.code.code)}
                 size={orbSize}
                 still
                 aria-label="Signal orb"
               />
-              <QrOrb value={state.code.code} size={orbSize} aria-label="QR orb" />
+              <QrOrb
+                value={pairingSymbols(state.code.code)}
+                size={orbSize}
+                aria-label="QR orb"
+              />
             </span>
           ) : null}
         </SettingsRow>

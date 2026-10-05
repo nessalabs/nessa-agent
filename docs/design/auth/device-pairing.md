@@ -2152,7 +2152,10 @@ slices 2a and 2b. The code, the fingerprint and the orbs are the UI kit's
 `SignalOrb`, `QrOrb`). They take plain props and do not know `pairing.*`.
 This window wires them, and it owns every sentence. The phone's scanner, and
 how a phone finds the gateway, are not this screen: an orb carries only the
-8-character code.
+8-character code. The gateway's display form is those eight symbols with a
+hyphen between the groups (`ABCD-2345`). PairingCode groups the eight
+itself, so the hyphen is not passed through as a ninth character. A first
+read that is not answered says so; it does not keep saying it is checking.
 
 Native linking is on only when `pairing.pending` succeeds. `pairing_not_configured`
 is off: the switch is shown off and disabled, because nothing here writes

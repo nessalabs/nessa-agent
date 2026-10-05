@@ -113,6 +113,18 @@ describe("Linked devices", () => {
     expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
   })
 
+  it("a failed first read is not still checking", async () => {
+    const gate = gateway(async () => ({ ok: false, failure: { kind: "unanswered" } }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    expect(host.textContent).toContain("No answer")
+    expect(host.textContent).not.toContain("Checking whether linking is on")
+    expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
+  })
+
   it("L2: linking off is a disabled switch and the config hint, with no pair button", async () => {
     const gate = gateway(async () => ({ ok: true, value: { kind: "off" } }))
     await mount(
@@ -160,7 +172,9 @@ describe("Linked devices", () => {
     expect(pair?.disabled).toBe(false)
     await act(async () => pair?.click())
     expect(gate.creates).toBe(1)
-    expect(host.textContent).toContain("ABCD-2345")
+    expect(host.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
+      "ABCD2345",
+    )
     expect(host.querySelector("[data-slot='signal-orb']")).not.toBeNull()
     expect(host.querySelector("[data-slot='qr-orb']")).not.toBeNull()
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("cancel")

@@ -413,7 +413,7 @@ await main(meta, async ({ options, rep, url }) => {
       await page.locator(css.linkedAction("cancel")).click()
       await page.waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
       return [
-        shown === "ABCD-2345" ? null : `the code was ${shown}`,
+        shown === "ABCD2345" ? null : `the code was ${shown}`,
         orbs.signal === 1 ? null : `signal orbs: ${orbs.signal}`,
         orbs.qr === 1 ? null : `qr orbs: ${orbs.qr}`,
         ...fit,
