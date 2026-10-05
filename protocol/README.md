@@ -39,15 +39,15 @@ or schema version bump is needed merely to change this repository's current cont
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
 its request. On the authenticated socket, a request the gateway cannot decode
-is answered when that `id` can still be read:
+is answered when the first row holds:
 
 | What the frame holds | What the gateway does |
 | --- | --- |
-| `type` is `req`, and `id` is one Unicode string of 1 to 256 bytes | `invalid_request` on that `id`. A string in the frame that is not Unicode, such as a lone surrogate, does not hide it |
-| An envelope key that appears twice, `id` missing, not a string, or a string that is not Unicode, `id` empty or longer than 256 bytes, `type` not `req`, or the text not one JSON object | no reply; the caller's own timeout settles it |
+| The envelope parser reads one JSON object, no decoded name appears twice, `type` is `req`, and `id` is one Unicode string of 1 to 256 bytes | `invalid_request` on that `id`. A string or a name that is not Unicode, such as a lone surrogate, does not hide that id and is not a second name |
+| A decoded name appears twice, `id` missing, not a string, or a string that is not Unicode, `id` empty or longer than 256 bytes, `type` not `req`, the text not one JSON object, or deeper than 127 containers | no reply; the caller's own timeout settles it |
 
-The handshake is not this table: a frame that does not decode before
-authentication is answered `unauthorized` on an empty id, and the socket
+The handshake is not this table. While its deadline still has time, a frame
+that does not decode is answered `unauthorized` on an empty id, and the socket
 closes `authentication_failed` (4001).
 
 Mutations separately carry a stable `requestId` for explicit retries.

@@ -28,9 +28,10 @@ const utf8 = new TextEncoder()
  * itself rather than read a `TypeError` whose cause it cannot tell. Each
  * must also be Unicode text (`wellFormedText`): this client refuses a lone
  * surrogate before send. If one still reaches the gateway, the frame is
- * answered `invalid_request` when it is one JSON object, its envelope keys
- * are unique, `type` is `req`, and `id` is one Unicode string of 1 to 256
- * bytes (#403). What the
+ * answered `invalid_request` when the envelope parser reads one JSON object,
+ * no decoded name appears twice, `type` is `req`, and `id` is one Unicode
+ * string of 1 to 256 bytes. A name that is not Unicode is not a second name,
+ * and a frame deeper than 127 containers is not read (#403). What the
  * arguments decode to — an object, its strings — is the gateway's to judge,
  * and it answers `invalid_request`.
  *
