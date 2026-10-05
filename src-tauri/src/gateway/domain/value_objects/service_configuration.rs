@@ -31,18 +31,71 @@ impl ServiceConfiguration {
         if port == 0 {
             return Err(ServiceConfigurationError::Port);
         }
-        if claude_config_directory
-            .as_deref()
-            .is_some_and(|directory| !normalized_absolute(directory))
-        {
-            return Err(ServiceConfigurationError::ClaudeConfigDirectory);
-        }
+        claude_config_directory_is_durable(claude_config_directory.as_deref())?;
         Ok(Self {
             namespace,
             data_root,
             port,
             claude_config_directory,
         })
+    }
+
+    /// A new configuration with only the Claude directory replaced.
+    ///
+    /// The directory rule stays in [`claude_config_directory_is_durable`]; this
+    /// rebuilds through [`Self::new`] so a caller cannot store a path that
+    /// construction would have refused.
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
+    pub fn with_claude_config_directory(
+        self,
+        claude_config_directory: Option<PathBuf>,
+    ) -> Result<Self, ServiceConfigurationError> {
+        let stage = self.stage().to_owned();
+        let instance = self.instance().map(str::to_owned);
+        Self::new(
+            stage,
+            self.data_root,
+            instance,
+            self.port,
+            claude_config_directory,
+        )
+    }
+
+    /// The value to store when the Claude directory becomes `directory`.
+    ///
+    /// `Ok(None)` means that directory is already published, so the caller must
+    /// not reconcile. Validity stays in [`Self::new`].
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub fn replacing_claude_config_directory(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<Option<Self>, ServiceConfigurationError> {
+        if self.claude_config_directory == directory {
+            return Ok(None);
+        }
+        self.clone()
+            .with_claude_config_directory(directory)
+            .map(Some)
+    }
+
+    /// The value to store when a failed reconciliation still owns `expected`.
+    ///
+    /// `Ok(None)` means the live directory is no longer `expected`, or it is
+    /// already `previous`, so the caller must not write. A newer settings save
+    /// keeps the directory it published
+    /// (`a_failed_registration_does_not_restore_a_newer_directory`).
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
+    pub fn restoring_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<Option<Self>, ServiceConfigurationError> {
+        if &self.claude_config_directory != expected || self.claude_config_directory == previous {
+            return Ok(None);
+        }
+        self.clone()
+            .with_claude_config_directory(previous)
+            .map(Some)
     }
 
     pub fn stage(&self) -> &str {
@@ -69,6 +122,20 @@ impl ServiceConfiguration {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn claude_config_directory(&self) -> Option<&Path> {
         self.claude_config_directory.as_deref()
+    }
+}
+
+/// Whether a Claude configuration directory is durable service input.
+///
+/// `None` is the provider default. A present path must be absolute and free of
+/// `.` and `..` components, the same rule [`ServiceConfiguration::new`] applies.
+pub fn claude_config_directory_is_durable(
+    directory: Option<&Path>,
+) -> Result<(), ServiceConfigurationError> {
+    if directory.is_some_and(|directory| !normalized_absolute(directory)) {
+        Err(ServiceConfigurationError::ClaudeConfigDirectory)
+    } else {
+        Ok(())
     }
 }
 
@@ -138,5 +205,36 @@ mod tests {
             Some("relative".into()),
         )
         .is_err());
+    }
+
+    #[test]
+    fn restoring_writes_the_previous_directory_only_while_the_attempt_still_owns_it() {
+        let original =
+            ServiceConfiguration::new("prod".into(), absolute("nessa"), None, 7420, None).unwrap();
+        let updated = original
+            .clone()
+            .with_claude_config_directory(Some(absolute("claude-a")))
+            .unwrap();
+        let newer = updated
+            .clone()
+            .with_claude_config_directory(Some(absolute("claude-b")))
+            .unwrap();
+
+        let restored = updated
+            .restoring_claude_config_directory(&Some(absolute("claude-a")), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.claude_config_directory, None);
+        assert!(newer
+            .restoring_claude_config_directory(&Some(absolute("claude-a")), None)
+            .unwrap()
+            .is_none());
+        assert!(updated
+            .restoring_claude_config_directory(
+                &Some(absolute("claude-a")),
+                Some(absolute("claude-a"))
+            )
+            .unwrap()
+            .is_none());
     }
 }

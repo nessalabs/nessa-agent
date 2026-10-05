@@ -30,7 +30,7 @@ pub use retirement_refusal::RetirementRefusal;
 mod search_path;
 pub use search_path::{SearchPath, SearchPathError};
 mod service_configuration;
-pub use service_configuration::ServiceConfiguration;
+pub use service_configuration::{claude_config_directory_is_durable, ServiceConfiguration};
 mod systemd;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use systemd::SystemdInvocationId;

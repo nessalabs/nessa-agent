@@ -16,8 +16,10 @@ use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentC
 use crate::agents::infrastructure::credentialed_claude::credential_environment;
 use std::collections::BTreeMap;
 #[cfg(unix)]
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 
 struct Credentials(Result<Option<(AgentId, String)>, AgentCredentialFailure>);
@@ -406,6 +408,52 @@ fn readiness_and_launch_agree_on_every_canonical_source_state() {
             launch
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn readiness_and_agent_start_read_one_substituted_credential_port() {
+    struct Shared {
+        reads: AtomicUsize,
+        secret: Vec<u8>,
+    }
+
+    impl AgentCredentialSource for Shared {
+        fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+            assert_eq!(agent, AgentId::Claude);
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            AgentCredential::new(AgentCredentialKind::ApiKey, self.secret.clone())
+                .map(Some)
+                .map_err(|_| AgentCredentialFailure::Invalid)
+        }
+    }
+
+    let source = Arc::new(Shared {
+        reads: AtomicUsize::new(0),
+        secret: b"saved-key".to_vec(),
+    });
+    let probe = LocalAgentProbe {
+        launch_files: HashMap::new(),
+        credentials: source.clone(),
+        sign_in: HashMap::from([(
+            AgentId::Claude,
+            SignIn {
+                credentials: None,
+                vendor_store: None,
+            },
+        )]),
+    };
+
+    assert_eq!(probe.authenticated(AgentId::Claude), Ok(true));
+    let environment = credential_environment(BTreeMap::new(), source.as_ref()).unwrap();
+    assert_eq!(
+        environment
+            .get(OsStr::new("ANTHROPIC_API_KEY"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("saved-key"))
+    );
+    assert!(!environment.contains_key(OsStr::new("CLAUDE_CODE_OAUTH_TOKEN")));
+    assert_eq!(source.reads.load(Ordering::SeqCst), 2);
 }
 
 #[test]

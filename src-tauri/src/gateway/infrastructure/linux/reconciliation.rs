@@ -15,13 +15,16 @@ use super::{
         settle_wants_link_transaction, staging_runtime_present, validate_runtime,
         wants_link_matches, wants_link_temporary_present,
     },
-    unit::{render, rendered_declaration, unit_name, RenderedUnit, UnitDefinition},
+    unit::{
+        installed_claude_config_directory, render, rendered_declaration, unit_name, RenderedUnit,
+        UnitDefinition,
+    },
     user_manager::{JobTerminal, UnitSnapshot, UserManager},
 };
 use crate::gateway::{
     application::{
-        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
-        GatewayReconciliationAttempt, GatewayReconciliationIntent,
+        ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayLifecycleRecovery,
+        GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
         MonotonicClock, ReconciledGateway, ReconciliationHistoryFact, StartupStep,
     },
@@ -57,7 +60,7 @@ const FRESH_RECOVERY: &str =
     "Recovered the unresolved systemd lifecycle by fresh observation; no native command was replayed";
 
 pub(crate) struct SystemdGateway {
-    configuration: ServiceConfiguration,
+    configuration: Mutex<ServiceConfiguration>,
     home: PathBuf,
     clock: Arc<dyn MonotonicClock>,
     manager_factory: Arc<dyn LinuxManagerFactory>,
@@ -304,12 +307,63 @@ impl SystemdGateway {
         clock: Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
-            configuration,
+            configuration: Mutex::new(configuration),
             home,
             clock,
             manager_factory: Arc::new(NativeLinuxManagerFactory),
             runtime_context: Arc::new(NativeLinuxRuntimeContext { xdg_paths }),
             process_factory: Arc::new(NativeLinuxProcessFactory),
+        }
+    }
+
+    fn service_configuration(&self) -> ServiceConfiguration {
+        self.configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn replace_claude_config_directory(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+        let mut configuration = self
+            .configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match configuration
+            .replacing_claude_config_directory(directory)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?
+        {
+            Some(updated) => {
+                let previous = configuration
+                    .claude_config_directory()
+                    .map(Path::to_path_buf);
+                *configuration = updated;
+                Ok(ClaudeDirectoryReplacement::Changed { previous })
+            }
+            None => Ok(ClaudeDirectoryReplacement::Unchanged),
+        }
+    }
+
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        let mut configuration = self
+            .configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match configuration
+            .restoring_claude_config_directory(expected, previous)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?
+        {
+            Some(updated) => {
+                *configuration = updated;
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
@@ -376,7 +430,39 @@ impl SystemdGateway {
 
 impl GatewayHost for SystemdGateway {
     fn startup_cause(&self) -> ReconciliationCause {
-        ReconciliationCause::Startup
+        let configuration = self.service_configuration();
+        let Ok(unit) = unit_name(configuration.stage(), configuration.instance()) else {
+            return ReconciliationCause::Startup;
+        };
+        let Ok(paths) = self.paths(&unit) else {
+            return ReconciliationCause::Startup;
+        };
+        let Ok(Some(bytes)) = owned_file_bytes(&paths.unit_file) else {
+            return ReconciliationCause::Startup;
+        };
+        let Ok(installed) = installed_claude_config_directory(&bytes) else {
+            return ReconciliationCause::Startup;
+        };
+        if installed.as_deref() != configuration.claude_config_directory() {
+            ReconciliationCause::ClaudeConfigurationChanged
+        } else {
+            ReconciliationCause::Startup
+        }
+    }
+
+    fn replace_claude_config_directory(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+        SystemdGateway::replace_claude_config_directory(self, directory)
+    }
+
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        SystemdGateway::restore_claude_config_directory(self, expected, previous)
     }
 
     fn register(
@@ -387,7 +473,8 @@ impl GatewayHost for SystemdGateway {
         attempt: &GatewayReconciliationAttempt,
         progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError> {
-        if stage != self.configuration.stage() {
+        let configuration = self.service_configuration();
+        if stage != configuration.stage() {
             return Err(pre_admission("Gateway service configuration stage changed"));
         }
         let (effective_uid, real_uid) = self.runtime_context.user_ids();
@@ -396,7 +483,7 @@ impl GatewayHost for SystemdGateway {
                 "The packaged gateway refuses a set-user-ID process",
             ));
         }
-        let unit = unit_name(stage, self.configuration.instance()).map_err(pre_admission)?;
+        let unit = unit_name(stage, configuration.instance()).map_err(pre_admission)?;
         let paths = self.paths(&unit).map_err(pre_admission)?;
         let fingerprint = runtime_fingerprint(runtime).map_err(pre_admission)?;
         let manager = self
@@ -405,11 +492,7 @@ impl GatewayHost for SystemdGateway {
             .map_err(pre_admission)?;
         verify_systemd_authority(manager.as_ref(), &paths, &unit).map_err(pre_admission)?;
         let installed = manager.snapshot(&unit).map_err(pre_admission)?;
-        let data = data_directory_path(
-            self.configuration.data_root(),
-            stage,
-            self.configuration.instance(),
-        );
+        let data = data_directory_path(configuration.data_root(), stage, configuration.instance());
         let advertisement = self
             .runtime_context
             .observe_endpoint_health(&data)
@@ -442,7 +525,7 @@ impl GatewayHost for SystemdGateway {
                     runtime: &paths
                         .runtime_root
                         .join(prior.target().runtime_fingerprint()),
-                    configuration: &self.configuration,
+                    configuration: &configuration,
                     working_directory: &data,
                     home: &self.home,
                     agent_path: &prior_path,
@@ -471,7 +554,7 @@ impl GatewayHost for SystemdGateway {
                         &paths,
                         &unit,
                         DefinitionAuthority {
-                            configuration: &self.configuration,
+                            configuration: &configuration,
                             data: &data,
                             home: &self.home,
                         },
@@ -494,7 +577,7 @@ impl GatewayHost for SystemdGateway {
                         &paths,
                         &unit,
                         DefinitionAuthority {
-                            configuration: &self.configuration,
+                            configuration: &configuration,
                             data: &data,
                             home: &self.home,
                         },
@@ -528,7 +611,7 @@ impl GatewayHost for SystemdGateway {
         let rendered = render(UnitDefinition {
             unit: &unit,
             runtime: &staged_runtime,
-            configuration: &self.configuration,
+            configuration: &configuration,
             working_directory: &data,
             home: &self.home,
             agent_path: &path,
@@ -598,7 +681,7 @@ impl GatewayHost for SystemdGateway {
                 prior,
                 &target,
                 RetirementAuthority {
-                    configuration: &self.configuration,
+                    configuration: &configuration,
                     data: &data,
                     home: &self.home,
                     paths: &paths,
@@ -869,9 +952,10 @@ impl GatewayHost for SystemdGateway {
         recovery: &GatewayLifecycleRecovery,
         journal: &dyn GatewayReconciliationJournalSession,
     ) -> Result<(), GatewayError> {
+        let configuration = self.service_configuration();
         let unit = SystemdUnitName::parse(recovery.target().service().to_owned())
             .map_err(|error| GatewayError::Registration(error.to_string()))?;
-        let expected = unit_name(self.configuration.stage(), self.configuration.instance())
+        let expected = unit_name(configuration.stage(), configuration.instance())
             .map_err(GatewayError::Registration)?;
         if unit != expected {
             return Err(GatewayError::Registration(
@@ -892,9 +976,9 @@ impl GatewayHost for SystemdGateway {
         verify_systemd_authority(manager.as_ref(), &paths, &unit)
             .map_err(GatewayError::Registration)?;
         let data = data_directory_path(
-            self.configuration.data_root(),
-            self.configuration.stage(),
-            self.configuration.instance(),
+            configuration.data_root(),
+            configuration.stage(),
+            configuration.instance(),
         );
         if recovery.pending_step().is_some_and(|step| {
             matches!(
@@ -918,7 +1002,7 @@ impl GatewayHost for SystemdGateway {
                 recovery.target(),
                 definition_digest,
                 DefinitionAuthority {
-                    configuration: &self.configuration,
+                    configuration: &configuration,
                     data: &data,
                     home: &self.home,
                 },
@@ -1004,7 +1088,7 @@ impl GatewayHost for SystemdGateway {
                 recovery.target(),
                 observed.snapshot.as_ref(),
                 DefinitionAuthority {
-                    configuration: &self.configuration,
+                    configuration: &configuration,
                     data: &data,
                     home: &self.home,
                 },
@@ -1046,7 +1130,7 @@ impl GatewayHost for SystemdGateway {
                     target_artifact_present: broad_artifact_present()?,
                 },
                 DefinitionAuthority {
-                    configuration: &self.configuration,
+                    configuration: &configuration,
                     data: &data,
                     home: &self.home,
                 },
@@ -1108,6 +1192,7 @@ impl GatewayHost for SystemdGateway {
         journal: &dyn GatewayReconciliationJournalSession,
         plan: &AuditDeliveryReceipt,
     ) -> Result<LifecycleObservation, GatewayError> {
+        let configuration = self.service_configuration();
         let token = session.begin_proof()?;
         let intended = session.request().intended();
         let unit = SystemdUnitName::parse(intended.service().to_owned())
@@ -1128,9 +1213,9 @@ impl GatewayHost for SystemdGateway {
         verify_systemd_authority(manager.as_ref(), &paths, &unit).map_err(GatewayError::Stop)?;
         let target = intended.audit_identity()?.target().clone();
         let data = data_directory_path(
-            self.configuration.data_root(),
-            self.configuration.stage(),
-            self.configuration.instance(),
+            configuration.data_root(),
+            configuration.stage(),
+            configuration.instance(),
         );
         let snapshot = manager
             .snapshot(&unit)
@@ -1176,7 +1261,7 @@ impl GatewayHost for SystemdGateway {
         let rendered = render(UnitDefinition {
             unit: &unit,
             runtime: &paths.runtime_root.join(target.runtime_fingerprint()),
-            configuration: &self.configuration,
+            configuration: &configuration,
             working_directory: &data,
             home: &self.home,
             agent_path: &retained_path,
@@ -4197,14 +4282,10 @@ mod tests {
         let (unit, _, snapshot) = fixture();
         let effective_uid = unsafe { libc::geteuid() };
         let gateway = SystemdGateway {
-            configuration: ServiceConfiguration::new(
-                "prod".into(),
-                data.join("nessa"),
-                None,
-                7420,
-                None,
-            )
-            .unwrap(),
+            configuration: Mutex::new(
+                ServiceConfiguration::new("prod".into(), data.join("nessa"), None, 7420, None)
+                    .unwrap(),
+            ),
             home,
             clock: Arc::new(SystemMonotonicClock),
             manager_factory: Arc::new(FixedManagerFactory {
@@ -4235,6 +4316,105 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_directory_change_names_startup_and_shell_variables_do_not() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let home = root.join("home");
+        let config = root.join("desktop-config");
+        let data = root.join("desktop-data");
+        fs::create_dir_all(&home).unwrap();
+        let unit = unit_name("prod", None).unwrap();
+        let paths = LinuxGatewayPaths::new(
+            &home,
+            Some(config.clone().into_os_string()),
+            Some(data.clone().into_os_string()),
+            Some(root.join("state").into_os_string()),
+            &unit,
+        )
+        .unwrap();
+        fs::create_dir_all(paths.unit_file.parent().unwrap()).unwrap();
+        let installed = ServiceConfiguration::new(
+            "prod".into(),
+            data.join("nessa"),
+            None,
+            7420,
+            Some(PathBuf::from("/work/claude-a")),
+        )
+        .unwrap();
+        let rendered = render(UnitDefinition {
+            unit: &unit,
+            runtime: Path::new("/runtime"),
+            configuration: &installed,
+            working_directory: &data.join("nessa"),
+            home: &home,
+            agent_path: &SearchPath::parse("/usr/bin:/bin").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        fs::write(&paths.unit_file, &rendered.bytes).unwrap();
+        fs::set_permissions(&paths.unit_file, fs::Permissions::from_mode(0o600)).unwrap();
+        let text = String::from_utf8(rendered.bytes).unwrap();
+        assert!(!text.contains("ANTHROPIC_API_KEY"));
+        assert!(!text.contains("USER="));
+
+        let (_, _, snapshot) = fixture();
+        let effective_uid = unsafe { libc::geteuid() };
+        let gateway = SystemdGateway {
+            configuration: Mutex::new(
+                ServiceConfiguration::new("prod".into(), data.join("nessa"), None, 7420, None)
+                    .unwrap(),
+            ),
+            home: home.clone(),
+            clock: Arc::new(SystemMonotonicClock),
+            manager_factory: Arc::new(FixedManagerFactory {
+                identity: snapshot.manager,
+                unit_path: vec![],
+                snapshot: None,
+                error: None,
+            }),
+            runtime_context: Arc::new(FixedRuntimeContext {
+                effective_uid,
+                real_uid: effective_uid,
+                config_home: Some(config.into_os_string()),
+                data_home: Some(data.into_os_string()),
+                state_home: Some(root.join("state").into_os_string()),
+                advertisement: None,
+                endpoint_error: None,
+            }),
+            process_factory: Arc::new(NativeLinuxProcessFactory),
+        };
+
+        assert_eq!(
+            gateway.startup_cause(),
+            ReconciliationCause::ClaudeConfigurationChanged
+        );
+        assert!(matches!(
+            gateway
+                .replace_claude_config_directory(Some(PathBuf::from("/work/claude-a")))
+                .unwrap(),
+            ClaudeDirectoryReplacement::Changed { previous: None }
+        ));
+        assert_eq!(gateway.startup_cause(), ReconciliationCause::Startup);
+        assert!(matches!(
+            gateway
+                .replace_claude_config_directory(Some(PathBuf::from("/work/claude-b")))
+                .unwrap(),
+            ClaudeDirectoryReplacement::Changed { .. }
+        ));
+        assert_eq!(
+            gateway.startup_cause(),
+            ReconciliationCause::ClaudeConfigurationChanged
+        );
+        assert_eq!(
+            gateway
+                .replace_claude_config_directory(Some(PathBuf::from("/work/claude-b")))
+                .unwrap(),
+            ClaudeDirectoryReplacement::Unchanged
+        );
+    }
+
+    #[test]
     fn pre_admission_refusal_states_that_no_service_change_occurred() {
         let temporary = tempfile::tempdir().unwrap();
         let configuration = ServiceConfiguration::new(
@@ -4247,7 +4427,7 @@ mod tests {
         .unwrap();
         let (unit, _, snapshot) = fixture();
         let gateway = SystemdGateway {
-            configuration,
+            configuration: Mutex::new(configuration),
             home: temporary.path().join("home"),
             clock: Arc::new(SystemMonotonicClock),
             manager_factory: Arc::new(FixedManagerFactory {
@@ -4350,7 +4530,7 @@ mod tests {
         ];
         for (effective, real, manager_error, endpoint_error, active_snapshot) in cases {
             let gateway = SystemdGateway {
-                configuration: configuration.clone(),
+                configuration: Mutex::new(configuration.clone()),
                 home: home.clone(),
                 clock: Arc::new(SystemMonotonicClock),
                 manager_factory: Arc::new(FixedManagerFactory {
@@ -4374,7 +4554,7 @@ mod tests {
         }
 
         let gateway = SystemdGateway {
-            configuration,
+            configuration: Mutex::new(configuration),
             home,
             clock: Arc::new(SystemMonotonicClock),
             manager_factory: Arc::new(FixedManagerFactory {
@@ -4832,7 +5012,7 @@ mod tests {
             runtime_context: Arc<dyn LinuxRuntimeContext>,
         ) -> SystemdGateway {
             SystemdGateway {
-                configuration: self.configuration.clone(),
+                configuration: Mutex::new(self.configuration.clone()),
                 home: self.home.clone(),
                 clock: Arc::new(SystemMonotonicClock),
                 manager_factory,

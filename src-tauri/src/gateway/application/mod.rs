@@ -9,13 +9,13 @@ pub use ports::GatewayLifecycleRecovery;
 #[cfg(target_os = "linux")]
 pub use ports::GatewayStopProofToken;
 pub use ports::{
-    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
-    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
-    GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
-    GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
-    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
-    GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway,
-    StartupStep, SystemMonotonicClock,
+    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
+    GatewayReconciliationEffectTiming, GatewayReconciliationIds, GatewayReconciliationIntent,
+    GatewayReconciliationIntentDelivery, GatewayReconciliationJournalSession,
+    GatewayReconciliationOutcome, GatewayReconciliationOutcomeError, GatewayReconciliationProgress,
+    GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
+    GatewayStopRequest, GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock,
+    ReconciledGateway, StartupStep, SystemMonotonicClock,
 };
 pub use service::{Gateway, GatewayRuntimeDependencies};

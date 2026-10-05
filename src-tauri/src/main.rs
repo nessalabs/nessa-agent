@@ -84,6 +84,7 @@ fn main() {
             provider_authentication::commands::provider_login_available,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
+            gateway::infrastructure::set_claude_configuration_directory,
             surface_credential::load_surface_credential,
             gateway_endpoint::entrypoint::command::load_gateway_endpoint,
             shortcuts::load_shortcuts,

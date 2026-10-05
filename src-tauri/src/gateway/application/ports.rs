@@ -20,7 +20,7 @@ use crate::gateway::domain::value_objects::{
 use std::{
     error::Error,
     fmt,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -1302,12 +1302,59 @@ pub trait LoginShellPath: Send + Sync {
     fn resolve(&self) -> Result<SearchPath, LoginShellError>;
 }
 
+/// What [`GatewayHost::replace_claude_config_directory`] did to the live directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClaudeDirectoryReplacement {
+    /// The host already publishes this directory.
+    Unchanged,
+    /// The host now publishes the requested directory. `previous` is what a
+    /// failed reconciliation restores.
+    Changed { previous: Option<PathBuf> },
+}
+
 /// Reconciliation returns the exact native runtime incarnation only after matching readiness. A stop
 /// acknowledges request delivery, not the eventual physical cleanup of each agent.
 pub trait GatewayHost: Send + Sync {
     /// Classify the durable definition change that caused host startup work.
     fn startup_cause(&self) -> ReconciliationCause {
         ReconciliationCause::Startup
+    }
+
+    /// Replace the Claude configuration directory the next registration publishes.
+    ///
+    /// [`ClaudeDirectoryReplacement::Unchanged`] must not start a reconciliation:
+    /// repeating a settings save is not a retirement. A
+    /// [`ClaudeDirectoryReplacement::Changed`] carries the directory to restore
+    /// when that reconciliation fails and this attempt still owns the value it
+    /// published, so the same save can be repeated
+    /// (`a_failed_registration_restores_the_directory_and_can_be_repeated`).
+    /// The default refuses, so a host that cannot publish the directory cannot
+    /// report a change it will not perform.
+    fn replace_claude_config_directory(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+        let _ = directory;
+        Err(GatewayError::Registration(
+            "this gateway host does not accept Claude configuration changes".into(),
+        ))
+    }
+
+    /// Write `previous` only when the live directory is still `expected`.
+    ///
+    /// `Ok(false)` means a newer change already replaced `expected`, so this
+    /// attempt must leave that directory in place
+    /// (`a_failed_registration_does_not_restore_a_newer_directory`). The
+    /// default refuses, matching [`Self::replace_claude_config_directory`].
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        let _ = (expected, previous);
+        Err(GatewayError::Registration(
+            "this gateway host does not accept Claude configuration changes".into(),
+        ))
     }
 
     /// Registers the service for `stage`, running the staged `runtime`.
