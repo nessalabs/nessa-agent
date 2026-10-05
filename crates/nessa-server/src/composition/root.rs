@@ -1619,7 +1619,7 @@ mod tests {
         native_report.observe_catalogue(Ok(()));
         native_report.observe_watches(Ok(()));
         native_report.observe_conversations(Ok(()));
-        native_report.observe_servers();
+        native_report.observe_servers(Ok(()));
         native_report.observe_native(Err(native));
         let native_slot = Mutex::new(Some(native_report));
         let served = Err(std::io::Error::other("listener died"));
