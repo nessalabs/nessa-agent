@@ -522,12 +522,13 @@ async fn conversations(
     };
     let root = conversation_root(namespace);
     let mcp_server_settings = match &mcp {
-        Some(mcp) => Some(Arc::new(super::mcp_servers::settings(
+        Some(mcp) => super::mcp_servers::settings(
             mcp,
             &agents,
             super::runtime_config::config_path(namespace),
             root.join("audit").join("mcp-servers"),
-        )?)),
+        )?
+        .map(Arc::new),
         None => None,
     };
     let agents = &agents;

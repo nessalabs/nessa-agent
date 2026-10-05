@@ -653,7 +653,9 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
     .unwrap()
     .expect("composed");
     let audit = namespace.join("audit");
-    let settings = settings(&composed, &config, config_path.clone(), audit.clone()).unwrap();
+    let settings = settings(&composed, &config, config_path.clone(), audit.clone())
+        .unwrap()
+        .expect("UTF-8 paths compose settings");
     let initiator = McpServerInitiator {
         organization_id: "organization".into(),
         principal_id: "principal".into(),
@@ -951,7 +953,8 @@ async fn s3_two_saves_at_one_revision_over_the_real_lock_are_serialised() {
             a_files.clone(),
             root.path().join("audit-1"),
         )
-        .unwrap(),
+        .unwrap()
+        .expect("UTF-8 paths compose settings"),
     );
     let second = Arc::new(
         settings_over(
@@ -960,7 +963,8 @@ async fn s3_two_saves_at_one_revision_over_the_real_lock_are_serialised() {
             b_files.clone(),
             root.path().join("audit-2"),
         )
-        .unwrap(),
+        .unwrap()
+        .expect("UTF-8 paths compose settings"),
     );
     let revision = first.list().await.unwrap().revision;
     let (release, gate) = std::sync::mpsc::channel();
@@ -1043,8 +1047,9 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
             std::fs::metadata(&config_path).unwrap().len() as usize,
             size
         );
-        let settings =
-            settings(&composed, &config, config_path, root.path().join("audit")).unwrap();
+        let settings = settings(&composed, &config, config_path, root.path().join("audit"))
+            .unwrap()
+            .expect("UTF-8 paths compose settings");
         let listed = settings.list().await;
         assert_eq!(
             listed.is_ok(),
@@ -1069,7 +1074,8 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
         config_path.clone(),
         root.path().join("audit"),
     )
-    .unwrap();
+    .unwrap()
+    .expect("UTF-8 paths compose settings");
     let size = || std::fs::metadata(&config_path).unwrap().len() as usize;
     let file = || std::fs::read(&config_path).unwrap();
     let compact = |bytes: &[u8]| !bytes[..bytes.len() - 1].contains(&b'\n');
@@ -1192,7 +1198,11 @@ async fn shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_
     let (root, config_path, composed, config) =
         composed_in(br#"{"session":{"writeTimeoutMs":75}}"#).await;
     let audit = root.path().join("audit");
-    let settings = Arc::new(settings(&composed, &config, config_path, audit.clone()).unwrap());
+    let settings = Arc::new(
+        settings(&composed, &config, config_path, audit.clone())
+            .unwrap()
+            .expect("UTF-8 paths compose settings"),
+    );
     let pid_file = root.path().join("pid");
     let child_pid_file = root.path().join("child");
     let listed_file = root.path().join("listed");
@@ -1354,7 +1364,8 @@ async fn a_repeated_variable_name_in_the_file_is_refused_in_either_order() {
             config_path.clone(),
             root.path().join("audit"),
         )
-        .unwrap();
+        .unwrap()
+        .expect("UTF-8 paths compose settings");
         assert_eq!(
             settings.list().await,
             Err(McpServerSettingsError::ConfigInvalid)
@@ -1387,7 +1398,8 @@ async fn c_null_agents_is_read_and_written_as_absent() {
         config_path.clone(),
         root.path().join("audit"),
     )
-    .unwrap();
+    .unwrap()
+    .expect("UTF-8 paths compose settings");
     let list = settings.list().await.unwrap();
     assert!(list.servers.is_empty());
     settings
@@ -1409,47 +1421,48 @@ async fn c_null_agents_is_read_and_written_as_absent() {
 }
 
 /// A first write with no `agents` block starts one from the running catalog
-/// and workspace. A workspace whose path is not UTF-8 cannot be written as
-/// it is: the write is refused `config_invalid` and nothing is written,
-/// rather than store a lossy path the next start would use. A file with a
-/// block of its own needs no fallback, and is written.
+/// and workspace. One whose path is not UTF-8 could not be written as it
+/// is, so no settings are composed at all — the methods answer
+/// `mcp_servers_not_configured`, never `config_invalid`, which says the file
+/// is at fault — whether or not the file has an `agents` block, and nothing
+/// is written.
 #[tokio::test]
-async fn a_fallback_path_that_is_not_utf8_refuses_the_write() {
+async fn a_fallback_path_that_is_not_utf8_composes_no_settings() {
     use super::settings;
-    use crate::mcp_servers::application::McpServerSettingsError;
     use std::os::unix::ffi::OsStrExt;
-    let workspace = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/nessa-\xff-workspace"));
-    for (file, written) in [
-        (&br#"{"session":{"writeTimeoutMs":75}}"#[..], false),
-        (
-            &br#"{"session":{"writeTimeoutMs":75},"agents":null}"#[..],
-            false,
-        ),
-        (
-            &br#"{"agents":{"catalog":"/m.json","workspace":"/w","mcpServers":[]}}"#[..],
-            true,
-        ),
+    let not_utf8 = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/nessa-\xff-path"));
+    for file in [
+        &br#"{"session":{"writeTimeoutMs":75}}"#[..],
+        &br#"{"agents":{"catalog":"/m.json","workspace":"/w","mcpServers":[]}}"#[..],
     ] {
-        let (root, config_path, composed, mut config) = composed_in(file).await;
-        config.workspace = workspace.clone();
-        let settings = settings(
-            &composed,
-            &config,
-            config_path.clone(),
-            root.path().join("audit"),
-        )
-        .unwrap();
-        let revision = settings.list().await.unwrap().revision;
-        let result = settings
-            .edit(caller(), revision, saved("mcptest", vec![]))
-            .await;
-        let now = std::fs::read(&config_path).unwrap();
-        if written {
-            assert!(result.is_ok(), "{result:?}");
-            assert!(!String::from_utf8_lossy(&now).contains('\u{fffd}'));
-        } else {
-            assert_eq!(result, Err(McpServerSettingsError::ConfigInvalid));
-            assert_eq!(now, file, "nothing is written");
+        for catalog in [false, true] {
+            let (root, config_path, composed, mut config) = composed_in(file).await;
+            let utf8 = settings(
+                &composed,
+                &config,
+                config_path.clone(),
+                root.path().join("audit-utf8"),
+            )
+            .unwrap();
+            assert!(utf8.is_some(), "UTF-8 paths compose settings");
+            if catalog {
+                config.catalog = not_utf8.clone();
+            } else {
+                config.workspace = not_utf8.clone();
+            }
+            let composed_settings = settings(
+                &composed,
+                &config,
+                config_path.clone(),
+                root.path().join("audit"),
+            )
+            .unwrap();
+            assert!(composed_settings.is_none(), "catalog: {catalog}");
+            assert_eq!(
+                std::fs::read(&config_path).unwrap(),
+                file,
+                "nothing is written"
+            );
         }
     }
 }

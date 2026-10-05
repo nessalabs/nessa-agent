@@ -906,7 +906,10 @@ impl Operations {
         // (`a_second_writer_waits_for_the_first_writers_live_replace`).
         let live_set = match (self.live.replace(&edited), edit) {
             (Ok(()), _) => LiveSetOutcome::Replaced,
-            (Err(_), ServerEdit::Remove { name }) if self.live.withdraw(name).is_ok() => {
+            // Withdrawn only when the server was live: one turned off, or
+            // never live, leaves the set as it was
+            // (`a_remove_of_a_server_not_live_from_a_list_past_a_bound_keeps_the_set`).
+            (Err(_), ServerEdit::Remove { name }) if self.live.withdraw(name) == Ok(true) => {
                 LiveSetOutcome::Withdrawn
             }
             (Err(_), _) => LiveSetOutcome::Kept,

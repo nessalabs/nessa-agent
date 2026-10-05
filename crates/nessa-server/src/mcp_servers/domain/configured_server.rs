@@ -291,9 +291,11 @@ impl ServerEdit {
 /// changes what the process runs or loads — a new executable, an argument, a
 /// variable such as `LD_PRELOAD`, `NODE_OPTIONS` or `PYTHONPATH` — could hand
 /// the secret to code it was never given to, and read it back through an
-/// inspection (#480 adversarial review).
+/// inspection (#480 adversarial review). The command is compared byte for
+/// byte: `Path`'s equality reads `/bin//server` as `/bin/server`, a
+/// different command as written.
 fn same_launch(stored: &ConfiguredMcpServer, save: &ServerSave) -> bool {
-    stored.server.command == save.server.command
+    stored.server.command.as_os_str() == save.server.command.as_os_str()
         && stored.server.args == save.server.args
         && save.env.len() == stored.env.len()
         && save

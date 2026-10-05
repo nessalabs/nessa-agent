@@ -184,6 +184,10 @@ fn a_kept_value_is_refused_when_anything_else_in_the_launch_changes() {
             relaunched(None, "/usr/bin/python3", vec![], same),
         ),
         (
+            "the command, as written",
+            relaunched(None, "/bin//server", vec![], same),
+        ),
+        (
             "arguments",
             relaunched(None, "/bin/server", vec!["-c".into()], same),
         ),

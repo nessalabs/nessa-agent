@@ -83,14 +83,24 @@ fn enabled() -> bool {
 }
 
 impl StoredMcpServer {
-    /// The entry as the gateway holds it, or why it cannot be: a name past
-    /// [`MAX_MCP_SERVER_NAME_BYTES`], or a variable named twice.
-    fn configured(self) -> Result<ConfiguredMcpServer, String> {
-        if self.name.len() > MAX_MCP_SERVER_NAME_BYTES {
-            // Not the name itself: it may be most of the file.
+    /// The entry at `index` as the gateway holds it, or why it cannot be: a
+    /// name past [`MAX_MCP_SERVER_NAME_BYTES`], or a variable named twice.
+    /// A name past the bound is logged by its entry's index and its length,
+    /// since `config_invalid` carries no details to say which entry it was
+    /// (`a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`).
+    fn configured(self, index: usize) -> Result<ConfiguredMcpServer, String> {
+        let bytes = self.name.len();
+        if bytes > MAX_MCP_SERVER_NAME_BYTES {
+            // Not the name itself, nor any value: it may be most of the file.
+            tracing::warn!(
+                index,
+                bytes,
+                max = MAX_MCP_SERVER_NAME_BYTES,
+                "agents.mcpServers entry's name is past the bound; the configuration is refused"
+            );
             return Err(format!(
-                "an MCP server name is {} bytes, past the {MAX_MCP_SERVER_NAME_BYTES} allowed",
-                self.name.len()
+                "the MCP server name of agents.mcpServers entry {index} is {bytes} bytes, \
+                 past the {MAX_MCP_SERVER_NAME_BYTES} allowed"
             ));
         }
         let name = self.name.clone();
@@ -116,7 +126,8 @@ pub fn stored_servers<'de, D: Deserializer<'de>>(
     let stored = Vec::<StoredMcpServer>::deserialize(deserializer)?;
     stored
         .into_iter()
-        .map(StoredMcpServer::configured)
+        .enumerate()
+        .map(|(index, server)| server.configured(index))
         .collect::<Result<_, _>>()
         .map_err(serde::de::Error::custom)
 }
