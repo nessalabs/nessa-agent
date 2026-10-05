@@ -109,9 +109,12 @@ function child(command, args, options, env = process.env) {
   return proc
 }
 
+/** The child has exited. A signal leaves `exitCode` null, so that alone is not enough. */
 function exited(proc) {
   return new Promise((ok) =>
-    proc.exitCode !== null ? ok(proc.exitCode) : proc.once("exit", ok),
+    proc.exitCode !== null || proc.signalCode !== null
+      ? ok(proc.exitCode)
+      : proc.once("exit", ok),
   )
 }
 
@@ -156,54 +159,73 @@ async function devServer(port, options, env = process.env) {
 }
 
 /**
+ * Stops a preview, if one is running, and removes its directory. The process
+ * has exited before the directory goes: a build that failed never started
+ * one, and a preview that did not answer is killed here and waited on.
+ */
+export async function stopPreview(outDir, preview) {
+  try {
+    if (preview && preview.exitCode === null && preview.signalCode === null) {
+      preview.kill()
+      await exited(preview)
+    }
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+}
+
+/**
  * Builds a production bundle and previews it on a free port. `env` is added
  * to the build and the preview: a check that talks to a ci gateway sets
  * `VITE_NESSA_STAGE=ci`, because the stage is inlined at build time and a
  * prod stage refuses that gateway's HTTP loopback address. Returns
- * `{ url, mode, close }`.
+ * `{ url, mode, close }`. A build that fails, or a preview that does not
+ * answer, removes that directory after the preview process has exited.
  */
 export async function startPreview(options, env = {}) {
   const outDir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-"))
-  log(`building production into ${outDir}…`)
-  const buildEnv = { ...process.env, ...env }
-  const build = child(
-    vite,
-    ["build", "--outDir", outDir, "--emptyOutDir"],
-    options,
-    buildEnv,
-  )
-  if ((await exited(build)) !== 0)
-    throw new CannotRun(`vite build failed\n${build.tail()}`)
-  const port = await freePort()
-  const url = `http://127.0.0.1:${port}/desktop.html`
-  const preview = child(
-    vite,
-    [
-      "preview",
-      "--outDir",
-      outDir,
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--strictPort",
-    ],
-    options,
-    buildEnv,
-  )
-  if (!(await waitFor(url, 30_000, preview))) {
-    preview.kill()
-    throw new CannotRun(`vite preview did not answer at ${url}\n${preview.tail()}`)
-  }
-  log(`previewing production at ${url}`)
-  return {
-    url,
-    mode: "prod",
-    close: async () => {
-      preview.kill()
-      await exited(preview)
-      rmSync(outDir, { recursive: true, force: true })
-    },
+  let preview
+  try {
+    log(`building production into ${outDir}…`)
+    const buildEnv = { ...process.env, ...env }
+    const build = child(
+      vite,
+      ["build", "--outDir", outDir, "--emptyOutDir"],
+      options,
+      buildEnv,
+    )
+    if ((await exited(build)) !== 0)
+      throw new CannotRun(`vite build failed\n${build.tail()}`)
+    const port = await freePort()
+    const url = `http://127.0.0.1:${port}/desktop.html`
+    preview = child(
+      vite,
+      [
+        "preview",
+        "--outDir",
+        outDir,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--strictPort",
+      ],
+      options,
+      buildEnv,
+    )
+    if (!(await waitFor(url, 30_000, preview)))
+      throw new CannotRun(`vite preview did not answer at ${url}\n${preview.tail()}`)
+    const running = preview
+    preview = undefined
+    log(`previewing production at ${url}`)
+    return {
+      url,
+      mode: "prod",
+      close: () => stopPreview(outDir, running),
+    }
+  } catch (error) {
+    await stopPreview(outDir, preview)
+    throw error
   }
 }
 
