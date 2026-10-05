@@ -182,6 +182,15 @@ struct Inner {
     audit_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
+/// Whether this phase resumes a bulk delivery task that already panicked.
+enum ParkedPanic {
+    /// `release` and `begin` surface it to their caller.
+    Resume,
+    /// An upload sweep leaves it parked. Awaiting it here would either reject
+    /// a ticket the panic did not use, or drop the panic.
+    LeaveParked,
+}
+
 /// Issues tickets, receives uploads under them, and releases holds. Clones
 /// share one ticket book, so the socket that issues a ticket and the route
 /// that redeems it agree on what is outstanding.
@@ -258,14 +267,20 @@ impl AttachmentService {
     /// after the caller has returned does not change the count. A refusal or a
     /// deadline is logged from the delivery task, so it stays visible when the
     /// caller is already gone. One record panicking does not skip the rest of
-    /// the phase. The order is the bulk-audit table in
-    /// `docs/design/artifact-sync.md`.
-    async fn audit_all(&self, records: Vec<AttachmentAuditRecord>) -> usize {
+    /// the phase. `parked` says whether this caller resumes a delivery task
+    /// that already panicked. `release` and `begin` do. An upload's sweep does
+    /// not: `receive` would record that panic as an unresolved upload. The
+    /// order is the bulk-audit table in `docs/design/artifact-sync.md`.
+    async fn audit_all(&self, records: Vec<AttachmentAuditRecord>, parked: ParkedPanic) -> usize {
         let total = records.len();
         if total == 0 {
             // An earlier phase may have panicked after its caller left. Surface
             // that here too, when this phase has nothing of its own to hand over.
-            self.reap_audit_tasks().await;
+            // An upload sweep does not: receive would spend a ticket the panic
+            // did not use, and awaiting the task would drop the panic.
+            if matches!(parked, ParkedPanic::Resume) {
+                self.reap_audit_tasks().await;
+            }
             return 0;
         }
         let tally = Arc::new(Mutex::new(DeliveryTally::new()));
@@ -281,6 +296,9 @@ impl AttachmentService {
             let mut in_flight = FuturesUnordered::new();
             let mut panic_payload = None;
             loop {
+                // Within this phase only. The semaphore is the cap shared with
+                // other phases. Admitting the rest here would queue one blocked
+                // future per record, which this task is not.
                 while in_flight.len() < admission {
                     let Some(record) = pending.next() else {
                         break;
@@ -340,9 +358,13 @@ impl AttachmentService {
             let _ = finished_tx.send(());
         });
         // The task owns this phase's records before an older panic is resumed,
-        // so that panic cannot drop them on the way out.
+        // so that panic cannot drop them on the way out. An upload leaves the
+        // older task parked: awaiting it here is what receive would turn into
+        // an unresolved rejection.
         self.park_audit_task(supervisor);
-        self.reap_audit_tasks().await;
+        if matches!(parked, ParkedPanic::Resume) {
+            self.reap_audit_tasks().await;
+        }
         // Waiting on the signal, not the task. Dropping this wait — the budget,
         // or the caller — leaves the task parked on the service.
         let _ = timeout(budget, finished_rx).await;
@@ -354,7 +376,9 @@ impl AttachmentService {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .stop();
-        self.reap_audit_tasks().await;
+        if matches!(parked, ParkedPanic::Resume) {
+            self.reap_audit_tasks().await;
+        }
         unacknowledged
     }
 
@@ -422,10 +446,10 @@ impl AttachmentService {
     /// sink. The tickets are gone either way. Returns how many were not yet
     /// acknowledged when the caller stopped waiting. A later accept still
     /// writes the original record and does not change this count.
-    async fn sweep_expired(&self, now_ms: u64) -> usize {
+    async fn sweep_expired(&self, now_ms: u64, parked: ParkedPanic) -> usize {
         let expired = self.book().expire(now_ms);
         if expired.is_empty() {
-            return self.audit_all(Vec::new()).await;
+            return self.audit_all(Vec::new(), parked).await;
         }
         let unacknowledged = self
             .audit_all(
@@ -433,6 +457,7 @@ impl AttachmentService {
                     .into_iter()
                     .map(|ticket| AttachmentAuditRecord::TicketExpired { ticket })
                     .collect(),
+                parked,
             )
             .await;
         if unacknowledged != 0 {
@@ -461,7 +486,7 @@ impl AttachmentService {
         // stale tickets must not be what fills the book. An expiry that was
         // not yet acknowledged fails this request visibly.
         let now_ms = self.inner.clock.unix_milliseconds();
-        let unacknowledged = self.sweep_expired(now_ms).await;
+        let unacknowledged = self.sweep_expired(now_ms, ParkedPanic::Resume).await;
         let upload = describe_upload(&caller, &request)?;
         if unacknowledged != 0 {
             return Err(BeginError::Audit);
@@ -656,8 +681,10 @@ impl AttachmentService {
         // stale tickets cannot fill the book while nobody begins anything. The
         // sweep's count is how many expiries were not yet acknowledged. It is
         // logged and does not fail an upload that had nothing to do with those
-        // tickets. This upload's own record does not take a bulk slot.
-        self.sweep_expired(now_ms).await;
+        // tickets. This upload's own record does not take a bulk slot. The
+        // sweep also does not resume a parked bulk panic: this task is what
+        // receive turns into an unresolved rejection when it panics.
+        self.sweep_expired(now_ms, ParkedPanic::LeaveParked).await;
         let ticket = match (redemption, expired) {
             (Redemption::Usable(ticket), _) => ticket,
             (_, Some(evidence)) => return Err(UploadError::TicketExpired { evidence }),
@@ -1036,7 +1063,7 @@ impl AttachmentService {
         }
         // Cleanup is already done. The caller waits at most the phase budget;
         // every record is still attempted for its own deadline.
-        let audit_failures = self.audit_all(records).await;
+        let audit_failures = self.audit_all(records, ParkedPanic::Resume).await;
         if storage_failures == 0 && audit_failures == 0 {
             return Ok(());
         }

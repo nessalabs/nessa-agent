@@ -1416,6 +1416,53 @@ async fn an_empty_phase_surfaces_a_panicked_delivery() {
 }
 
 #[tokio::test]
+async fn a_parked_bulk_panic_does_not_reject_a_later_upload() {
+    let fixture = fixture();
+    // Issued first. begin is a phase caller, so issuing after the panic is
+    // parked would resume it here instead of inside the upload.
+    let ticket = fixture.ticket(OTHER_CONVERSATION, BYTES, PDF).await;
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    fixture.audit.panic_in_record.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) >= attempts + 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+    fixture.audit.panic_in_record.store(false, Ordering::SeqCst);
+
+    let stored = fixture
+        .service
+        .receive(&ticket, Some(BYTES.len() as u64), ChannelBody::of(BYTES, 7))
+        .await
+        .unwrap();
+    assert_eq!(stored, attachment(BYTES, PDF));
+    let records = fixture.audit.taken();
+    let [AttachmentAuditRecord::HoldCreated { hold }] = records.as_slice() else {
+        panic!("the upload was kept, got {records:?}");
+    };
+    assert_eq!(hold.stored(), &attachment(BYTES, PDF));
+    assert_eq!(hold.conversation_id(), &conversation(OTHER_CONVERSATION));
+
+    // The upload did not await the parked task, so a later release still
+    // surfaces that panic.
+    let caught = AssertUnwindSafe(fixture.service.release(release_request(CONVERSATION)))
+        .catch_unwind()
+        .await;
+    assert!(caught.is_err());
+}
+
+#[tokio::test]
 async fn a_panicked_record_does_not_skip_the_rest_of_its_phase() {
     let fixture = fixture();
     fixture.upload(CONVERSATION, BYTES, PDF).await;

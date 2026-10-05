@@ -334,16 +334,23 @@ raised to one so a phase cannot be left with no slot.
 This covers two bulk phases: `release` (withdrawn tickets, then retired holds,
 then removed blobs) and the expiry sweep. `begin` fails when that sweep's
 count is not zero. An upload (`redeem`) runs the same sweep, logs the count,
-and does not fail the upload for it. Single-record writes — issuance,
+and does not fail the upload for it. That sweep does not resume a parked bulk
+panic; `release` and `begin` do. Single-record writes — issuance,
 redemption, refusal, creation — keep their own `audit_deadline` and do not take
 an admission slot. A single-record write that continues after its deadline is
 outside the bulk cap. Cleanup of tickets, holds, and unheld bytes finishes
 before either bulk phase starts, and it is not undone by audit.
 
 One phase moves its records into one delivery task. That task is not one task
-per record, and it is not a queue that accepts further work. It admits the
-next record only when a service-wide slot is free, then waits at most
-`audit_deadline`. The slot's wait is not part of the deadline. The service
+per record, and it is not a queue that accepts further work. Records not yet
+admitted stay in the phase's iterator. Building one future per record that
+then waits on the semaphore would be that queue. The semaphore is the cap two
+phases share; the iterator bound is the cap inside one phase. A single phase
+can show the same in-flight count under either cap.
+`a_second_bulk_phase_waits_for_the_admission_permit` is what fails when the
+permit is dropped before the attempt. The task admits the next record only
+when a service-wide slot is free, then waits at most `audit_deadline`. The
+slot's wait is not part of the deadline. The service
 holds that permit for the awaited attempt and does not hand it to the sink, so
 a blocking write cannot keep it. When the deadline drops the wait, the permit
 is released and the next record starts its own full deadline. A durable write
@@ -372,7 +379,14 @@ attempts are awaited at once. A write that continued past its deadline does
 not take one of those places. One record panicking does not skip the rest of
 its phase; the panic is resumed after those records have been handed over.
 The current phase's records are owned by its delivery task before an older
-panicked task is resumed. An empty phase still resumes one.
+panicked task is resumed. `release` and `begin` resume that panic, and an
+empty phase of either still does. An upload's expiry sweep does not resume
+it, including a panic from the sweep's own task. `receive` maps a panic in
+the upload task to an unresolved rejection of the ticket it already redeemed.
+Resuming the parked panic there would spend that ticket for a failure that
+was not this upload, and awaiting the task would drop the panic so a later
+`release` or `begin` could not surface it. The upload leaves the finished
+task parked.
 
 ```mermaid
 sequenceDiagram
@@ -413,7 +427,8 @@ sequenceDiagram
 | One record in a phase panics | The rest of that phase is still handed to the sink. The panic is resumed after that | `a_panicked_record_does_not_skip_the_rest_of_its_phase` |
 | Service dropped after the first attempt has started | Attempts not yet inside the sink stop. The one already inside is not followed by the rest | `dropping_the_service_stops_bulk_attempts_that_have_not_started` |
 | A delivery task panicked, then another phase has records | The new phase's task owns its records before the older panic is resumed, and those records are still handed to the sink | `a_panicked_delivery_does_not_drop_the_next_phase_s_records` |
-| A delivery task panicked, then an empty phase | The empty phase still resumes the panic | `an_empty_phase_surfaces_a_panicked_delivery` |
+| A delivery task panicked, then an empty phase of `release` or `begin` | That phase still resumes the panic | `an_empty_phase_surfaces_a_panicked_delivery` |
+| A delivery task panicked, then an upload | The upload is kept. The ticket is not recorded as unresolved. A later `release` still resumes the parked panic | `a_parked_bulk_panic_does_not_reject_a_later_upload` |
 | Upload while an expiry sweep is not yet acknowledged | The upload completes. The sweep's count does not fail it. The upload's own record does not take the sweep's slot | `an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged` |
 | Accept while the caller is still waiting, then the caller stops | The acknowledgement is in the count | `an_accept_while_the_caller_is_waiting_is_counted` |
 | Accept after the caller has stopped | The frozen count does not gain that acknowledgement | `a_late_accept_after_the_caller_stops_does_not_change_the_count` |
