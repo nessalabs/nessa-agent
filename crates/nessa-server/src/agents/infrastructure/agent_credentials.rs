@@ -12,12 +12,10 @@ use std::{collections::HashMap, ffi::OsString, sync::LazyLock};
 use nessa_agent_credentials::{CredentialAgent, CredentialNamespace};
 use serde::Deserialize;
 
-use crate::agents::{
-    application::{
-        AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
-    },
-    domain::AgentId,
+use crate::agents::application::{
+    AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
 };
+use nessa_protocol::agents::AgentId;
 
 const CREDENTIALS_JSON: &str =
     include_str!("../../../../../protocol/defaults/agent-credentials.json");

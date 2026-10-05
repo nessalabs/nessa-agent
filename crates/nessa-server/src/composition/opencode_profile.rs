@@ -20,11 +20,9 @@ use super::{
 };
 use crate::{
     agent_install::domain::HostPlatform,
-    agents::{
-        application::{AgentCredential, AgentCredentialKind, ProbeFailure},
-        domain::AgentId,
-    },
+    agents::application::{AgentCredential, AgentCredentialKind, ProbeFailure},
 };
+use nessa_protocol::agents::AgentId;
 
 const DEFAULT_MODEL: &str = "opencode/minimax-m3";
 

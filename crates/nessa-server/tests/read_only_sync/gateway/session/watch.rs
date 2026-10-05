@@ -2,9 +2,11 @@
 //! the inbox that keeps hints across operations, and the waits that read them
 //! (committed change watches, rows W2, W3, W6, W10, W11, W15).
 use super::*;
-use crate::product::generated::{ConversationWatchRecordsParams, MAX_CHANGE_WATCH_ID_BYTES};
-use crate::product_contract::generated::{ChangeWatchEndReason, ChangeWatchErrorCode};
 use crate::read_only_sync::application::watch::Wait;
+use nessa_protocol::product::generated::{
+    ConversationWatchRecordsParams, MAX_CHANGE_WATCH_ID_BYTES,
+};
+use nessa_protocol::product_contract::generated::{ChangeWatchEndReason, ChangeWatchErrorCode};
 
 const WATCH: &str = "00000000-0000-4000-8000-000000000001-1";
 

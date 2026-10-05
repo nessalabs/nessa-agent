@@ -169,12 +169,12 @@ Build `cargo build -p nessa-server -p nessa-mcp` before starting the gateway.
 `toolsEnabled: true` exposes Claude's native tool preset, including WebSearch and
 WebFetch. All Nessa-owned tools are supplied through the configured MCP servers;
 `nessa-mcp` currently supplies `shell`, backed by Shepherd. Server executables and
-arguments come only from trusted local configuration. They are not part of the
-provider restoration fingerprint: the server list is attached to each provider
-open, like the stand-in token, so adding, editing or removing a server leaves
-saved conversations restorable. An open conversation keeps its harness's set
-until its provider session ends. There are no automatically discovered MCP
-servers.
+arguments come only from trusted local configuration. A change made through
+`mcpServers.save` or `.remove` reaches new conversations at once, a hand edit to
+`config.json` at the next such change or a restart, and none strands a saved
+conversation
+([MCP servers and the restoration identity](../design/mcp-connections.md#mcp-servers-and-the-restoration-identity)).
+There are no automatically discovered MCP servers.
 
 An `mcpServers` entry may also carry `"enabled": false`, which keeps it
 configured but gives it to no new conversation, and `"env": {"NAME": "value"}`,
@@ -194,9 +194,12 @@ a restart. `mcpServers.list` reads the file, so a hand edit to it is listed
 at once but reaches new conversations only at the next save or remove, or the
 next start. Editing a server's variables alone is a change like any other: a
 conversation still running the old one is refused it and starts a new
-session. A change or inspection already under way when the gateway begins
-to stop finishes and is recorded before the MCP servers stop; one asked for
-after that is refused `mcp_servers_stopping`. `mcpServers.inspect` starts a saved server once,
+session. A variable named twice in one entry is refused, at startup and on a
+write, rather than one value kept. A change already under way when the
+gateway begins to stop finishes and is recorded before the MCP servers stop;
+an inspection under way is cut at once — its server stopped and the cut
+recorded — rather than finished; one asked for after that is refused
+`mcp_servers_stopping`. `mcpServers.inspect` starts a saved server once,
 outside any conversation, lists its tools with their hints and each MCP App's
 CSP and permissions, then stops it; it is bounded in time and size, runs at
 most two at a time, and is audited, because it runs the server's executable
@@ -763,9 +766,10 @@ gateway acknowledgement. The composer's generating animation is disabled.
 
 ### Restoring after local configuration changes
 
-Saved Claude sessions retain the exact context fingerprint, including workspace,
-launch arguments, system prompt, and tool configuration — not the MCP server
-list, which is attached to each open (ADR 344). A mismatch returns
+Saved Claude sessions retain the exact context fingerprint, whose inputs are
+listed on `fingerprint` in
+[`acp/sessions/identity.rs`](../../crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs).
+A mismatch returns
 `conversation_configuration_changed`; it does not start another context or erase
 history. The gateway logs the underlying opening failure and retains any required
 cleanup owner. Retrying the same configuration does not resolve a mismatch.
@@ -777,13 +781,10 @@ before messages could point at files does not reopen. See
 [ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md) for why a migration
 script was written for exactly this and then deleted.
 
-The release that takes the MCP server list out of the fingerprint answers
-`conversation_configuration_changed` for conversations saved before it, once:
-their saved fingerprint hashed the MCP servers, and with them the gateway
-executable's path. That is what every app update already does, because each
-version runs its gateway from a new directory. After that release, neither a
-change to the MCP servers nor a move of the gateway's executable strands a saved
-conversation (ADR 344).
+An update that changes the staged runtime tree, which in practice is every
+release, still strands saved conversations, and so, once, does the release that
+takes the MCP servers out of the fingerprint; see
+[MCP servers and the restoration identity](../design/mcp-connections.md#mcp-servers-and-the-restoration-identity).
 
 ### Conversation activity surfaces
 

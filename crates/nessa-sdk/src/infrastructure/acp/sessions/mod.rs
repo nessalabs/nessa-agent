@@ -32,6 +32,7 @@ mod stand_ins;
 pub(crate) mod thought_level;
 pub use config::{
     AcpConfig, McpServerList, McpServerProblem, McpServerSource, StdioMcpServer, MAX_MCP_SERVERS,
+    MAX_MCP_SERVER_ARGS, MAX_MCP_SERVER_ARG_BYTES, MAX_MCP_SERVER_NAME_BYTES,
 };
 pub use forwarded::{ForwardedResults, MAX_FORWARDED_RESULTS};
 pub use stand_ins::{StandInGrant, StandInGrants, StandInSessions};

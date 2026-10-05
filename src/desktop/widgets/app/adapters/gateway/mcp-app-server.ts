@@ -5,7 +5,7 @@
  * `mcp.releaseApp`. Who may call what — a tool hidden from apps, another
  * server's, a destructive tool the person must review — is the gateway's to
  * decide; this only says what it answered, in the port's typed outcomes (the
- * state table on #384, rows A1–A14, R1–R6).
+ * state table on #384, rows A1–A14, R1–R8).
  *
  * A resource's bytes are fetched with the single-use ticket `readResource`
  * answers, at once and once. The client's `fetchResource` holds them to the
@@ -25,7 +25,8 @@
  *
  * `callTool` and `readResource` settle with an outcome whatever the client
  * throws, so the bridge never mistakes one for a fault of this adapter
- * (`mcp-app-server.test.ts`, "never rejects"). Only `release` rejects, when
+ * (`mcp-app-server.test.ts`, "A11, R4: callTool and readResource never
+ * reject, whatever is thrown"). Only `release` rejects, when
  * the gateway did not take it.
  */
 import {
@@ -283,8 +284,16 @@ export function gatewayAppServer(
         )
       } catch (error) {
         // Used, expired, released, not the bytes described, or unreachable:
-        // the app is not loaded (R4). The error never holds the ticket; an
-        // abort is the mount's own end, not a fault.
+        // the app is not loaded (R4). The error never holds the ticket.
+        // `aborted` is not logged: the client answers it only for the signal
+        // it was given, the mount's, so it is the mount's own end. Its own
+        // deadline is `timeout`, and a transport's own AbortError is
+        // `unreachable` (`mcp-apps-api.test.ts`: "reports the caller's own
+        // abort as aborted…", "gives up on a fetch that never answers…" and
+        // "reports a transport's own AbortError, the caller's signal still
+        // live, as unreachable…"). The code is taken as the client gives it,
+        // not checked against the signal: an `aborted` while the mount is
+        // live — which that client cannot answer — is a failure, unlogged (R8).
         if (!(error instanceof NessaMcpResourceError && error.code === "aborted"))
           console.error("An MCP App's resource was not fetched", error)
         return failed

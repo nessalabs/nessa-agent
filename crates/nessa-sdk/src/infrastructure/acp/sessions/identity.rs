@@ -6,13 +6,6 @@
 //! fingerprint, so two profiles with byte-identical configuration still hold
 //! distinct identities.
 //!
-//! The MCP servers a harness is given are not hashed. They are a per-open
-//! attachment, like the stand-in grant, and not a selector of the provider's
-//! context: changing them leaves every saved conversation restorable
-//! (`adding_an_mcp_server_keeps_the_identity_and_restores`). The relay refuses
-//! a server whose configuration changed under an open conversation on its own
-//! (`configuration-changed`).
-//!
 //! [`ProviderIdentity`]: crate::application::agent_execution::providers::ProviderIdentity
 use super::AcpConfig;
 use crate::domain::agent_execution::{
@@ -28,6 +21,32 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update(bytes);
 }
 
+/// The restoration fingerprint: what a saved conversation's context must
+/// match to be restored. This function is the complete list of its inputs;
+/// the `AcpConfig` field docs that state their membership link here.
+///
+/// Hashed: the executable's path, the ordered arguments, the context
+/// environment, the workspace, whether tools are enabled, the token limits,
+/// the permission decisions, and the composed system prompt. Changing any of
+/// them changes the identity, and a saved conversation is refused before launch
+/// (`context_changes_reject_restore_before_launch_but_credentials_rotate_without_persistence`,
+/// `fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments`).
+///
+/// Not hashed:
+/// - the credential environment, so credentials rotate without stranding a
+///   conversation;
+/// - the stand-in grants (`AcpConfig::stand_ins`), fresh on every open;
+/// - the MCP servers (`AcpConfig::mcp_servers`): their names, commands and
+///   arguments. They are attached to each provider open, like the grants, and
+///   select no provider context, so adding, editing, removing or moving a
+///   server keeps the identity and the conversation resumes with the current
+///   list (`adding_an_mcp_server_keeps_the_identity_and_restores`,
+///   `editing_...`, `moving_an_mcp_servers_command_...`, `removing_...`).
+///
+/// What follows from this for the gateway — the one-time change of every
+/// saved identity, and what still strands a saved conversation — is in
+/// `docs/design/mcp-connections.md`, "MCP servers and the restoration
+/// identity".
 pub(crate) fn fingerprint(
     config: &AcpConfig,
     limits: TokenLimits,

@@ -106,8 +106,8 @@ impl TicketRecorder {
 /// Short, because a socket's path has a platform limit (104 bytes on macOS)
 /// that a namespace under a long data directory passes; in a directory of the
 /// user's own, created private and refused when it is not (`relay::bind`); and
-/// the same on every run of one namespace, so a stand-in's arguments are too.
-/// Those arguments are not part of any restoration identity (ADR 344).
+/// derived from the namespace alone, so two gateways of one namespace meet at
+/// one socket and the second cannot take it over (`relay::bind`).
 pub(super) fn relay_socket(namespace: &Path, uid: u32) -> PathBuf {
     let digest = Sha256::digest(namespace.as_os_str().as_encoded_bytes());
     let name: String = digest[..8]
@@ -335,9 +335,11 @@ pub(super) fn settings_over(
 }
 
 /// The gateway's MCP stop, in its one order: `settings` — when this gateway
-/// manages its stored servers — admits no more changes or inspections, stops
-/// the inspections under way, and drains every admitted one to its outcome
-/// record ([`McpServerSettings::shutdown`]); then `servers` stop, whatever
+/// manages its stored servers — admits no more changes or inspections and
+/// stops the inspections under way (done already as cleanup began,
+/// `ProductRouteState::close_mcp_server_admission`), and drains every
+/// admitted one to its outcome record ([`McpServerSettings::shutdown`]);
+/// then `servers` stop, whatever
 /// the drain answered. Called once, by the gateway's cleanup
 /// (`root::cleanup_product`), after conversations
 /// (`the_mcp_stop_drains_admitted_writes_before_the_servers_stop`).

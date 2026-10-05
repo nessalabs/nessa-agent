@@ -4,7 +4,16 @@
 //! each inspection.
 use crate::mcp_servers::domain::ConfiguredMcpServer;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
-use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    path::PathBuf,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::sync::watch;
 
 /// The stored servers, as one read sees them.
@@ -35,6 +44,17 @@ pub enum StoreError {
     Unavailable,
 }
 
+/// What a write published.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Written {
+    /// The stored block's revision now.
+    pub revision: String,
+    /// Whether the publish was made durable: false when the file was
+    /// replaced but its directory could not be synced, so a crash could
+    /// still lose it. The file is new either way.
+    pub durable: bool,
+}
+
 /// The lock on the stored configuration, held until dropped.
 pub type StoreLock = Box<dyn Send>;
 
@@ -55,13 +75,16 @@ pub trait McpServerStore: Send + Sync {
     /// The servers stored now.
     fn read(&self) -> Result<StoredServers, StoreError>;
     /// Store `servers` in place of the stored block, leaving the rest of the
-    /// configuration as it is, and answer the new revision — when the block
-    /// it reads now is still at `revision`, and
-    /// [`StoreError::RevisionConflict`] when it is not
+    /// configuration as it is, and answer the new revision and whether it
+    /// was made durable — when the block it reads now is still at
+    /// `revision`, and [`StoreError::RevisionConflict`] when it is not
     /// (`a_change_made_outside_the_lock_after_the_read_is_a_conflict`). Made
     /// only under the lock ([`Self::lock`]); the stored configuration is
-    /// unchanged on every error.
-    fn write(&self, revision: &str, servers: &[ConfiguredMcpServer]) -> Result<String, StoreError>;
+    /// unchanged on every error. A file replaced whose directory could not
+    /// be synced is not an error: it is [`Written`] with `durable: false`
+    /// (`s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable`).
+    fn write(&self, revision: &str, servers: &[ConfiguredMcpServer])
+        -> Result<Written, StoreError>;
 }
 
 /// Why a list of servers cannot be the live set: the SDK's rules for a
@@ -75,7 +98,7 @@ pub enum ServerProblem {
     Name { server: String },
     Command { server: String },
     Arguments { server: String },
-    EnvironmentName { server: String },
+    EnvironmentName { server: String, name: String },
     ReservedEnvironmentName { server: String, name: String },
     EnvironmentValue { server: String, name: String },
 }
@@ -110,12 +133,26 @@ pub struct McpServerAuditRecord {
     /// Minted when the change was asked for; the requested record and its
     /// outcome share it.
     pub operation_id: String,
-    /// Who asked: the authenticated caller.
-    pub initiator: McpServerInitiator,
+    /// Why this record's transition happened, and who set it off.
+    pub cause: McpServerCause,
     /// What was asked, with variable names and never their values
     /// (`a_save_is_published_then_replaces_the_live_set_and_is_audited_both_sides`).
     pub request: McpServerChangeRequest,
     pub phase: McpServerAuditPhase,
+}
+
+/// Why a record's transition happened: the operation's cause, which is the
+/// caller's request — a deadline or a fault included, as they end the
+/// caller's operation — unless shutdown ended it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpServerCause {
+    /// The authenticated caller asked for it.
+    CallerRequested(McpServerInitiator),
+    /// The gateway began to stop, which ended an inspection: not started,
+    /// or cut. The gateway — the system — is its initiator; the caller who
+    /// asked is on the requested record with the same operation
+    /// (`shutdown_ended_inspections_are_recorded_as_the_gateway_stopping`).
+    GatewayStopping,
 }
 
 /// The authenticated caller of a change.
@@ -172,11 +209,13 @@ pub enum McpServerAuditPhase {
 pub enum McpServerOutcome {
     /// Published. `live_set_replaced` is false only when the gateway was
     /// stopping, so its live set was not replaced; the next start reads the
-    /// file.
+    /// file. `durable` is false when the file was replaced but its
+    /// directory could not be synced ([`Written::durable`]).
     Applied {
         before: ServerNames,
         after: ServerNames,
         live_set_replaced: bool,
+        durable: bool,
     },
     /// Refused before anything was written; `before` is what was stored, when
     /// it could be read.
@@ -232,10 +271,10 @@ impl AuditedServer {
     /// `server` as a record names it.
     pub fn of(server: &ConfiguredMcpServer) -> Self {
         Self {
-            name: server.server.name.clone(),
-            command: server.server.command.clone(),
-            args: server.server.args.clone(),
-            enabled: server.enabled,
+            name: server.server().name().to_owned(),
+            command: server.server().command().to_owned(),
+            args: server.server().args().to_vec(),
+            enabled: server.enabled(),
             env_names: server.env_names(),
         }
     }
@@ -310,6 +349,10 @@ pub struct InspectedUi {
 /// them: stopped, or never started.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InspectFailure {
+    /// The stored server breaks the SDK's rules for what a server is
+    /// started with — an entry added to the file by hand, say — so it was
+    /// not started (`i_invalid_a_stored_server_that_breaks_a_rule_is_invalid_and_not_started`).
+    Invalid(ServerProblem),
     /// Its process could not be launched.
     StartFailed,
     /// It was not started: the gateway is stopping, and the SDK refused to
@@ -328,7 +371,7 @@ pub enum InspectFailure {
 impl InspectFailure {
     /// Whether the server's process was started before this.
     pub fn started(&self) -> bool {
-        !matches!(self, Self::StartFailed | Self::Stopping)
+        !matches!(self, Self::Invalid(_) | Self::StartFailed | Self::Stopping)
     }
 }
 
@@ -357,18 +400,44 @@ impl InspectStop {
     }
 }
 
+/// Marked by an inspector as the inspected server's launch begins, so a
+/// fault after that is answered as a server that may have run, and one
+/// before it as a server that did not.
+#[derive(Clone, Debug, Default)]
+pub struct LaunchBegun(Arc<AtomicBool>);
+impl LaunchBegun {
+    /// The mark `flag` holds: begun once it holds `true`.
+    pub fn over(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+    /// The launch begins now.
+    pub fn mark(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    /// Whether the launch has begun.
+    pub fn marked(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// What [`ServerInspector::inspect`] answers.
 pub type InspectFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Inspection, InspectFailure>> + Send + 'a>>;
 
 /// Starts one stored server once, outside any conversation, reads what it
 /// offers within `bounds` — or until `stop` is given — and stops it with
-/// its process group before answering, however the reading ended.
+/// its process group before answering, however the reading ended. It marks
+/// `launch` just before it asks for the server to be opened, and not when it
+/// is stopped first. The opening is also what refuses an invalid server, so a
+/// refused opening can follow the mark: a fault after it is then answered as
+/// a server that may have run, the side that over-reports rather than hides
+/// a launch. Its outcome is left unrecorded, since the task never reached it.
 pub trait ServerInspector: Send + Sync {
     fn inspect(
         &self,
         server: &ConfiguredMcpServer,
         bounds: InspectBounds,
         stop: InspectStop,
+        launch: LaunchBegun,
     ) -> InspectFuture<'_>;
 }

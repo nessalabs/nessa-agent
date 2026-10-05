@@ -13,7 +13,12 @@
 //! launch, the handshake, every read and the close. Shutdown's stop
 //! ([`InspectStop`]) is observed beside it at each step: given before the
 //! launch, nothing is launched (`stopping`); given after, the inspection is
-//! cut ([`InspectCut::Stopping`]). Past the deadline, or once stopped —
+//! cut ([`InspectCut::Stopping`]). The opening is polled before the stop,
+//! so a stop that lands as it begins never cuts a server that was not
+//! asked to start: one the SDK refuses before launching — a stored server
+//! breaking its rules is [`InspectFailure::Invalid`] — answers as refused
+//! (`a_stop_landing_as_the_opening_begins_never_cuts_a_server_never_started`).
+//! Past the deadline, or once stopped —
 //! while opening, reading or closing — the session is dropped, which kills
 //! the process group at once rather than waiting out the SDK's grace for a
 //! server whose stdin closed
@@ -22,10 +27,10 @@
 //! `a_stop_mid_read_cuts_the_inspection_and_kills_its_group`). Any other end
 //! of the reading closes the session gracefully, within what is left of the
 //! deadline. Either way the server is stopped before the answer.
-use super::live_set::LaunchSettings;
+use super::live_set::{problem, LaunchSettings};
 use crate::mcp_servers::application::{
     InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectStop, InspectedTool,
-    InspectedUi, Inspection, ServerInspector,
+    InspectedUi, Inspection, LaunchBegun, ServerInspector,
 };
 use crate::mcp_servers::domain::ConfiguredMcpServer;
 use nessa_sdk::domain::mcp_apps::UiResourceUri;
@@ -61,6 +66,7 @@ impl ServerInspector for McpServerInspector {
         server: &ConfiguredMcpServer,
         bounds: InspectBounds,
         mut stop: InspectStop,
+        begun: LaunchBegun,
     ) -> InspectFuture<'_> {
         let launch = self.launches.launch(server);
         Box::pin(async move {
@@ -68,10 +74,12 @@ impl ServerInspector for McpServerInspector {
             if stop.given() {
                 return Err(InspectFailure::Stopping);
             }
+            begun.mark();
             let deadline = self.clock.now() + bounds.deadline;
             // Dropped at the deadline or the stop, the opening kills what it
-            // launched.
+            // launched. Polled first: its first poll refuses or launches.
             let session = tokio::select! {
+                biased;
                 opened = self.servers.open_once(&launch) => opened.map_err(opening)?,
                 () = self.clock.sleep_until(deadline) => return Err(InspectFailure::TimedOut),
                 () = stop.wait() => return Ok(stopped()),
@@ -182,7 +190,8 @@ fn opening(error: McpError) -> InspectFailure {
 /// The SDK's error as an inspection's failure, once the session is open.
 fn failure(error: McpError) -> InspectFailure {
     match error {
-        McpError::Start(_) | McpError::InvalidConfiguration(_) => InspectFailure::StartFailed,
+        McpError::InvalidConfiguration(refused) => InspectFailure::Invalid(problem(refused)),
+        McpError::Start(_) => InspectFailure::StartFailed,
         McpError::Timeout => InspectFailure::TimedOut,
         McpError::Remote { code, message } => InspectFailure::RemoteError { code, message },
         McpError::Handshake(_)

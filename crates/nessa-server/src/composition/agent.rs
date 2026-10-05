@@ -39,7 +39,6 @@
 use super::managed_adapter::ManagedAdapter;
 #[cfg(unix)]
 use crate::agents::application::AgentCredentialSource;
-use crate::agents::domain::AgentId;
 #[cfg(unix)]
 use crate::agents::infrastructure::CredentialedClaudeProvider;
 #[cfg(unix)]
@@ -49,6 +48,7 @@ use crate::core::RunError;
 use crate::mcp_servers::{domain::ConfiguredMcpServer, infrastructure::stored_servers};
 #[cfg(unix)]
 use nessa_auth::application::ports::Clock;
+use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 #[cfg(unix)]
 use nessa_sdk::{

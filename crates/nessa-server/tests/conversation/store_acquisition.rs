@@ -1,11 +1,12 @@
 //! Actual SQLite projections refuse oversized text before selecting its bytes.
 use super::{conversation, summary, text};
-use crate::agents::domain::AgentId;
-use crate::conversation::domain::{
-    Conversation, ConversationModelId, ConversationPreview, ConversationTitle,
-};
+use crate::conversation::domain::Conversation;
 use nessa_auth::domain::MAX_IDENTIFIER_BYTES;
 use nessa_local_database::rusqlite::{params, types::Value, Connection};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationModelId, ConversationPreview, ConversationTitle,
+};
 use nessa_sync::replication::domain::MAX_ID_BYTES;
 
 #[test]

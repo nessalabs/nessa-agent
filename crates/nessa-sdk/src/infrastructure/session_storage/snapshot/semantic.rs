@@ -322,7 +322,11 @@ mod tests {
                 ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
                 ReviewDeclineStage,
             },
-            prompts::{ImageReference, PromptText, UserMessage},
+            prompts::{
+                AppModelContext, ImageReference, McpAppSource, MessageSender, PromptText,
+                UserMessage,
+            },
+            tools::{McpTool, ToolCallId},
         },
         domain::common::value_objects::{ImageMediaType, Sha256Digest},
     };
@@ -539,6 +543,174 @@ mod tests {
                 "{field}"
             );
         }
+    }
+
+    #[test]
+    fn semantic_admission_restores_who_wrote_it_and_what_apps_gave_with_it() {
+        let app = |tool_id: &str| {
+            McpAppSource::new(
+                ExecutionId::new("turn-0").unwrap(),
+                ToolCallId::new(tool_id).unwrap(),
+                McpTool::new("charts", "plot").unwrap(),
+            )
+            .unwrap()
+        };
+        let message = UserMessage::text_only(PromptText::new("plot May").unwrap())
+            .sent_by(MessageSender::App(app("call-1")))
+            .with_app_model_context(vec![
+                AppModelContext::new(app("call-1"), "update-1", Some("zoomed".into()), None)
+                    .unwrap()
+                    .unwrap(),
+                AppModelContext::new(
+                    app("call-2"),
+                    "update-1",
+                    None,
+                    Some(r#"{"month":5}"#.into()),
+                )
+                .unwrap()
+                .unwrap(),
+            ])
+            .unwrap();
+        let record = InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new("one").unwrap(),
+                user_message: message,
+                estimated_input_tokens: 7,
+                reserved_output_tokens: 8,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        };
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        assert!(matches!(
+            decode_one(&bytes, &ProviderContext::Absent).unwrap(),
+            SessionChange::InputAccepted(next) if *next == record
+        ));
+        // Each part is rebuilt through the domain: what it would refuse is a
+        // corrupt record, not a message the agent is handed.
+        let valid: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for (path, replacement) in [
+            (
+                &["user_app", "server"][..],
+                serde_json::Value::from("two words"),
+            ),
+            (&["user_app", "tool_id"][..], serde_json::Value::from(" ")),
+            (&["user_app", "extra"][..], serde_json::Value::from("x")),
+            (
+                &["user_app_model_context", "1", "structured_content"][..],
+                "[5]".into(),
+            ),
+            (
+                &["user_app_model_context", "0", "text"][..],
+                serde_json::Value::Null,
+            ),
+            // Saved only as none, never as empty: one empty was changed.
+            // On the one with structure too, where an empty text read as
+            // none would leave a context standing.
+            (&["user_app_model_context", "1", "text"][..], "".into()),
+            (&["user_app_model_context", "0", "update"][..], " ".into()),
+            (
+                &["user_app_model_context", "0", "text"][..],
+                "x".repeat(AppModelContext::MAX_BYTES + 1).into(),
+            ),
+        ] {
+            let mut invalid = valid.clone();
+            let mut at = &mut invalid["changes"][0]["InputAccepted"]["metadata"];
+            for key in path {
+                at = match key.parse::<usize>() {
+                    Ok(index) => &mut at[index],
+                    Err(_) => &mut at[*key],
+                };
+            }
+            *at = replacement;
+            assert!(
+                matches!(
+                    decode_one(
+                        &serde_json::to_vec(&invalid).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{path:?}"
+            );
+        }
+        // Five contexts are refused by the decoder, before a fifth is built,
+        // not only by the message's own constructor after all five were.
+        let mut five = valid.clone();
+        let contexts = five["changes"][0]["InputAccepted"]["metadata"]["user_app_model_context"]
+            .as_array_mut()
+            .unwrap();
+        let first = contexts[0].clone();
+        contexts.extend([first.clone(), first.clone(), first]);
+        assert!(matches!(
+            decode_one(
+                &serde_json::to_vec(&five).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::Corrupt(message))
+                if message.contains("journal collection exceeds decoding limit")
+        ));
+        // A context missing either part's key is not of this shape either,
+        // not read as that part being none.
+        for part in ["text", "structured_content"] {
+            let mut partial = valid.clone();
+            partial["changes"][0]["InputAccepted"]["metadata"]["user_app_model_context"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove(part);
+            assert!(
+                matches!(
+                    decode_one(
+                        &serde_json::to_vec(&partial).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{part}"
+            );
+        }
+        // A record without either field is not of this shape: corrupt, not
+        // read as the person's with nothing given (no older reader is kept).
+        for field in ["user_app", "user_app_model_context"] {
+            let mut older = valid.clone();
+            older["changes"][0]["InputAccepted"]["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                matches!(
+                    decode_one(
+                        &serde_json::to_vec(&older).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{field}"
+            );
+        }
+        // A person's message says so: `user_app` is null.
+        let person = UserMessage::text_only(PromptText::new("mine").unwrap());
+        let mut record = record;
+        record.request.user_message = person;
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            saved["changes"][0]["InputAccepted"]["metadata"]["user_app"],
+            serde_json::Value::Null
+        );
+        assert!(matches!(
+            decode_one(&bytes, &ProviderContext::Absent).unwrap(),
+            SessionChange::InputAccepted(next) if *next == record
+        ));
     }
 
     #[test]

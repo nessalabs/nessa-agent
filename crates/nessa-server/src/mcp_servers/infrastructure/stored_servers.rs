@@ -5,14 +5,22 @@
 //! An entry is `{name, command, args?, enabled?, env?}`. One without
 //! `enabled` is on, and one without `env` has no variables of its own: that
 //! is the current contract's default, not a reading of an older shape.
+//!
+//! `env` is read entry by entry, every entry kept, and handed to
+//! [`ConfiguredMcpServer::new`], which refuses a name given twice: decoded
+//! into a map first, the second value would silently replace the first
+//! (`a_repeated_variable_name_in_the_file_is_refused_in_either_order`).
 use crate::mcp_servers::domain::{
     stored_revision, ConfigurationKey, ConfiguredMcpServer, StdioServer,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{
+    de::{MapAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::Value;
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, fmt, path::PathBuf};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StoredMcpServer {
     name: String,
@@ -22,24 +30,65 @@ struct StoredMcpServer {
     #[serde(default = "enabled")]
     enabled: bool,
     #[serde(default)]
-    env: BTreeMap<String, String>,
+    env: Entries,
+}
+
+/// An entry as it is written: its variables by name, as the server holds
+/// them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WrittenMcpServer<'a> {
+    name: &'a str,
+    command: &'a std::path::Path,
+    args: &'a [String],
+    enabled: bool,
+    env: &'a BTreeMap<String, String>,
+}
+
+/// An `env` object's entries in the order the file gives them, a name
+/// given twice kept twice.
+#[derive(Default)]
+struct Entries(Vec<(String, String)>);
+impl<'de> Deserialize<'de> for Entries {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Each;
+        impl<'de> Visitor<'de> for Each {
+            type Value = Entries;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of variable names and string values")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Entries, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry::<String, String>()? {
+                    entries.push(entry);
+                }
+                Ok(Entries(entries))
+            }
+        }
+        deserializer.deserialize_map(Each)
+    }
 }
 
 fn enabled() -> bool {
     true
 }
 
-impl From<StoredMcpServer> for ConfiguredMcpServer {
-    fn from(stored: StoredMcpServer) -> Self {
-        Self {
-            server: StdioServer {
-                name: stored.name,
-                command: stored.command,
-                args: stored.args,
-            },
-            enabled: stored.enabled,
-            env: stored.env,
-        }
+impl StoredMcpServer {
+    /// The entry as the gateway holds it, or why it cannot be: a variable
+    /// named twice.
+    fn configured(self) -> Result<ConfiguredMcpServer, String> {
+        let name = self.name.clone();
+        ConfiguredMcpServer::new(
+            StdioServer::new(self.name, self.command, self.args),
+            self.enabled,
+            self.env.0,
+        )
+        .map_err(|repeated| {
+            format!(
+                "MCP server {name:?} names the variable {:?} twice",
+                repeated.name
+            )
+        })
     }
 }
 
@@ -49,7 +98,11 @@ pub fn stored_servers<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<ConfiguredMcpServer>, D::Error> {
     let stored = Vec::<StoredMcpServer>::deserialize(deserializer)?;
-    Ok(stored.into_iter().map(ConfiguredMcpServer::from).collect())
+    stored
+        .into_iter()
+        .map(StoredMcpServer::configured)
+        .collect::<Result<_, _>>()
+        .map_err(serde::de::Error::custom)
 }
 
 /// `block` (an `agents.mcpServers` value) parsed, or `None` when it is not
@@ -62,14 +115,14 @@ pub(crate) fn parse_block(block: &Value) -> Option<Vec<ConfiguredMcpServer>> {
 /// when a command is not UTF-8, which the SDK's rules refuse first
 /// (`McpServerProblem::Command`).
 pub(crate) fn block(servers: &[ConfiguredMcpServer]) -> Option<Value> {
-    let stored: Vec<StoredMcpServer> = servers
+    let stored: Vec<WrittenMcpServer<'_>> = servers
         .iter()
-        .map(|configured| StoredMcpServer {
-            name: configured.server.name.clone(),
-            command: configured.server.command.clone(),
-            args: configured.server.args.clone(),
-            enabled: configured.enabled,
-            env: configured.env.clone(),
+        .map(|configured| WrittenMcpServer {
+            name: configured.server().name(),
+            command: configured.server().command(),
+            args: configured.server().args(),
+            enabled: configured.enabled(),
+            env: configured.env(),
         })
         .collect();
     serde_json::to_value(stored).ok()

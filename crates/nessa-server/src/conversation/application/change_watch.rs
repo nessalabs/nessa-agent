@@ -1,6 +1,6 @@
 //! Narrow injection of the existing committed-record producer.
 
-use crate::conversation::domain::ConversationId;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::sessions::{ChangeWatchError, CommittedChangeWatch};
 use uuid::Uuid;
 

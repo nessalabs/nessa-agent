@@ -1,19 +1,10 @@
 use super::*;
-use crate::conversation::application::{
-    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, ReceiverReadScope,
-    WatchCatalogue, WatchRecords,
-};
+use crate::conversation::application::{CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue, WatchRecords};
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use crate::conversation::infrastructure::NessaRecordWatches;
-use crate::product::{
-    change_watch::{
-        watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector,
-    },
-    generated::{
-        MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
-    },
-    WatchTaskFault,
-};
-use crate::product_contract::generated::ChangeWatchErrorCode;
+use crate::product::{change_watch::{watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector}, WatchTaskFault};
+use nessa_protocol::product::generated::{MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES};
+use nessa_protocol::product_contract::generated::ChangeWatchErrorCode;
 use futures_util::poll;
 use nessa_sdk::application::agent_execution::sessions::{ChangeWatchError, CommittedChangeWatch};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
@@ -2222,6 +2213,8 @@ impl HostWatchFixture {
         }
     }
     /// No watch admitted: the host's watch drain has nothing to wait for.
+    /// Only the MCP stop's tests, on Unix, use it.
+    #[cfg(unix)]
     pub(crate) async fn idle() -> Self {
         Self {
             inner: WatchFixture::new().await,

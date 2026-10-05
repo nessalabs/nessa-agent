@@ -15,8 +15,8 @@
 //! when one is held. This loop decides only what ends the run; composition
 //! asks the pinned status again for an end whose cause `asks_status` names
 //! (row PC5).
-use super::{device::asks_status, GatewayError};
-use crate::product_contract::generated::{ChangeWatchEndReason, RecordReadErrorCode};
+use super::{device::asks_status, GatewayAttempt, GatewayError};
+use nessa_protocol::product_contract::generated::{ChangeWatchEndReason, RecordReadErrorCode};
 use std::num::NonZeroUsize;
 
 /// What one wait for a hint found.
@@ -52,6 +52,23 @@ pub(crate) const PREPARING_ATTEMPTS: usize = 4;
 /// retained, and the same read may be asked again.
 fn preparing(cause: GatewayError) -> bool {
     cause == GatewayError::Record(RecordReadErrorCode::SourcePreparing)
+}
+
+/// Discovery before registration (row W17): an attempt answered
+/// `source_preparing` kept the session and the gateway's progress, so it is
+/// asked again at once, up to `PREPARING_ATTEMPTS` attempts. Returns the last
+/// attempt, whatever it answered; an `Err` from `attempt` is returned as is.
+pub(crate) fn discover<R, E>(
+    mut attempt: impl FnMut() -> Result<GatewayAttempt<R>, E>,
+) -> Result<GatewayAttempt<R>, E> {
+    let mut attempts = 1;
+    loop {
+        let discovery = attempt()?;
+        match discovery.outcome.failure {
+            Some(cause) if preparing(cause) && attempts < PREPARING_ATTEMPTS => attempts += 1,
+            _ => return Ok(discovery),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,11 +4,6 @@
 //! `conversation.write` grant, and admitted the two calls onto the app lane.
 use super::{
     conversation::{caller, conversation_id, error_code},
-    generated::{
-        ConversationErrorCode, ConversationMutationResult, McpAppReference, McpCallToolParams,
-        McpCallToolResult, McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams,
-        McpRemoteErrorDetails, McpUiCsp, McpUiPermissions,
-    },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
@@ -16,8 +11,13 @@ use crate::conversation::application::{
     ConversationError, McpAppCall, McpAppError, McpAppRead, McpAppRef, RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
-use crate::protocol::{OutgoingMessage, RequestFrame};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    ConversationErrorCode, ConversationMutationResult, McpAppReference, McpCallToolParams,
+    McpCallToolResult, McpReadResourceParams, McpReadResourceResult, McpReleaseAppParams,
+    McpRemoteErrorDetails, McpUiCsp, McpUiPermissions,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, MAX_UI_URI_BYTES};
 

@@ -14,15 +14,15 @@
 //! holds. A refusal, a timeout, a closed connection or an unreadable status
 //! ends nothing and purges nothing (design rows PC2–PC5).
 use super::{CacheError, GatewayError};
-use crate::product_contract::generated::{
-    CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
-};
 use nessa_auth::{
     application::pairing::{
         ClientPendingStore, DeviceCredential, PendingEnrollment, PrivateKeyMaterial,
         PrivateStateError,
     },
     domain::{pairing::PublicIntent, CredentialId, ResourceId},
+};
+use nessa_protocol::product_contract::generated::{
+    CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
 };
 use nessa_sync::replication::domain::Id;
 use std::sync::{Arc, Mutex, PoisonError};

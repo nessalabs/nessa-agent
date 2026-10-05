@@ -27,6 +27,15 @@ use nessa_auth::adapters::pairing::{
 };
 use nessa_auth::application::pairing::ClientPendingStore;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::pairing::{
+    encode_frame,
+    wire::{encode_request, NativePairingRequest},
+    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
+};
 use nessa_sdk::application::agent_execution::{
     executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate},
     permissions::ActionContext,
@@ -42,17 +51,9 @@ use nessa_sdk::domain::agent_execution::{
     sessions::{ExecutionSessionId, ProviderContext, SessionId},
 };
 use nessa_sdk::infrastructure::session_storage::RecordStorage;
-use nessa_server::agents::domain::AgentId;
 use nessa_server::conversation::application::ConversationRepository;
-use nessa_server::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-};
+use nessa_server::conversation::domain::Conversation;
 use nessa_server::conversation::infrastructure::LocalConversationStore;
-use nessa_server::device_pairing::infrastructure::{
-    encode_frame,
-    wire::{encode_request, NativePairingRequest},
-    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
-};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};

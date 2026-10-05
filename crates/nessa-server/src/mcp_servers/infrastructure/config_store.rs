@@ -21,7 +21,7 @@
 //! `agents.mcpServers` keeps its value, not its spelling (`a_save_is_published_then_replaces_the_live_set_and_is_audited_both_sides`).
 use super::stored_servers::{block, parse_block, revision};
 use crate::mcp_servers::application::{
-    McpServerStore, StoreError, StoreFuture, StoreLock, StoredServers,
+    McpServerStore, StoreError, StoreFuture, StoreLock, StoredServers, Written,
 };
 use crate::mcp_servers::domain::{ConfigurationKey, ConfiguredMcpServer};
 use nessa_sdk::infrastructure::clock::Clock;
@@ -34,13 +34,25 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(2);
 /// How often a waiting change tries the lock again.
 const LOCK_RETRY: Duration = Duration::from_millis(20);
 
+/// How far a publish that replaced the file got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Published {
+    /// Replaced, and its directory synced: it survives a crash.
+    Durable,
+    /// Replaced, but its directory could not be synced: the file is new,
+    /// and a crash could still lose it.
+    NotDurable,
+}
+
 /// The file system under the store: the configuration file and its lock.
 pub trait ConfigFiles: Send + Sync {
     /// The file's bytes, at most `limit + 1` of them; `None` when there is no
     /// file.
     fn read(&self, limit: usize) -> io::Result<Option<Vec<u8>>>;
-    /// Replace the file with `bytes` in one step, private to this user.
-    fn publish(&self, bytes: &[u8]) -> io::Result<()>;
+    /// Replace the file with `bytes` in one step, private to this user, and
+    /// say whether that was made durable. An error leaves the file as it
+    /// was.
+    fn publish(&self, bytes: &[u8]) -> io::Result<Published>;
     /// The lock, or `None` while another holder has it.
     fn try_lock(&self) -> io::Result<Option<StoreLock>>;
 }
@@ -171,7 +183,11 @@ impl McpServerStore for ConfigJsonStore {
         })
     }
 
-    fn write(&self, expected: &str, servers: &[ConfiguredMcpServer]) -> Result<String, StoreError> {
+    fn write(
+        &self,
+        expected: &str,
+        servers: &[ConfiguredMcpServer],
+    ) -> Result<Written, StoreError> {
         let mut document = self.document()?;
         // What is stored now is what the edit was made to, or the edit is
         // stale: something wrote outside the lock since the read.
@@ -181,8 +197,15 @@ impl McpServerStore for ConfigJsonStore {
         }
         let written = block(servers).ok_or(StoreError::ConfigInvalid)?;
         let new_revision = revision(&self.key, Some(&written));
+        // `"agents": null` is no block, as the runtime configuration reads it
+        // (`c_null_agents_is_read_and_written_as_absent`).
         let agents = document
             .entry("agents")
+            .and_modify(|agents| {
+                if agents.is_null() {
+                    *agents = Value::Object(self.agents.clone());
+                }
+            })
             .or_insert_with(|| Value::Object(self.agents.clone()));
         let Value::Object(agents) = agents else {
             return Err(StoreError::ConfigInvalid);
@@ -190,10 +213,14 @@ impl McpServerStore for ConfigJsonStore {
         agents.insert("mcpServers".into(), written);
         let bytes = self.serialised(&Value::Object(document))?;
         self.checked(&bytes)?;
-        self.files
+        let published = self
+            .files
             .publish(&bytes)
             .map_err(|_| StoreError::Unavailable)?;
-        Ok(new_revision)
+        Ok(Written {
+            revision: new_revision,
+            durable: published == Published::Durable,
+        })
     }
 }
 
@@ -239,26 +266,39 @@ impl ConfigFiles for OsConfigFiles {
         Ok(Some(bytes))
     }
 
-    fn publish(&self, bytes: &[u8]) -> io::Result<()> {
+    fn publish(&self, bytes: &[u8]) -> io::Result<Published> {
         use std::io::Write;
         let directory = self.directory()?;
         let mut file = nessa_local_storage::PrivateTempFile::new_in(directory)?;
         file.as_file_mut().write_all(bytes)?;
         file.as_file().sync_all()?;
         file.persist(&self.path)?;
-        nessa_local_storage::sync_directory(directory)
+        // Renamed: the file is new whatever the sync says.
+        Ok(match nessa_local_storage::sync_directory(directory) {
+            Ok(()) => Published::Durable,
+            Err(_) => Published::NotDurable,
+        })
     }
 
     fn try_lock(&self) -> io::Result<Option<StoreLock>> {
         use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::io::AsRawFd;
+        // Opened without blocking, and refused unless it is a regular file:
+        // a FIFO planted as the lock would otherwise hold a blocking thread
+        // in `open` (`a_lock_that_is_not_a_regular_file_is_refused_without_blocking`).
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(self.lock_path())?;
+        if !lock.metadata()?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "config.json.lock must be a regular file",
+            ));
+        }
         // SAFETY: flock has no memory preconditions; the descriptor is open.
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let error = io::Error::last_os_error();

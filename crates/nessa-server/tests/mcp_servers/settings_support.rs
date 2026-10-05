@@ -1,16 +1,22 @@
 //! Substitutes for what managing the stored servers reads from outside — the
 //! configuration file and its lock, the audit, the clock, and the server an
 //! inspection starts — each able to fail, and the settings built over them.
+//!
+//! Most tests that use these run on Unix only, as the live set does; a
+//! helper only those tests use is compiled only there, so no other target
+//! sees dead code (`clippy --all-targets -D warnings` on Windows).
+#[cfg(unix)]
+use crate::mcp_servers::application::McpServerInitiator;
 use crate::mcp_servers::application::{
     AuditUnavailable, InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectStop,
-    Inspection, LiveServerSet, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
-    McpServerInitiator, McpServerSettings, ServerInspector, StoreLock,
+    Inspection, LaunchBegun, LiveServerSet, McpServerAudit, McpServerAuditPhase,
+    McpServerAuditRecord, McpServerSettings, ServerInspector, StoreLock,
 };
 use crate::mcp_servers::domain::{
     ConfigurationKey, ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME,
 };
 use crate::mcp_servers::infrastructure::{
-    ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers,
+    ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers, Published,
 };
 use nessa_sdk::infrastructure::{
     clock::{Clock, ClockInstant, ClockSleep, RuntimeClock},
@@ -20,27 +26,30 @@ use serde_json::{json, Map, Value};
 use std::{
     collections::BTreeMap,
     io,
-    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
 };
-use tokio::sync::{watch, Semaphore};
+#[cfg(unix)]
+use tokio::sync::watch;
+use tokio::sync::Semaphore;
 
 /// What the check refuses: a configuration holding this is not one the
 /// gateway starts with.
 pub(crate) const UNPARSEABLE: &str = "refused-by-the-runtime-configuration";
 
 /// `config.json` in memory, with its lock, publishing that can be made to
-/// fail or held, reads counted, and an edit made outside the lock once the
-/// next read has been answered.
+/// fail, to publish without its directory synced, or held, reads counted,
+/// and an edit made outside the lock once the next read has been answered.
 #[derive(Default)]
 pub(crate) struct MemoryFiles {
     pub(crate) bytes: Mutex<Option<Vec<u8>>>,
     pub(crate) held: Arc<AtomicBool>,
     pub(crate) fail_publish: AtomicBool,
+    /// The file is replaced, then its directory sync fails.
+    pub(crate) fail_sync: AtomicBool,
     pub(crate) publishes: AtomicUsize,
     pub(crate) locks: AtomicUsize,
     /// How many reads have been made.
@@ -59,13 +68,16 @@ impl MemoryFiles {
         *files.bytes.lock().unwrap() = Some(serde_json::to_vec(&document).unwrap());
         Arc::new(files)
     }
+    pub(crate) fn document(&self) -> Value {
+        serde_json::from_slice(self.bytes.lock().unwrap().as_ref().unwrap()).unwrap()
+    }
+}
+#[cfg(unix)]
+impl MemoryFiles {
     pub(crate) fn raw(bytes: &[u8]) -> Arc<Self> {
         let files = Self::default();
         *files.bytes.lock().unwrap() = Some(bytes.to_vec());
         Arc::new(files)
-    }
-    pub(crate) fn document(&self) -> Value {
-        serde_json::from_slice(self.bytes.lock().unwrap().as_ref().unwrap()).unwrap()
     }
     pub(crate) fn current(&self) -> Option<Vec<u8>> {
         self.bytes.lock().unwrap().clone()
@@ -91,7 +103,7 @@ impl ConfigFiles for MemoryFiles {
         }
         Ok(read)
     }
-    fn publish(&self, bytes: &[u8]) -> io::Result<()> {
+    fn publish(&self, bytes: &[u8]) -> io::Result<Published> {
         self.publishing.store(true, Ordering::SeqCst);
         let gate = self.publish_gate.lock().unwrap().take();
         if let Some(gate) = gate {
@@ -102,7 +114,11 @@ impl ConfigFiles for MemoryFiles {
         }
         self.publishes.fetch_add(1, Ordering::SeqCst);
         *self.bytes.lock().unwrap() = Some(bytes.to_vec());
-        Ok(())
+        Ok(if self.fail_sync.load(Ordering::SeqCst) {
+            Published::NotDurable
+        } else {
+            Published::Durable
+        })
     }
     fn try_lock(&self) -> io::Result<Option<StoreLock>> {
         if self.held.swap(true, Ordering::SeqCst) {
@@ -156,17 +172,21 @@ impl Clock for LeapingClock {
 
 /// A clock that moves only when told to, and whose sleeps end once it has
 /// moved past them.
+#[cfg(unix)]
 pub(crate) struct ManualClock(watch::Sender<Duration>);
+#[cfg(unix)]
 impl Default for ManualClock {
     fn default() -> Self {
         Self(watch::channel(Duration::ZERO).0)
     }
 }
+#[cfg(unix)]
 impl ManualClock {
     pub(crate) fn advance(&self, by: Duration) {
         self.0.send_modify(|now| *now += by);
     }
 }
+#[cfg(unix)]
 impl Clock for ManualClock {
     fn now(&self) -> ClockInstant {
         ClockInstant::from_origin(*self.0.borrow())
@@ -182,7 +202,8 @@ impl Clock for ManualClock {
 /// An inspector that answers what it is given, records the servers and
 /// bounds it was asked with, and — while `gate` holds no permit — waits for
 /// one before answering. It observes the stop as the real one does: given
-/// before it starts, `stopping`; while it waits, cut `stopping`.
+/// before it starts, `stopping`, with no launch begun; while it waits, cut
+/// `stopping`.
 pub(crate) struct ScriptedInspector {
     pub(crate) answer: Mutex<Result<Inspection, InspectFailure>>,
     pub(crate) asked: Mutex<Vec<(ConfiguredMcpServer, InspectBounds)>>,
@@ -206,12 +227,14 @@ impl ServerInspector for ScriptedInspector {
         server: &ConfiguredMcpServer,
         bounds: InspectBounds,
         mut stop: InspectStop,
+        launch: LaunchBegun,
     ) -> InspectFuture<'_> {
         self.asked.lock().unwrap().push((server.clone(), bounds));
         Box::pin(async move {
             if stop.given() {
                 return Err(InspectFailure::Stopping);
             }
+            launch.mark();
             tokio::select! {
                 passed = self.gate.acquire() => {
                     let _passed = passed.unwrap();
@@ -240,24 +263,22 @@ pub(crate) fn absolute(unix: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn server(name: &str) -> StdioServer {
-    StdioServer {
-        name: name.into(),
-        command: PathBuf::from(absolute("/usr/bin/python3")),
-        args: vec![format!("/{name}.py")],
-    }
+    StdioServer::new(
+        name,
+        absolute("/usr/bin/python3"),
+        vec![format!("/{name}.py")],
+    )
 }
 
 pub(crate) fn managed() -> ConfiguredMcpServer {
-    ConfiguredMcpServer {
-        server: StdioServer {
-            name: MANAGED_SERVER_NAME.into(),
-            command: PathBuf::from(absolute("/bundle/nessa-mcp")),
-            args: vec!["--workspace".into(), "/w".into()],
-        },
-        enabled: true,
-        env: BTreeMap::new(),
-    }
+    let server = StdioServer::new(
+        MANAGED_SERVER_NAME,
+        absolute("/bundle/nessa-mcp"),
+        vec!["--workspace".into(), "/w".into()],
+    );
+    ConfiguredMcpServer::new(server, true, []).unwrap()
 }
 
 /// A stored entry as `config.json` has it.
@@ -274,6 +295,7 @@ pub(crate) fn config(servers: Vec<Value>) -> Value {
     })
 }
 
+#[cfg(unix)]
 pub(crate) fn initiator() -> McpServerInitiator {
     McpServerInitiator {
         organization_id: "organization".into(),
@@ -309,6 +331,7 @@ pub(crate) fn inspected_over(
 
 /// The settings of a gateway that started with `startup` configured — the
 /// managed server among them, or not — over `files`, on a leaping clock.
+#[cfg(unix)]
 pub(crate) fn settings_started_with(
     files: Arc<MemoryFiles>,
     audit: Arc<RecordingAudit>,
@@ -335,22 +358,18 @@ fn started_with(
     })
 }
 
-/// [`settings_for`], inspecting with `inspector`, and with the live set
-/// seen through `live` — wrapped, so it can be made to fail.
+/// [`settings_over`] on `clock`, inspecting with `inspector`, and with the
+/// live set seen through `live` — wrapped, so it can be made to fail or
+/// held.
+#[cfg(unix)]
 pub(crate) fn settings_through(
     files: Arc<MemoryFiles>,
     audit: Arc<RecordingAudit>,
+    clock: Arc<dyn Clock>,
     inspector: Arc<dyn ServerInspector>,
     live: impl FnOnce(LiveMcpServers) -> Arc<dyn LiveServerSet>,
 ) -> (McpServerSettings, McpServers) {
-    live_through(
-        files,
-        audit,
-        Arc::new(LeapingClock::default()),
-        inspector,
-        &[managed()],
-        live,
-    )
+    live_through(files, audit, clock, inspector, &[managed()], live)
 }
 
 fn live_through(
@@ -401,6 +420,7 @@ pub(crate) fn settings_for(
 }
 
 /// The names in the live set, in order.
+#[cfg(unix)]
 pub(crate) fn live(servers: &McpServers) -> Vec<String> {
     servers
         .configured()

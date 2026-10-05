@@ -20,18 +20,24 @@ use nessa_auth::{
         CredentialId, ResourceId,
     },
 };
+use nessa_protocol::{
+    clock::Clock as ServerClock,
+    pairing::{
+        wire::{
+            decode_reply, decode_request, encode_challenge, encode_hello, encode_request,
+            NativePairingReply, NativePairingRequest, NativePairingStatus,
+        },
+        EnrollmentChannel, NativeFrameError,
+    },
+};
 use nessa_server::{
-    app::{dependencies::RuntimeDependencies, ports::Clock as ServerClock},
+    app::dependencies::RuntimeDependencies,
     device_pairing::{
         application::OwnerError,
         infrastructure::{
-            wire::{
-                decode_reply, decode_request, encode_challenge, encode_hello, encode_request,
-                NativePairingReply, NativePairingRequest, NativePairingStatus,
-            },
-            BeginPairing, CreatedInvitation, EnrollmentChannel, NativeClientError,
-            NativeConnectionError, NativeConnectionFailure, NativeEnrollmentClient,
-            NativeEnrollmentConnections, NativeFrameError, PairingRuntimeError,
+            BeginPairing, CreatedInvitation, NativeClientError, NativeConnectionError,
+            NativeConnectionFailure, NativeEnrollmentClient, NativeEnrollmentConnections,
+            PairingRuntimeError,
         },
     },
 };

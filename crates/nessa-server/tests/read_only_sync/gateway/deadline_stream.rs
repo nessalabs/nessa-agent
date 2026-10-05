@@ -1,6 +1,6 @@
 use super::super::deadline_stream::DeadlineStream;
-use crate::app::ports::Clock;
 use crate::read_only_sync::application::{Cancellation, GatewayError, GatewayStream};
+use nessa_protocol::clock::Clock;
 use std::io::{ErrorKind, Read, Result as IoResult, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;

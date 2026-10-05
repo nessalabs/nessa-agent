@@ -20,6 +20,7 @@
 //!
 //! The report is one JSON document on stdout; diagnostics go to stderr.
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::{domain::ConversationId, read_scope::ReceiverReadScope};
 use nessa_sdk::{
     application::agent_execution::{
         executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate},
@@ -39,10 +40,8 @@ use nessa_sdk::{
 };
 use nessa_server::conversation::{
     application::{
-        ReceiverReadScope, RecordReadError, RecordReadLease, RecordReadOperation, RecordReadSource,
-        RecordReadValue,
+        RecordReadError, RecordReadLease, RecordReadOperation, RecordReadSource, RecordReadValue,
     },
-    domain::ConversationId,
     infrastructure::NessaRecordReadSource,
 };
 use nessa_sync::replication::domain::{Id, PageRequest, Scope};

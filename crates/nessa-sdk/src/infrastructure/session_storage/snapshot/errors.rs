@@ -6,7 +6,9 @@ use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::{
     CloseOutcome, ImageInputRefusal, UserImageError,
 };
-use crate::application::agent_execution::sessions::{StorageError, StorageShutdownFailure};
+use crate::application::agent_execution::sessions::{
+    StorageError, StorageShutdownFailure, UnknownApp,
+};
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use crate::domain::common::value_objects::ImageMediaType;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -216,6 +218,8 @@ pub(super) enum SavedError {
     },
     Unsupported(String),
     InvalidInput(String),
+    UnknownAppNoMcpToolCall,
+    UnknownAppDifferentMcpTool,
     UserImageMissing,
     UserImageUnavailable,
     UserImageMismatch,
@@ -457,6 +461,10 @@ impl TryFrom<SavedError> for AgentError {
                 max_bytes,
             },
             SavedError::InvalidInput(value) => Self::InvalidInput(value),
+            SavedError::UnknownAppNoMcpToolCall => Self::UnknownApp(UnknownApp::NoMcpToolCall),
+            SavedError::UnknownAppDifferentMcpTool => {
+                Self::UnknownApp(UnknownApp::DifferentMcpTool)
+            }
             SavedError::Protocol(value) => Self::Protocol(value),
             SavedError::Transport(value) => Self::Transport(value),
             SavedError::Busy => Self::Busy,
@@ -571,6 +579,10 @@ impl From<AgentError> for SavedError {
                 max_bytes,
             },
             AgentError::InvalidInput(value) => Self::InvalidInput(value),
+            AgentError::UnknownApp(UnknownApp::NoMcpToolCall) => Self::UnknownAppNoMcpToolCall,
+            AgentError::UnknownApp(UnknownApp::DifferentMcpTool) => {
+                Self::UnknownAppDifferentMcpTool
+            }
             AgentError::Protocol(value) => Self::Protocol(value),
             AgentError::Transport(value) => Self::Transport(value),
             AgentError::Busy => Self::Busy,
@@ -673,5 +685,24 @@ mod storage_failure_tests {
             "ShutdownFailures": {"read": "r", "runtime": "c", "success": true}
         }))
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod unknown_app_tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_app_keeps_which_it_was_in_the_codec() {
+        for (refusal, tag) in [
+            (UnknownApp::NoMcpToolCall, "UnknownAppNoMcpToolCall"),
+            (UnknownApp::DifferentMcpTool, "UnknownAppDifferentMcpTool"),
+        ] {
+            let error = AgentError::UnknownApp(refusal);
+            let encoded = serde_json::to_value(SavedError::from(error.clone())).unwrap();
+            assert_eq!(encoded, serde_json::json!(tag));
+            let restored: SavedError = serde_json::from_value(encoded).unwrap();
+            assert_eq!(AgentError::try_from(restored).unwrap(), error);
+        }
     }
 }

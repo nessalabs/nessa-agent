@@ -730,6 +730,21 @@ it("reports the caller's own abort as aborted, and sends nothing when already ab
   expect(unsent).not.toHaveBeenCalled()
 })
 
+it("reports a transport's own AbortError, the caller's signal still live, as unreachable — aborted is only ever the caller's", async () => {
+  const caller = new AbortController()
+  const cause = new DOMException("The operation was aborted.", "AbortError")
+  const error = await failure(
+    fetches(() => Promise.reject(cause)).fetchResource(
+      ticket,
+      { size: html.byteLength, sha256 },
+      { signal: caller.signal },
+    ),
+  )
+  expect(caller.signal.aborted).toBe(false)
+  expect(error).toBeInstanceOf(NessaMcpResourceError)
+  expect(error).toMatchObject({ code: "unreachable", cause, status: undefined })
+})
+
 it.each([
   ["a short ticket", ticket.slice(1), { size: 1, sha256 }],
   ["a long ticket", `${ticket}A`, { size: 1, sha256 }],

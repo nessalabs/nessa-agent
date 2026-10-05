@@ -1,24 +1,22 @@
 //! Test-only ports for the attachment service. Every double can fail the way
 //! its real counterpart can, because those are the paths nothing else reaches.
-use crate::{
-    attachments::{
-        application::{
-            AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
-            AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
-            BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
-            Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
-            OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport,
-            RemovedBlob, RetiredHold, RetirementEvidence, RevertCause, SecretsUnavailable,
-            StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted,
-        },
-        domain::{Attachment, Hold, MediaType, RetiredFrom},
+use crate::attachments::{
+    application::{
+        AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
+        AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
+        BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
+        Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable,
+        PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold,
+        RetirementEvidence, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
+        TicketSecrets, UploadBody, UploadInterrupted,
     },
-    conversation::domain::ConversationId,
+    domain::{Attachment, Hold, MediaType, RetiredFrom},
 };
 use nessa_auth::{
     application::ports::Clock,
     domain::{OrganizationId, PrincipalId},
 };
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{

@@ -754,6 +754,201 @@ async fn definitely_rejected_admission_does_not_leak_into_the_next_record_batch(
         ));
     }
 }
+/// Admission asks the app rule of the turns saved before the message ("The
+/// app a message names", A1, A2, A5, A6): an app of the running turn's tool
+/// call is refused until that call is observed as an MCP call, and then
+/// taken only as a call to the same server and tool. A refusal saves
+/// nothing.
+#[tokio::test]
+async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
+    use crate::application::agent_execution::sessions::UnknownApp;
+    use crate::domain::agent_execution::{
+        prompts::{McpAppSource, MessageSender},
+        tools::{McpTool, ToolCallId, ToolCallUpdate},
+    };
+    let (manager, lease, active) = manager(0).await;
+    let show = || McpTool::new("charts", "show").unwrap();
+    let request = |id: &str, tool: McpTool| ExecutionRequest {
+        execution_id: ExecutionId::new(id).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("plot").unwrap()).sent_by(
+            MessageSender::App(
+                McpAppSource::new(active.clone(), ToolCallId::new("call-1").unwrap(), tool)
+                    .unwrap(),
+            ),
+        ),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let actor = || ActionContext::new("user", "test", "invoke").unwrap();
+
+    assert_eq!(
+        manager.begin(request("early", show()), actor()).await,
+        Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall))
+    );
+    manager
+        .event(ExecutionEvent::new(
+            active.clone(),
+            ExecutionUpdate::Tool(
+                ToolCallUpdate::new(
+                    ToolCallId::new("call-1").unwrap(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_mcp_tool(show()),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .begin(
+                request("forged", McpTool::new("charts", "hide").unwrap()),
+                actor()
+            )
+            .await,
+        Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
+    );
+    // A message admitted with its own id names its own turn: no call of its
+    // came before it.
+    let mut own = request("own", show());
+    own.user_message = own.user_message.sent_by(MessageSender::App(
+        McpAppSource::new(
+            own.execution_id.clone(),
+            ToolCallId::new("call-1").unwrap(),
+            show(),
+        )
+        .unwrap(),
+    ));
+    assert_eq!(
+        manager.begin(own, actor()).await,
+        Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall))
+    );
+    assert_eq!(manager.snapshot().await.unwrap().invocations.len(), 1);
+
+    assert_eq!(
+        manager.begin(request("drawn", show()), actor()).await,
+        Ok(1)
+    );
+    let accepted: Vec<_> = lease
+        .changes
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .filter_map(|change| match change {
+            SessionChange::InputAccepted(record) => Some(record.request.execution_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(accepted, [ExecutionId::new("drawn").unwrap()]);
+}
+
+/// Admission saves a steered message's target and offset together (A11): a
+/// target among the saved turns takes its saved event count as the offset,
+/// and a target that is not is refused, saving nothing, rather than saved
+/// without one.
+#[tokio::test]
+async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
+    let (manager, lease, active) = manager(0).await;
+    manager.event(text(&active)).await.unwrap();
+    manager.flush_observed().await.unwrap();
+    let saves = lease.changes.lock().unwrap().len();
+    let actor = ActionContext::new("user", "test", "steer").unwrap();
+    let steer = |id: &str, target: &ExecutionId| {
+        (
+            invocation(id, false).request,
+            InvocationSchedulingEvent {
+                kind: InvocationKind::Steering,
+                target: Some(target.clone()),
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(actor.clone()),
+            },
+        )
+    };
+    let (request, event) = steer("stray", &ExecutionId::new("unsaved").unwrap());
+    assert!(matches!(
+        manager
+            .begin_with_scheduling(request, actor.clone(), event, SubmissionMode::Steering)
+            .await,
+        Err(AgentError::InvalidInput(_))
+    ));
+    assert_eq!(lease.changes.lock().unwrap().len(), saves);
+    let (request, event) = steer("steered", &active);
+    manager
+        .begin_with_scheduling(request, actor.clone(), event, SubmissionMode::Steering)
+        .await
+        .unwrap();
+    let snapshot = manager.snapshot().await.unwrap();
+    let steered = snapshot.invocations.last().unwrap();
+    assert_eq!(steered.request.execution_id.as_str(), "steered");
+    assert_eq!(steered.target_event_offset, Some(1));
+}
+
+/// A call observed as `charts/show` and then reported as `charts/hide` keeps
+/// its first MCP identity: the second observation is refused and saved as
+/// nothing, so admission refuses an app naming `charts/hide`
+/// (`DifferentMcpTool`) and takes `charts/show`; restoration refuses a
+/// history holding the two together
+/// (`no_durable_history_holds_one_call_as_two_mcp_tools`).
+#[tokio::test]
+async fn admission_keeps_a_calls_first_mcp_identity() {
+    use crate::application::agent_execution::sessions::UnknownApp;
+    use crate::domain::agent_execution::{
+        prompts::{McpAppSource, MessageSender},
+        tools::{McpTool, ToolCallId, ToolCallUpdate},
+    };
+    let (manager, _lease, active) = manager(0).await;
+    let show = || McpTool::new("charts", "show").unwrap();
+    let hide = || McpTool::new("charts", "hide").unwrap();
+    let observed = |tool: McpTool| {
+        ExecutionEvent::new(
+            active.clone(),
+            ExecutionUpdate::Tool(
+                ToolCallUpdate::new(
+                    ToolCallId::new("call-1").unwrap(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_mcp_tool(tool),
+            ),
+        )
+    };
+    let request = |id: &str, tool: McpTool| ExecutionRequest {
+        execution_id: ExecutionId::new(id).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("plot").unwrap()).sent_by(
+            MessageSender::App(
+                McpAppSource::new(active.clone(), ToolCallId::new("call-1").unwrap(), tool)
+                    .unwrap(),
+            ),
+        ),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let actor = || ActionContext::new("user", "test", "invoke").unwrap();
+
+    manager.event(observed(show())).await.unwrap();
+    assert!(matches!(
+        manager.event(observed(hide())).await,
+        Err(StorageError::Corrupt(message)) if message.contains("DifferentMcpTool")
+    ));
+    assert_eq!(
+        manager.begin(request("hidden", hide()), actor()).await,
+        Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
+    );
+    assert_eq!(
+        manager.begin(request("shown", show()), actor()).await,
+        Ok(1)
+    );
+}
+
 fn text(id: &ExecutionId) -> ExecutionEvent {
     ExecutionEvent::new(
         id.clone(),

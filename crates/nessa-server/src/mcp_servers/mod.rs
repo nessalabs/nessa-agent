@@ -21,8 +21,8 @@
 //! given in place of a server (`domain`: the relay arguments and the
 //! configuration digest the relay compares — keyed per process, over the
 //! command, arguments and environment — so a server changed under an open
-//! conversation is refused `configuration-changed`; ADR 344 keeps the server
-//! list out of the restoration identity),
+//! conversation is refused `configuration-changed`; see "MCP servers and the
+//! restoration identity" in `docs/design/mcp-connections.md`),
 //! the socket and the hello in front of it, the `mcp-relay` command, and the
 //! adapter the conversation view asks for a tool's UI; and, for an MCP App,
 //! the resource tickets it redeems and the route it redeems them at

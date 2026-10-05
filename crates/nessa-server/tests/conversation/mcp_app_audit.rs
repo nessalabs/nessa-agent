@@ -2,8 +2,8 @@
 //! refuses to overwrite.
 use super::*;
 use crate::conversation::application::{McpAppCode, McpAppRef, TicketEnd};
-use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A clock that answers what it is told, one tick per question.

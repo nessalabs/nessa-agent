@@ -24,13 +24,8 @@ cargo build -p nessa-mcp
 
 Configure it as server `nessa` in the gateway's `agent.mcpServers`; see
 [gateway setup](../../docs/guides/gateway-chat.md). Restart the gateway after
-changing its tool configuration. The server list is not part of a conversation's
-restoration identity: it is attached afresh to each provider session, so saved
-conversations reopen with the current configuration. A server changed under a
-conversation that is still open is refused `configuration-changed` by the
-gateway's relay, and that conversation keeps its harness's set until its
-provider session ends
-([MCP connections](../../docs/design/mcp-connections.md#what-one-connection-per-harness-session-means)).
+changing its tool configuration; saved conversations reopen with the new one
+([MCP servers and the restoration identity](../../docs/design/mcp-connections.md#mcp-servers-and-the-restoration-identity)).
 
 `shell` accepts `command` and optional `timeoutSeconds` (1–3600, default 120).
 Commands run in the configured workspace using `/bin/bash --noprofile --norc -c`.

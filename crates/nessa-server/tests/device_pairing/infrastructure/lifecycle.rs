@@ -16,12 +16,13 @@ use nessa_auth::{
         CredentialId, ResourceId,
     },
 };
+use nessa_protocol::pairing::{socket::NativeWakeCause, wire::NativePairingStatus};
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{
-        wire::NativePairingStatus, NativeClientError, NativeConnectionFailure,
-        NativeEnrollmentClient, NativeEnrollmentConnections, NativeWakeCause, PairingRuntimeError,
-        RegisteredInvitation, RegistrationError, RegistrationWorker,
+        NativeClientError, NativeConnectionFailure, NativeEnrollmentClient,
+        NativeEnrollmentConnections, PairingRuntimeError, RegisteredInvitation, RegistrationError,
+        RegistrationWorker,
     },
 };
 use std::{

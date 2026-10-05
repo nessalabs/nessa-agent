@@ -5,12 +5,13 @@
 use super::*;
 use crate::core::{Outcome, ShutdownStage};
 use crate::mcp_servers::application::{
-    McpServerAuditPhase, McpServerOutcome, McpServerSettingsError,
+    InspectCut, Inspection, McpServerAuditPhase, McpServerCause, McpServerOutcome,
+    McpServerSettingsError,
 };
 use crate::mcp_servers::domain::{ServerEdit, ServerSave};
 use crate::mcp_servers::infrastructure::settings_test_support::{
-    config, initiator, server, settings_for, settings_over, ManualClock, MemoryFiles,
-    RecordingAudit,
+    config, entry, initiator, inspected_over, server, settings_for, settings_over, LeapingClock,
+    ManualClock, MemoryFiles, RecordingAudit, ScriptedInspector,
 };
 use crate::product::HostWatchFixture;
 use nessa_sdk::infrastructure::mcp::McpError;
@@ -194,4 +195,106 @@ async fn an_unfinished_drain_is_an_unconfirmed_shutdown() {
         Err(McpError::Stopped)
     );
     assert!(shutdown_result(&report).is_err());
+}
+
+/// X-early, through the gateway's cleanup: shutdown begins while a
+/// conversation is still draining. Admission closes at once — a later save
+/// or inspection is `stopping`, unaudited — and the inspection already
+/// running is cut and recorded now, while the conversations have not yet
+/// drained and the MCP stop has not begun; only then do the servers stop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn x_early_admission_closes_and_inspections_are_cut_while_conversations_drain() {
+    let fixture = HostWatchFixture::idle().await;
+    let files = MemoryFiles::holding(config(vec![entry("a")]));
+    let audit = Arc::new(RecordingAudit::default());
+    let inspector = Arc::new(ScriptedInspector::default());
+    // Held until stopped: the inspection never answers on its own.
+    inspector
+        .gate
+        .forget_permits(tokio::sync::Semaphore::MAX_PERMITS);
+    let (settings, servers) = inspected_over(
+        files.clone(),
+        audit.clone(),
+        Arc::new(LeapingClock::default()),
+        inspector.clone(),
+    );
+    let settings = Arc::new(settings);
+    let state = fixture.state().with_mcp_server_settings(settings.clone());
+    let revision = settings.list().await.unwrap().revision;
+    let inspecting = tokio::spawn({
+        let settings = settings.clone();
+        async move { settings.inspect(initiator(), "a").await }
+    });
+    within("the server is started", || {
+        !inspector.asked.lock().unwrap().is_empty()
+    })
+    .await;
+    let (drained, draining) = tokio::sync::oneshot::channel::<()>();
+    let report: Arc<ReportSlot> = Arc::new(Mutex::new(None));
+    let cleanup = tokio::spawn({
+        let report = report.clone();
+        let state = state.clone();
+        let servers = servers.clone();
+        async move {
+            cleanup_product(
+                &report,
+                &state,
+                async { Ok(()) },
+                async { Ok(()) },
+                Some(async move {
+                    let _ = draining.await;
+                    Ok::<(), ConversationError>(())
+                }),
+                super::super::mcp_servers::stop(state.mcp_server_settings.as_deref(), &servers),
+                std::future::ready(Ok(())),
+                Duration::from_secs(30),
+            )
+            .await;
+        }
+    });
+    // The inspection is cut and recorded while the conversations drain.
+    let answered = joined(inspecting).await;
+    assert_eq!(
+        answered,
+        Ok(Inspection {
+            tools: vec![],
+            cut: Some(InspectCut::Stopping),
+        })
+    );
+    let records = audit.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[1].phase,
+        McpServerAuditPhase::Outcome(McpServerOutcome::Inspected {
+            tools: 0,
+            cut: Some(InspectCut::Stopping),
+        })
+    );
+    assert_eq!(records[1].cause, McpServerCause::GatewayStopping);
+    // Admission closed: refused, with nothing recorded.
+    assert_eq!(
+        settings.edit(initiator(), revision, save("b")).await,
+        Err(McpServerSettingsError::Stopping)
+    );
+    assert_eq!(
+        settings.inspect(initiator(), "a").await,
+        Err(McpServerSettingsError::Stopping)
+    );
+    assert_eq!(audit.records().len(), 2);
+    assert!(
+        !cleanup.is_finished(),
+        "cleanup did not wait for the conversations"
+    );
+    // The MCP stop has not begun: the servers still take a replacement.
+    assert_eq!(servers.replace(servers.configured()), Ok(()));
+    drained.send(()).unwrap();
+    joined(cleanup).await;
+    assert_eq!(
+        servers.replace(servers.configured()),
+        Err(McpError::Stopped)
+    );
+    assert_eq!(
+        report.lock().unwrap().as_ref().unwrap().servers(),
+        Outcome::Ok
+    );
 }

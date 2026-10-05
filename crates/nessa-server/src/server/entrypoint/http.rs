@@ -3,13 +3,13 @@ use crate::attachments::entrypoint::http as attachments_handler;
 use crate::browser_session::entrypoint as browser;
 use crate::health::entrypoint::handler as health_handler;
 use crate::mcp_servers::entrypoint::http as mcp_resources_handler;
-use crate::protocol::MAX_PAYLOAD_BYTES;
 use crate::server::entrypoint::origin;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put, Router};
+use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 
 /// Every RPC path uses the same mandatory authentication and authorization flow.
 /// The HTTP probe reports liveness only and exposes no product state.

@@ -519,7 +519,9 @@ async fn cleanup_product(
 ) {
     product.close_watch_admission();
     // A stored MCP server change or inspection admitted from here on would
-    // outlive the drain before the servers stop.
+    // outlive the drain before the servers stop; and the inspections under
+    // way are stopped now, not after the conversations drain
+    // (`x_early_admission_closes_and_inspections_are_cut_while_conversations_drain`).
     product.close_mcp_server_admission();
     passive_cleanup(
         slot,

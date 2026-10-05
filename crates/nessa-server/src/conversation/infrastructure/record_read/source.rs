@@ -1,12 +1,14 @@
 //! SDK identity and physical reads on tracked threads after passive admission.
 
 use super::operation;
+use crate::conversation::application::conversation_session;
 use crate::conversation::application::{
-    ReadRefusal, ReceiverReadScope, RecordReadError, RecordReadFuture, RecordReadLease,
-    RecordReadOperation, RecordReadResponse, RecordReadSource,
+    RecordReadError, RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
+    RecordReadSource,
 };
 use crate::conversation::infrastructure::record_scope_from_identity;
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
+use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
 use nessa_sdk::{
     domain::agent_execution::sessions::SessionId, infrastructure::session_storage::RecordStorage,
 };
@@ -208,9 +210,7 @@ fn worker_error(error: ReadWorkerError) -> RecordReadError {
 }
 
 fn session_id(admitted: &ReceiverReadScope) -> Result<SessionId, RecordReadError> {
-    Ok(crate::conversation::application::conversation_session(
-        &admitted.conversation_id,
-    ))
+    Ok(conversation_session(&admitted.conversation_id))
 }
 
 #[cfg(test)]

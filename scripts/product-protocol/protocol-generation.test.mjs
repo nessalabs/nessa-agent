@@ -21,15 +21,15 @@ const contract = coreWireContract(root)
 const genericOutputs = [
   "packages/nessa-client/src/generated/protocol.ts",
   "packages/nessa-client/src/generated/catalog.ts",
-  "crates/nessa-server/src/protocol/generated_catalog.rs",
-  "crates/nessa-server/src/protocol/generated_types.rs",
+  "crates/nessa-protocol/src/protocol/generated_catalog.rs",
+  "crates/nessa-protocol/src/protocol/generated_types.rs",
 ]
 const productOutputs = [
   "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs",
   "protocol/product/pairing-values.generated.json",
   "packages/nessa-client/src/generated/product.ts",
-  "crates/nessa-server/src/product/generated.rs",
-  "crates/nessa-server/src/product_contract/generated.rs",
+  "crates/nessa-protocol/src/product/generated.rs",
+  "crates/nessa-protocol/src/product_contract/generated.rs",
 ]
 function fixture(run) {
   const path = mkdtempSync(join(tmpdir(), "nessa-generation-"))
@@ -43,7 +43,9 @@ function fixture(run) {
       "package.json",
       "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs",
       "crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs",
-      "crates/nessa-server/src/protocol/encode.rs",
+      "crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs",
+      "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
+      "crates/nessa-protocol/src/protocol/encode.rs",
       "crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json",
     ]) {
       mkdirSync(dirname(join(path, name)), { recursive: true })
@@ -151,7 +153,7 @@ test("passive timing publishes changed phase values and their derived client flo
       "utf8",
     )
     const rust = readFileSync(
-      join(path, "crates/nessa-server/src/product/generated.rs"),
+      join(path, "crates/nessa-protocol/src/product/generated.rs"),
       "utf8",
     )
     assert.match(ts, /readTimeoutMs: 61/)
@@ -184,7 +186,7 @@ test("MCP App call timing publishes its parts, the client's deadline, and the ga
       "utf8",
     )
     const contract = readFileSync(
-      join(path, "crates/nessa-server/src/product_contract/generated.rs"),
+      join(path, "crates/nessa-protocol/src/product_contract/generated.rs"),
       "utf8",
     )
     const published = ts.slice(ts.indexOf("export const mcpAppCallTiming"))
@@ -226,6 +228,75 @@ for (const [name, value] of [
         /Invalid MCP App call timing|unknown fields|deadline exceeds|outlasts a call/,
       )
     }))
+
+test("MCP server rules publish the SDK's bounds to the client", () =>
+  fixture((path) => {
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const ts = readFileSync(
+      join(path, "packages/nessa-client/src/generated/product.ts"),
+      "utf8",
+    )
+    const published = ts.slice(ts.indexOf("export const mcpServerRules"))
+    for (const [name, value] of [
+      ["maxServers", 16],
+      ["nameMaxBytes", 64],
+      ["maxArgs", 64],
+      ["argMaxBytes", 8192],
+      ["environmentNameMaxBytes", 256],
+    ])
+      assert.match(published, new RegExp(`${name}: ${value},`))
+  }))
+
+// Changed where it is owned, in the SDK, or retyped in the schema: either
+// way the two disagree, and nothing is published.
+for (const [rule, file, constant] of [
+  ["maxServers", "acp/sessions/config.rs", "MAX_MCP_SERVERS"],
+  ["nameMaxBytes", "acp/sessions/config.rs", "MAX_MCP_SERVER_NAME_BYTES"],
+  ["maxArgs", "acp/sessions/config.rs", "MAX_MCP_SERVER_ARGS"],
+  ["argMaxBytes", "acp/sessions/config.rs", "MAX_MCP_SERVER_ARG_BYTES"],
+  ["environmentNameMaxBytes", "mcp/servers.rs", "MAX_MCP_ENVIRONMENT_NAME_BYTES"],
+]) {
+  test(`MCP server rule ${rule} changed in the SDK alone refuses to publish`, () =>
+    fixture((path) => {
+      const source = join(path, `crates/nessa-sdk/src/infrastructure/${file}`)
+      const before = readFileSync(source, "utf8")
+      const after = before.replace(
+        new RegExp(`(pub const ${constant}: usize = )([0-9_]+);`),
+        (_, head, value) => `${head}${Number(value.replaceAll("_", "")) + 1};`,
+      )
+      assert.notEqual(after, before)
+      writeFileSync(source, after)
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`x-mcpServerRules.${rule} drifted`))
+    }))
+  test(`MCP server rule ${rule} retyped in the schema alone refuses to publish`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema["x-mcpServerRules"][rule] += 1
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`x-mcpServerRules.${rule} drifted`))
+    }))
+}
+test("MCP server rules with an unknown field refuse to publish", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema["x-mcpServerRules"].unknown = 1
+    })
+    const result = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(result.stderr, /MCP server rules must name exactly/)
+  }))
 
 for (const [name, value] of [
   ["readTimeoutMs", undefined],
@@ -305,7 +376,7 @@ test("pairing owner changes derive auth constants and published shape before dri
       values.manualCodeBytes + 1,
     )
     const routes = readFileSync(
-      join(path, "crates/nessa-server/src/product/generated.rs"),
+      join(path, "crates/nessa-protocol/src/product/generated.rs"),
       "utf8",
     )
     assert.match(routes, /pub device_key: \[u8; DeviceKey::LENGTH\],/)
@@ -353,8 +424,8 @@ test("watch policy and identity publish the same schema owner to both languages"
     assert.equal(result.status, 0, result.stderr)
     const output = (name) => readFileSync(join(path, name), "utf8")
     const ts = output("packages/nessa-client/src/generated/product.ts")
-    const rust = output("crates/nessa-server/src/product/generated.rs")
-    const outcomes = output("crates/nessa-server/src/product_contract/generated.rs")
+    const rust = output("crates/nessa-protocol/src/product/generated.rs")
+    const outcomes = output("crates/nessa-protocol/src/product_contract/generated.rs")
     assert.match(ts, /maxChangeWatchIdBytes = 51/)
     assert.ok(ts.includes(`changeWatchIdPattern = ${JSON.stringify(pattern)}`))
     assert.match(ts, /globalOwners: 17/)

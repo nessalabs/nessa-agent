@@ -1,6 +1,6 @@
-use crate::conversation::domain::ConversationId;
 use crate::read_only_sync::application::{CacheError, GatewayError};
 use crate::read_only_sync::domain::CacheReset;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::catalogue::EntryKey;
 use nessa_sync::replication::domain::{Id, Scope};
 use std::fmt::{Display, Formatter, Result as FmtResult};

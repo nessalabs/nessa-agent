@@ -9,13 +9,6 @@
 //! frame is written: tools are dropped from the end until it fits
 //! (`i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits`).
 use super::{
-    generated::{
-        McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
-        McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersErrorCode,
-        McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
-        McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
-        McpServersRevisionConflictDetails, McpServersSaveParams, McpServersWriteResult,
-    },
     mcp_apps::{remote_details, ui_csp, ui_permissions},
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -27,8 +20,16 @@ use crate::mcp_servers::{
     },
     domain::{ServerEdit, ServerSave, StdioServer},
 };
-use crate::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::product::generated::{
+    McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
+    McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersErrorCode,
+    McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
+    McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
+    McpServersRevisionConflictDetails, McpServersSaveParams, McpServersStorageUnavailableDetails,
+    McpServersWriteResult,
+};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use serde_json::json;
 
 pub(super) async fn dispatch(
@@ -103,11 +104,7 @@ fn save(previous_name: Option<String>, input: McpServerInput) -> ServerSave {
     }
     ServerSave {
         previous_name,
-        server: StdioServer {
-            name: input.name,
-            command: input.command.into(),
-            args: input.args,
-        },
+        server: StdioServer::new(input.name, input.command, input.args),
         env: input
             .env
             .into_iter()
@@ -125,10 +122,10 @@ fn listed(list: ServerList) -> McpServersListResult {
             .into_iter()
             .map(|listed| McpServerListEntry {
                 kind: McpServerKind::Stdio,
-                name: listed.server.name,
+                name: listed.server.name().to_owned(),
                 // Stored commands are UTF-8: the SDK's rules refuse any other.
-                command: listed.server.command.to_string_lossy().into_owned(),
-                args: listed.server.args,
+                command: listed.server.command().to_string_lossy().into_owned(),
+                args: listed.server.args().to_vec(),
                 env_names: listed.env_names,
                 enabled: listed.enabled,
                 managed: listed.managed,
@@ -205,12 +202,13 @@ fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
         McpServerSettingsError::Busy => McpServersErrorCode::McpServersBusy,
         McpServerSettingsError::ConfigInvalid => McpServersErrorCode::McpServersConfigInvalid,
         McpServerSettingsError::ConfigTooLarge => McpServersErrorCode::McpServersConfigTooLarge,
-        McpServerSettingsError::StorageUnavailable => {
+        McpServerSettingsError::StorageUnavailable { .. } => {
             McpServersErrorCode::McpServersStorageUnavailable
         }
         McpServerSettingsError::Stopping => McpServersErrorCode::McpServersStopping,
         McpServerSettingsError::AuditUnavailable { .. } => McpServersErrorCode::AuditUnavailable,
         McpServerSettingsError::Inspect(failure) => match failure {
+            InspectFailure::Invalid(_) => McpServersErrorCode::McpServersInvalid,
             InspectFailure::Stopping => McpServersErrorCode::McpServersStopping,
             InspectFailure::StartFailed => McpServersErrorCode::McpServerStartFailed,
             InspectFailure::TimedOut => McpServersErrorCode::McpServerTimedOut,
@@ -225,6 +223,12 @@ fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
     let code = code(&error);
     let details = match error {
         McpServerSettingsError::Invalid(problem) => serde_json::to_value(problem_details(problem)),
+        McpServerSettingsError::Inspect(InspectFailure::Invalid(problem)) => {
+            serde_json::to_value(problem_details(EditProblem::Server(problem)))
+        }
+        McpServerSettingsError::StorageUnavailable { applied } => {
+            serde_json::to_value(McpServersStorageUnavailableDetails { applied })
+        }
         McpServerSettingsError::RevisionConflict { revision } => {
             serde_json::to_value(McpServersRevisionConflictDetails { revision })
         }
@@ -250,7 +254,6 @@ fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
         | McpServerSettingsError::Busy
         | McpServerSettingsError::ConfigInvalid
         | McpServerSettingsError::ConfigTooLarge
-        | McpServerSettingsError::StorageUnavailable
         | McpServerSettingsError::Stopping
         | McpServerSettingsError::Inspect(_) => return failure(request_id, code.as_str()),
     };
@@ -278,9 +281,11 @@ fn problem_details(problem: EditProblem) -> McpServersInvalidDetails {
             ServerProblem::Arguments { server } => {
                 (McpServerProblemCode::Arguments, Some(server), None)
             }
-            ServerProblem::EnvironmentName { server } => {
-                (McpServerProblemCode::EnvironmentName, Some(server), None)
-            }
+            ServerProblem::EnvironmentName { server, name } => (
+                McpServerProblemCode::EnvironmentName,
+                Some(server),
+                Some(name),
+            ),
             ServerProblem::ReservedEnvironmentName { server, name } => (
                 McpServerProblemCode::ReservedEnvironmentName,
                 Some(server),

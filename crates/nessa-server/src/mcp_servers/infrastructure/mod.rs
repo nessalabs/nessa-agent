@@ -31,7 +31,9 @@ pub(crate) mod ticket_test_support;
 pub use apps::SessionApps;
 #[cfg(unix)]
 pub use config_store::OsConfigFiles;
-pub use config_store::{ConfigCheck, ConfigFiles, ConfigJsonStore, ConfigParse, LOCK_WAIT};
+pub use config_store::{
+    ConfigCheck, ConfigFiles, ConfigJsonStore, ConfigParse, Published, LOCK_WAIT,
+};
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
 pub use inspector::McpServerInspector;
 pub use live_set::{sdk_server, LaunchSettings, LiveMcpServers};

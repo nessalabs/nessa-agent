@@ -55,6 +55,21 @@ holds bytes, so a request stays small enough to compare for retry identity,
 queue, and persist whole. Its constructor owns the rules: at least one of the
 three, at most 10 images, 5 MiB each and 10 MiB together, and at most 10 files.
 
+A `UserMessage` also says who wrote it and what apps gave the model to know.
+Its `MessageSender` is the person, or an MCP App writing on their behalf
+(`McpAppSource`: the turn and tool call that drew the app, and the MCP server
+and tool that call was to); a message is the person's until `sent_by` says
+otherwise. `with_app_model_context` gives it up to
+`UserMessage::MAX_APP_MODEL_CONTEXTS` `AppModelContext` values, each one app's
+text, structured content or both, within `AppModelContext::MAX_BYTES`. The
+writer and the contexts are part of the message's equality, so they are part
+of its retry identity, and both are saved with it. An app a message names must
+be an MCP tool call this session recorded before it; the rule, how contexts
+reach the agent, and how they are saved are in
+[An app in its conversation](../../../../docs/design/mcp-app-calls.md#an-app-in-its-conversation-390).
+The types are in [`app_message.rs`](../../src/domain/agent_execution/prompts/value_objects/app_message.rs)
+and [`user_message.rs`](../../src/domain/agent_execution/prompts/value_objects/user_message.rs).
+
 A `LinkedFile` is the other half, and it is carried in the opposite way. It holds
 one absolute path and nothing else — no digest, no media type, no size, because
 nothing about the file travels and nothing here opens it. It becomes a
@@ -114,9 +129,11 @@ gave `AcpConfig::images` a `UserImageSource`. And the connected agent must have
 advertised `promptCapabilities.image` at `initialize`, reported as
 `OperationCapabilities::image_input`.
 
-Every one of those is checked when a message is submitted, before it is
-accepted, by `Agent::invoke`, `enqueue`, `enqueue_steering`, and `steer` alike.
-A refusal there saved nothing, queued nothing, and sent nothing:
+Every one of those, with the app and text-input rules in the last two rows, is
+checked when a message is submitted, before it is accepted, by `Agent::invoke`,
+`enqueue`, and `enqueue_steering`. A refusal there saved nothing, queued
+nothing, and sent nothing. `steer` checks the app rule the same way, but every
+other row only after the steered message is saved (#477):
 
 | Refused because | Error |
 | --- | --- |
@@ -125,6 +142,13 @@ A refusal there saved nothing, queued nothing, and sent nothing:
 | an image is larger than the model's `max_raw_bytes()` | `ImageInputRefused(ImageTooLarge { .. })` |
 | the agent is known not to take images | `ImageInputRefused(AgentDoesNotAccept)` |
 | the encoded message cannot fit `max_frame_bytes` | `MessageTooLarge { .. }` |
+| an app the message names is no earlier recorded MCP tool call to the same server and tool | [`UnknownApp(..)`](../../src/application/agent_execution/sessions/app_sources.rs) |
+| the message carries app contexts and the model takes no text input | `InvalidInput(..)` |
+
+Contexts reach the agent as a leading text block, so a message carrying them
+needs the model's text input even with no text of its own. Both rows are in
+[The app a message names](../../../../docs/design/mcp-app-calls.md#the-app-a-message-names)
+(A2–A7) and "The values, saved and sent" (B6).
 
 `NotOffered` and `AgentDoesNotAccept` are two different facts and stay apart:
 the first is this attachment, which was never going to carry an image; the

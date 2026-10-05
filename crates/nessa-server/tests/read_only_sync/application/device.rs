@@ -1,8 +1,8 @@
 //! The purge-before-forgetting store and the recheck rule, against doubles
 //! that record the order of effects.
 use super::*;
-use crate::product_contract::generated::SessionCloseReason;
 use nessa_auth::domain::pairing::{AttemptId, ConsentIntentId, InvitationId};
+use nessa_protocol::product_contract::generated::SessionCloseReason;
 
 #[derive(Default)]
 struct Effects(Mutex<Vec<&'static str>>);

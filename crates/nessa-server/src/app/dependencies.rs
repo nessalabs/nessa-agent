@@ -1,4 +1,4 @@
-use crate::app::ports::Clock;
+use nessa_protocol::clock::Clock;
 use std::{sync::Arc, time::Instant};
 
 /// Typed constructor inputs. Clone shares one application's dependencies.

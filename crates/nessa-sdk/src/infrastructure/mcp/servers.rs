@@ -40,6 +40,10 @@ pub const MAX_TOOLS: usize = 1024;
 /// token meant for the gateway, nor pass one on.
 pub const MCP_SESSION_VARIABLE: &str = "NESSA_MCP_SESSION";
 
+/// The most bytes in the name of a variable a server is started with
+/// ([`McpServerLaunch::problem`]).
+pub const MAX_MCP_ENVIRONMENT_NAME_BYTES: usize = 256;
+
 /// One configured stdio server and what it is started with.
 ///
 /// Its `Debug` names the environment's variables and never prints their
@@ -67,18 +71,20 @@ impl std::fmt::Debug for McpServerLaunch {
 impl McpServerLaunch {
     /// Why this server cannot be started as configured, or `None` when it
     /// can: its [`StdioMcpServer::problem`], then its environment — each
-    /// name 1–256 bytes of ASCII letters, digits and `_`, not starting with a
+    /// name 1 to [`MAX_MCP_ENVIRONMENT_NAME_BYTES`] bytes of ASCII letters,
+    /// digits and `_`, not starting with a
     /// digit, and not [`MCP_SESSION_VARIABLE`]; each value without NUL.
     pub fn problem(&self) -> Option<McpServerProblem> {
         self.server.problem().or_else(|| {
             self.environment.iter().find_map(|(name, value)| {
                 let Some(name) = name.to_str().filter(|name| {
-                    (1..=256).contains(&name.len())
+                    (1..=MAX_MCP_ENVIRONMENT_NAME_BYTES).contains(&name.len())
                         && !name.starts_with(|c: char| c.is_ascii_digit())
                         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 }) else {
                     return Some(McpServerProblem::EnvironmentName {
                         server: self.server.name.clone(),
+                        name: name.to_string_lossy().into_owned(),
                     });
                 };
                 if name == MCP_SESSION_VARIABLE {

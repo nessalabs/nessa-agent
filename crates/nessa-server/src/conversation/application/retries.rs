@@ -1,4 +1,4 @@
-use crate::conversation::domain::ConversationId;
+use nessa_protocol::conversation::domain::ConversationId;
 use std::{
     collections::HashMap,
     sync::{

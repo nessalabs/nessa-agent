@@ -1,25 +1,20 @@
 //! Independent client/gateway processes use canonical credential, receiver and cache owners.
 use super::{private_write, uuid, Setup};
 use crate::agents::application::{AgentProbe, AgentProbeEvidence};
-use crate::agents::domain::AgentId;
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs};
 use crate::composition::runtime_config::NativeConfig;
 use crate::conversation::application::{
-    ConversationRepository, ReceiverReadScope, RecordReadFuture, RecordReadLease,
+    ConversationRepository, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
-use crate::conversation::domain::{
-    Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
-};
+use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, NessaRecordWatches,
 };
-use crate::device_pairing::infrastructure::{
-    wire::NativePairingStatus, NativeEnrollmentClient, PairingOwnerCommands,
-};
+use crate::device_pairing::infrastructure::{NativeEnrollmentClient, PairingOwnerCommands};
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -32,6 +27,12 @@ use nessa_auth::application::dto::{
 use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
+use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
     SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -107,6 +108,9 @@ impl RecordReadSource for GatedRead {
                     self.heads.release.notified().await
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
+                // A cold first head read, as a loaded gateway answers it
+                // (row W17); the next head read succeeds.
+                ("preparing-head", Some(1)) => return Err(RecordReadError::SourcePreparing),
                 ("cumulative-head", Some(count)) if count > 1 => {
                     tokio::time::sleep(Duration::from_secs(3)).await
                 }
