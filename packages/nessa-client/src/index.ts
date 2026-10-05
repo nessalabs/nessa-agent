@@ -168,6 +168,12 @@ export {
 } from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
 export { type McpServersApi } from "./presentation/mcp-servers-api.js"
+export { type PairingApi } from "./presentation/pairing-api.js"
+export {
+  NessaPairingError,
+  PairingRefusalCode,
+  type PairingMethod,
+} from "./application/pairing-error.js"
 export {
   NessaMcpServersError,
   type McpServersMethod,

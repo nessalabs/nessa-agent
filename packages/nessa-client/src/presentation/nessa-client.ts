@@ -14,6 +14,7 @@ import { createConversationApi, type ConversationApi } from "./conversation-api.
 import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
+import { createPairingApi, type PairingApi } from "./pairing-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
 import { createCatalogueReadApi, type CatalogueReadApi } from "./catalogue-read-api.js"
 import { createRecordReadApi, type RecordReadApi } from "./record-read-api.js"
@@ -75,6 +76,8 @@ export class NessaClient {
   readonly mcpServers: McpServersApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
+  /** Owner pairing: create a one-use code, and approve, deny or cancel an invitation. */
+  readonly pairing: PairingApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
   readonly auth: AuthApi
 
@@ -97,6 +100,7 @@ export class NessaClient {
     this.mcpApps = createMcpAppsApi(wire, resources, newRequestId, httpTimer)
     this.mcpServers = createMcpServersApi(wire)
     this.credentials = createCredentialApi(wire, newRequestId)
+    this.pairing = createPairingApi(wire)
     this.auth = createAuthApi(wire)
   }
 
