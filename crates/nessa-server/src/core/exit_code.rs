@@ -66,6 +66,9 @@ pub(super) fn reason(error: &RunError) -> &'static str {
         }
         RunError::Registry(_) => "credentialRegistry",
         RunError::Dataset(_) => "datasetRefused",
+        // Absent while cleanup is still owed. Not damaged data, and not a
+        // new empty journal: the file has to be restored.
+        RunError::ReceiverJournal(_) => "receiverJournalMissing",
         // The command line named nothing this binary can run. Under launchd
         // that is this installation's own plist being wrong, not anything the
         // person did, so it is told apart from the reasons they can act on
@@ -171,6 +174,9 @@ mod tests {
                 source: Error::from(ErrorKind::AddrInUse),
             }),
             RunError::Native(NativeFailure::Listener(ErrorKind::InvalidInput)),
+            RunError::ReceiverJournal(crate::core::MissingReceiverJournal::new(
+                std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
+            )),
         ] {
             assert!(CODES.codes.contains_key(reason(&error)), "{error}");
             assert_eq!(exit_code(&error), CODES.codes[reason(&error)]);

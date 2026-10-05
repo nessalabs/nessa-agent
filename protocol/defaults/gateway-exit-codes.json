@@ -14,6 +14,7 @@
     "runtime": 30,
     "stoppedOnRequest": 31,
     "usage": 32,
-    "datasetRefused": 33
+    "datasetRefused": 33,
+    "receiverJournalMissing": 34
   }
 }

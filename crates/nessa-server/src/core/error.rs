@@ -69,6 +69,28 @@ pub enum RunError {
     /// stopped serving (design rows S4, S10, S14 in
     /// `docs/design/auth/device-pairing.md`).
     Native(NativeFailure),
+    /// The receiver journal is not on disk, and an enrollment still owes
+    /// receiver cleanup. A new empty journal would turn that fence into a
+    /// missing receiver, which startup then refuses for good. The file is
+    /// left absent (design rows RJ1–RJ2 in `docs/design/auth/device-pairing.md`).
+    ReceiverJournal(MissingReceiverJournal),
+}
+
+/// Where the receiver journal was looked for, and was not.
+#[derive(Debug)]
+pub struct MissingReceiverJournal {
+    path: PathBuf,
+}
+
+impl MissingReceiverJournal {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    /// The file that was not there.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Why native pairing stopped this gateway: preparing its private state and
@@ -130,8 +152,9 @@ impl RunError {
     /// another version, not a database, a damaged page — is a
     /// [`RunError::Dataset`]; anything that can clear — a directory, I/O, a
     /// lock — stays `Agent`, which is retried. Conversations are composed
-    /// only on Unix; the receiver-access store is also opened for native
-    /// pairing, on every OS.
+    /// only on Unix; the receiver journal is also opened for native pairing,
+    /// on every OS. It is `receiver-access/receiver-access.sqlite3` under
+    /// the namespace, not a file in `conversations/`.
     pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
         match cause {
             OpenError::Version { .. } | OpenError::Unreadable(_) | OpenError::Damaged(_) => {
@@ -306,6 +329,11 @@ impl fmt::Display for RunError {
                 write!(f, "shutdown never reported whether cleanup completed")
             }
             Self::Native(failure) => write!(f, "{failure}"),
+            Self::ReceiverJournal(missing) => write!(
+                f,
+                "receiver access journal missing at {}: an enrollment still owes receiver cleanup",
+                missing.path.display()
+            ),
         }
     }
 }
@@ -327,7 +355,7 @@ impl std::error::Error for RunError {
             Self::Native(NativeFailure::Directory(source) | NativeFailure::Bind { source, .. }) => {
                 Some(source)
             }
-            Self::Native(_) => None,
+            Self::Native(_) | Self::ReceiverJournal(_) => None,
         }
     }
 }

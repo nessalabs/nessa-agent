@@ -254,7 +254,7 @@ async fn device_at_gateway(gateway: &Gateway, device: DeviceCredential) -> Devic
         authenticated = Err(error);
     }
     let receivers = LocalReceiverAuthority::open(
-        &data.join("conversations/receiver-access.sqlite3"),
+        &data.join("receiver-access/receiver-access.sqlite3"),
         &CedarPolicyEvaluator::profile_digest(),
         Arc::new(RuntimeClock),
     )

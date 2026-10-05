@@ -1907,7 +1907,11 @@ server's `device_pairing/application` reaches the receiver authority through
 its own `PairingReceivers` port; `device_pairing/infrastructure/receivers.rs`
 adapts the conversation context's authority to it. Composition opens one
 receiver authority when agents or native pairing are configured and gives the
-same instance to both.
+same instance to both. The journal is
+`receiver-access/receiver-access.sqlite3` under the namespace. It is not
+under `conversations/`, so a gateway with only native pairing does not create
+that directory and retirement does not report it as conversation data
+(ADR 221).
 
 ### Owners
 
@@ -1994,6 +1998,17 @@ physical exclusion, not an enrollment state.
   the stage lease already excludes a concurrent dispatch.
 - **Generation replacement (P24) is not reachable**: this profile has one
   consent generation and no replacement operation.
+- **A missing journal is not replaced while cleanup is owed.** If the journal
+  file is absent and any enrollment still has cleanup pending, startup
+  returns `RunError::ReceiverJournal` and does not create a file. An empty
+  journal would answer the owed fence as a missing receiver, and that
+  refusal does not clear. The enrollment is left as it was. Restart is
+  pointless, and the process reason is `receiverJournalMissing`, which is
+  not `datasetRefused`: the file is absent, not a version this build cannot
+  read. The host has no sentence of its own for that reason; the failure
+  record's message names the journal. When nothing owes cleanup, an absent
+  file is the first journal and is created. A file that is already there is
+  opened either way.
 
 ### Ordering table
 
@@ -2015,7 +2030,9 @@ physical exclusion, not an enrollment state.
 | A8 (P23, P48) | Cancel arrives while the activation holds the stage lease | Cancel answers Terminal with `cleanupPending` true (`StageOccupied`); the activation, still holding the lease, remembers its late receiver and fences it; the record ends cleaned | `cancel_during_activation_is_settled_by_the_activation` |
 | A9 (P34, O9) | Owner revokes the Active device credential with `credential.revoke` | Auth ends the enrollment Terminal(CredentialRevoked) by the owner with cleanup pending; the device verifier refuses at once; the receiver is fenced by the next owner read or device status (A13), startup (S7) or stop (D5), whichever comes first; the device's status reads Terminal and removes its credential (A14) | `mounted_gateway_issues_a_device_credential_and_revokes_it`; `revoked_active_receiver_is_fenced_by_the_next_read` |
 | A10 | Device receives Active | The client saves the credential, replacing its pending record in one publication, before returning the status. A failed save keeps the pending record and the next status delivers again; another credential conflicts; a new enrollment is refused (`Enrolled`) | `issued_credential_replaces_pending_once_and_reopens` (Auth); `device_keeps_the_issued_credential_and_clears_pending` |
-| S7 | Startup with a Terminal cleanup-pending enrollment, no live dispatch (the previous process was killed) | `native_pairing::prepare` runs `reconcile_cleanup` before it returns, so before the native bind: lookup only; a receipt is remembered and fenced, no receipt completes without a receiver. Nothing pairs | `startup_settles_ended_enrollments_before_serving`; `mounted_gateway_issues_a_device_credential_and_revokes_it` (killed process, restart) |
+| RJ1 | Native pairing is configured and no agent is. A journal already at `conversations/receiver-access.sqlite3` is moved once to the current path; that old path is not opened. An empty `conversations/` is removed. A directory that still holds another file stays | The journal is at `namespace/receiver-access/receiver-access.sqlite3`. `conversations/` is not created for the journal. Retirement, asked with nothing left running, reports that conversation data as missing | `a_native_only_journal_is_not_conversation_data`; `a_journal_left_under_conversations_is_moved` |
+| RJ2 | The journal file is absent and an enrollment still has cleanup pending | `RunError::ReceiverJournal` before the journal is created and before cleanup runs. The file stays absent. Restart is pointless (`receiverJournalMissing`). An existing file is opened, and an absent file is created when nothing owes cleanup | `a_missing_journal_is_not_recreated_while_cleanup_is_owed` |
+| S7 | Startup with a Terminal cleanup-pending enrollment, no live dispatch (the previous process was killed) | `native_pairing::prepare` runs `reconcile_cleanup` before it returns, so before the native bind: lookup only; a receipt is remembered and fenced, no receipt completes without a receiver. Nothing pairs. A missing journal is RJ2, not an empty journal whose fence then fails as a missing receiver | `startup_settles_ended_enrollments_before_serving`; `mounted_gateway_issues_a_device_credential_and_revokes_it` (killed process, restart) |
 | S8 | Startup cleanup cannot complete (receiver authority unavailable) | `reconcile_cleanup` returns `Cleanup(..)`, which `prepare` returns as `RunError::Native(Open(..))`; nothing is bound; the record keeps its cause and `cleanupPending`. A receiver failure is `CleanupError::Receiver` on both the lookup and the fence path. Restart policy (S16): `CleanupError::recurs` (the one classifier) — a receiver missing, conflicting, exhausted or no longer paired, a registry refusal naming the record's own state or a capacity limit, a missing record or corrupt/conflicting private state is `Restart::Pointless`; an unavailable receiver or a clock behind the record (`Invalid`) stays `Worthwhile` | `startup_settles_ended_enrollments_before_serving`; `a_registry_this_build_cannot_read_is_not_worth_starting_for_again`, `a_failure_that_can_clear_on_its_own_is_still_retried` (cleanup cases in both) |
 | D5 | Shutdown with an ended enrollment pending cleanup | `RunningNative::join`: listener drain, then `GatewayPairing::shutdown` closes owner admission (`ShuttingDown`, slice 2a's `OwnerAdmission`) and waits for every admitted owner command, an approval's receiver work included; then `reconcile_cleanup` settles it and the report is confirmed | `shutdown_settles_ended_enrollments_after_the_drains`; `mounted_gateway_issues_a_device_credential_and_revokes_it` (second device) |
 | D6 | Shutdown reconciliation cannot complete | `NativeShutdownFailure::Cleanup`; the record keeps `cleanupPending` and its first cause. A faulted listener (drain unknown) returns its `ListenerFault` without reconciling | `shutdown_settles_ended_enrollments_after_the_drains`; `faulted_listener_join_reports_the_fault_without_reconciling` |

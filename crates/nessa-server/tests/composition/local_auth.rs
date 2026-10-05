@@ -1,4 +1,17 @@
 use super::*;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::desktop_runtime::application::ConversationData;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::desktop_runtime::domain::RetirementRefusal;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::desktop_runtime::infrastructure::ConversationDirectory;
+use nessa_auth::{
+    adapters::local::BootstrapRequest,
+    application::dto::{
+        CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
+        OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
+    },
+};
 
 /// A configuration naming both agents, with no file on disk for either.
 ///
@@ -123,4 +136,141 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
             assert_eq!(ids, expected, "{} {}", agent.agent, model.model_id);
         }
     }
+}
+
+fn opened(result: Result<Arc<LocalReceiverAuthority>, RunError>) {
+    if let Err(error) = result {
+        panic!("journal did not open: {error}");
+    }
+}
+
+fn namespace_with_registry() -> (tempfile::TempDir, std::path::PathBuf, LocalCredentialStore) {
+    let directory = tempfile::tempdir().unwrap();
+    let namespace = directory.path().join("namespace");
+    nessa_local_storage::create_directory(&namespace.join("auth")).unwrap();
+    let store = LocalCredentialStore::open(namespace.join("auth"), "credentials.json").unwrap();
+    store
+        .bootstrap(BootstrapRequest {
+            gateway_id: "gateway".into(),
+            organization: OrganizationInputDto { id: "org".into() },
+            principal: PrincipalInputDto {
+                id: "owner".into(),
+                kind: PrincipalKindDto::Human,
+            },
+            membership: MembershipInputDto {
+                id: "member".into(),
+                principal_id: "owner".into(),
+                organization_id: "org".into(),
+                role: MembershipRoleDto::Admin,
+                state: MembershipStateDto::Active,
+            },
+            credential_id: "credential".into(),
+            issued_at: SystemClock.unix_seconds() - 1,
+            expires_at: None,
+            grants: ["credential.manage".into()]
+                .into_iter()
+                .map(|action| CredentialGrantDto {
+                    action,
+                    resource: ResourceDto {
+                        organization_id: "org".into(),
+                        id: "gateway".into(),
+                    },
+                })
+                .collect(),
+        })
+        .unwrap();
+    (directory, namespace, store)
+}
+
+/// Native pairing opens the receiver journal. That must not create
+/// `conversations/`, which retirement reads as conversation data still there.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_native_only_journal_is_not_conversation_data() {
+    let (_directory, namespace, store) = namespace_with_registry();
+    assert!(!receiver_cleanup_owed(&store).unwrap());
+    opened(receiver_access(&namespace, &store, "policy"));
+    let journal = receiver_journal(&namespace);
+    assert!(journal.is_file(), "{}", journal.display());
+    assert!(!conversation_root(&namespace).exists());
+    let data = ConversationDirectory::new(conversation_root(&namespace));
+    assert!(data.missing());
+    assert_eq!(
+        RetirementRefusal::of(true, data.missing()),
+        RetirementRefusal::DataMissing
+    );
+}
+
+/// An absent journal is created when nothing owes a fence, and left absent
+/// when an enrollment still does. Creating one would make that fence a
+/// missing receiver.
+#[test]
+fn a_missing_journal_is_not_recreated_while_cleanup_is_owed() {
+    let (_directory, namespace, store) = namespace_with_registry();
+    opened(receiver_access(&namespace, &store, "policy"));
+    let journal = receiver_journal(&namespace);
+    std::fs::remove_file(&journal).unwrap();
+    opened(receiver_access(&namespace, &store, "policy"));
+    assert!(journal.is_file());
+
+    std::fs::remove_file(&journal).unwrap();
+    let Err(error) = open_receiver_journal(&namespace, "policy", true) else {
+        panic!("a journal was opened while cleanup is owed");
+    };
+    let RunError::ReceiverJournal(missing) = &error else {
+        panic!("expected a missing journal, got {error}");
+    };
+    assert_eq!(missing.path(), journal.as_path());
+    assert!(error
+        .to_string()
+        .contains("receiver access journal missing"));
+    assert!(!journal.exists());
+    assert!(!conversation_root(&namespace).exists());
+    assert!(
+        matches!(
+            open_receiver_journal(&namespace, "policy", true),
+            Err(RunError::ReceiverJournal(_))
+        ),
+        "a second start created a journal"
+    );
+    assert!(!journal.exists());
+
+    opened(open_receiver_journal(&namespace, "policy", false));
+    opened(open_receiver_journal(&namespace, "policy", true));
+    assert!(journal.is_file());
+}
+
+/// A journal already stored under `conversations/` is moved once. The old
+/// path is not what later opens. An empty conversation directory goes with
+/// it; one that still holds another file stays.
+#[test]
+fn a_journal_left_under_conversations_is_moved() {
+    let (_directory, namespace, _store) = namespace_with_registry();
+    let legacy_dir = conversation_root(&namespace);
+    nessa_local_storage::create_directory(&legacy_dir).unwrap();
+    let legacy = legacy_dir.join("receiver-access.sqlite3");
+    match LocalReceiverAuthority::open(&legacy, "policy", Arc::new(SystemClock)) {
+        Ok(authority) => drop(authority),
+        Err(error) => panic!("legacy journal did not open: {error}"),
+    }
+    // Cleanup owed would refuse a missing journal. The move has to happen
+    // first, or this start would refuse and leave the file where it was.
+    opened(open_receiver_journal(&namespace, "policy", true));
+    assert!(receiver_journal(&namespace).is_file());
+    assert!(!legacy.exists());
+    assert!(!legacy_dir.exists());
+
+    let (_kept, kept, _store) = namespace_with_registry();
+    let kept_dir = conversation_root(&kept);
+    nessa_local_storage::create_directory(&kept_dir).unwrap();
+    let kept_journal = kept_dir.join("receiver-access.sqlite3");
+    match LocalReceiverAuthority::open(&kept_journal, "policy", Arc::new(SystemClock)) {
+        Ok(authority) => drop(authority),
+        Err(error) => panic!("legacy journal did not open: {error}"),
+    }
+    std::fs::write(kept_dir.join("metadata.sqlite3"), b"keep").unwrap();
+    opened(open_receiver_journal(&kept, "policy", true));
+    assert!(receiver_journal(&kept).is_file());
+    assert!(!kept_journal.exists());
+    assert!(kept_dir.join("metadata.sqlite3").is_file());
 }

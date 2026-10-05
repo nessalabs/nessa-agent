@@ -56,6 +56,7 @@ use nessa_auth::{
             ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
         dto::CredentialMetadataDto,
+        pairing::PairingStore,
         ports::{Clock, PortFuture},
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
@@ -211,6 +212,7 @@ pub(super) async fn product_state(
     let receivers = if settings.agents.is_some() || settings.native.is_some() {
         Some(receiver_access(
             namespace,
+            &store,
             &CedarPolicyEvaluator::profile_digest(),
         )?)
     } else {
@@ -457,22 +459,128 @@ async fn conversations(
     ))
 }
 
-/// Open the namespace's receiver-access store, creating its directory.
+/// Open the namespace's receiver journal.
+///
+/// The file is `receiver-access/receiver-access.sqlite3`, not a file under
+/// [`conversation_root`]: that directory's absence is how retirement reports
+/// conversation data gone (ADR 221), and a gateway with only native pairing
+/// has none. When the file is absent and an enrollment still owes receiver
+/// cleanup, this does not create one. An empty journal would make the owed
+/// fence a missing receiver, which startup then refuses for good
+/// (`a_missing_journal_is_not_recreated_while_cleanup_is_owed`).
 fn receiver_access(
     namespace: &Path,
+    store: &LocalCredentialStore,
     policy_revision: &str,
 ) -> Result<Arc<LocalReceiverAuthority>, RunError> {
-    let root = conversation_root(namespace);
-    nessa_local_storage::create_directory(&root)
-        .map_err(|error| RunError::Agent(error.to_string()))?;
-    let path = root.join("receiver-access.sqlite3");
+    open_receiver_journal(namespace, policy_revision, receiver_cleanup_owed(store)?)
+}
+
+fn open_receiver_journal(
+    namespace: &Path,
+    policy_revision: &str,
+    cleanup_owed: bool,
+) -> Result<Arc<LocalReceiverAuthority>, RunError> {
+    let path = receiver_journal(namespace);
+    if journal_absent(&path)? {
+        // One move onto the current path. The old path is not opened.
+        adopt_legacy_journal(namespace, &path)?;
+    }
+    if journal_absent(&path)? {
+        if cleanup_owed {
+            return Err(RunError::ReceiverJournal(
+                crate::core::MissingReceiverJournal::new(path),
+            ));
+        }
+        let root = path
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
+        nessa_local_storage::create_directory(root)
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+    }
     LocalReceiverAuthority::open(&path, policy_revision, Arc::new(SystemClock))
         .map(Arc::new)
         .map_err(|cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &path, cause))
 }
 
+/// Move a journal that still sits under `conversations/` to `path`.
+///
+/// This is the current location, not a second reader: after the move, only
+/// `path` is opened. An empty conversation directory is removed, because it
+/// was created for this file and retirement would otherwise report it as
+/// conversation data. A directory that still holds anything else is left.
+fn adopt_legacy_journal(namespace: &Path, path: &Path) -> Result<(), RunError> {
+    let legacy_dir = conversation_root(namespace);
+    let legacy = legacy_dir.join("receiver-access.sqlite3");
+    match std::fs::symlink_metadata(&legacy) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(RunError::Agent(format!(
+                "receiver access at {}: {error}",
+                legacy.display()
+            )));
+        }
+    }
+    let root = path
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid receiver journal path".into()))?;
+    nessa_local_storage::create_directory(root)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    std::fs::rename(&legacy, path).map_err(|error| {
+        RunError::Agent(format!("receiver access at {}: {error}", legacy.display()))
+    })?;
+    // Empty only. A directory that still holds conversation records stays,
+    // and that is not a failure to move the journal.
+    match std::fs::remove_dir(&legacy_dir) {
+        Ok(()) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                || error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+        Err(error) => {
+            return Err(RunError::Agent(format!(
+                "conversations directory at {}: {error}",
+                legacy_dir.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Whether any enrollment still has to fence a receiver through the journal.
+fn receiver_cleanup_owed(store: &LocalCredentialStore) -> Result<bool, RunError> {
+    let pending = store.pending_pairings().map_err(|error| {
+        RunError::Authentication(format!(
+            "could not read whether receiver cleanup is owed: {error}"
+        ))
+    })?;
+    Ok(pending.iter().any(|record| record.cleanup_pending()))
+}
+
+/// The journal file is not there. A stat that fails any other way is that
+/// failure, not an absent journal. A path that exists is opened as it is.
+fn journal_absent(path: &Path) -> Result<bool, RunError> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(RunError::Agent(format!(
+            "receiver access at {}: {error}",
+            path.display()
+        ))),
+        Ok(_) => Ok(false),
+    }
+}
+
+/// Where a namespace keeps its receiver journal. Not under `conversations/`.
+pub(super) fn receiver_journal(namespace: &Path) -> std::path::PathBuf {
+    namespace
+        .join("receiver-access")
+        .join("receiver-access.sqlite3")
+}
+
 /// Where a namespace keeps its conversations. Read by composition and by the
-/// retirement that reports whether they are still there.
+/// retirement that reports whether they are still there. The receiver journal
+/// is not in this directory.
 pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }
