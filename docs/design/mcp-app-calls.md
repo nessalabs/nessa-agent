@@ -237,7 +237,8 @@ agreement), then the client's API, then the desktop. This section is the
 SDK's part: the values, how they are saved and sent, and which apps a
 message may name. The gateway's part is
 ["An app in its conversation: the gateway"](#an-app-in-its-conversation-the-gateway-390)
-below.
+below, and the client's
+["An app in its conversation: the client"](#an-app-in-its-conversation-the-client-390).
 
 **Decisions.**
 
@@ -787,7 +788,53 @@ Each row has at least one test, named after it.
   applied, one byte over refused with nothing recorded — and on record for
   both together past the service's, and the transcript's `app` on the wire
   (`an_apps_messages_and_contexts_travel_on_its_lane_and_land_as_its_own`).
-- `packages/nessa-client/src/protocol/conversation-validate.test.ts`: K10.
+- `packages/nessa-client/src/protocol/conversation-validate.test.ts`: K10,
+  the client's view agreement (below).
+
+## An app in its conversation: the client (#390)
+
+`client.mcpApps.sendMessage` and `client.mcpApps.updateModelContext`
+(`packages/nessa-client/src/presentation/mcp-apps-api.ts`) send the two
+requests; what they may carry is `mcpAppRequestProblem.message` and
+`.context` (`protocol/mcp-app-validate.ts`), which read the generated
+`minMcpMessageCharacters`, `maxMcpMessageBytes`, `maxMcpContextBytes`,
+`maxMcpNameBytes` and `maxExecutionIdBytes` rather than restating them. The
+client refuses early only what the schema refuses at the wire; blank text,
+both parts together and the structure's shape stay the gateway's (M3, C3,
+C4). Both wait `mcpAppDeadlines.callToolMs`, the deadline of a call that can
+wait on a review. Whether a refusal is certain is `rejectedBeforeDispatch`'s
+one reading of each code (`application/conversation-mutation-error.ts`), the
+same for every method: `turn_running` and `mcp_cancelled` are certain, and
+`mcp_cancelled` from either method means nothing was sent or held.
+
+| # | Event | Effect | PR |
+| --- | --- | --- | --- |
+| K1 | `sendMessage` text not a string, empty (the schema's `minLength`), past `MAX_MCP_MESSAGE_BYTES`, or ill-formed | `TypeError` before any request | 2b |
+| K2 | a context `null`, not an object, an array, or no plain object | `TypeError` before any request | 2b |
+| K3 | a context with an own key other than `text` / `structuredContentJson` (symbol or hidden ones too); a part it only inherits is not read (`Object.hasOwn`) | `TypeError` before any request | 2b |
+| K4 | a part not a string, past `MAX_MCP_CONTEXT_BYTES`, or ill-formed | `TypeError` before any request; both together, and the structure, are the gateway's (C3, C4) | 2b |
+| K5 | `{}`, or a part given as `undefined` | sent with neither part: a clear (C7); an empty text is sent as given | 2b |
+| K6 | a server name outside 1 to `maxMcpNameBytes` UTF-8 bytes | `TypeError` before any request | 2b |
+| K7 | a message answer without `executionId`, an empty one, one past `maxExecutionIdBytes`, or with an unknown field | `NessaMcpAppError{code: undefined, uncertain: true}` | 2b |
+| K8 | a context answer acknowledging another `requestId` | `NessaMcpAppError{uncertain: true}` | 2b |
+| K9 | `turn_running` | `NessaMcpAppError{code: turn_running, uncertain: false}`; each other code as `rejectedBeforeDispatch` reads it | 2b |
+| K10 | a view's `messages[].app` / `pending[].app` malformed, or a pending entry's author differs from its message's | view refused | 2a |
+
+### Tests (client)
+
+All in `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`, under
+"an app speaking in its conversation (#390)", each named after its row:
+
+- K1 `K1: sends a message of one character, and of exactly its bound in UTF-8 bytes`, `K1: refuses a message that is %s before asking the gateway` (no string, undefined, empty, one byte past, a lone surrogate), `K1: says why a message is outside its bounds before a host sends it`
+- K2 `K2: refuses a context that is %s before asking the gateway` (null, a number, a string, an array, an array carrying a part, a class instance)
+- K3 `K3: refuses a context with %s before asking the gateway` (another field, a part beside another field, a symbol key, a hidden key), `K3: reads a context's own parts only, never one every object inherits`
+- K4 `K4: sends each part at exactly its own bound, and both together for the gateway to judge`, `K4: refuses a context with %s before asking the gateway`, `K4: checks and sends one read of each part, so a part that changes as it is read sends what was checked`
+- K5 `K5: sends {} as an update with neither part, a clear, and an empty text as given`
+- K6 `K6: refuses a server name that is %s before asking the gateway`, `K6: takes a server name of exactly its bound`
+- K7 `K7: refuses a message answer with %s as uncertain`, `K7: takes a message answer whose turn is exactly its bound`
+- K8 `K8: refuses a context answer acknowledging %s as uncertain`
+- K9 `K9: is certain a message refused while a turn runs became no turn`, `K9: reports %s as certain for a message and a context`, `K9: reports %s as uncertain`
+- The request and its deadline: `sends a message as the app, waits as long as a call that waits on a review, and returns its turn`, and K5's
 - `protocol/product/fixtures.json` and `pnpm protocol:check`: the new shapes.
 
 ## Lanes
@@ -817,7 +864,9 @@ Each row above has a test, named after it:
   `crates/nessa-server/tests/mcp_servers/gateway.rs`.
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `error_code.rs`.
-- The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
+- The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`;
+  an app in its conversation, K1–K9, under
+  ["Tests (client)"](#tests-client) above.
 - An app in its conversation, the gateway's rows: listed under
   ["Tests (gateway)"](#tests-gateway) above.
 - An app in its conversation, the SDK's rows: "The app a message names",
