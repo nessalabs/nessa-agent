@@ -159,7 +159,7 @@ export type Failure =
     }
   | {
       readonly kind: "storageUnavailable"
-      /** true: published and live, but it may not survive a crash. false: nothing was written. */
+      /** true: published, the live set following as far as it could, but it may not survive a crash. false: nothing was written. */
       readonly applied?: boolean
     }
   | { readonly kind: "remoteError"; readonly code?: number; readonly message?: string }
@@ -446,7 +446,7 @@ export const sentences = {
     "The configuration file couldn't be read or written, so nothing was changed.",
   storageUnknown:
     "The configuration file couldn't be read or written. The list shows where things stand.",
-  /** Published and live, but its directory not synced (U36). */
+  /** Published, but its directory not synced (U36). */
   notDurable: (what: "save" | "remove" | "change") =>
     `${what === "save" ? "Saved" : what === "remove" ? "Removed" : "Changed"}, but it may not survive a crash.`,
   inspectUnanswered: (name: string) =>
