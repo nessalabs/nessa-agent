@@ -13,14 +13,15 @@ use crate::gateway::{
         GatewayReconciliationOutcomeError, GatewayReconciliationRequest, MonotonicClock,
     },
     domain::value_objects::{
-        AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
-        LifecycleEffectPredicate, LifecycleFailedPhase, LifecycleHistory, LifecycleObservation,
-        LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecord,
-        LifecycleRecordKind, LifecycleRecordPayload, ReconciliationCause,
-        ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
-        ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget, ServiceManager,
-        SystemdJobAttempt, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
-        SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
+        claude_config_directory_is_durable, AuditDeliveryReceipt, BundledSurface,
+        LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate, LifecycleFailedPhase,
+        LifecycleHistory, LifecycleObservation, LifecycleObservationSource,
+        LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecord, LifecycleRecordKind,
+        LifecycleRecordPayload, ReconciliationCause, ReconciliationCleanupDecision,
+        ReconciliationCorrelation, ReconciliationEvidence, ReconciliationIncarnation,
+        ReconciliationInitiator, ReconciliationTarget, ServiceManager, SystemdJobAttempt,
+        SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation,
+        SystemdUnitName, SystemdUnitState,
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
@@ -34,7 +35,7 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     os::fd::AsRawFd,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
@@ -376,7 +377,21 @@ fn parse_request(
     ),
     GatewayError,
 > {
-    let value = object(value, &["correlation", "cause", "initiator"])?;
+    let value = value
+        .as_object()
+        .ok_or_else(|| invalid_record("expected an object"))?;
+    let with_directory = value.contains_key("claudeConfiguration");
+    let expected_len = if with_directory { 4 } else { 3 };
+    if value.len() != expected_len
+        || !value.contains_key("correlation")
+        || !value.contains_key("cause")
+        || !value.contains_key("initiator")
+    {
+        return Err(invalid_record("object has missing or unknown fields"));
+    }
+    if with_directory {
+        parse_claude_configuration(&value["claudeConfiguration"])?;
+    }
     let correlation = ReconciliationCorrelation::parse(string(value, "correlation")?)
         .map_err(|error| invalid_record(&error.to_string()))?;
     Ok((
@@ -384,6 +399,27 @@ fn parse_request(
         parse_cause(&string(value, "cause")?)?,
         parse_initiator(&string(value, "initiator")?)?,
     ))
+}
+
+fn parse_claude_configuration(value: &Value) -> Result<(), GatewayError> {
+    let configuration = object(value, &["previous", "directory"])?;
+    parse_claude_directory(configuration, "previous")?;
+    parse_claude_directory(configuration, "directory")?;
+    Ok(())
+}
+
+fn parse_claude_directory(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<(), GatewayError> {
+    match object.get(field) {
+        Some(Value::Null) => Ok(()),
+        Some(Value::String(directory)) => {
+            claude_config_directory_is_durable(Some(Path::new(directory)))
+                .map_err(|error| invalid_record(&error.to_string()))
+        }
+        _ => Err(invalid_record("expected a string field")),
+    }
 }
 
 fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
@@ -1806,11 +1842,24 @@ fn failed_phase(phase: LifecycleFailedPhase) -> &'static str {
 }
 
 fn request(request: &GatewayReconciliationRequest) -> Value {
-    json!({
+    let mut value = json!({
         "correlation": request.correlation().as_str(),
         "cause": cause(request.evidence().cause()),
         "initiator": initiator(request.evidence().initiator()),
-    })
+    });
+    if let Some(change) = request.evidence().claude_directory() {
+        value["claudeConfiguration"] = json!({
+            "previous": directory_value(change.previous()),
+            "directory": directory_value(change.directory()),
+        });
+    }
+    value
+}
+
+fn directory_value(directory: Option<&Path>) -> Value {
+    directory
+        .map(|directory| Value::String(directory.display().to_string()))
+        .unwrap_or(Value::Null)
 }
 
 fn cause(cause: ReconciliationCause) -> &'static str {
@@ -1873,6 +1922,65 @@ mod tests {
         fs,
         sync::atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn a_claude_directory_change_is_stored_on_the_request_and_still_parses() {
+        let directory = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\me\.claude-work")
+        } else {
+            PathBuf::from("/Users/me/.claude-work")
+        };
+        let request = GatewayReconciliationRequest::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000611".into())
+                .unwrap(),
+            ReconciliationEvidence::with_claude_directory(
+                ReconciliationInitiator::BundledSurface(BundledSurface::Main),
+                None,
+                Some(directory.clone()),
+            )
+            .unwrap(),
+        );
+        let value = super::request(&request);
+        assert_eq!(value["claudeConfiguration"]["previous"], Value::Null);
+        assert_eq!(
+            value["claudeConfiguration"]["directory"],
+            directory.display().to_string()
+        );
+        let (correlation, cause, initiator) = parse_request(&value).unwrap();
+        assert_eq!(correlation, *request.correlation());
+        assert_eq!(cause, ReconciliationCause::ClaudeConfigurationChanged);
+        assert_eq!(
+            initiator,
+            ReconciliationInitiator::BundledSurface(BundledSurface::Main)
+        );
+        assert!(parse_request(&json!({
+            "correlation": "00000000-0000-4000-8000-000000000611",
+            "cause": "claude_configuration_changed",
+            "initiator": "main_window",
+            "claudeConfiguration": {"previous": null, "directory": "relative/claude"},
+        }))
+        .is_err());
+
+        let unchanged = GatewayReconciliationRequest::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000612".into())
+                .unwrap(),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let stored = super::request(&unchanged);
+        assert!(stored.get("claudeConfiguration").is_none());
+        assert_eq!(
+            stored,
+            json!({
+                "correlation": "00000000-0000-4000-8000-000000000612",
+                "cause": "startup",
+                "initiator": "desktop_host",
+            })
+        );
+    }
 
     #[test]
     fn every_effect_predicate_is_stored_and_restored_as_itself() {

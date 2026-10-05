@@ -226,6 +226,59 @@ fn path_directive(value: &str) -> Result<String, String> {
     Ok(escaped)
 }
 
+/// The Claude configuration directory published in a rendered unit.
+///
+/// `Ok(None)` is a unit whose command has no `CLAUDE_CONFIG_DIR`. `Err` is
+/// bytes this parser cannot treat as that command, which startup classification
+/// leaves as an ordinary startup rather than a provider-directory change.
+pub(super) fn installed_claude_config_directory(
+    bytes: &[u8],
+) -> Result<Option<std::path::PathBuf>, ()> {
+    let text = std::str::from_utf8(bytes).map_err(|_| ())?;
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("ExecStart="))
+        .ok_or(())?;
+    assignment_value(line, "CLAUDE_CONFIG_DIR").map(|value| value.map(std::path::PathBuf::from))
+}
+
+fn assignment_value(line: &str, key: &str) -> Result<Option<String>, ()> {
+    let marker = format!("\"{key}=");
+    let Some(index) = line.find(&marker) else {
+        return Ok(None);
+    };
+    unescape_quoted(&line[index + marker.len()..])
+}
+
+fn unescape_quoted(input: &str) -> Result<Option<String>, ()> {
+    let mut output = String::new();
+    let mut characters = input.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => return Ok(Some(output)),
+            '\\' => {
+                let escaped = characters.next().ok_or(())?;
+                output.push(match escaped {
+                    '\\' => '\\',
+                    '"' => '"',
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    _ => return Err(()),
+                });
+            }
+            '%' => {
+                if characters.next() != Some('%') {
+                    return Err(());
+                }
+                output.push('%');
+            }
+            _ => output.push(character),
+        }
+    }
+    Err(())
+}
+
 fn quote(value: &str) -> Result<String, String> {
     if value.contains('\0') {
         return Err("A systemd unit value contains NUL".into());
@@ -262,27 +315,93 @@ mod tests {
     #[test]
     fn renders_no_shell_clean_environment_and_percent_escaping() {
         let unit = unit_name("prod", None).unwrap();
-        let rendered = String::from_utf8(
-            render(UnitDefinition {
-                unit: &unit,
-                runtime: Path::new("/runtime%one"),
-                configuration: &configuration(),
-                working_directory: Path::new("/data"),
-                home: Path::new("/home/me"),
-                agent_path: &SearchPath::parse("/usr/bin:/opt/tools").unwrap(),
-                fingerprint: &"a".repeat(64),
-                generation: &"b".repeat(64),
-            })
-            .unwrap()
-            .bytes,
+        let rendered = render(UnitDefinition {
+            unit: &unit,
+            runtime: Path::new("/runtime%one"),
+            configuration: &configuration(),
+            working_directory: Path::new("/data"),
+            home: Path::new("/home/me"),
+            agent_path: &SearchPath::parse("/usr/bin:/opt/tools").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        let text = String::from_utf8(rendered.bytes).unwrap();
+        assert!(text.contains("ExecStart=:\"/usr/bin/env\" \"-i\""));
+        assert!(text.contains("/runtime%%one/nessa"));
+        assert!(text.contains("Description=Nessa gateway (nessa-gateway-prod.service)"));
+        assert!(text.contains("WorkingDirectory=/data"));
+        assert!(!text.contains("sh -c"));
+        assert!(text.contains("WantedBy=default.target"));
+        assert_eq!(rendered.arguments[0], "/usr/bin/env");
+        assert_eq!(rendered.arguments[1], "-i");
+        let executable = rendered
+            .arguments
+            .iter()
+            .position(|argument| argument.ends_with("/nessa"))
+            .unwrap();
+        let keys: Vec<_> = rendered.arguments[2..executable]
+            .iter()
+            .map(|argument| argument.split_once('=').unwrap().0)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "HOME",
+                "NESSA_STAGE",
+                "NESSA_HOST",
+                "NESSA_PORT",
+                "NESSA_DATA_DIR",
+                "NESSA_AGENT_PATH",
+                "NESSA_RUNTIME_FINGERPRINT",
+                "NESSA_SERVICE_GENERATION",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_claude_directory_round_trips_and_shell_variables_do_not() {
+        let unit = unit_name("prod", None).unwrap();
+        let directory = PathBuf::from("/work/claude%dir");
+        let with_directory = ServiceConfiguration::new(
+            "prod".into(),
+            PathBuf::from("/data"),
+            None,
+            7420,
+            Some(directory.clone()),
         )
         .unwrap();
-        assert!(rendered.contains("ExecStart=:\"/usr/bin/env\" \"-i\""));
-        assert!(rendered.contains("/runtime%%one/nessa"));
-        assert!(rendered.contains("Description=Nessa gateway (nessa-gateway-prod.service)"));
-        assert!(rendered.contains("WorkingDirectory=/data"));
-        assert!(!rendered.contains("sh -c"));
-        assert!(rendered.contains("WantedBy=default.target"));
+        let rendered = render(UnitDefinition {
+            unit: &unit,
+            runtime: Path::new("/runtime"),
+            configuration: &with_directory,
+            working_directory: Path::new("/data"),
+            home: Path::new("/home/me"),
+            agent_path: &SearchPath::parse("/usr/bin").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        assert_eq!(
+            installed_claude_config_directory(&rendered.bytes),
+            Ok(Some(directory))
+        );
+        assert!(!String::from_utf8(rendered.bytes.clone())
+            .unwrap()
+            .contains("ANTHROPIC_API_KEY"));
+        let without = render(UnitDefinition {
+            unit: &unit,
+            runtime: Path::new("/runtime"),
+            configuration: &configuration(),
+            working_directory: Path::new("/data"),
+            home: Path::new("/home/me"),
+            agent_path: &SearchPath::parse("/usr/bin").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        assert_eq!(installed_claude_config_directory(&without.bytes), Ok(None));
+        assert!(installed_claude_config_directory(b"not a unit").is_err());
     }
 
     #[test]

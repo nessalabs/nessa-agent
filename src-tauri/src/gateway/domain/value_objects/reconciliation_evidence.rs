@@ -14,9 +14,11 @@
 //! ```
 //! Arrows mean immutable evidence carried forward; constructors reject facts
 //! that contradict the protocol before infrastructure may persist them.
+use super::service_configuration::{claude_config_directory_is_durable, ServiceConfigurationError};
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
+    path::{Path, PathBuf},
 };
 
 /// Why the host requested service reconciliation.
@@ -50,11 +52,33 @@ pub enum ReconciliationInitiator {
     BundledSurface(BundledSurface),
 }
 
+/// The Claude configuration directory a settings change asked to publish.
+///
+/// `previous` is the directory the attempt replaced. `directory` is the one it
+/// asked the next registration to publish. Either may be absent when the
+/// provider default is in use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudeDirectoryChange {
+    previous: Option<PathBuf>,
+    directory: Option<PathBuf>,
+}
+
+impl ClaudeDirectoryChange {
+    pub fn previous(&self) -> Option<&Path> {
+        self.previous.as_deref()
+    }
+
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref()
+    }
+}
+
 /// Immutable request evidence retained across retries and coalescing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationEvidence {
     cause: ReconciliationCause,
     initiator: ReconciliationInitiator,
+    claude_directory: Option<ClaudeDirectoryChange>,
 }
 
 impl ReconciliationEvidence {
@@ -82,8 +106,35 @@ impl ReconciliationEvidence {
             )
         );
         valid
-            .then_some(Self { cause, initiator })
+            .then_some(Self {
+                cause,
+                initiator,
+                claude_directory: None,
+            })
             .ok_or(ReconciliationEvidenceError)
+    }
+
+    /// A bundled or desktop change of Claude's configuration directory.
+    ///
+    /// Both paths follow [`claude_config_directory_is_durable`]. The cause is
+    /// [`ReconciliationCause::ClaudeConfigurationChanged`], so a journal can
+    /// reconstruct the directory that was requested when registration succeeds
+    /// or fails (`settings_change_reregisters_once_and_records_the_reason`).
+    pub fn with_claude_directory(
+        initiator: ReconciliationInitiator,
+        previous: Option<PathBuf>,
+        directory: Option<PathBuf>,
+    ) -> Result<Self, ServiceConfigurationError> {
+        claude_config_directory_is_durable(previous.as_deref())?;
+        claude_config_directory_is_durable(directory.as_deref())?;
+        Ok(Self {
+            cause: ReconciliationCause::ClaudeConfigurationChanged,
+            initiator,
+            claude_directory: Some(ClaudeDirectoryChange {
+                previous,
+                directory,
+            }),
+        })
     }
 
     pub fn cause(&self) -> ReconciliationCause {
@@ -99,6 +150,10 @@ impl ReconciliationEvidence {
     )]
     pub fn initiator(&self) -> ReconciliationInitiator {
         self.initiator
+    }
+
+    pub fn claude_directory(&self) -> Option<&ClaudeDirectoryChange> {
+        self.claude_directory.as_ref()
     }
 }
 
@@ -954,6 +1009,41 @@ mod tests {
             ReconciliationInitiator::DesktopHost
         )
         .is_ok());
+        assert!(ReconciliationEvidence::new(
+            ReconciliationCause::Startup,
+            ReconciliationInitiator::DesktopHost
+        )
+        .unwrap()
+        .claude_directory()
+        .is_none());
+    }
+
+    #[test]
+    fn a_claude_directory_change_keeps_both_paths_and_rejects_a_relative_one() {
+        let directory = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\me\.claude-work")
+        } else {
+            PathBuf::from("/Users/me/.claude-work")
+        };
+        let evidence = ReconciliationEvidence::with_claude_directory(
+            ReconciliationInitiator::BundledSurface(BundledSurface::Main),
+            None,
+            Some(directory.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.cause(),
+            ReconciliationCause::ClaudeConfigurationChanged
+        );
+        let change = evidence.claude_directory().unwrap();
+        assert_eq!(change.previous(), None);
+        assert_eq!(change.directory(), Some(directory.as_path()));
+        assert!(ReconciliationEvidence::with_claude_directory(
+            ReconciliationInitiator::BundledSurface(BundledSurface::Setup),
+            None,
+            Some(PathBuf::from("relative/claude")),
+        )
+        .is_err());
     }
 
     #[test]

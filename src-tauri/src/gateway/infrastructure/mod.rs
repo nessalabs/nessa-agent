@@ -18,6 +18,7 @@
 //!
 //! ```text
 //! bundled windows -> commands authorization -> Gateway startup / endpoint / credential access
+//!                    -> Claude configuration directory -> one re-registration
 //! desktop window  -> commands authorization -> endpoint / credential access, once ready
 //! Gateway -> native manager -> staging -> verified immutable runtime
 //!                    -> control -> launchd / existing gateway
@@ -47,9 +48,11 @@ mod selection;
 mod unsupported;
 pub(crate) use commands::GatewayReader;
 pub use commands::{
-    __cmd__gateway_startup, __cmd__retry_gateway_startup, __tauri_command_name_gateway_startup,
-    __tauri_command_name_retry_gateway_startup, gateway_startup, retry_gateway_startup,
-    startup_events,
+    __cmd__gateway_startup, __cmd__retry_gateway_startup,
+    __cmd__set_claude_configuration_directory, __tauri_command_name_gateway_startup,
+    __tauri_command_name_retry_gateway_startup,
+    __tauri_command_name_set_claude_configuration_directory, gateway_startup,
+    retry_gateway_startup, set_claude_configuration_directory, startup_events,
 };
 pub use selection::{
     current, login_shell_path, platform_context, reconciliation_audit, reconciliation_ids,

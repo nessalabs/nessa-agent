@@ -9,13 +9,13 @@
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
-    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
-    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
-    GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
-    GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
-    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
-    GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
+    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
+    GatewayReconciliationEffectTiming, GatewayReconciliationIds, GatewayReconciliationIntent,
+    GatewayReconciliationIntentDelivery, GatewayReconciliationJournalSession,
+    GatewayReconciliationOutcome, GatewayReconciliationOutcomeError, GatewayReconciliationProgress,
+    GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
+    GatewayStopRequest, GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
     ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
@@ -25,6 +25,8 @@ use crate::gateway::domain::value_objects::{
     ReconciliationCause, ReconciliationCleanupDecision, ReconciliationCorrelation,
     ReconciliationEvidence, ReconciliationIncarnation, ReconciliationInitiator, SearchPath,
 };
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 use std::time::Duration;
 use std::{
@@ -814,6 +816,12 @@ pub struct Gateway {
     runtime: PathBuf,
     stage: String,
     lifecycle: Arc<Mutex<Lifecycle>>,
+    /// The Claude directory whose registration has not finished.
+    ///
+    /// A later save of that same directory waits for this attempt. A different
+    /// directory publishes its own attempt. A failed attempt restores only
+    /// while it still owns the directory it published.
+    claude_publication: Mutex<Option<Arc<ClaudePublication>>>,
     #[cfg(test)]
     lifecycle_probe: Arc<LifecycleProbe>,
     #[cfg(test)]
@@ -932,6 +940,7 @@ impl Gateway {
                 running: None,
                 pending: None,
             })),
+            claude_publication: Mutex::new(None),
             #[cfg(test)]
             lifecycle_probe: Arc::new(LifecycleProbe::default()),
             #[cfg(test)]
@@ -975,6 +984,12 @@ impl Gateway {
         .await
     }
 
+    /// Reconcile because a bundled surface changed Claude's configuration directory.
+    ///
+    /// The host must already be publishing that directory.
+    /// [`Self::change_claude_configuration`] is the production entry: it updates
+    /// the host, records the directory, and then reconciles. Tests call this
+    /// when they only need the cause.
     #[cfg(test)]
     pub async fn configuration_changed(&self, surface: BundledSurface) -> Result<(), GatewayError> {
         self.reconcile(evidence(
@@ -982,6 +997,110 @@ impl Gateway {
             ReconciliationInitiator::BundledSurface(surface),
         )?)
         .await
+    }
+
+    /// Publish `directory` on the host and reconcile once when it changed.
+    ///
+    /// An equal directory that no attempt is still publishing returns without
+    /// a registration
+    /// (`settings_change_reregisters_once_and_records_the_reason`). The same
+    /// directory, while its attempt is in flight, waits for that attempt
+    /// (`an_identical_in_flight_directory_change_waits_for_that_attempt`).
+    /// A different directory waits until that attempt finishes, then publishes
+    /// its own (`a_different_directory_waits_until_the_in_flight_attempt_finishes`).
+    /// A reconciliation that fails restores the previous directory only when
+    /// this attempt still owns the value it published
+    /// (`a_failed_registration_restores_the_directory_and_can_be_repeated`,
+    /// `a_failed_registration_does_not_restore_a_newer_directory`).
+    pub async fn change_claude_configuration(
+        &self,
+        surface: BundledSurface,
+        directory: Option<PathBuf>,
+    ) -> Result<(), GatewayError> {
+        let claimed = loop {
+            match self.claim_claude_directory(surface, &directory)? {
+                ClaudeDirectoryClaim::Settled => return Ok(()),
+                ClaudeDirectoryClaim::Join(existing) => {
+                    if existing.is_pending() {
+                        return wait_claude_publication(existing).await;
+                    }
+                    self.clear_claude_publication(&existing);
+                }
+                ClaudeDirectoryClaim::Wait(existing) => {
+                    let _ = wait_claude_publication(existing.clone()).await;
+                    self.clear_claude_publication(&existing);
+                }
+                ClaudeDirectoryClaim::Publish {
+                    publication,
+                    previous,
+                    evidence,
+                } => break (publication, previous, evidence),
+            }
+        };
+        let (publication, previous, evidence) = claimed;
+        let mut finish = ClaudePublicationFinish {
+            gateway: self,
+            publication,
+            directory,
+            previous,
+            outcome: None,
+        };
+        let outcome = self.reconcile(evidence).await;
+        finish.outcome = Some(outcome.clone());
+        outcome
+    }
+
+    fn claim_claude_directory(
+        &self,
+        surface: BundledSurface,
+        directory: &Option<PathBuf>,
+    ) -> Result<ClaudeDirectoryClaim, GatewayError> {
+        let mut slot = self
+            .claude_publication
+            .lock()
+            .map_err(|_| state_unavailable())?;
+        if let Some(existing) = slot.clone() {
+            if existing.directory == *directory {
+                return Ok(ClaudeDirectoryClaim::Join(existing));
+            }
+            return Ok(ClaudeDirectoryClaim::Wait(existing));
+        }
+        match self
+            .host
+            .replace_claude_config_directory(directory.clone())?
+        {
+            ClaudeDirectoryReplacement::Unchanged => Ok(ClaudeDirectoryClaim::Settled),
+            ClaudeDirectoryReplacement::Changed { previous } => {
+                let evidence =
+                    match directory_evidence(surface, previous.clone(), directory.clone()) {
+                        Ok(evidence) => evidence,
+                        Err(error) => {
+                            let _ = self
+                                .host
+                                .restore_claude_config_directory(directory, previous);
+                            return Err(error);
+                        }
+                    };
+                let publication = Arc::new(ClaudePublication::new(directory.clone()));
+                *slot = Some(Arc::clone(&publication));
+                Ok(ClaudeDirectoryClaim::Publish {
+                    publication,
+                    previous,
+                    evidence,
+                })
+            }
+        }
+    }
+
+    fn clear_claude_publication(&self, publication: &Arc<ClaudePublication>) {
+        if let Ok(mut slot) = self.claude_publication.lock() {
+            if slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, publication))
+            {
+                *slot = None;
+            }
+        }
     }
 
     async fn reconcile(&self, evidence: ReconciliationEvidence) -> Result<(), GatewayError> {
@@ -1125,6 +1244,18 @@ impl Gateway {
     #[cfg(test)]
     fn wait_for_pending_receipt(&self) -> Option<Arc<AttemptReceipt>> {
         self.lifecycle_probe.wait_for_pending(&self.lifecycle)
+    }
+
+    #[cfg(test)]
+    fn claude_publication_waiters(&self) -> usize {
+        self.claude_publication
+            .lock()
+            .ok()
+            .and_then(|slot| {
+                slot.as_ref()
+                    .map(|publication| publication.waiters.load(Ordering::SeqCst))
+            })
+            .unwrap_or(0)
     }
 }
 
@@ -1304,6 +1435,114 @@ fn evidence(
 ) -> Result<ReconciliationEvidence, GatewayError> {
     ReconciliationEvidence::new(cause, initiator)
         .map_err(|error| GatewayError::Registration(error.to_string()))
+}
+
+fn directory_evidence(
+    surface: BundledSurface,
+    previous: Option<PathBuf>,
+    directory: Option<PathBuf>,
+) -> Result<ReconciliationEvidence, GatewayError> {
+    ReconciliationEvidence::with_claude_directory(
+        ReconciliationInitiator::BundledSurface(surface),
+        previous,
+        directory,
+    )
+    .map_err(|error| GatewayError::Registration(error.to_string()))
+}
+
+enum ClaudeDirectoryClaim {
+    Settled,
+    Join(Arc<ClaudePublication>),
+    /// A different directory is still reconciling. Wait, then claim again.
+    Wait(Arc<ClaudePublication>),
+    Publish {
+        publication: Arc<ClaudePublication>,
+        previous: Option<PathBuf>,
+        evidence: ReconciliationEvidence,
+    },
+}
+
+struct ClaudePublication {
+    directory: Option<PathBuf>,
+    result: Mutex<Option<Result<(), GatewayError>>>,
+    ready: Condvar,
+    #[cfg(test)]
+    waiters: AtomicUsize,
+}
+
+impl ClaudePublication {
+    fn new(directory: Option<PathBuf>) -> Self {
+        Self {
+            directory,
+            result: Mutex::new(None),
+            ready: Condvar::new(),
+            #[cfg(test)]
+            waiters: AtomicUsize::new(0),
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.result
+            .lock()
+            .map(|result| result.is_none())
+            .unwrap_or(false)
+    }
+
+    fn finish(&self, outcome: Result<(), GatewayError>) {
+        if let Ok(mut result) = self.result.lock() {
+            *result = Some(outcome);
+            self.ready.notify_all();
+        }
+    }
+
+    fn wait(&self) -> Result<(), GatewayError> {
+        #[cfg(test)]
+        self.waiters.fetch_add(1, Ordering::SeqCst);
+        let mut result = self.result.lock().map_err(|_| state_unavailable())?;
+        while result.is_none() {
+            result = self.ready.wait(result).map_err(|_| state_unavailable())?;
+        }
+        result.clone().ok_or_else(state_unavailable)?
+    }
+}
+
+struct ClaudePublicationFinish<'a> {
+    gateway: &'a Gateway,
+    publication: Arc<ClaudePublication>,
+    directory: Option<PathBuf>,
+    previous: Option<PathBuf>,
+    outcome: Option<Result<(), GatewayError>>,
+}
+
+impl Drop for ClaudePublicationFinish<'_> {
+    fn drop(&mut self) {
+        let outcome = self.outcome.take().unwrap_or_else(|| {
+            Err(GatewayError::Registration(
+                "claude configuration reconciliation ended before it reported a result".into(),
+            ))
+        });
+        if outcome.is_err() {
+            let _ = self
+                .gateway
+                .host
+                .restore_claude_config_directory(&self.directory, self.previous.clone());
+        }
+        self.publication.finish(outcome);
+        if let Ok(mut slot) = self.gateway.claude_publication.lock() {
+            if slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &self.publication))
+            {
+                *slot = None;
+            }
+        }
+    }
+}
+
+async fn wait_claude_publication(publication: Arc<ClaudePublication>) -> Result<(), GatewayError> {
+    tauri::async_runtime::spawn_blocking(move || publication.wait())
+        .await
+        .map_err(|error| GatewayError::Registration(error.to_string()))?
 }
 
 fn audit_attached(

@@ -3,6 +3,8 @@
 //! There is no settings UI yet, so the file is the interface: it is written
 //! with its defaults on first launch, which is what makes the keys
 //! discoverable. A later settings surface reads and writes the same shape.
+//! `set_claude_configuration_directory` writes `service.claude.configurationDirectory`
+//! and re-registers the packaged gateway once when that directory changes.
 //! Path is stage-scoped via [`crate::local_data`] (ADR 0005).
 //!
 //! Global summon lives in `shortcuts.json` (ADR 0004), not here.
