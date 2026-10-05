@@ -345,10 +345,12 @@ the SDK already gives a send to a closing agent. The mark also covers the
 moment after a close is confirmed, when the agent's lifecycle opens again but
 its slot is still in place.
 
-The desktop stop takes the submission lock only to set the mark, so the mark is
-ordered with any submission between its checks and its enqueue. It lets the
-lock go before the agent closes, so nothing else on the conversation waits for
-the close: reads answer throughout.
+The desktop stop holds the submission lock while it sets the mark, waits for
+any opening to finish, and ends the owner's apps. That orders the mark with any
+submission between its checks and its enqueue, and a submission arriving in
+that time waits for the lock. The stop lets the lock go before the agent
+closes, so nothing on the conversation waits for the close itself: reads
+answer throughout.
 
 Without that order, a stop landing past the checks closed the agent under the
 submission. The reopened lifecycle then admitted the message as waiting work
