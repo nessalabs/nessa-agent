@@ -19,6 +19,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{
+    any::Any,
     panic::AssertUnwindSafe,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
@@ -180,6 +181,9 @@ struct Inner {
     /// One task per bulk phase still delivering. The caller does not own it:
     /// returning, or being dropped, leaves the task here until it finishes.
     audit_tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Panic payloads already taken from a finished task and not yet resumed.
+    /// Resuming one must not drop the rest.
+    audit_panics: Mutex<Vec<Box<dyn Any + Send>>>,
 }
 
 /// Whether this phase resumes a bulk delivery task that already panicked.
@@ -226,6 +230,7 @@ impl AttachmentService {
                 audit_admission,
                 audit_slots: Arc::new(Semaphore::new(audit_admission)),
                 audit_tasks: Mutex::new(Vec::new()),
+                audit_panics: Mutex::new(Vec::new()),
                 limits,
             }),
         }
@@ -400,8 +405,17 @@ impl AttachmentService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Surface a delivery task that panicked, and drop the ones that finished.
-    /// A task still handing records over stays parked.
+    fn audit_panics(&self) -> MutexGuard<'_, Vec<Box<dyn Any + Send>>> {
+        self.inner
+            .audit_panics
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Surface one parked panic. Any other finished panic stays parked for the
+    /// next `release` or `begin`. Dropping that payload would lose it: the
+    /// unwind never returns to the rest of this loop. A task still handing
+    /// records over stays parked.
     async fn reap_audit_tasks(&self) {
         let finished = {
             let mut tasks = self.audit_tasks();
@@ -417,13 +431,22 @@ impl AttachmentService {
             *tasks = running;
             finished
         };
+        let mut payloads = std::mem::take(&mut *self.audit_panics());
         for task in finished {
             if let Err(error) = task.await {
                 if error.is_panic() {
-                    std::panic::resume_unwind(error.into_panic());
+                    payloads.push(error.into_panic());
                 }
             }
         }
+        if payloads.is_empty() {
+            return;
+        }
+        let first = payloads.remove(0);
+        if !payloads.is_empty() {
+            self.audit_panics().extend(payloads);
+        }
+        std::panic::resume_unwind(first);
     }
 }
 

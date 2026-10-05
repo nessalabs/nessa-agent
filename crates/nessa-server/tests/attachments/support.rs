@@ -107,7 +107,12 @@ pub(crate) struct RecordingAudit {
     /// The next `record` panics after it has been counted, so a delivery task
     /// can be left finished with a panic.
     pub(crate) panic_in_record: AtomicBool,
+    /// Panic this many of the next `record` calls, then stop. Unlike
+    /// [`Self::panic_in_record`], the count is used up.
+    pub(crate) panic_next: AtomicUsize,
     pub(crate) attempts: AtomicUsize,
+    /// Conversation of each `record` call, in the order the sink was entered.
+    conversations: Mutex<Vec<ConversationId>>,
     /// How long each `record` future lived, in call order. A deadline drops
     /// the future, so this is the attempt the service actually gave it.
     durations: Mutex<Vec<Duration>>,
@@ -154,6 +159,30 @@ impl RecordingAudit {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
     }
+    /// Conversations whose records have entered the sink, in that order.
+    pub(crate) fn conversations(&self) -> Vec<ConversationId> {
+        self.conversations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+fn record_conversation(record: &AttachmentAuditRecord) -> ConversationId {
+    match record {
+        AttachmentAuditRecord::TicketIssued { ticket }
+        | AttachmentAuditRecord::TicketReplaced { ticket }
+        | AttachmentAuditRecord::TicketExpired { ticket }
+        | AttachmentAuditRecord::TicketWithdrawn { ticket, .. }
+        | AttachmentAuditRecord::UploadRejected { ticket, .. } => ticket.conversation_id().clone(),
+        AttachmentAuditRecord::HoldCreated { hold }
+        | AttachmentAuditRecord::AlreadyHeld { hold, .. }
+        | AttachmentAuditRecord::HoldReverted { hold, .. }
+        | AttachmentAuditRecord::HoldReleased { hold, .. } => hold.conversation_id().clone(),
+        AttachmentAuditRecord::BlobRemoved { removed } => {
+            removed.retirements()[0].hold().conversation_id().clone()
+        }
+    }
 }
 
 /// Times one sink call, including the drop that ends a deadline.
@@ -173,9 +202,14 @@ impl Drop for AttemptSpan<'_> {
 
 impl AttachmentAudit for RecordingAudit {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
+        let conversation_id = record_conversation(&record);
         Box::pin(async move {
             // The service drops its admission permit when this future ends,
             // including when a deadline drops a stall.
+            self.conversations
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(conversation_id);
             let _span = AttemptSpan {
                 audit: self,
                 started: tokio::time::Instant::now(),
@@ -194,7 +228,13 @@ impl AttachmentAudit for RecordingAudit {
             }
             // After a held gate, so a test can drop the caller while this
             // attempt is still inside the sink and only then let it panic.
-            if self.panic_in_record.load(Ordering::SeqCst) {
+            let counted_panic = self
+                .panic_next
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            if self.panic_in_record.load(Ordering::SeqCst) || counted_panic {
                 panic!("attachment audit sink panicked");
             }
             if self.stalled.load(Ordering::SeqCst) {

@@ -1289,6 +1289,49 @@ async fn a_second_bulk_phase_waits_for_the_admission_permit() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_second_phase_enters_when_the_permit_is_released() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        audit_admission: 1,
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(OTHER_CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let before = fixture.audit.conversations().len();
+    fixture.audit.stalled.store(true, Ordering::SeqCst);
+    let first = fixture.service.clone();
+    let second = fixture.service.clone();
+    let first = tokio::spawn(async move { first.release(release_request(CONVERSATION)).await });
+    let second =
+        tokio::spawn(async move { second.release(release_request(OTHER_CONVERSATION)).await });
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let seen = fixture.audit.conversations();
+    assert_eq!(&seen[before..], &[conversation(CONVERSATION)]);
+    // One second past the deadline. The permit has been released, and the
+    // other phase was already waiting on it.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let seen = fixture.audit.conversations();
+    let bulk = &seen[before..];
+    assert!(
+        bulk.len() >= 2,
+        "the second record was not handed over: {bulk:?}"
+    );
+    assert_eq!(
+        bulk[1],
+        conversation(OTHER_CONVERSATION),
+        "the first phase's remaining record was queued ahead of the waiting phase: {bulk:?}"
+    );
+
+    first.abort();
+    second.abort();
+    let _ = first.await;
+    let _ = second.await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_zero_admission_still_attempts_every_record() {
     let fixture = Fixture::new(AttachmentLimits {
         audit_deadline: Duration::from_secs(5),
@@ -1460,6 +1503,119 @@ async fn a_parked_bulk_panic_does_not_reject_a_later_upload() {
         .catch_unwind()
         .await;
     assert!(caught.is_err());
+}
+
+#[tokio::test]
+async fn a_second_parked_panic_is_resumed_by_a_later_release() {
+    let fixture = fixture();
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(OTHER_CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    fixture.audit.panic_in_record.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let first_service = fixture.service.clone();
+    let second_service = fixture.service.clone();
+    let first =
+        tokio::spawn(async move { first_service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    let second = tokio::spawn(async move {
+        second_service
+            .release(release_request(OTHER_CONVERSATION))
+            .await
+    });
+    // Let the second phase reach the semaphore before its caller is dropped.
+    // Aborting sooner cancels release before it parks a delivery task.
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    first.abort();
+    second.abort();
+    let _ = first.await;
+    let _ = second.await;
+    gate.send(()).unwrap();
+    for _ in 0..64 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) >= attempts + 4 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    fixture.audit.panic_in_record.store(false, Ordering::SeqCst);
+
+    let first_surface = AssertUnwindSafe(fixture.service.release(release_request(CONVERSATION)))
+        .catch_unwind()
+        .await;
+    assert!(first_surface.is_err());
+    let second_surface =
+        AssertUnwindSafe(fixture.service.release(release_request(OTHER_CONVERSATION)))
+            .catch_unwind()
+            .await;
+    assert!(
+        second_surface.is_err(),
+        "reap dropped the second parked panic while resuming the first"
+    );
+}
+
+#[tokio::test]
+async fn a_sweep_panic_parked_beside_an_older_one_is_still_surfaced() {
+    let fixture = Fixture::new(AttachmentLimits {
+        tickets: tickets(4),
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    let _stale = fixture.ticket(OTHER_CONVERSATION, b"stale", PDF).await;
+    fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS - 1);
+    let fresh = fixture
+        .ticket_as("begin-2", OTHER_CONVERSATION, b"fresh", PDF)
+        .await;
+    fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS + 1);
+    fixture.audit.taken_all();
+    let gate = fixture.audit.hold_after(0, false);
+    fixture.audit.panic_in_record.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let service = fixture.service.clone();
+    let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
+    fixture.audit.entered.notified().await;
+    caller.abort();
+    let _ = caller.await;
+    gate.send(()).unwrap();
+    for _ in 0..32 {
+        if fixture.audit.attempts.load(Ordering::SeqCst) >= attempts + 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    fixture.audit.panic_in_record.store(false, Ordering::SeqCst);
+    // The sweep's expiry record panics. The upload's own record does not.
+    fixture.audit.panic_next.store(1, Ordering::SeqCst);
+
+    let stored = fixture
+        .service
+        .receive(&fresh, Some(5), ChannelBody::of(b"fresh", 7))
+        .await
+        .unwrap();
+    assert_eq!(stored, attachment(b"fresh", PDF));
+
+    let first_surface = AssertUnwindSafe(fixture.service.release(release_request(CONVERSATION)))
+        .catch_unwind()
+        .await;
+    assert!(first_surface.is_err());
+    let second_surface =
+        AssertUnwindSafe(fixture.service.release(release_request(OTHER_CONVERSATION)))
+            .catch_unwind()
+            .await;
+    assert!(
+        second_surface.is_err(),
+        "the sweep panic was dropped while the older panic was resumed"
+    );
 }
 
 #[tokio::test]
