@@ -11,6 +11,7 @@ use crate::domain::mcp_apps::{
 use crate::infrastructure::json_rpc::json_fits;
 use base64::Engine;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 
 /// The protocol revision this client asks for.
 pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -117,8 +118,58 @@ pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpE
 /// Whether the model may see and call `tool`, a tool as `tools/list` gives it
 /// ([`declared_ui`]).
 pub(crate) fn model_may_see(tool: &Value) -> bool {
-    let (_, who) = declared_ui(tool);
-    who.model()
+    tool_visibility(tool).model()
+}
+
+/// Who may see `tool`, one entry as `tools/list` gives it ([`declared_ui`]).
+pub(crate) fn tool_visibility(tool: &Value) -> UiVisibility {
+    declared_ui(tool).1
+}
+
+/// One visibility per name, in the order each name is first seen. A side is
+/// included only when every entry for that name includes it
+/// ([`UiVisibility::every`]).
+pub(crate) fn one_visibility_per_name(
+    entries: impl IntoIterator<Item = (String, UiVisibility)>,
+) -> Vec<(String, UiVisibility)> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut folded: Vec<(String, UiVisibility)> = Vec::new();
+    for (name, who) in entries {
+        if let Some(&at) = index.get(&name) {
+            folded[at].1 = folded[at].1.every(who);
+        } else {
+            index.insert(name.clone(), folded.len());
+            folded.push((name, who));
+        }
+    }
+    folded
+}
+
+/// The model record for a kept list: one bool per name, hidden when any
+/// entry excludes the model. Names that could not be a [`ListedTool`] are
+/// taken from `hidden`, which is the per-entry record [`tools_page`] built.
+pub(crate) fn hidden_for_model(
+    tools: &[ListedTool],
+    hidden: &[(String, bool)],
+) -> Vec<(String, bool)> {
+    let known: HashSet<String> = tools
+        .iter()
+        .map(|tool| tool.tool().tool().to_owned())
+        .collect();
+    let mut entries: Vec<(String, UiVisibility)> = tools
+        .iter()
+        .map(|tool| (tool.tool().tool().to_owned(), tool.ui().visibility()))
+        .collect();
+    for (name, is_hidden) in hidden {
+        if known.contains(name) {
+            continue;
+        }
+        entries.push((name.clone(), UiVisibility::new(!is_hidden, true)));
+    }
+    one_visibility_per_name(entries)
+        .into_iter()
+        .map(|(name, who)| (name, !who.model()))
+        .collect()
 }
 
 /// A listed tool's `_meta.ui`, and who may see it. One reading for the model

@@ -69,8 +69,18 @@ cleanup. An already-settled invocation keeps its earlier result.
   provider fields in the exact review JSON; other tools preserve bounded
   original JSON review input.
   MCP names must belong to a configured server. Native tool names are bounded
-  and provider-validated. Only supplied `allow_once` and `reject_once` choices
-  are exposed. Ambiguous permission options fail closed.
+  and provider-validated. A permission `toolCall` is a tool-call update: when it
+  omits the tool name or object `rawInput`, the review uses the name and latest
+  object input already retained for that same call, including a WebSearch query
+  that arrived on the preceding update. An object that does not fit the
+  retention budget is not cached, and neither is a supplied non-object. Either
+  one clears any input already cached for that call, so a later sparse review
+  cannot approve the previous query. A `completed` or `failed` update drops
+  that call's cached input; a pending or running update keeps it. A declined
+  permission that supplies a non-object drops the cached input for a call
+  already observed, and it does not admit a call that was never observed. Only
+  supplied `allow_once` and `reject_once` choices are exposed. Ambiguous
+  permission options fail closed.
 - Denied tools are the whole of that boundary, since admission is otherwise
   open, and they are read against the one pinned harness version startup
   verifies. Execution Nessa does not own is denied: Bash, TaskOutput, TaskStop,
