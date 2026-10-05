@@ -432,7 +432,8 @@ export function conversationView(value: unknown, expected: string): Conversation
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
     // What it asks the person to allow, a closed set: a surface words its
     // review by it, so a value this build does not know refuses the view.
-    oneOf(text(permission, "ask", 16), Object.values(ConversationPermissionAsk))
+    const ask = text(permission, "ask", 16)
+    oneOf(ask, Object.values(ConversationPermissionAsk))
     // Who asked: the agent, or an MCP App naming the tool it asked to call.
     const origin = record(permission.origin)
     exact(origin, ["kind", "server", "tool"])
@@ -443,6 +444,9 @@ export function conversationView(value: unknown, expected: string): Conversation
       text(origin, "tool", bounds.maxMcpNameBytes, false)
     } else if (origin.server !== undefined || origin.tool !== undefined) {
       throw new Error("A review the agent asked for names no app tool")
+    } else if (ask === ConversationPermissionAsk.Message) {
+      // Only an app sends a message as the person; the agent asks to run tools.
+      throw new Error("A review the agent asked for asks to run a tool")
     }
     const permissionKey = JSON.stringify([
       permission.executionId,

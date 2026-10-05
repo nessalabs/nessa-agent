@@ -472,6 +472,34 @@ describe("conversation view agreement", () => {
       expect(() => conversationView(withAsk(ask), "conversation")).toThrow()
   })
 
+  it("D19 (#390): refuses a review the agent asked for that asks to send a message, a contradiction", () => {
+    const withOrigin = (ask: string) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Run write_file",
+            toolName: "write_file",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            ask,
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    expect(conversationView(withOrigin("tool"), "conversation").permissions[0]!.ask).toBe(
+      "tool",
+    )
+    expect(() => conversationView(withOrigin("message"), "conversation")).toThrow(
+      "A review the agent asked for asks to run a tool",
+    )
+  })
+
   it("reads what each permission option decides, and refuses an option that does not say", () => {
     const withOptions = (options: unknown[]) => {
       const value = view()
