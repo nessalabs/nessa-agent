@@ -12,11 +12,7 @@
   box-sizing: border-box;
   color: #f2f2f2;
   text-align: center;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    system-ui,
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
 
 [data-nessa-load-message][data-nessa-startup-screen] {
@@ -92,7 +88,11 @@ html[data-nessa-surface="panel"] [data-nessa-startup-overlay] {
   border: 0;
   background: transparent;
   color: rgb(255 255 255 / 46%);
-  font: 11px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font:
+    11px/1.2 -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    sans-serif;
   letter-spacing: 0.16em;
   cursor: copy;
   user-select: all;

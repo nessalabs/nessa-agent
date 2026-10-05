@@ -22,7 +22,7 @@ const subjects = Object.keys(reads) as ReadSubject[]
 
 it("says each reason in words of its own", () => {
   const tables = [
-    failureCopy,
+    (reason: WorkspaceFailureReason) => failureCopy(reason),
     ...subjects.map(
       (read) => (reason: WorkspaceFailureReason) => readFailureCopy(reason, read),
     ),
