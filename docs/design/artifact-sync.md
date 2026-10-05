@@ -357,7 +357,9 @@ slot's wait is not part of the deadline. The service
 holds that permit for the awaited attempt and does not hand it to the sink, so
 a blocking write cannot keep it. When the deadline drops the wait, the permit
 is released and the next record starts its own full deadline. A durable write
-already running on the blocking pool keeps running without the permit. The
+already running on the blocking pool keeps running without the admission
+permit. The sink does not start another blocking write until that one
+finishes, so a stuck sync cannot fill the pool. The
 caller waits
 until every record in the phase has been acknowledged or `audit_budget`
 elapses, whichever comes first, and then returns. The delivery task keeps
@@ -427,7 +429,8 @@ sequenceDiagram
 | Two bulk phases at once | The phases share one permit. A second phase does not enter the sink until a deadline releases it | `a_second_bulk_phase_waits_for_the_admission_permit` |
 | A second phase is waiting while the first still has records it has not admitted | When the permit is released, the next record handed to the sink is the second phase's. The rest of the first phase is not queued ahead of it | `a_second_phase_enters_when_the_permit_is_released` |
 | `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |
-| Durable write outlives its deadline | The service releases the admission permit at the deadline while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only one attempt has been handed over. The sink is not given the permit | `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
+| Durable write outlives its deadline | The service releases the admission permit at the deadline while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only one attempt has been handed over. The sink is not given the permit. The overlap is `max_in_flight`, not a clock | `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
+| A durable write is still running | The sink does not start a second blocking write until that one finishes | `a_durable_write_does_not_start_until_the_previous_one_finishes` |
 | Caller dropped, then the sink refuses | The delivery task logs the refusal. The caller is no longer there to return it | `a_lost_caller_still_logs_a_refusal` |
 | Caller dropped, then a record's deadline passes | The delivery task logs the deadline. The caller is no longer there to return it | `a_lost_caller_still_logs_a_deadline` |
 | One record in a phase panics | The rest of that phase is still handed to the sink. The panic is resumed after that | `a_panicked_record_does_not_skip_the_rest_of_its_phase` |

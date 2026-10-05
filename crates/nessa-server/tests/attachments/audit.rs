@@ -385,6 +385,39 @@ async fn a_record_is_committed_privately_with_its_own_identity_and_observation_t
     assert_ne!(identities[0], identities[1]);
 }
 
+#[tokio::test]
+async fn a_durable_write_does_not_start_until_the_previous_one_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let audit = Arc::new(
+        DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap(),
+    );
+    let held = audit.hold_write_for_test();
+    let writing = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..40 {
+        if audit.writes_started() > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        audit.writes_started(),
+        0,
+        "a write started while one was still held"
+    );
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    drop(held);
+    writing.await.unwrap().unwrap();
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_failure() {
