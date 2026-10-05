@@ -81,14 +81,34 @@ const steps = [
   "conflict",
   "remove",
   "reconnect",
+  "too-large",
+  "save-too-large",
   "non-admin",
   "done-when",
 ]
 
+/**
+ * The hand-edited list of the too-large steps: this many servers, each with
+ * one long argument, written compact to just under config.json's 64 KiB.
+ * The list answer carries more per server than the file does (`kind`,
+ * `envNames`, `managed`), so the file fits and its list does not. One under
+ * the SDK's 16 (`MAX_MCP_SERVERS`), so save-too-large's add is refused for
+ * its size and not its count.
+ */
+const BIG_SERVERS = 15
+/** What the file is left short of its 65 536-byte bound. */
+const FILE_SLACK = 64
+const FILE_LIMIT = 65_536
+const bigName = (index) => `big-${String(index).padStart(2, "0")}`
+/** The one removed by name, after which the list fits again. */
+const BIG_REMOVED = bigName(7)
+/** The server the refused save adds. */
+const BIG_ADDED = "big-extra"
+
 const meta = {
   name: "mcp-servers-gateway",
   summary:
-    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, non-admin, and an app drawn from a server added there",
+    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, a list too large to show, a save refused for size, non-admin, and an app drawn from a server added there",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
   help: `
@@ -130,6 +150,17 @@ Steps, per engine, in order on one page (--only <names> to pick):
              the switch it left untouched from the reload
   remove     asked first while an inspection runs, then removed: the row
              gone, "No servers yet", the inspection saying the server is gone
+  too-large  config.json hand-edited to ${BIG_SERVERS} servers with long arguments,
+             under its 64 KiB, whose list will not fit one frame (a Node
+             client's list refused mcp_servers_config_too_large): the panel
+             says the list is too large to show, no row and no Add; ${BIG_REMOVED}
+             removed by name, asked first: one remove, one list, and the list
+             shown again without it (U44, U45)
+  save-too-large
+             a server added with an argument that would push the list past
+             the bound, the file still under its own: refused, the form kept
+             open with the sentence why, nothing listed again and config.json
+             unchanged (U48); then config.json restored
   reconnect  config.json made unreadable, the socket dropped: the list's
              failure is said; config.json restored, the socket dropped again:
              the list shown and the failure's notice gone
@@ -452,6 +483,34 @@ const focused = (page) =>
         : null,
     }
   })
+
+/**
+ * `original` (config.json's bytes) with its stored servers replaced by
+ * BIG_SERVERS servers, each one long argument, padded so the compact file is
+ * FILE_SLACK bytes short of its bound. Each server is off, so none is started.
+ */
+function bigConfig(original) {
+  const document = JSON.parse(original.toString("utf8"))
+  const write = (padding) => {
+    document.agents.mcpServers = Array.from({ length: BIG_SERVERS }, (_, index) => ({
+      name: bigName(index),
+      command: process.execPath,
+      args: [serverScript, "p".repeat(padding)],
+      enabled: false,
+    }))
+    return Buffer.from(`${JSON.stringify(document)}\n`)
+  }
+  const bare = write(0).length
+  const padding = Math.floor((FILE_LIMIT - FILE_SLACK - bare) / BIG_SERVERS)
+  return { bytes: write(padding), padding, document }
+}
+
+/** The refusal a Node client's list gets, or `null` when it lists. */
+const listRefusal = (client) =>
+  client.mcpServers.list().then(
+    () => null,
+    (error) => error.refusal ?? { code: String(error) },
+  )
 
 const checks = {
   empty: async (page) => {
@@ -983,6 +1042,158 @@ const checks = {
     return { seen, failures }
   },
 
+  "too-large": async (page, stack, context) => {
+    const failures = []
+    const tab = page.locator(css.mcpServers)
+    const tooLarge = page.locator(css.mcpTooLarge)
+    context.original = readFileSync(stack.config)
+    const big = bigConfig(context.original)
+    writeFileSync(stack.config, big.bytes)
+    const seen = { fileBytes: big.bytes.length, padding: big.padding }
+    // The premise, from the gateway itself: the file fits, its list does not.
+    seen.nodeList = await listRefusal(stack.client)
+    if (seen.fileBytes > FILE_LIMIT)
+      throw new CannotRun(`the hand-edited file is ${seen.fileBytes} bytes`)
+    if (seen.nodeList?.code !== "mcp_servers_config_too_large")
+      throw new CannotRun(
+        `the gateway answers the hand-edited list with ${JSON.stringify(seen.nodeList)}`,
+      )
+    // The window lists again on its next connection.
+    seen.dropped = await context.opened.drop()
+    seen.shown = await visible(page.locator(css.mcpServersIn("too-large")), 20_000)
+    if (!seen.shown) {
+      failures.push(
+        `the tab is ${await tab.getAttribute("data-mcp-servers")}, not too-large; its notices "${await page.locator(css.mcpNotices).textContent()}"`,
+      )
+      return { seen, failures }
+    }
+    await settled(page)
+    const field = tooLarge.locator(css.mcpAction("removeByName"))
+    seen.sentence = await tooLarge.locator("p").first().textContent()
+    seen.fieldDescribedBy = await field.evaluate(
+      (element) =>
+        document.getElementById(element.getAttribute("aria-describedby"))?.textContent ??
+        null,
+    )
+    seen.rows = await page.locator(css.mcpRow).count()
+    seen.add = await page.locator(css.mcpAction("add")).count()
+    seen.removeBeforeName = await button(tooLarge, names.mcp.remove).isEnabled()
+    if (seen.sentence !== names.mcp.listTooLarge)
+      failures.push(`the panel says "${seen.sentence}"`)
+    if (seen.fieldDescribedBy !== names.mcp.listTooLarge)
+      failures.push(`the name field is described by "${seen.fieldDescribedBy}"`)
+    if (seen.rows !== 0) failures.push(`${seen.rows} rows drawn`)
+    if (seen.add !== 0) failures.push("Add server… is offered")
+    if (seen.removeBeforeName) failures.push("Remove is enabled with no name typed")
+    // Removed by name, asked first: nothing sent until confirmed.
+    await field.fill(BIG_REMOVED)
+    const before = context.opened.sent.length
+    await button(tooLarge, names.mcp.remove).click()
+    seen.asked = await tooLarge.locator(css.mcpConfirm).textContent()
+    seen.sentOnAsk = context.opened.sent.length - before
+    await tooLarge.locator(css.mcpAction("confirm")).click()
+    seen.listed = await visible(page.locator(css.mcpServersIn("listed")), 20_000)
+    await settled(page)
+    seen.requests = context.opened.sent.slice(before)
+    seen.listedRows = await stored(page).evaluateAll((rows) =>
+      rows.map((each) => each.getAttribute("data-mcp-server")),
+    )
+    seen.notices = await page.locator(css.mcpNotices).textContent()
+    const expected = Array.from({ length: BIG_SERVERS }, (_, index) =>
+      bigName(index),
+    ).filter((name) => name !== BIG_REMOVED)
+    if (seen.asked !== names.mcp.removeAsk(BIG_REMOVED))
+      failures.push(`it asked "${seen.asked}"`)
+    if (seen.sentOnAsk !== 0)
+      failures.push(`${seen.sentOnAsk} requests sent before the removal was confirmed`)
+    if (!seen.listed)
+      failures.push(
+        `after the remove the tab is ${await tab.getAttribute("data-mcp-servers")}, not listed`,
+      )
+    if (JSON.stringify([...seen.listedRows].sort()) !== JSON.stringify(expected))
+      failures.push(
+        `rows ${JSON.stringify(seen.listedRows)}, expected the ${expected.length} but ${BIG_REMOVED}`,
+      )
+    if (seen.notices !== "") failures.push(`the notices say "${seen.notices}"`)
+    if (
+      JSON.stringify(seen.requests) !==
+      JSON.stringify(["mcpServers.remove", "mcpServers.list"])
+    )
+      failures.push(
+        `requests ${JSON.stringify(seen.requests)}, expected one remove then one list`,
+      )
+    return { seen, failures }
+  },
+
+  "save-too-large": async (page, stack, context) => {
+    const failures = []
+    if (!context.original) throw new CannotRun("not run: too-large did not run first")
+    const seen = {}
+    try {
+      const fileBefore = readFileSync(stack.config)
+      const stored = JSON.parse(fileBefore.toString("utf8"))
+      const longest = Math.max(
+        ...stored.agents.mcpServers.map((each) => each.args.at(-1).length),
+      )
+      // Shorter than the one removed, so the file it would write fits its
+      // bound; with the list's per-server fields, the answer would not.
+      const argument = "q".repeat(longest - 600)
+      stored.agents.mcpServers.push({
+        name: BIG_ADDED,
+        command: process.execPath,
+        args: [argument],
+        enabled: true,
+      })
+      seen.fileWouldBe = Buffer.byteLength(`${JSON.stringify(stored)}\n`)
+      if (seen.fileWouldBe > FILE_LIMIT)
+        throw new CannotRun(
+          `the save's file would be ${seen.fileWouldBe} bytes, past its own bound`,
+        )
+      const before = context.opened.sent.length
+      await button(page.locator(css.mcpGroup), names.mcp.add).click()
+      const add = form(page)
+      await add.getByLabel(names.mcp.name, { exact: true }).fill(BIG_ADDED)
+      await add.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
+      await addArgument(add, argument)
+      await button(add, names.mcp.save).click()
+      const problem = add.locator(`${css.mcpProblem}[data-mcp-problem="form"]`)
+      seen.problem = await waitFor(async () => await problem.textContent(), 10_000)
+      // Long enough for a list the window should not send to have gone.
+      await sleep(1500)
+      seen.formOpen = (await form(page).count()) === 1
+      seen.kept = await argumentsOf(add).then((args) => args.map((each) => each.length))
+      seen.requests = context.opened.sent.slice(before)
+      seen.notices = await page.locator(css.mcpNotices).textContent()
+      seen.fileUnchanged = readFileSync(stack.config).equals(fileBefore)
+      seen.saveEnabled = await button(add, names.mcp.save).isEnabled()
+      if (seen.problem !== names.mcp.saveTooLarge)
+        failures.push(`the form says "${seen.problem}"`)
+      if (!seen.formOpen) failures.push("the form closed on the refusal")
+      if (JSON.stringify(seen.kept) !== JSON.stringify([argument.length]))
+        failures.push(`the arguments kept are ${JSON.stringify(seen.kept)} long`)
+      if (!seen.saveEnabled) failures.push("Save rests after the refusal")
+      if (seen.notices !== "") failures.push(`the notices say "${seen.notices}"`)
+      if (!seen.fileUnchanged) failures.push("config.json changed")
+      if (JSON.stringify(seen.requests) !== JSON.stringify(["mcpServers.save"]))
+        failures.push(
+          `requests ${JSON.stringify(seen.requests)}, expected one save alone`,
+        )
+      await button(add, names.mcp.cancel).click()
+      if (!(await gone(add))) failures.push("the form did not close on Cancel")
+    } finally {
+      // Back to the file before the too-large steps, and listed again.
+      writeFileSync(stack.config, context.original)
+      context.original = null
+    }
+    seen.dropped = await context.opened.drop()
+    seen.restored =
+      (await visible(page.locator(css.mcpServersIn("listed")), 20_000)) &&
+      (await visible(page.locator(css.mcpEmpty), 5000))
+    await settled(page)
+    if (!seen.restored) failures.push("the restored list is not shown empty")
+    return { seen, failures }
+  },
+
   "non-admin": async (page, stack, context) => {
     const failures = []
     const reader = await signedIn(
@@ -1184,6 +1395,9 @@ await main(
             if (!entry.ok) stopped = name
           }
         } finally {
+          // A too-large step that stopped leaves its hand-edited file: put
+          // back, so the next engine and done-when start from the original.
+          if (context.original) writeFileSync(stack.config, context.original)
           await opened.close()
           log(`${engine}: ${Date.now() - started} ms`)
         }

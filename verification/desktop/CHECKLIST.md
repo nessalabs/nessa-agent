@@ -536,7 +536,7 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
 ### Integrations: the gateway's MCP servers
 
 #391 PR 3's design (the issue's comments of its state table, rows U1–U31,
-and U32–U43 from its review):
+U32–U43 from its review, and U44–U50 for a list too large to show):
 Settings › Connections › Integrations manages the gateway's stored MCP
 servers over `client.mcpServers`. Every row is a test of
 `settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
@@ -589,6 +589,20 @@ publish, and refuses nothing the gateway would judge.
   dropped again, the list is shown with no notice. A write's "not confirmed"
   stays through the lists after it until the next action. _Check:_
   `mcp-servers-gateway.mjs --only reconnect`; unit tests `mcp-servers.test.ts`.
+- [ ] **A list too large to show offers a remove by name** — config.json
+  edited by hand to 15 servers with long arguments, under its own 64 KiB, whose
+  list will not fit one frame (the gateway refuses it
+  `mcp_servers_config_too_large` with a revision): the panel says "The server
+  list is too large to show. Removing a server fixes it: enter its name.", the
+  name field described by it, no row, no Add, and Remove resting until a name
+  is typed; a server removed by name is asked first, nothing sent until
+  confirmed, then one remove and one list, and the list shown again without it
+  (U44, U45). A save that would push the list past the bound, the file still
+  under its own, is refused: the form stays open with "This would make the
+  server list too large; remove a server or shorten its arguments.", what was
+  typed kept, no notice, nothing listed again and config.json unchanged (U48).
+  _Check:_ `mcp-servers-gateway.mjs --only too-large,save-too-large`; unit
+  tests `mcp-servers.test.ts`, `integrations-tab.test.tsx` (U46, U47, U49, U50).
 - [ ] **A credential without `credential.manage` sees "Only an administrator
   can manage MCP servers", no control, and sends no `mcpServers` request**
   (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.

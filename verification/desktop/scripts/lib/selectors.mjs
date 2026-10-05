@@ -175,7 +175,7 @@ export const css = {
   // Settings › Connections › Integrations: the gateway's MCP servers
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
-  mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | not-admin
+  mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
   mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
   mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
@@ -184,6 +184,7 @@ export const css = {
   mcpRowText: ".settings-row-text", // class: a row's name, command and variables
   mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
   mcpEmpty: "[data-mcp-empty]",
+  mcpTooLarge: "[data-mcp-too-large]", // a list too large to show: its sentence and the remove-by-name field (U44)
   mcpNotices: "[data-mcp-notices]", // the notices' live region, drawn from the tab's first draw
   mcpNotice: "[data-mcp-notice]", // what an answer said, in the notices' region
   mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
@@ -194,7 +195,7 @@ export const css = {
   mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
   mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
   mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
-  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's button by what it does: add | edit | inspect | remove | cancel | confirm | close
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | cancel | confirm | close | removeByName (the name field)
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
   mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
   mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
@@ -366,6 +367,10 @@ export const names = {
     gone: (name) => `“${name}” is no longer stored.`,
     configInvalid:
       "The configuration file can't be read as it is, so nothing was changed.",
+    listTooLarge:
+      "The server list is too large to show. Removing a server fixes it: enter its name.",
+    saveTooLarge:
+      "This would make the server list too large; remove a server or shorten its arguments.",
     removeAsk: (name) =>
       `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
   },
