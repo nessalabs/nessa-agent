@@ -822,7 +822,7 @@ already so. No new deadline is added for it (gate 16).
 | K1 | `sendMessage` text not a string, empty (the schema's `minLength`), past `MAX_MCP_MESSAGE_BYTES`, or ill-formed | `TypeError` before any request; the byte bound is checked first, and the minimum counts no further than itself, so a text far past the bound is not read character by character (`K1: refuses a text far past its bound without reading it`) | 2b |
 | K2 | a context `null`, not an object, an array, or no plain object; one made with no prototype (`Object.create(null)`) is plain | `TypeError` before any request; a context with no prototype is sent | 2b |
 | K3 | a context with an own key other than `text` / `structuredContentJson` (symbol or hidden ones too); a part it only inherits is not read (`Object.hasOwn`) | `TypeError` before any request | 2b |
-| K4 | a part not a string, past `MAX_MCP_CONTEXT_BYTES`, or ill-formed | `TypeError` before any request; both together, and the structure, are the gateway's (C3, C4) | 2b |
+| K4 | a part not a string, past `MAX_MCP_CONTEXT_BYTES`, or ill-formed | `TypeError` before any request; a part far past the bound is refused without being encoded (`K4: refuses a context %s far past its bound without encoding it`); both together, and the structure, are the gateway's (C3, C4) | 2b |
 | K5 | `{}`, or a part given as `undefined` | sent with neither part: a clear (C7); an empty text is sent as given | 2b |
 | K6 | a server name outside 1 to `maxMcpNameBytes` UTF-8 bytes | `TypeError` before any request | 2b |
 | K7 | a message answer without `executionId`, an empty one, one past `maxExecutionIdBytes`, one with a lone surrogate, or with an unknown field | `NessaMcpAppError{code: undefined, uncertain: true}` | 2b |

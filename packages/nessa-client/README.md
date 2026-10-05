@@ -389,7 +389,9 @@ input waits — the person's or an app's — takes it as it is read, and it is
 held no longer; if that message is refused, or its turn fails, it is lost,
 and the app may give it again; a message queued behind a turn, or steered
 into one, takes none; a release of the mount, or the end of the
-conversation's opening, drops it unsent. The design states each ordering
+conversation's opening, drops it unsent. So `applied: true` means the update
+was taken and recorded, not that it is still held: a release or end that lands
+before it is held drops it unsent (the design's C17). The design states each ordering
 ([docs/design/mcp-app-calls.md](../../docs/design/mcp-app-calls.md#an-app-in-its-conversation-the-gateway-390)).
 A message is 1 character to `MAX_MCP_MESSAGE_BYTES` UTF-8 bytes, and each
 part of a context at most `MAX_MCP_CONTEXT_BYTES`, as

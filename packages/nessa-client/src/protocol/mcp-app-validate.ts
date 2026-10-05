@@ -76,14 +76,18 @@ export const mcpAppRequestProblem = {
    * judge (`invalid_request`, on record). The byte bound is checked first, so
    * a text far past it is refused without being encoded or read character by
    * character (`K1: refuses a text far past its bound without reading it`).
+   * Anything but a string — a `String` object, an array, `null` — is refused
+   * too: this is the check `sendMessage` makes.
    */
-  message: (text: string): string | undefined =>
-    !withinUtf8Bytes(text, MAX_MCP_MESSAGE_BYTES) ||
-    !atLeastCodePoints(text, bounds.minMcpMessageCharacters)
-      ? `Message must contain ${bounds.minMcpMessageCharacters} character to ${MAX_MCP_MESSAGE_BYTES} UTF-8 bytes`
-      : !wellFormedText(text)
-        ? "Message must be Unicode text"
-        : undefined,
+  message: (text: unknown): string | undefined =>
+    typeof text !== "string"
+      ? "Message must be a string"
+      : !withinUtf8Bytes(text, MAX_MCP_MESSAGE_BYTES) ||
+          !atLeastCodePoints(text, bounds.minMcpMessageCharacters)
+        ? `Message must contain ${bounds.minMcpMessageCharacters} character to ${MAX_MCP_MESSAGE_BYTES} UTF-8 bytes`
+        : !wellFormedText(text)
+          ? "Message must be Unicode text"
+          : undefined,
   /**
    * The context an app gives the model: a plain object of its own `text` and
    * `structuredContentJson` and nothing else, each part a string of at most
@@ -156,7 +160,7 @@ export function mcpAppModelContext(context: unknown): McpAppModelContext | strin
       : undefined
     if (value === undefined) continue
     if (typeof value !== "string") return `Context ${part} must be a string`
-    if (utf8.encode(value).byteLength > MAX_MCP_CONTEXT_BYTES)
+    if (!withinUtf8Bytes(value, MAX_MCP_CONTEXT_BYTES))
       return `Context ${part} must contain at most ${MAX_MCP_CONTEXT_BYTES} UTF-8 bytes`
     if (!wellFormedText(value)) return `Context ${part} must be Unicode text`
     parts[part] = value

@@ -1000,6 +1000,22 @@ describe("an app speaking in its conversation (#390)", () => {
     expect(request).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ["a String object", new String("x")],
+    ["an array", ["x"]],
+    ["null", null],
+  ])(
+    "K1: says a message that is %s is no string, as sendMessage refuses it",
+    async (_name, text) => {
+      expect(mcpAppRequestProblem.message(text)).toBe("Message must be a string")
+      const request = taking()
+      await expect(
+        api(request).sendMessage(conversationId, app, "charts", text as string),
+      ).rejects.toThrow(new TypeError("Message must be a string"))
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
   it("K1: counts a message's characters no further than its minimum", () => {
     for (const text of [
       "x".repeat(MAX_MCP_MESSAGE_BYTES),
@@ -1132,6 +1148,27 @@ describe("an app speaking in its conversation (#390)", () => {
       const request = taking()
       await expect(
         api(request).updateModelContext(conversationId, app, "charts", context as object),
+      ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(["text", "structuredContentJson"])(
+    "K4: refuses a context %s far past its bound without encoding it",
+    async (part) => {
+      const context = { [part]: "x".repeat(MAX_MCP_CONTEXT_BYTES * 1024) }
+      const encode = vi.spyOn(TextEncoder.prototype, "encode")
+      try {
+        expect(mcpAppRequestProblem.context(context)).toMatch(
+          String(MAX_MCP_CONTEXT_BYTES),
+        )
+        expect(encode).not.toHaveBeenCalled()
+      } finally {
+        encode.mockRestore()
+      }
+      const request = taking()
+      await expect(
+        api(request).updateModelContext(conversationId, app, "charts", context),
       ).rejects.toBeInstanceOf(TypeError)
       expect(request).not.toHaveBeenCalled()
     },

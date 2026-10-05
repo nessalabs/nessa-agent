@@ -590,7 +590,7 @@ ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
 ts += `${doc(
-  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, since the gateway may open the conversation first.",
+  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it. These bound a request to an open conversation: no published deadline covers opening a closed one first.",
 )}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
 ts += `${doc(
   "How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response.",

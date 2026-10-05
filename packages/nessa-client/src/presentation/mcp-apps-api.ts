@@ -57,13 +57,16 @@ export const mcpAppDeadlines = Object.freeze({
    * `updateModelContext` wait as long: every new message waits on the
    * person's review as a destructive tool's call does (a retry of one the
    * conversation holds is not asked again, `docs/design/mcp-app-calls.md`
-   * M6), and an update, as a read, may first open the conversation.
+   * M6), and an update, which waits on no review, as a read does: its own
+   * steps fit within a call's budget. None of the three budgets covers
+   * opening a closed conversation first; no published deadline does (above).
    */
   callToolMs: mcpAppCallTiming.callDeadlineMs,
   /**
-   * `readResource`: as long as a call. The gateway may open the conversation
-   * first, and records each step; a read never outlasts a call. The client
-   * waits at least this long, as for `callTool`.
+   * `readResource`: as long as a call. The server's read (`readTimeoutMs`)
+   * and the steps the gateway records fit within a call's budget; opening a
+   * closed conversation first does not, which no published deadline covers
+   * (above). The client waits at least this long, as for `callTool`.
    */
   readResourceMs: mcpAppCallTiming.callDeadlineMs,
   /**
@@ -224,7 +227,10 @@ export type McpAppsApi = {
    * other key. `{}` clears. Whether the two fit together, and whether the
    * structure is one object, are the gateway's to say.
    * @param options - Optional caller-managed action identity.
-   * @returns The gateway's acknowledgement of this action, `applied: true`.
+   * @returns The gateway's acknowledgement of this action, `applied: true`:
+   * the update was taken and recorded. A release of the mount, or the end of
+   * the conversation's opening, that lands before it is held drops it unsent
+   * (`docs/design/mcp-app-calls.md` C17), so it is not necessarily still held.
    * @throws TypeError for arguments outside the schema's bounds, before
    * anything is sent; otherwise {@link NessaMcpAppError}, with `code`
    * undefined and `uncertain` true for an answer this client does not
@@ -406,10 +412,7 @@ export function createMcpAppsApi(
     async sendMessage(conversationId, app, server, text, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      const problem =
-        typeof text === "string"
-          ? mcpAppRequestProblem.message(text)
-          : "Message must be a string"
+      const problem = mcpAppRequestProblem.message(text)
       if (problem) throw new TypeError(problem)
       return call(
         ProductMethod.McpSendMessage,
