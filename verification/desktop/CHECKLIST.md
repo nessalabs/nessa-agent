@@ -707,7 +707,7 @@ mounts, `index.html` shows the fallback on that stage.
 
 - [ ] **The painted avatar and "Loading" sit inside the visible window; their
   layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
-  height, and a narrow panel; with the size pending or refused they stay inside the bottom-right 320 × 320 and still say "Loading". When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: the flat avatar, "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit. The page URL and the script path stay in the console, not on the screen. The avatar stays inside the same box (setup, centred in the window) and has no halo. Nothing
+  height, and a narrow panel; with the size pending or refused they stay inside the bottom-right 320 × 320 and still say "Loading". When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: the flat avatar, "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions. The page URL and the script path stay in the console, not on the screen. The avatar stays inside the same box. Setup centres that stack; the panel starts it at the window's top left. The avatar has no halo. Nothing
   paints over the line, the page does not scroll, and nothing animates with
   reduced motion. The breathing avatar, while it is still Loading, stays centred on its layout box; its
   full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against

@@ -130,9 +130,10 @@ describe("a page the dev server did not serve", () => {
     expect(screen?.textContent).toContain("STARTUP_MODULE")
     expect(screen?.textContent).not.toContain("did not serve")
     expect(screen?.textContent).not.toContain("/src/main.tsx")
-    expect(screen?.querySelector("[data-nessa-startup-mark]")?.getAttribute("src")).toBe(
-      "/src-tauri/icons/nessa-avatar.svg",
-    )
+    const mark = screen?.querySelector("[data-nessa-startup-mark]")
+    expect(mark?.tagName.toLowerCase()).toBe("span")
+    expect(mark?.querySelector("svg")).toBeInstanceOf(SVGElement)
+    expect(mark?.innerHTML ?? "").not.toContain('filter="url(')
     expect(screen?.querySelector("[aria-label=Restart]")).toBeInstanceOf(
       HTMLButtonElement,
     )

@@ -1,4 +1,6 @@
 import face from "../../host/startup-face.html?raw"
+import avatar from "../../../src-tauri/icons/nessa-avatar.svg?raw"
+import { flatStartupMark } from "../../host/startup-mark.mjs"
 import { startupLine } from "../../host/startup-refusals"
 import "../../host/startup-screen.css"
 
@@ -20,6 +22,7 @@ export function StartupScreen({
   onQuit: () => void
 }) {
   const html = face
+    .replace("{{MARK}}", flatStartupMark(avatar))
     .replaceAll("{{LINE}}", escapeText(startupLine()))
     .replaceAll("{{CODE}}", escapeText(code))
   return (

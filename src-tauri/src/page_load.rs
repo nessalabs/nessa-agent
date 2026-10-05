@@ -179,18 +179,34 @@ fn plain(status: StatusCode, body: &'static str) -> Response<Cow<'static, [u8]>>
     response
 }
 
+/// The loading avatar with its blur and grain left off. The same strip as
+/// `src/host/startup-mark.mjs`.
 fn avatar_mark() -> String {
-    include_str!("../icons/nessa-avatar.svg").replacen("<svg ", "<svg data-nessa-startup-mark ", 1)
+    let marked = include_str!("../icons/nessa-avatar.svg");
+    let mut rest = marked;
+    let needle = " filter=\"url(#";
+    let mut out = String::with_capacity(rest.len());
+    while let Some(start) = rest.find(needle) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + needle.len()..];
+        let Some(end) = after.find('"') else {
+            out.push_str(rest);
+            return out;
+        };
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn document() -> String {
     let face = include_str!("../../src/host/startup-face.html")
-        .replace(
-            r#"<img data-nessa-startup-mark src="/src-tauri/icons/nessa-avatar.svg" alt="" width="28" height="28" />"#,
-            &avatar_mark(),
-        )
+        .replace("{{MARK}}", &avatar_mark())
         .replace("{{LINE}}", &escape(&host_refusal::line()))
-        .replace("{{CODE}}", &escape(&host_refusal::code("document-unserved")));
+        .replace(
+            "{{CODE}}",
+            &escape(&host_refusal::code("document-unserved")),
+        );
     let css = include_str!("../../src/host/startup-screen.css");
     let actions = include_str!("../../src/host/startup-actions.js");
     format!(
@@ -201,7 +217,7 @@ fn document() -> String {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <title>Nessa</title>
 <style>
-  html, body {{ margin: 0; height: 100%; background: #121214; }}
+  html, body {{ margin: 0; height: 100%; background: #000; }}
   {css}
 </style>
 </head>
@@ -285,6 +301,7 @@ mod tests {
         assert!(body.contains("default-src 'none'"));
         assert!(body.contains("STARTUP_PAGE"), "{body}");
         assert!(body.contains("data-nessa-startup-mark"), "{body}");
+        assert!(!body.contains("filter=\"url("), "{body}");
         assert!(body.contains("aria-label=\"Restart\""), "{body}");
         assert!(body.contains("aria-label=\"Quit\""), "{body}");
         assert!(!body.contains("not serving"), "{body}");

@@ -1,16 +1,16 @@
-/* The calm startup screen. The loading fallback keeps its own glow; this
-   mark is the same avatar, drawn flat. A full window sets
-   data-nessa-startup-overlay. The load fallback's message does not: that
-   box is already the visible corner of the panel. */
+/* The calm startup screen. Desktop and setup centre it. The panel keeps
+   the same stack, flush to the start of the window, because that window is
+   a corner of a larger stage. The mark is the loading avatar with no halo.
+   A full window sets data-nessa-startup-overlay. */
 
 [data-nessa-startup-screen] {
   display: grid;
   place-content: center;
   justify-items: center;
-  gap: 0.75rem;
+  gap: 0;
   margin: 0;
   box-sizing: border-box;
-  color: #ededed;
+  color: #f2f2f2;
   text-align: center;
   font-family:
     -apple-system,
@@ -19,12 +19,22 @@
     sans-serif;
 }
 
+[data-nessa-load-message][data-nessa-startup-screen] {
+  gap: 0;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
 [data-nessa-startup-overlay] {
   position: fixed;
   z-index: 1100;
   inset: 0;
-  padding: 1.5rem;
-  background: #121214;
+  background: #000;
+}
+
+[data-nessa-load-fallback]:has([data-nessa-startup-screen]) {
+  background: #000;
 }
 
 [data-nessa-load-fallback]:has([data-nessa-startup-screen])::before,
@@ -34,56 +44,86 @@
   animation: none;
 }
 
-img[data-nessa-startup-mark],
-svg[data-nessa-startup-mark] {
-  width: 28px;
-  height: 28px;
+html[data-nessa-surface="panel"] [data-nessa-load-message][data-nessa-startup-screen],
+html[data-nessa-surface="panel"] [data-nessa-startup-overlay] {
+  place-content: start;
+  justify-items: start;
+  align-content: start;
+  text-align: left;
+  padding: 36px 32px;
+}
+
+html[data-nessa-surface="panel"] [data-nessa-startup-overlay] {
+  top: auto;
+  left: auto;
+  right: 0;
+  bottom: 0;
+  width: var(--nessa-window-width, 320px);
+  height: var(--nessa-window-height, 320px);
+}
+
+[data-nessa-startup-mark] {
+  width: 32px;
+  height: 32px;
+  margin: 0 0 22px;
   display: block;
   box-shadow: none;
   filter: none;
   animation: none;
-  border-radius: 0;
+}
+
+[data-nessa-startup-mark] svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 [data-nessa-startup-line] {
-  margin: 0;
-  color: rgb(237 237 237 / 82%);
-  font-size: 0.875rem;
+  margin: 0 0 10px;
+  color: #f5f5f5;
+  font-size: 15px;
   font-weight: 400;
+  letter-spacing: 0.01em;
 }
 
 [data-nessa-startup-code] {
-  margin: 0;
+  margin: 0 0 26px;
   padding: 0;
   border: 0;
   background: transparent;
-  color: rgb(237 237 237 / 46%);
-  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.06em;
+  color: rgb(255 255 255 / 46%);
+  font: 11px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  letter-spacing: 0.16em;
   cursor: copy;
   user-select: all;
 }
 
 [data-nessa-startup-actions] {
   display: flex;
-  gap: 4px;
+  gap: 14px;
 }
 
 [data-nessa-startup-actions] button {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   display: grid;
   place-items: center;
-  border: 0;
-  border-radius: 8px;
+  border: 1px solid rgb(255 255 255 / 32%);
+  border-radius: 50%;
   background: transparent;
-  color: rgb(237 237 237 / 72%);
+  color: rgb(255 255 255 / 78%);
   cursor: pointer;
 }
 
 [data-nessa-startup-actions] button:hover {
-  background: rgb(255 255 255 / 8%);
+  background: rgb(255 255 255 / 6%);
+  border-color: rgb(255 255 255 / 48%);
+}
+
+[data-nessa-startup-actions] button:focus-visible {
+  outline: 1px solid rgb(255 255 255 / 55%);
+  outline-offset: 3px;
 }
 
 [data-nessa-startup-actions] svg {

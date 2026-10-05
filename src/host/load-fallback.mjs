@@ -11,11 +11,15 @@
 import { readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { flatStartupMark } from "./startup-mark.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
 const sentences = JSON.parse(readFileSync(resolve(here, "startup-refusals.json"), "utf8"))
-const faceTemplate = readFileSync(resolve(here, "startup-face.html"), "utf8")
+const faceTemplate = readFileSync(resolve(here, "startup-face.html"), "utf8").replace(
+  "{{MARK}}",
+  flatStartupMark(readFileSync(resolve(here, "../../src-tauri/icons/nessa-avatar.svg"), "utf8")),
+)
 const screenCss = readFileSync(resolve(here, "startup-screen.css"), "utf8")
 const actionsSource = readFileSync(resolve(here, "startup-actions.js"), "utf8")
 
