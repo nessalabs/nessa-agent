@@ -5,6 +5,7 @@ import { Provider } from "react-redux"
 import { host, signInToProvider, providerLoginAvailable } from "../host"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
+import { StartupMounted } from "../startup/ui/mounted-signal"
 import { createDesktopDependencies } from "./dependencies"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
@@ -76,9 +77,9 @@ void store.dispatch(loadWorkspace())
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
-document.documentElement.dataset.nessaMounted = "1"
 createRoot(container).render(
   <React.StrictMode>
+    <StartupMounted />
     <Provider store={store}>
       <WidgetRegistryProvider registry={dependencies.widgets}>
         <ClockProvider now={dependencies.now}>

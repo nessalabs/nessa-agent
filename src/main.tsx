@@ -24,7 +24,7 @@ import {
   windowSize,
   windowSurface,
 } from "./host"
-import { StartupRefused } from "./startup"
+import { StartupMounted, StartupRefused } from "./startup"
 import { publishWindowSize } from "./panel/adapters/panel-frame"
 
 import { environmentFromVite } from "./env/vite"
@@ -76,9 +76,9 @@ void hostStartup()
   .catch(() => ({ state: "ready" }) as const)
   .then((startup) => {
     if (startup.state === "refused") {
-      document.documentElement.dataset.nessaMounted = "1"
       root.render(
         <React.StrictMode>
+          <StartupMounted />
           <StartupRefused
             details={startup.details}
             onTryAgain={() => void restartNessa()}
@@ -92,9 +92,9 @@ void hostStartup()
   })
 
 function renderApplication() {
-  document.documentElement.dataset.nessaMounted = "1"
   root.render(
     <React.StrictMode>
+      <StartupMounted />
       {windowSurface() === "setup" ? (
         <Provider store={store}>
           <SetupGate

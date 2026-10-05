@@ -11,5 +11,6 @@ export {
 } from "./application/gateway-startup"
 export { COULD_NOT_START, TRY_AGAIN_HINT, startupSentence } from "./application/copy"
 export { nativeGatewayStartup } from "./adapters/gateway-startup"
+export { StartupMounted } from "./ui/mounted-signal"
 export { StartupRefused } from "./ui/startup-refused"
 export { useGatewayStartup } from "./ui/use-gateway-startup"
