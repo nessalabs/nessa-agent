@@ -152,7 +152,7 @@ The state names describe steps in the code, rather than a saved state-machine va
 
 ## Call admission
 
-Nessa checks which conversation and app the request came from, who is using it, and whether that person is allowed to make the call. Knowing a conversation ID is not enough to gain access.
+Nessa checks that the caller can access the conversation and that the app reference identifies a tool with a UI in that conversation. The app uses the caller's credential; it does not sign in separately. Knowing a conversation ID is not enough to gain access.
 
 Each open copy of an app is tracked separately. For example, an inline app and the same app opened in a pane have different identities. That keeps their approval requests and downloads from being confused.
 
@@ -173,7 +173,7 @@ The request must be recorded before it is shown. If that record cannot be saved,
 
 ## Direct dispatch admission
 
-A tool classified as non-destructive can proceed without asking the person for approval. Nessa still checks the app's access, the input and whether the app is open.
+A tool classified as non-destructive can proceed without asking the person for approval. Nessa still checks the caller's access, the app reference, the input and whether the app is open.
 
 Nessa records that the call was accepted before handing it to the tool connection. If that record cannot be saved, the request stops and nothing is sent.
 

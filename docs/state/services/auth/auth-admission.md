@@ -73,7 +73,7 @@ sequenceDiagram
     participant Store as Current access records
     Client->>Gateway: Present credential proof
     Gateway->>Gateway: Verify the proof
-    Gateway->>Store: Read credential, membership and permissions
+    Gateway->>Store: Read credential and membership
     Store-->>Gateway: Current records
     alt Records, identities and validity agree
         Gateway-->>Client: Admit session with its deadline
