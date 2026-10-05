@@ -579,7 +579,11 @@ async function axHolds(page, text) {
   }
 }
 
-/** Whether Playwright's ARIA snapshot of the page holds `text`. */
+/**
+ * Whether Playwright's ARIA snapshot of the page holds `text`. Computed from
+ * the DOM, not the engine: it shows a password field's value, which no
+ * engine's tree does, so it judges only what is not in a field.
+ */
 const ariaHolds = async (page, text) =>
   (await page.locator("body").ariaSnapshot()).includes(text)
 
@@ -1033,7 +1037,9 @@ const checks = {
 
     if (seen.field.tag !== "INPUT" || seen.field.type !== "password")
       failures.push(`the value field is ${JSON.stringify(seen.field)}`)
-    if (seen.typed.markup || seen.typed.ax || seen.typed.aria)
+    // Playwright's ARIA snapshot reads any input's DOM value, a password
+    // field's too, so it is recorded, not judged: the engine's tree is.
+    if (seen.typed.markup || seen.typed.ax)
       failures.push(`a typed value is exposed: ${JSON.stringify(seen.typed)}`)
     if (!seen.paste.carried)
       throw new CannotRun("this engine's paste event carries no data")
@@ -1317,7 +1323,7 @@ const checks = {
     const expected = Array.from({ length: BIG_SERVERS }, (_, index) =>
       bigName(index),
     ).filter((name) => name !== BIG_REMOVED)
-    if (seen.asked !== names.mcp.removeAsk(BIG_REMOVED))
+    if (seen.asked !== names.mcp.removeByNameAsk(BIG_REMOVED))
       failures.push(`it asked "${seen.asked}"`)
     if (seen.sentOnAsk !== 0)
       failures.push(`${seen.sentOnAsk} requests sent before the removal was confirmed`)

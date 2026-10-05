@@ -380,6 +380,8 @@ export const names = {
       "This would make the server list too large; remove a server or shorten its arguments.",
     removeAsk: (name) =>
       `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    removeByNameAsk: (name) =>
+      `Remove “${name}”? This removes the first server stored under that name. New conversations stop getting it. Open ones keep it until they close.`,
     removeFirst: (name) => `Remove the first server named “${name}”`,
     removeFirstAsk: (name) =>
       `Remove the first server named “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
