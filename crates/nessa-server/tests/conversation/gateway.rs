@@ -403,15 +403,16 @@ mod gateway {
             .ok
         );
         let panel = chat_session(&state, "owner-panel").await;
-        let conflict = chat_request(
-            &state,
-            &panel,
-            "conversation.create",
-            json!({"conversationId":id,"requestId":"owner-panel"}),
-        )
-        .await;
-        assert!(!conflict.ok);
-        assert_eq!(conflict.error.unwrap().code, "approval_request_conflict");
+        assert!(
+            chat_request(
+                &state,
+                &panel,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"owner-panel"}),
+            )
+            .await
+            .ok
+        );
         for session in [&phone, &panel] {
             assert!(
                 chat_request(

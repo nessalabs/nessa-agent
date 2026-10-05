@@ -6,8 +6,8 @@ use super::{
 };
 use nessa_sdk::application::agent_execution::commands::{
     CreationBinding, CreationCoordinator, CreationFailure, CreationFuture,
-    CreationInitializationFailure, CreationReceipt, CreationStage, CreationStorage, CreationTarget,
-    CreationTaskFault,
+    CreationInitializationFailure, CreationReceipt, CreationStage, CreationStorage,
+    CreationStorageError, CreationTarget, CreationTaskFault,
 };
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,12 @@ impl ConversationService {
         requested: RequestedConversation,
     ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
         let binding = binding(&id, &caller, &requested).map_err(CreationFailure::Target)?;
+        if let Some(reopened) = self
+            .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
+            .await?
+        {
+            return Ok(reopened);
+        }
         let service = self.clone();
         tokio::spawn(async move {
             let _admission = service.admit().await.map_err(CreationFailure::Target)?;
@@ -69,6 +75,68 @@ impl ConversationService {
         CreationCoordinator::new(storage)
             .lookup(&binding, &target)
             .await
+    }
+
+    /// A new request for a conversation that already exists is the existing
+    /// creation owner's reopen. It attaches when the process has no live
+    /// slot, and it does not write a second creation receipt: a stored
+    /// `Ready` would skip that attach on the next restart. An existing
+    /// receipt stays with the coordinator, so an exact retry still does not
+    /// open the provider again.
+    async fn reopen_owned(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        requested: &RequestedConversation,
+        binding: &CreationBinding,
+    ) -> Result<Option<CreationReceipt>, CreationFailure<ConversationError>> {
+        let saved = match storage
+            .open_creation(binding.actor().principal_id().into(), false)
+            .await
+        {
+            Ok(Some(lease)) => match lease.load(binding.actor().request_id()).await {
+                Ok(saved) => saved,
+                Err(CreationStorageError::ForeignRequest) => return Err(CreationFailure::Conflict),
+                Err(error) => return Err(CreationFailure::Storage(error)),
+            },
+            Ok(None) => None,
+            Err(error) => return Err(CreationFailure::Storage(error)),
+        };
+        if saved.is_some() {
+            return Ok(None);
+        }
+        let Some(record) = self
+            .inner
+            .metadata
+            .load(id)
+            .await
+            .map_err(CreationFailure::Target)?
+        else {
+            return Ok(None);
+        };
+        record
+            .check_access(&caller.organization_id, &caller.principal_id)
+            .map_err(ConversationError::from)
+            .map_err(CreationFailure::Target)?;
+        self.create(
+            id.clone(),
+            caller.clone(),
+            RequestedConversation {
+                agent: requested.agent,
+                model: requested.model.clone(),
+                approval_mode: requested.approval_mode,
+            },
+        )
+        .await
+        .map_err(CreationFailure::Target)?;
+        let accepted = CreationReceipt::accepted(binding.clone());
+        let attempted = accepted
+            .advance(CreationStage::Attempted)
+            .map_err(|error| CreationFailure::Storage(CreationStorageError::Storage(error)))?;
+        Ok(Some(attempted.advance(CreationStage::Ready).map_err(
+            |error| CreationFailure::Storage(CreationStorageError::Storage(error)),
+        )?))
     }
 }
 struct Target {

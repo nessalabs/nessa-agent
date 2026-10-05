@@ -1305,28 +1305,72 @@ async fn a_second_creation_request_cannot_reinitialize_the_original_target() {
         )
         .await
         .unwrap();
-    assert!(matches!(
-        service
-            .create_command(
-                storage.clone(),
-                target,
-                caller("another"),
-                RequestedConversation::default()
-            )
-            .await,
-        Err(CreationFailure::Target(ConversationError::RequestConflict))
-    ));
+    service
+        .create_command(
+            storage.clone(),
+            target.clone(),
+            caller("another"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
     let lease = storage
         .open_creation("person".into(), false)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        lease.load("another").await.unwrap().unwrap().stage(),
-        CreationStage::Accepted
-    );
+    assert!(lease.load("another").await.unwrap().is_none());
     drop(lease);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    let record = ConversationRepository::load(metadata.as_ref(), &target)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.creation_action(), "original");
+    assert_eq!(record.creator_surface(), "panel");
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn a_new_request_reopens_an_owned_conversation_and_attaches_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let target = id();
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service
+        .create_command(
+            storage.clone(),
+            target.clone(),
+            caller("original"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    retire(service, storage, metadata).await;
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service
+        .create_command(
+            storage.clone(),
+            target.clone(),
+            caller("request-reopen"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    let lease = storage
+        .open_creation("person".into(), false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(lease.load("request-reopen").await.unwrap().is_none());
+    drop(lease);
+    let record = ConversationRepository::load(metadata.as_ref(), &target)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.creation_action(), "original");
     retire(service, storage, metadata).await;
 }
 
