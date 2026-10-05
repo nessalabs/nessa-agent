@@ -250,16 +250,11 @@ impl ServerEdit {
                         name: name.to_owned(),
                     });
                 }
-                // A stored value is kept only for the same launch: a save
-                // that changes the command or arguments must give every value
-                // again, so a new command cannot be pointed at a secret it
-                // was never given (#480 adversarial review).
+                // A stored value is kept only for the same launch
+                // ([`same_launch`]); otherwise every value is given again.
                 let kept = replaced
                     .map(|index| &stored[index])
-                    .filter(|stored| {
-                        stored.server.command == save.server.command
-                            && stored.server.args == save.server.args
-                    })
+                    .filter(|stored| same_launch(stored, save))
                     .map(|stored| &stored.env);
                 let env =
                     save.env
@@ -287,6 +282,27 @@ impl ServerEdit {
             }
         }
     }
+}
+
+/// Whether `save` launches `stored` exactly as it is launched now, apart from
+/// the values it keeps: the same command and arguments, and the same
+/// variables — none added, none left out — each kept (`None`) or given its
+/// stored value. Only then is a kept value honoured. Anything else that
+/// changes what the process runs or loads — a new executable, an argument, a
+/// variable such as `LD_PRELOAD`, `NODE_OPTIONS` or `PYTHONPATH` — could hand
+/// the secret to code it was never given to, and read it back through an
+/// inspection (#480 adversarial review).
+fn same_launch(stored: &ConfiguredMcpServer, save: &ServerSave) -> bool {
+    stored.server.command == save.server.command
+        && stored.server.args == save.server.args
+        && save.env.len() == stored.env.len()
+        && save
+            .env
+            .iter()
+            .all(|(name, value)| match stored.env.get(name) {
+                Some(stored) => value.as_ref().is_none_or(|value| value == stored),
+                None => false,
+            })
 }
 
 #[cfg(test)]

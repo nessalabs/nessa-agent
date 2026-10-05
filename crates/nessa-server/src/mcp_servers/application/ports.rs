@@ -129,6 +129,32 @@ pub trait LiveServerSet: Send + Sync {
     /// [`LiveSetKept`] once the gateway is stopping, or for a set
     /// [`Self::problem`] refuses; the set is kept.
     fn replace(&self, stored: &[ConfiguredMcpServer]) -> Result<(), LiveSetKept>;
+    /// Take the server called `name` out of the live set, leaving the rest
+    /// as they are: what a remove does when the list it leaves cannot be
+    /// made live as a whole. A set only shrinks by this, so the SDK's rules
+    /// never refuse it.
+    ///
+    /// # Errors
+    ///
+    /// [`LiveSetKept`] once the gateway is stopping; the set is kept.
+    fn withdraw(&self, name: &str) -> Result<(), LiveSetKept>;
+}
+
+/// What a published change did to the live set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveSetOutcome {
+    /// The stored list, as written, is the live set.
+    Replaced,
+    /// A remove whose list could not be made live as a whole — a hand-edited
+    /// list still past a bound — took its server out of the live set and
+    /// left the rest as they were, until a change brings the list within
+    /// its bounds
+    /// (`a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`).
+    Withdrawn,
+    /// The live set is as it was: the gateway is stopping, and the next
+    /// start reads the file
+    /// (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
+    Kept,
 }
 
 /// The durable record of one change, by one caller, to the stored servers.
@@ -211,17 +237,13 @@ pub enum McpServerAuditPhase {
 /// How a change ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpServerOutcome {
-    /// Published. `live_set_replaced` is false when the live set was not
-    /// replaced: the gateway was stopping (the next start reads the file),
-    /// or a remove left a hand-edited list still past a bound, so the live
-    /// set is kept until a later change brings the list within it
-    /// (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
-    /// `durable` is false when the file was replaced but its
-    /// directory could not be synced ([`Written::durable`]).
+    /// Published. `live_set` is what that did to the live set
+    /// ([`LiveSetOutcome`]). `durable` is false when the file was replaced
+    /// but its directory could not be synced ([`Written::durable`]).
     Applied {
         before: ServerNames,
         after: ServerNames,
-        live_set_replaced: bool,
+        live_set: LiveSetOutcome,
         durable: bool,
     },
     /// Refused before anything was written; `before` is what was stored, when

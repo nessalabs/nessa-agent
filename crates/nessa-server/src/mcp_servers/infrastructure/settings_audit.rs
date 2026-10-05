@@ -12,7 +12,7 @@
 //! step backwards. The operation's id, not the time, is what pairs a
 //! requested record with its outcome.
 use crate::mcp_servers::application::{
-    AuditUnavailable, AuditedServer, InspectCut, McpServerAction, McpServerAudit,
+    AuditUnavailable, AuditedServer, InspectCut, LiveSetOutcome, McpServerAction, McpServerAudit,
     McpServerAuditPhase, McpServerAuditRecord, McpServerCause, McpServerOutcome, ServerNames,
 };
 use nessa_auth::application::ports::Clock;
@@ -85,7 +85,7 @@ fn stored(record: &McpServerAuditRecord) -> Value {
         McpServerAuditPhase::Outcome(McpServerOutcome::Applied {
             before,
             after,
-            live_set_replaced,
+            live_set,
             durable,
         }) => (
             "outcome",
@@ -93,7 +93,11 @@ fn stored(record: &McpServerAuditRecord) -> Value {
                 "outcome": "applied",
                 "before": names(before),
                 "after": names(after),
-                "liveSetReplaced": live_set_replaced,
+                "liveSet": match live_set {
+                    LiveSetOutcome::Replaced => "replaced",
+                    LiveSetOutcome::Withdrawn => "withdrawn",
+                    LiveSetOutcome::Kept => "kept",
+                },
                 "durable": durable,
             }),
         ),

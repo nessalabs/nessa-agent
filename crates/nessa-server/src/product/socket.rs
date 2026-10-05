@@ -2399,6 +2399,7 @@ mod tests {
         )
         .await;
         assert!(ok, "{saved}");
+        assert_eq!(saved["live"], true, "{saved}");
         let listed = list(&state).await;
         assert_eq!(listed["revision"], saved["revision"]);
         assert_eq!(
@@ -2916,6 +2917,41 @@ mod tests {
         assert!(!list_fits(&padded_list(edge + 1)));
         // With a short id the same list has room to spare.
         assert!(answered("id", padded_list(edge + 1)).is_success());
+    }
+
+    /// A remove answers whether the stored list is now live: `false` while a
+    /// list edited by hand is still past the count after it (its server
+    /// taken out of the live set all the same), `true` once it is within it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_remove_answers_whether_the_list_went_live() {
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            config, entry, settings_for, MemoryFiles, RecordingAudit,
+        };
+        let files = MemoryFiles::holding(config(
+            (0..17)
+                .map(|index| entry(&format!("s{index:02}")))
+                .collect(),
+        ));
+        let (settings, _) = settings_for(files, Arc::new(RecordingAudit::default()));
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let (_, listed) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        let mut revision = listed["revision"].clone();
+        // With the managed server, 17 and then 16: past the count, then within it.
+        for (name, live) in [("s16", false), ("s15", true)] {
+            let (ok, removed) = mcp_servers_call(
+                &state,
+                &session,
+                "mcpServers.remove",
+                json!({"revision": revision, "name": name}),
+            )
+            .await;
+            assert!(ok, "{removed}");
+            assert_eq!(removed["live"], live, "{name}: {removed}");
+            revision = removed["revision"].clone();
+        }
     }
 
     /// L2, W1 and W2 over a store bounded as the gateway's: a file edited by

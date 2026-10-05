@@ -6,15 +6,15 @@
 //! against real server processes beside the inspector, I5 at the socket).
 use super::{
     AuditedServer, EditProblem, InspectCut, InspectFailure, InspectedTool, Inspection,
-    McpServerAction, McpServerAuditPhase, McpServerCause, McpServerOutcome, McpServerSettingsError,
-    ServerNames, ServerProblem, INSPECT_BOUNDS,
+    LiveSetOutcome, McpServerAction, McpServerAuditPhase, McpServerCause, McpServerOutcome,
+    McpServerSettingsError, ServerNames, ServerProblem, INSPECT_BOUNDS,
 };
 use crate::mcp_servers::domain::{
     stored_revision, ConfigurationKey, ConfiguredMcpServer, ServerEdit, ServerSave, StdioServer,
 };
 use crate::mcp_servers::infrastructure::settings_test_support::{
-    config, entry, initiator, inspected_over, key, live, managed, server, settings_for,
-    settings_over, settings_started_with, LeapingClock, MemoryFiles, RecordingAudit,
+    config, entry, initiator, inspected_over, key, live, managed, server, settings_at_full_size,
+    settings_for, settings_over, settings_started_with, LeapingClock, MemoryFiles, RecordingAudit,
     ScriptedInspector, UNPARSEABLE,
 };
 use crate::mcp_servers::infrastructure::{sdk_server, LaunchSettings, LOCK_WAIT};
@@ -110,7 +110,8 @@ async fn a_save_is_published_then_replaces_the_live_set_and_is_audited_both_side
             save_with("b", None, vec![("API_TOKEN", Some("secret-value"))]),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_ne!(after, before.revision);
     assert_eq!(settings.list().await.unwrap().revision, after);
     assert_eq!(stored(&files), ["a", "b"]);
@@ -149,7 +150,7 @@ async fn a_save_is_published_then_replaces_the_live_set_and_is_audited_both_side
                 names: vec!["a".into(), "b".into()],
                 target: Some(audited("b", true, &["API_TOKEN"])),
             },
-            live_set_replaced: true,
+            live_set: LiveSetOutcome::Replaced,
             durable: true,
         }
     );
@@ -246,7 +247,7 @@ async fn s3_two_saves_at_one_revision_are_serialised_and_the_second_conflicts() 
         "B read while A held the lock between its re-read and its publish"
     );
     release.send(()).unwrap();
-    let won = bounded(first).await.unwrap();
+    let won = bounded(first).await.unwrap().revision;
     let lost = bounded(second).await.unwrap_err();
     assert_eq!(
         lost,
@@ -432,7 +433,7 @@ async fn s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable() {
                 names: vec!["a".into()],
                 target: Some(audited("a", true, &[])),
             },
-            live_set_replaced: true,
+            live_set: LiveSetOutcome::Replaced,
             durable: false,
         }
     );
@@ -497,6 +498,9 @@ impl super::LiveServerSet for HeldLive {
         }
         self.live.replace(stored)
     }
+    fn withdraw(&self, name: &str) -> Result<(), super::LiveSetKept> {
+        self.live.withdraw(name)
+    }
 }
 
 /// The lock is let go only after the live set is replaced: a second writer
@@ -555,7 +559,7 @@ async fn a_second_writer_waits_for_the_first_writers_live_replace() {
     assert_eq!(files.reads.load(Ordering::SeqCst), reads, "the second read");
     assert!(!second.is_finished());
     release.send(()).unwrap();
-    let won = bounded(first).await.unwrap();
+    let won = bounded(first).await.unwrap().revision;
     assert_eq!(
         bounded(second).await,
         Err(McpServerSettingsError::RevisionConflict { revision: won })
@@ -577,7 +581,8 @@ async fn a_publish_during_stop_answers_success_and_leaves_the_live_set() {
     let after = settings
         .edit(initiator(), before.clone(), save("a"))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(stored(&files), ["a"]);
     assert_eq!(live(&servers), ["nessa"]);
     assert_eq!(
@@ -589,14 +594,29 @@ async fn a_publish_during_stop_answers_success_and_leaves_the_live_set() {
                 target: None,
             },
             after: ServerNames {
-                revision: after,
+                revision: after.clone(),
                 names: vec!["a".into()],
                 target: Some(audited("a", true, &[])),
             },
-            live_set_replaced: false,
+            live_set: LiveSetOutcome::Kept,
             durable: true,
         }
     );
+    // A remove too: nothing is taken out of a stopped set.
+    audit.records.lock().unwrap().clear();
+    let edited = settings
+        .edit(initiator(), after, remove("a"))
+        .await
+        .unwrap();
+    assert_eq!(edited.live_set, LiveSetOutcome::Kept);
+    assert_eq!(stored(&files), Vec::<String>::new());
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Applied {
+            live_set: LiveSetOutcome::Kept,
+            ..
+        }
+    ));
 }
 
 /// S8: a configuration that does not parse — before the edit, as its block,
@@ -779,7 +799,7 @@ async fn s10_an_invalid_or_reserved_server_is_refused_with_its_problem() {
 #[tokio::test]
 async fn s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found() {
     // The same launch under a new name, so its value is kept (a changed
-    // launch must give it again: `a_kept_value_is_refused_when_the_command_or_arguments_change`).
+    // launch must give it again: `a_kept_value_is_refused_when_anything_else_in_the_launch_changes`).
     let mut old_entry = entry("new");
     old_entry["name"] = json!("old");
     old_entry["env"] = json!({"TOKEN": "kept"});
@@ -793,7 +813,8 @@ async fn s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found() {
             save_with("new", Some("old"), vec![("TOKEN", None)]),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(files.publishes.load(Ordering::SeqCst), 1);
     assert_eq!(stored(&files), ["new", "other"]);
     assert_eq!(
@@ -836,8 +857,11 @@ async fn s16_removing_an_unknown_name_is_not_found() {
     ));
 }
 
-/// S17: a variable given without a value keeps the stored one; one with no
-/// stored value is invalid. A variable left out is removed.
+/// S17: a variable given without a value keeps the stored one, when the
+/// rest of the launch is as stored — every other variable kept or given its
+/// stored value, none added, none left out; otherwise, and for a name with
+/// no stored value, it is invalid. With every value given, a variable left
+/// out is removed.
 #[tokio::test]
 async fn s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep() {
     let mut stored_entry = entry("a");
@@ -849,31 +873,49 @@ async fn s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep() {
         .edit(
             initiator(),
             revision,
-            save_with("a", None, vec![("KEEP", None), ("NEW", Some("fresh"))]),
+            save_with("a", None, vec![("KEEP", None), ("DROP", Some("gone"))]),
+        )
+        .await
+        .unwrap()
+        .revision;
+    assert_eq!(
+        files.document()["agents"]["mcpServers"][0]["env"],
+        json!({"DROP": "gone", "KEEP": "stored"})
+    );
+    let old = files.current();
+    for (env, missing) in [
+        (vec![("KEEP", None), ("NEW", Some("fresh"))], "KEEP"),
+        (vec![("NEVER", None)], "NEVER"),
+    ] {
+        assert_eq!(
+            settings
+                .edit(initiator(), revision.clone(), save_with("a", None, env))
+                .await,
+            Err(McpServerSettingsError::Invalid(
+                EditProblem::EnvironmentValueMissing {
+                    server: "a".into(),
+                    name: missing.into()
+                }
+            ))
+        );
+        assert_eq!(files.current(), old);
+    }
+    settings
+        .edit(
+            initiator(),
+            revision,
+            save_with(
+                "a",
+                None,
+                vec![("KEEP", Some("again")), ("NEW", Some("fresh"))],
+            ),
         )
         .await
         .unwrap();
     assert_eq!(
         files.document()["agents"]["mcpServers"][0]["env"],
-        json!({"KEEP": "stored", "NEW": "fresh"})
+        json!({"KEEP": "again", "NEW": "fresh"})
     );
-    let old = files.current();
-    assert_eq!(
-        settings
-            .edit(
-                initiator(),
-                revision,
-                save_with("a", None, vec![("NEVER", None)])
-            )
-            .await,
-        Err(McpServerSettingsError::Invalid(
-            EditProblem::EnvironmentValueMissing {
-                server: "a".into(),
-                name: "NEVER".into()
-            }
-        ))
-    );
-    assert_eq!(files.current(), old);
 }
 
 /// A server turned off stays stored and leaves the live set; turned on, it
@@ -889,7 +931,11 @@ async fn a_disabled_server_stays_stored_and_out_of_the_live_set() {
         env: vec![],
         enabled: false,
     });
-    let revision = settings.edit(initiator(), revision, off).await.unwrap();
+    let revision = settings
+        .edit(initiator(), revision, off)
+        .await
+        .unwrap()
+        .revision;
     assert_eq!(stored(&files), ["a"]);
     assert_eq!(
         files.document()["agents"]["mcpServers"][0]["enabled"],
@@ -1001,7 +1047,8 @@ async fn the_audit_records_the_targets_before_and_after_on_save_rename_disable_a
             ),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(
         targets(&audit),
         (
@@ -1021,7 +1068,11 @@ async fn the_audit_records_the_targets_before_and_after_on_save_rename_disable_a
         env: vec![("TOKEN".into(), None), ("NEW".into(), None)],
         enabled: false,
     });
-    let revision = settings.edit(initiator(), revision, off).await.unwrap();
+    let revision = settings
+        .edit(initiator(), revision, off)
+        .await
+        .unwrap()
+        .revision;
     assert_eq!(
         targets(&audit),
         (
@@ -1032,7 +1083,8 @@ async fn the_audit_records_the_targets_before_and_after_on_save_rename_disable_a
     let revision = settings
         .edit(initiator(), revision, save("c"))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(targets(&audit), (None, Some(audited("c", true, &[]))));
     settings
         .edit(initiator(), revision, remove("b"))
@@ -1112,7 +1164,7 @@ async fn a_caller_gone_mid_write_still_replaces_the_live_set_and_records_the_out
     assert!(matches!(
         outcome(&audit),
         McpServerOutcome::Applied {
-            live_set_replaced: true,
+            live_set: LiveSetOutcome::Replaced,
             ..
         }
     ));
@@ -1158,7 +1210,7 @@ async fn shutdown_during_a_save_returns_after_its_outcome_is_recorded() {
     assert!(matches!(
         outcome(&audit),
         McpServerOutcome::Applied {
-            live_set_replaced: true,
+            live_set: LiveSetOutcome::Replaced,
             ..
         }
     ));
@@ -1324,6 +1376,9 @@ impl super::LiveServerSet for PanickingLive {
         self.live.problem(stored)
     }
     fn replace(&self, _: &[ConfiguredMcpServer]) -> Result<(), super::LiveSetKept> {
+        panic!("a fault after the publish")
+    }
+    fn withdraw(&self, _: &str) -> Result<(), super::LiveSetKept> {
         panic!("a fault after the publish")
     }
 }
@@ -1954,9 +2009,9 @@ async fn an_inspection_is_not_started_unaudited_and_keeps_both_causes() {
 
 /// A remove from a hand-edited list past a bound (here, more servers than
 /// allowed) is written, not refused: removing adds no problem, and it is the
-/// way back. The live set is kept while the list is still past the bound, the
-/// outcome says so, and the remove that brings it within takes it live
-/// (found by #482's browser check).
+/// way back. While the list is still past the bound only the removed server
+/// leaves the live set, the outcome says `withdrawn`, and the remove that
+/// brings it within takes it live (found by #482's browser check).
 #[tokio::test]
 async fn a_remove_from_a_list_past_its_bounds_is_written_and_recovers() {
     let names: Vec<String> = (0..18).map(|i| format!("s{i:02}")).collect();
@@ -1978,17 +2033,19 @@ async fn a_remove_from_a_list_past_its_bounds_is_written_and_recovers() {
     let revision = settings
         .edit(initiator(), revision, remove("s17"))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(stored(&files).len(), 17);
     assert_eq!(
         live(&servers),
         kept,
         "the live set followed a list past its bound"
     );
+    // `s17` was never live: taking it out leaves the set as it was.
     assert!(matches!(
         outcome(&audit),
         McpServerOutcome::Applied {
-            live_set_replaced: false,
+            live_set: LiveSetOutcome::Withdrawn,
             ..
         }
     ));
@@ -1997,20 +2054,100 @@ async fn a_remove_from_a_list_past_its_bounds_is_written_and_recovers() {
     let revision = settings
         .edit(initiator(), revision, remove("s16"))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(live(&servers), kept);
     audit.records.lock().unwrap().clear();
     let _ = settings
         .edit(initiator(), revision, remove("s15"))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(stored(&files).len(), 15);
     assert!(matches!(
         outcome(&audit),
         McpServerOutcome::Applied {
-            live_set_replaced: true,
+            live_set: LiveSetOutcome::Replaced,
             ..
         }
     ));
     assert!(live(&servers).contains(&"s14".to_owned()));
+}
+
+/// A remove always takes its server out of the live set. A hand-edited list
+/// past the count, the live `a` among it: removing `a` leaves the list still
+/// past the count, so it cannot go live as a whole, but `a` leaves the live
+/// set and the rest stay as they were. Before this, `a` kept running for new
+/// conversations though it was no longer stored (#480 adversarial review).
+#[tokio::test]
+async fn a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound() {
+    let files = MemoryFiles::holding(config(vec![entry("a"), entry("b")]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, servers) = settings_for(files.clone(), audit.clone());
+    let revision = settings.list().await.unwrap().revision;
+    let edited = settings
+        .edit(initiator(), revision, save("a"))
+        .await
+        .unwrap();
+    assert_eq!(edited.live_set, LiveSetOutcome::Replaced);
+    assert_eq!(live(&servers), ["a", "b", "nessa"]);
+    let mut entries = vec![entry("a"), entry("b")];
+    entries.extend((0..16).map(|index| entry(&format!("s{index:02}"))));
+    *files.bytes.lock().unwrap() = Some(serde_json::to_vec(&config(entries)).unwrap());
+    let revision = settings.list().await.unwrap().revision;
+    audit.records.lock().unwrap().clear();
+    let edited = settings
+        .edit(initiator(), revision, remove("a"))
+        .await
+        .unwrap();
+    assert_eq!(edited.live_set, LiveSetOutcome::Withdrawn);
+    assert_eq!(stored(&files).len(), 17);
+    assert_eq!(live(&servers), ["b", "nessa"]);
+    assert!(matches!(
+        outcome(&audit),
+        McpServerOutcome::Applied {
+            live_set: LiveSetOutcome::Withdrawn,
+            ..
+        }
+    ));
+}
+
+/// A stored name longer than the SDK allows makes the configuration
+/// unreadable, as any other hand edit that does not parse: a request naming
+/// it could not fit one frame, so the server could not be removed through
+/// the gateway. Every request is refused `config_invalid`, nothing written.
+/// A name at the bound is read.
+#[tokio::test]
+async fn a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid() {
+    use nessa_sdk::infrastructure::acp::sessions::MAX_MCP_SERVER_NAME_BYTES;
+    let at = "a".repeat(MAX_MCP_SERVER_NAME_BYTES);
+    let files = MemoryFiles::holding(config(vec![entry(&at)]));
+    let (settings, _) = settings_for(files, Arc::new(RecordingAudit::default()));
+    let listed = settings.list().await.unwrap();
+    assert_eq!(listed.servers[0].server.name(), at);
+    // One byte past, and most of a file bounded as the gateway's is.
+    for past in [MAX_MCP_SERVER_NAME_BYTES + 1, 60 * 1024] {
+        let name = "a".repeat(past);
+        let mut long = entry(&name);
+        long["args"] = json!([]);
+        let files = MemoryFiles::holding(config(vec![long, entry("b")]));
+        let (settings, _) =
+            settings_at_full_size(files.clone(), Arc::new(RecordingAudit::default()));
+        let old = files.current();
+        assert_eq!(
+            settings.list().await,
+            Err(McpServerSettingsError::ConfigInvalid)
+        );
+        for edit in [remove(&name), remove("b"), save("c")] {
+            assert_eq!(
+                settings.edit(initiator(), "any".into(), edit).await,
+                Err(McpServerSettingsError::ConfigInvalid)
+            );
+        }
+        assert_eq!(
+            settings.inspect(initiator(), "b").await,
+            Err(McpServerSettingsError::ConfigInvalid)
+        );
+        assert_eq!(files.current(), old);
+    }
 }

@@ -538,16 +538,31 @@ params are read.
   or the next start. `enabled` is whether the server is stored on, so the
   same holds for it.
 - `mcpServers.save {revision, previousName?, server: {kind: "stdio", name,
-  command, args, env: [{name, value | null}], enabled}}` → `{revision}`. The
-  server's `env` is exactly the names listed; `value: null` keeps the value
-  stored for that name on the server being saved (the one under
-  `previousName`, else under `name`), when the save keeps that server's
-  command and arguments ([LS17](#the-live-server-set-391)).
-- `mcpServers.remove {revision, name}` → `{revision}`. A remove is never
-  refused for a bound on the list (count, frame size, an entry that does not
-  parse): it only shortens the list and is how a hand-edited one is brought
-  back. Its file is written; the live set follows once the list is within
-  its bounds (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
+  command, args, env: [{name, value | null}], enabled}}` → `{revision,
+  live}`. The server's `env` is exactly the names listed; `value: null`
+  keeps the value stored for that name on the server being saved (the one
+  under `previousName`, else under `name`) only when the save launches that
+  server exactly as stored apart from the kept values: the same command and
+  arguments, and the same variable names, each other one `null` or given its
+  stored value ([LS17](#the-live-server-set-391)). A variable such as
+  `LD_PRELOAD`, `NODE_OPTIONS` or `PYTHONPATH` loads code as surely as a new
+  command does, so adding one, changing one, or leaving one out means giving
+  every value again. A save whose resulting list would not fit one frame is
+  refused `mcp_servers_config_too_large`, even one that shortens a list
+  already past it: that is intended, and remove is the way out of such a
+  list.
+- `mcpServers.remove {revision, name}` → `{revision, live}`. A remove is
+  never refused for a bound on the list (count, frame size, an entry that
+  breaks a rule): it only shortens the list and is how a hand-edited one is
+  brought back. Its file is written, and it always takes its server out of
+  the live set: when the list it leaves cannot go live as a whole, the live
+  set becomes the current one less that server — a subset of a valid set,
+  so always valid — and the outcome says `liveSet: withdrawn`
+  (`a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`,
+  `a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
+- `live` (save and remove) is whether new conversations now get the stored
+  list as written: `false` while the gateway stops, or after a remove that
+  only withdrew its server (`a_remove_answers_whether_the_list_went_live`).
 
 The revision is a digest of the stored block (`[]` when there is none),
 keyed with the process's `ConfigurationKey` — the one the stand-ins' digests
@@ -643,11 +658,19 @@ Each change, in order:
 5. Replace the live set, still under the lock, so changes publish and
    replace in the same order: a second writer does not take the lock until
    the first's replacement is done
-   (`a_second_writer_waits_for_the_first_writers_live_replace`). Refused only
-   once the gateway is stopping: the change still answers success, the
-   outcome says `liveSetReplaced: false`, and the next start reads the file.
+   (`a_second_writer_waits_for_the_first_writers_live_replace`). The live
+   set is not replaced for one of two reasons. The gateway is stopping: the
+   set is kept, the outcome says `liveSet: kept`, and the next start reads
+   the file (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
+   Or a remove left a hand-edited list still past a bound: its server is
+   taken out of the set and the rest kept, the outcome says
+   `liveSet: withdrawn`, and the change that brings the list within its
+   bounds takes it live
+   (`a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`).
+   Either way the change answers success, with `live: false`.
 6. Unlock, then the outcome record: `applied` with the revision and names
-   before and after and whether it was made `durable`, or
+   before and after, what it did to the live set (`liveSet`: `replaced`,
+   `withdrawn` or `kept`) and whether it was made `durable`, or
    `refused`/`failed` with the reason and what was stored when it was read.
    Applied but not durable answers `mcp_servers_storage_unavailable` with
    `applied: true`. Each side names the target as stored there —
@@ -670,7 +693,13 @@ the `requested` record with the same `operationId`
 carry no sequence number: an operation's `requested` record is made durable
 before its outcome, and between operations — and across a restart — the
 only order is `observedAtMs`, on the wall clock, which may step backwards. The file is never repaired: one that does not parse is
-refused `mcp_servers_config_invalid` before and after the edit.
+refused `mcp_servers_config_invalid` before and after the edit. So is one
+holding a stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (LS20): every
+other rule for a stored server is the SDK's, asked of the whole list and
+named in `mcp_servers_invalid`, but a request naming a longer one would not
+fit a frame, so it could not be removed through the gateway. And a first
+write to a file with no `agents` block is refused the same way when the
+running catalog or workspace path is not UTF-8 (LS21).
 
 Errors are `McpServersErrorCode`: `mcp_servers_not_configured`,
 `mcp_servers_invalid` (details `{problem, server?, name?}`: `server` names the
@@ -727,10 +756,13 @@ meet the stand-in and forwarded-result rows above.
 | LS11 | A server edited while a conversation's harness has it — its command, arguments, or only its variables | The running harness and its server process are untouched (a relaunch of the same provider session keeps its set); its stand-in's next hello is refused `configuration-changed`; the next open gets the new stand-in | `a_replaced_set_refuses_old_stand_ins_and_leaves_running_ones_alone`, `s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_refused`, `each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch`, `a_replaced_set_is_read_by_the_next_opening_and_leaves_open_sessions_alone` |
 | LS12 | A server removed or turned off while open | Its stand-in's next hello is refused `unknown-server`; a new open does not list it; an open session of it is untouched | the same, `a_disabled_server_stays_stored_and_out_of_the_live_set` |
 | LS13 | Added back, or turned on again | It is in the next open, and its stand-ins are let through | the same |
-| LS14 | `replace` once stopping, or contending with the real `stop` for the lock | Once stopping: refused `Stopped`, the set kept, nothing launched; contending, its answer agrees with the set whichever takes the lock first. A `save` or `remove` that publishes then answers success, outcome `liveSetReplaced: false` | `a_replacement_once_stopping_is_refused_and_launches_nothing`, `a_replacement_contending_with_the_real_stop_agrees_with_the_set`, `a_publish_during_stop_answers_success_and_leaves_the_live_set` |
+| LS14 | `replace` once stopping, or contending with the real `stop` for the lock | Once stopping: refused `Stopped`, the set kept, nothing launched; contending, its answer agrees with the set whichever takes the lock first. A `save` or `remove` that publishes then answers success with `live: false`, outcome `liveSet: kept` | `a_replacement_once_stopping_is_refused_and_launches_nothing`, `a_replacement_contending_with_the_real_stop_agrees_with_the_set`, `a_publish_during_stop_answers_success_and_leaves_the_live_set` |
 | LS15 | Rename (`previousName`) | One write: the old name gone, the new one in its place; unknown `previousName` → `not_found` | `s15_a_rename_is_one_write_and_an_unknown_previous_name_is_not_found` |
 | LS16 | Remove an unknown name | `not_found`; nothing written | `s16_removing_an_unknown_name_is_not_found` |
-| LS17 | `save` keeps a variable with `value: null` | The stored value is kept when the save keeps the server's command and arguments; a save that changes either must give every value again (`environment_value_missing`), so a new command is never pointed at a secret it was not given; a null for a name with no stored value → `invalid` (`environment_value_missing`); an entry with no `value` at all → `invalid_request`; a name given twice → `environment_name_repeated`, said before a missing value | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `a_kept_value_is_refused_when_the_command_or_arguments_change`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`, `a_repeated_name_is_said_before_a_missing_value` |
+| LS17 | `save` keeps a variable with `value: null` | The stored value is kept only when the save launches the server as stored apart from the kept values: the same command and arguments, the same variable names, each other one `null` or its stored value. A changed command or argument, a variable added (`LD_PRELOAD`), swapped, left out, or given another value → `invalid` (`environment_value_missing`), so a secret never reaches code it was not given to; a null for a name with no stored value → the same; an entry with no `value` at all → `invalid_request`; a name given twice → `environment_name_repeated`, said before a missing value | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `a_kept_value_is_refused_when_anything_else_in_the_launch_changes`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`, `a_repeated_name_is_said_before_a_missing_value` |
+| LS19 | `remove` of a live server from a hand-edited list still past a bound after it | Written; the server leaves the live set and the rest stay; outcome `liveSet: withdrawn`; wire `live: false`. The remove that brings the list within its bounds answers `live: true`, outcome `replaced` | `a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`, `a_remove_from_a_list_past_its_bounds_is_written_and_recovers`, `a_remove_answers_whether_the_list_went_live` |
+| LS20 | A stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (64), by one byte or by most of the file | The configuration does not parse (`stored_servers`, the one reader for startup and the store): list, save, remove and inspect answer `config_invalid`, nothing written, so every request naming a stored server fits a frame. 64 bytes is read | `a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid` |
+| LS21 | A first write with no `agents` block, the running catalog or workspace path not UTF-8 | `config_invalid`, nothing written: never a lossy path the next start would use. With an `agents` block of its own the file is written | `a_fallback_path_that_is_not_utf8_refuses_the_write` |
 | LS18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
 | — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |
 | — | `replace` lands between a hello's admission and its open | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |

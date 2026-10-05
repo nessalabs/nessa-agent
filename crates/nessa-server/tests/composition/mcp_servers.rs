@@ -680,7 +680,11 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         Err(McpServerSettingsError::Busy)
     );
     drop(held);
-    let revision = settings.edit(initiator, list.revision, save).await.unwrap();
+    let revision = settings
+        .edit(initiator, list.revision, save)
+        .await
+        .unwrap()
+        .revision;
     assert_eq!(settings.list().await.unwrap().revision, revision);
     let bytes = std::fs::read(&config_path).unwrap();
     let mode = std::fs::metadata(&config_path)
@@ -992,7 +996,7 @@ async fn s3_two_saves_at_one_revision_over_the_real_lock_are_serialised() {
         "B read while A held the flock between its re-read and its publish"
     );
     release.send(()).unwrap();
-    let won = joined(a).await.unwrap();
+    let won = joined(a).await.unwrap().revision;
     let lost = joined(b).await.unwrap_err();
     assert_eq!(
         lost,
@@ -1082,24 +1086,28 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     let revision = settings
         .edit(caller(), revision, saved("b", vec!["/b.py".into()]))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     let revision = settings
         .edit(caller(), revision, padded(1000))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     // Pretty-printed, exactly at the edge.
     let edge = 1000 + MAX_CONFIG_BYTES - size();
     let revision = settings
         .edit(caller(), revision, padded(edge))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(size(), MAX_CONFIG_BYTES);
     assert!(!compact(&file()));
     // A byte past it pretty-printed: written compact, within the bound.
     let revision = settings
         .edit(caller(), revision, padded(edge + 1))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert!(compact(&file()));
     assert!(size() < MAX_CONFIG_BYTES);
     // Compact, exactly at the edge; then a byte past it is refused.
@@ -1107,7 +1115,8 @@ async fn the_configuration_bound_holds_at_exactly_its_edge() {
     let revision = settings
         .edit(caller(), revision, padded(compact_edge))
         .await
-        .unwrap();
+        .unwrap()
+        .revision;
     assert_eq!(size(), MAX_CONFIG_BYTES);
     assert!(compact(&file()));
     let at_edge = file();
@@ -1397,6 +1406,52 @@ async fn c_null_agents_is_read_and_written_as_absent() {
         .map(|each| each.server().name())
         .collect();
     assert_eq!(stored, ["mcptest"]);
+}
+
+/// A first write with no `agents` block starts one from the running catalog
+/// and workspace. A workspace whose path is not UTF-8 cannot be written as
+/// it is: the write is refused `config_invalid` and nothing is written,
+/// rather than store a lossy path the next start would use. A file with a
+/// block of its own needs no fallback, and is written.
+#[tokio::test]
+async fn a_fallback_path_that_is_not_utf8_refuses_the_write() {
+    use super::settings;
+    use crate::mcp_servers::application::McpServerSettingsError;
+    use std::os::unix::ffi::OsStrExt;
+    let workspace = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/nessa-\xff-workspace"));
+    for (file, written) in [
+        (&br#"{"session":{"writeTimeoutMs":75}}"#[..], false),
+        (
+            &br#"{"session":{"writeTimeoutMs":75},"agents":null}"#[..],
+            false,
+        ),
+        (
+            &br#"{"agents":{"catalog":"/m.json","workspace":"/w","mcpServers":[]}}"#[..],
+            true,
+        ),
+    ] {
+        let (root, config_path, composed, mut config) = composed_in(file).await;
+        config.workspace = workspace.clone();
+        let settings = settings(
+            &composed,
+            &config,
+            config_path.clone(),
+            root.path().join("audit"),
+        )
+        .unwrap();
+        let revision = settings.list().await.unwrap().revision;
+        let result = settings
+            .edit(caller(), revision, saved("mcptest", vec![]))
+            .await;
+        let now = std::fs::read(&config_path).unwrap();
+        if written {
+            assert!(result.is_ok(), "{result:?}");
+            assert!(!String::from_utf8_lossy(&now).contains('\u{fffd}'));
+        } else {
+            assert_eq!(result, Err(McpServerSettingsError::ConfigInvalid));
+            assert_eq!(now, file, "nothing is written");
+        }
+    }
 }
 
 /// `config.json.lock` planted as a FIFO is refused, not waited on: opened

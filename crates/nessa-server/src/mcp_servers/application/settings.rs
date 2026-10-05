@@ -71,10 +71,10 @@
 //! first record cannot be written, nothing is started.
 use super::ports::{
     AuditUnavailable, AuditedServer, InspectBounds, InspectCut, InspectFailure, InspectStop,
-    Inspection, LaunchBegun, LiveServerSet, McpServerAction, McpServerAudit, McpServerAuditPhase,
-    McpServerAuditRecord, McpServerCause, McpServerChangeRequest, McpServerInitiator,
-    McpServerOutcome, McpServerStore, ServerInspector, ServerNames, ServerProblem, StoreError,
-    StoreLock, StoredServers,
+    Inspection, LaunchBegun, LiveServerSet, LiveSetOutcome, McpServerAction, McpServerAudit,
+    McpServerAuditPhase, McpServerAuditRecord, McpServerCause, McpServerChangeRequest,
+    McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
+    ServerProblem, StoreError, StoreLock, StoredServers,
 };
 use crate::mcp_servers::domain::{
     ConfiguredMcpServer, EditRefusal, ServerEdit, ServerSave, StdioServer, MANAGED_SERVER_NAME,
@@ -139,6 +139,14 @@ pub struct ServerList {
 /// way out of a list that does not fit
 /// (`w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers`).
 pub type ListFits = fn(&ServerList) -> bool;
+
+/// What a published `mcpServers.save` or `mcpServers.remove` answers: the
+/// new revision, and what it did to the live set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edited {
+    pub revision: String,
+    pub live_set: LiveSetOutcome,
+}
 
 /// Why an edit is invalid.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -314,9 +322,9 @@ impl McpServerSettings {
     }
 
     /// Make `edit` to the servers stored at `revision`, for `initiator`, and
-    /// answer the new revision. Once admitted, the change runs to its
-    /// outcome record on a task of its own, whether or not this future is
-    /// still polled.
+    /// answer the new revision and what it did to the live set. Once
+    /// admitted, the change runs to its outcome record on a task of its own,
+    /// whether or not this future is still polled.
     ///
     /// # Errors
     ///
@@ -331,7 +339,7 @@ impl McpServerSettings {
         initiator: McpServerInitiator,
         revision: String,
         edit: ServerEdit,
-    ) -> Result<String, McpServerSettingsError> {
+    ) -> Result<Edited, McpServerSettingsError> {
         let operations = self.operations.clone();
         self.owned(
             |reached| async move { operations.edit(initiator, revision, edit, &reached).await },
@@ -599,7 +607,7 @@ impl Operations {
         revision: String,
         edit: ServerEdit,
         reached: &Reached,
-    ) -> Result<String, McpServerSettingsError> {
+    ) -> Result<Edited, McpServerSettingsError> {
         let request = McpServerChangeRequest {
             action: match edit {
                 ServerEdit::Save(_) => McpServerAction::Save,
@@ -642,7 +650,7 @@ impl Operations {
             Ok(change) => McpServerOutcome::Applied {
                 before: change.before.clone(),
                 after: change.after.clone(),
-                live_set_replaced: change.live_set_replaced,
+                live_set: change.live_set,
                 durable: change.durable,
             },
             Err((error, before)) if error.refused() => McpServerOutcome::Refused {
@@ -660,7 +668,10 @@ impl Operations {
         // Published but not made durable: applied, and said so.
         let not_durable = McpServerSettingsError::StorageUnavailable { applied: true };
         match (result, recorded) {
-            (Ok(change), Ok(())) if change.durable => Ok(change.after.revision),
+            (Ok(change), Ok(())) if change.durable => Ok(Edited {
+                revision: change.after.revision,
+                live_set: change.live_set,
+            }),
             (Ok(_), Ok(())) => Err(not_durable),
             (Ok(change), Err(AuditUnavailable)) => Err(McpServerSettingsError::AuditUnavailable {
                 applied: true,
@@ -799,7 +810,7 @@ impl Operations {
             Ok(published) => Ok(Change {
                 before,
                 after: published.after,
-                live_set_replaced: published.live_set_replaced,
+                live_set: published.live_set,
                 durable: published.durable,
             }),
             Err(error) => Err((error, Some(before))),
@@ -850,8 +861,9 @@ impl Operations {
         })?;
         // A remove only shortens the list, so it adds no problem: it is how a
         // hand-edited list past a bound (more servers than allowed, one
-        // that will not parse) is brought back. Its file is written; the
-        // live set follows once the list is valid again
+        // that will not parse) is brought back. Its file is written, and its
+        // server leaves the live set; the rest follows once the list is
+        // valid again
         // (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
         let problem = match edit {
             ServerEdit::Save(_) => self.live.problem(&edited),
@@ -881,16 +893,24 @@ impl Operations {
         // follows it.
         let written = written?;
         reached.mark_applied();
-        // Published: the live set follows, under the same lock. Refused once
-        // the gateway is stopping, or when a remove left a hand-edited list
-        // still past a bound: the change still answers success, and its
-        // outcome record says the live set was not replaced. The next start,
-        // or a change that brings the list within its bounds, reads the file
-        // (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
+        // Published: the live set follows, under the same lock. A remove
+        // always takes its server out of it: when the list it leaves cannot
+        // be made live as a whole — a hand-edited list still past a bound —
+        // the live set loses that server and keeps the rest
+        // (`a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`).
+        // Once the gateway is stopping the set is kept: the change still
+        // answers success, its outcome says so, and the next start reads the
+        // file (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
         // The lock is let go only after the replacement, so two changes
         // replace in the order they published
         // (`a_second_writer_waits_for_the_first_writers_live_replace`).
-        let live_set_replaced = self.live.replace(&edited).is_ok();
+        let live_set = match (self.live.replace(&edited), edit) {
+            (Ok(()), _) => LiveSetOutcome::Replaced,
+            (Err(_), ServerEdit::Remove { name }) if self.live.withdraw(name).is_ok() => {
+                LiveSetOutcome::Withdrawn
+            }
+            (Err(_), _) => LiveSetOutcome::Kept,
+        };
         drop(lock);
         let after_target = match edit {
             ServerEdit::Save(save) => Some(save.server.name()),
@@ -898,7 +918,7 @@ impl Operations {
         };
         Ok(Published {
             after: names(&written.revision, &edited, after_target),
-            live_set_replaced,
+            live_set,
             durable: written.durable,
         })
     }
@@ -970,7 +990,7 @@ fn requested(save: &ServerSave) -> AuditedServer {
 struct Change {
     before: ServerNames,
     after: ServerNames,
-    live_set_replaced: bool,
+    live_set: LiveSetOutcome,
     durable: bool,
 }
 
@@ -978,7 +998,7 @@ struct Change {
 /// and whether the file was made durable.
 struct Published {
     after: ServerNames,
-    live_set_replaced: bool,
+    live_set: LiveSetOutcome,
     durable: bool,
 }
 

@@ -925,6 +925,7 @@ pub struct McpServersRemoveParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServersWriteResult {
     pub revision: String,
+    pub live: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

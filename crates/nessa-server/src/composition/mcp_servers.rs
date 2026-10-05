@@ -302,22 +302,13 @@ pub(super) fn settings_over(
     files: Arc<dyn ConfigFiles>,
     audit: PathBuf,
 ) -> Result<McpServerSettings, RunError> {
-    let mut block = serde_json::Map::new();
-    block.insert(
-        "catalog".into(),
-        serde_json::Value::String(agents.catalog.to_string_lossy().into_owned()),
-    );
-    block.insert(
-        "workspace".into(),
-        serde_json::Value::String(agents.workspace.to_string_lossy().into_owned()),
-    );
     let store = ConfigJsonStore::new(
         files,
         ConfigCheck {
             limit: MAX_CONFIG_BYTES,
             parses: Box::new(|bytes| RuntimeConfig::parse(bytes).is_ok()),
         },
-        block,
+        fallback_agents(agents),
         Arc::new(RuntimeClock::new()),
         mcp.key.clone(),
     );
@@ -337,6 +328,17 @@ pub(super) fn settings_over(
         )),
         list_fits,
     ))
+}
+
+/// The `agents` block a first write starts from: the running catalog and
+/// workspace, or `None` when either is not UTF-8 — written lossily, the file
+/// would name another path, which the next start would use
+/// (`a_fallback_path_that_is_not_utf8_refuses_the_write`).
+fn fallback_agents(agents: &AgentsConfig) -> Option<serde_json::Map<String, serde_json::Value>> {
+    Some(serde_json::Map::from_iter([
+        ("catalog".to_owned(), agents.catalog.to_str()?.into()),
+        ("workspace".to_owned(), agents.workspace.to_str()?.into()),
+    ]))
 }
 
 /// The gateway's MCP stop, in its one order: `settings` — when this gateway
