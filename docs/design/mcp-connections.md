@@ -506,7 +506,11 @@ params are read.
   stored for that name on the server being saved (the one under
   `previousName`, else under `name`), when the save keeps that server's
   command and arguments ([LS17](#the-live-server-set-391)).
-- `mcpServers.remove {revision, name}` → `{revision}`.
+- `mcpServers.remove {revision, name}` → `{revision}`. A remove is never
+  refused for a bound on the list (count, frame size, an entry that does not
+  parse): it only shortens the list and is how a hand-edited one is brought
+  back. Its file is written; the live set follows once the list is within
+  its bounds (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
 
 The revision is a digest of the stored block (`[]` when there is none),
 keyed with the process's `ConfigurationKey` — the one the stand-ins' digests

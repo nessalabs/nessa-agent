@@ -836,7 +836,16 @@ impl Operations {
                     })
                 }
             })?;
-        if let Some(problem) = self.live.problem(&edited) {
+        // A remove only shortens the list, so it adds no problem: it is how a
+        // hand-edited list past a bound (more servers than allowed, one
+        // that will not parse) is brought back. Its file is written; the
+        // live set follows once the list is valid again
+        // (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
+        let problem = match edit {
+            ServerEdit::Save(_) => self.live.problem(&edited),
+            ServerEdit::Remove { .. } => None,
+        };
+        if let Some(problem) = problem {
             return Err(McpServerSettingsError::Invalid(EditProblem::Server(
                 problem,
             )));

@@ -2898,6 +2898,7 @@ mod tests {
     /// W1 at the edge: a save's list is measured for the longest request
     /// id — 256 bytes, each written as six — so a list that passed answers
     /// whole whatever id later asks for it.
+    #[cfg(unix)]
     #[test]
     fn w1_a_list_fits_for_the_longest_request_id_at_exactly_its_edge() {
         use super::super::mcp_servers::{answered, list_fits};
@@ -2923,6 +2924,7 @@ mod tests {
     /// leaves the list too long still — so removes recover; a save whose
     /// list would not fit is refused `mcp_servers_config_too_large`, nothing
     /// written, its outcome recorded refused.
+    #[cfg(unix)]
     #[tokio::test]
     async fn w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers() {
         use crate::mcp_servers::application::{McpServerAuditPhase, McpServerOutcome};
