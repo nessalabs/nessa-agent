@@ -10,9 +10,18 @@
 //! [`ConfiguredMcpServer::new`], which refuses a name given twice: decoded
 //! into a map first, the second value would silently replace the first
 //! (`a_repeated_variable_name_in_the_file_is_refused_in_either_order`).
+//!
+//! A name longer than the SDK allows ([`MAX_MCP_SERVER_NAME_BYTES`]) makes
+//! the block unreadable, as any other hand edit that does not parse: every
+//! other rule for a server is the SDK's, asked of the whole list and named
+//! in `mcp_servers_invalid`, but a name past this bound would not fit in the
+//! frame of a request that names it — a remove, an inspection — so the
+//! server could not be taken out through the gateway
+//! (`a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`).
 use crate::mcp_servers::domain::{
     stored_revision, ConfigurationKey, ConfiguredMcpServer, StdioServer,
 };
+use nessa_sdk::infrastructure::acp::sessions::MAX_MCP_SERVER_NAME_BYTES;
 use serde::{
     de::{MapAccess, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -74,9 +83,16 @@ fn enabled() -> bool {
 }
 
 impl StoredMcpServer {
-    /// The entry as the gateway holds it, or why it cannot be: a variable
-    /// named twice.
+    /// The entry as the gateway holds it, or why it cannot be: a name past
+    /// [`MAX_MCP_SERVER_NAME_BYTES`], or a variable named twice.
     fn configured(self) -> Result<ConfiguredMcpServer, String> {
+        if self.name.len() > MAX_MCP_SERVER_NAME_BYTES {
+            // Not the name itself: it may be most of the file.
+            return Err(format!(
+                "an MCP server name is {} bytes, past the {MAX_MCP_SERVER_NAME_BYTES} allowed",
+                self.name.len()
+            ));
+        }
         let name = self.name.clone();
         ConfiguredMcpServer::new(
             StdioServer::new(self.name, self.command, self.args),

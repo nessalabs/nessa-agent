@@ -20,8 +20,8 @@ use super::{
 };
 use crate::mcp_servers::{
     application::{
-        EditProblem, InspectCut, InspectFailure, Inspection, McpServerInitiator,
-        McpServerSettingsError, ServerList, ServerProblem,
+        EditProblem, Edited, InspectCut, InspectFailure, Inspection, LiveSetOutcome,
+        McpServerInitiator, McpServerSettingsError, ServerList, ServerProblem,
     },
     domain::{ServerEdit, ServerSave, StdioServer},
 };
@@ -63,7 +63,7 @@ pub(super) async fn dispatch(
             settings
                 .edit(initiator(session), params.revision, edit)
                 .await
-                .map(|revision| success(&frame.id, &McpServersWriteResult { revision }))
+                .map(|edited| written(&frame.id, edited))
         }
         "mcpServers.remove" => {
             let Ok(params) = serde_json::from_value::<McpServersRemoveParams>(frame.params) else {
@@ -73,7 +73,7 @@ pub(super) async fn dispatch(
             settings
                 .edit(initiator(session), params.revision, edit)
                 .await
-                .map(|revision| success(&frame.id, &McpServersWriteResult { revision }))
+                .map(|edited| written(&frame.id, edited))
         }
         "mcpServers.inspect" => {
             let Ok(params) = serde_json::from_value::<McpServersInspectParams>(frame.params) else {
@@ -87,6 +87,19 @@ pub(super) async fn dispatch(
         _ => return failure(&frame.id, "unknown_method"),
     };
     result.unwrap_or_else(|error| refusal(&frame.id, error))
+}
+
+/// A published save or remove: its revision, and whether the stored list is
+/// now the live set — not when a remove only took its server out of it, or
+/// the set was kept.
+fn written(id: &str, edited: Edited) -> OutgoingMessage {
+    success(
+        id,
+        &McpServersWriteResult {
+            revision: edited.revision,
+            live: edited.live_set == LiveSetOutcome::Replaced,
+        },
+    )
 }
 
 /// The authenticated caller, as each change's records name it.

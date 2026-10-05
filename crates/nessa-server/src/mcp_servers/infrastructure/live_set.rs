@@ -170,6 +170,19 @@ impl LiveServerSet for LiveMcpServers {
         let launches = self.launches.launch_set(stored).map_err(|_| LiveSetKept)?;
         self.servers.replace(launches).map_err(|_| LiveSetKept)
     }
+
+    /// The live set now, less `name`: a subset of a set the SDK took, so
+    /// only a stop refuses it. The store's lock is held, so nothing
+    /// replaces the set between the read and the replacement.
+    fn withdraw(&self, name: &str) -> Result<(), LiveSetKept> {
+        let launches = self
+            .servers
+            .configured()
+            .into_iter()
+            .filter(|launch| launch.server.name != name)
+            .collect();
+        self.servers.replace(launches).map_err(|_| LiveSetKept)
+    }
 }
 
 /// The SDK's problem as the application names it.

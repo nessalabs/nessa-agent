@@ -5,7 +5,7 @@
 use super::*;
 use crate::core::{Outcome, ShutdownStage};
 use crate::mcp_servers::application::{
-    InspectCut, Inspection, McpServerAuditPhase, McpServerCause, McpServerOutcome,
+    InspectCut, Inspection, LiveSetOutcome, McpServerAuditPhase, McpServerCause, McpServerOutcome,
     McpServerSettingsError,
 };
 use crate::mcp_servers::domain::{ServerEdit, ServerSave};
@@ -115,7 +115,7 @@ async fn the_mcp_stop_drains_admitted_writes_before_the_servers_stop() {
     assert!(matches!(
         &records[1].phase,
         McpServerAuditPhase::Outcome(McpServerOutcome::Applied {
-            live_set_replaced: true,
+            live_set: LiveSetOutcome::Replaced,
             ..
         })
     ));

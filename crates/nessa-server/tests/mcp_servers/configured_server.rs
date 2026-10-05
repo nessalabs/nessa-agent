@@ -155,36 +155,107 @@ fn a_repeated_name_is_said_before_a_missing_value() {
     );
 }
 
-/// A kept value stays with its launch: a save that changes the command or the
-/// arguments, renamed or not, must give every value again. Otherwise a new
-/// command could be pointed at a secret it was never given, and read it back
-/// through an inspection (#480 adversarial review).
+/// A kept value stays with its launch: a save that changes anything the
+/// process is started with, apart from the kept values themselves — the
+/// command, the arguments, a variable added, another variable's value, a
+/// variable left out — renamed or not, must give every value again.
+/// Otherwise a new command, or a variable such as `LD_PRELOAD` that loads
+/// code into the old one, could be pointed at a secret it was never given,
+/// and read it back through an inspection (#480 adversarial review).
 #[test]
-fn a_kept_value_is_refused_when_the_command_or_arguments_change() {
-    let list = vec![stored("a", &[("TOKEN", "secret")])];
-    let relaunched = |previous: Option<&str>, command: &str, args: Vec<String>| {
-        ServerEdit::Save(ServerSave {
-            previous_name: previous.map(str::to_owned),
-            server: StdioServer::new("a", command, args),
-            env: vec![("TOKEN".into(), None)],
-            enabled: true,
-        })
-    };
-    for edit in [
-        relaunched(None, "/usr/bin/python3", vec![]),
-        relaunched(None, "/bin/server", vec!["-c".into()]),
-        relaunched(Some("a"), "/usr/bin/python3", vec![]),
+fn a_kept_value_is_refused_when_anything_else_in_the_launch_changes() {
+    let list = vec![stored("a", &[("TOKEN", "secret"), ("URL", "https://a")])];
+    let relaunched =
+        |previous: Option<&str>, command: &str, args: Vec<String>, env: &[(&str, Option<&str>)]| {
+            ServerEdit::Save(ServerSave {
+                previous_name: previous.map(str::to_owned),
+                server: StdioServer::new("a", command, args),
+                env: env
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), value.map(str::to_owned)))
+                    .collect(),
+                enabled: true,
+            })
+        };
+    let same: &[(&str, Option<&str>)] = &[("TOKEN", None), ("URL", Some("https://a"))];
+    for (why, edit) in [
+        (
+            "command",
+            relaunched(None, "/usr/bin/python3", vec![], same),
+        ),
+        (
+            "arguments",
+            relaunched(None, "/bin/server", vec!["-c".into()], same),
+        ),
+        (
+            "renamed, command",
+            relaunched(Some("a"), "/usr/bin/python3", vec![], same),
+        ),
+        (
+            "a variable added",
+            relaunched(
+                None,
+                "/bin/server",
+                vec![],
+                &[
+                    ("LD_PRELOAD", Some("/tmp/x.so")),
+                    ("TOKEN", None),
+                    ("URL", Some("https://a")),
+                ],
+            ),
+        ),
+        (
+            "another variable's value",
+            relaunched(
+                None,
+                "/bin/server",
+                vec![],
+                &[("TOKEN", None), ("URL", Some("https://evil"))],
+            ),
+        ),
+        (
+            "a variable swapped for another",
+            relaunched(
+                None,
+                "/bin/server",
+                vec![],
+                &[("LD_PRELOAD", Some("/tmp/x.so")), ("TOKEN", None)],
+            ),
+        ),
+        (
+            "a variable left out",
+            relaunched(None, "/bin/server", vec![], &[("TOKEN", None)]),
+        ),
     ] {
         assert_eq!(
             edit.apply(&list),
             Err(EditRefusal::EnvironmentValueMissing {
                 name: "TOKEN".into()
-            })
+            }),
+            "{why}"
         );
     }
-    // The same launch keeps it.
-    let kept = relaunched(None, "/bin/server", vec![])
-        .apply(&list)
-        .unwrap();
-    assert_eq!(kept[0].env_names(), ["TOKEN"]);
+    // The same launch keeps it, every other variable kept or given its
+    // stored value, renamed or not.
+    for (previous, env) in [
+        (None, same),
+        (None, &[("TOKEN", None), ("URL", None)][..]),
+        (Some("a"), same),
+    ] {
+        let kept = relaunched(previous, "/bin/server", vec![], env)
+            .apply(&list)
+            .unwrap();
+        assert_eq!(kept[0].env()["TOKEN"], "secret");
+        assert_eq!(kept[0].env()["URL"], "https://a");
+    }
+    // With nothing kept, anything may change.
+    let given = relaunched(
+        None,
+        "/usr/bin/python3",
+        vec![],
+        &[("LD_PRELOAD", Some("/x.so")), ("TOKEN", Some("new"))],
+    )
+    .apply(&list)
+    .unwrap();
+    assert_eq!(given[0].env_names(), ["LD_PRELOAD", "TOKEN"]);
 }

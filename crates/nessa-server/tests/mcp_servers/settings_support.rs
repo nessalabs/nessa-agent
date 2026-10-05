@@ -433,10 +433,10 @@ fn live_through(
                     && !String::from_utf8_lossy(bytes).contains(UNPARSEABLE)
             }),
         },
-        Map::from_iter([
+        Some(Map::from_iter([
             ("catalog".to_owned(), json!("/models.json")),
             ("workspace".to_owned(), json!("/w")),
-        ]),
+        ])),
         clock,
         key(),
     );
