@@ -2,7 +2,9 @@
  * The gateway's log, against a stand-in for the `nessa` binary
  * (`MCP_LIVE_NESSA`): what the gateway says as it stops is in `log()` once
  * `stop()` returns, and a gateway that fails to start leaves its output on
- * the error. `live-check.mjs` writes either to its evidence.
+ * the error. `live-check.mjs` writes either to its evidence. And the prompt
+ * both live checks ask with (`toolPrompt`): its one-tool wording held to the
+ * live Codex turn recorded with it (#500), its five-tool wording to itself.
  */
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
@@ -20,7 +22,7 @@ import { dirname, join } from "node:path"
 import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { startLocalGateway } from "./local-gateway.mjs"
+import { SERVER, repoRoot, startLocalGateway, toolPrompt } from "./local-gateway.mjs"
 
 const scratch = mkdtempSync(join(tmpdir(), "nessa-local-gateway-test-"))
 after(() => rmSync(scratch, { recursive: true, force: true }))
@@ -216,4 +218,55 @@ test("a signed-out gateway is started with no credential and a home of its own",
   // Not signed out, it is this process's environment.
   const live = await seen({})
   for (const name of planted) assert.equal(live.env[name], "planted", name)
+})
+
+/** The live Codex turn asked with `toolPrompt`'s single-tool wording (#500). */
+const toolSearchTurn = JSON.parse(
+  readFileSync(
+    join(
+      repoRoot,
+      "crates/nessa-sdk/tests/infrastructure/codex_acp/tools/fixtures/mcp_live_frames.json",
+    ),
+    "utf8",
+  ),
+).toolSearchTurn
+
+const fiveTools = [
+  { name: "report_rows" },
+  { name: "link_resources" },
+  { name: "rows.get", args: { id: 2 } },
+  { name: "always_fails" },
+  { name: "show_chart" },
+]
+
+test("the one-tool prompt is the one the recorded Codex turn was asked with", () => {
+  assert.equal(
+    toolPrompt([{ name: "review_rows" }]),
+    toolSearchTurn.prompt,
+    "the wording changed: record the Codex turn again with the new wording " +
+      "(the fixture's toolSearchTurn, scripts/mcp-test-server/README.md)",
+  )
+})
+
+test("the several-tool prompt is exactly this wording, which forbids only other tools of the server", () => {
+  // Held word for word, as the one-tool wording is held to its recording: a
+  // sentence forbidding the agent's own tools, however phrased, fails here.
+  assert.equal(
+    toolPrompt(fiveTools),
+    `Use the tools of the "${SERVER}" MCP server. If they are not among the tools you ` +
+      "were given, find them with your tool search. Call each of these exactly once, in " +
+      "this order, waiting for each result before the next: report_rows (no arguments), " +
+      'link_resources (no arguments), rows.get with {"id": 2}, always_fails (no ' +
+      "arguments), show_chart (no arguments). Call no other tool of that server. When " +
+      "all 5 have returned, reply with DONE.",
+  )
+  // Empty arguments read as none, as absent ones do.
+  assert.equal(
+    toolPrompt([{ name: "show_chart", args: {} }]),
+    toolPrompt([{ name: "show_chart" }]),
+  )
+})
+
+test("a prompt for no tools is refused", () => {
+  assert.throws(() => toolPrompt([]))
 })

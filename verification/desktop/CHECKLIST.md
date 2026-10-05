@@ -423,8 +423,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
-  announcement and then updates under its id (Codex three frames, Claude
-  four), and the window draws it as one transcript step and one inline app
+  announcement and then updates under its id (Codex three frames, or two
+  in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app
   frame, so the app mounts once. _#418 design._ _Check:_
   `mcp-apps-gateway.mjs --agent codex --scripted` and `--agent claude
   --scripted`, `renders`: its step and frame counts (no model, no sign-in: the
@@ -757,6 +757,8 @@ says why where the conversations would be.
   `hostGateway`, `connectDevSession`, the gateway source — against a fake host
   whose endpoint and credential commands answer with a real gateway's, started
   by `lib/gateway-stack.mjs` with a real agent; needs the agent signed in).
+  With `--scripted` the same steps run signed out against
+  `scenarios/text-reply.json`, including `--mode prod`.
   _Not in a browser:_ the native host's side — readiness, endpoint discovery,
   the credential file read and its refusals — is the Rust host tests'
   (`src-tauri/src/surface_credential.rs`,
@@ -767,6 +769,17 @@ says why where the conversations would be.
   window.** _By hand:_ `pnpm app` against a gateway with
   `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
   #436 lands.
+- [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
+  window shows it.** _Check:_ `scripted-scenarios.mjs` (and
+  `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and
+  `gateway-window --scripted` in Chromium and WebKit). The agent runs
+  `scenarios/window.json`: streamed text, an agent approval answered Allow
+  Once, a tool step, a turn that fails after speaking, and a turn that stays
+  cancelled after the conversation is closed. The strings come from that file.
+  `--mode prod` runs this check and `gateway-window --scripted` against a
+  production preview; MCP Apps stay on the dev server. One evidence directory
+  per run, and one verdict line.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
 
 ## Console errors
 
@@ -788,8 +801,9 @@ says why where the conversations would be.
   assertions' to judge (`renders` in `mcp-apps-gateway.mjs` for
   `/mcp-resources`; the conversation loading at all for `/browser/check`).
   Harmless lines of either kind are kept in the JSON as `harmless` by
-  `smoke.mjs`, `mcp-apps-gateway.mjs` and `gateway-window.mjs`; the other
-  scripts that open a page do not keep them yet (#494). Vite's
+  `smoke.mjs`, `mcp-apps-gateway.mjs`, `gateway-window.mjs` and
+  `scripted-scenarios.mjs`; the other scripts that open a page do not keep
+  them yet (#494). Vite's
   `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
   by another edit landing on the dev server mid-run is not a finding —
   re-run.

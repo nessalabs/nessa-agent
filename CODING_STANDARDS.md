@@ -387,6 +387,9 @@ that their combination describes a possible execution.
   suites on the combined tree. Update callers, contracts, docs, and review links
   together. A response claiming a fix must cite its implementation and validation;
   resolve a review thread only after verifying that disposition.
+- A pull request that changes UI, gateway, ACP, or MCP behavior includes the
+  scripted-run summary defined in
+  [Browser verification for UI](#browser-verification-for-ui).
 - A clean review report states the exact reviewed head, dimensions tested,
   remaining limits, and unresolved findings. When external review is requested,
   track its result against the current head; a prior-head approval or a human
@@ -882,6 +885,16 @@ WKWebView, so Chrome alone is not evidence.
   build with CPU throttling, several runs, reporting max and median, and every
   over-budget frame is attributed to the code that spent it. A calibration frame
   of known cost shows the measurement itself is working.
+- **A pull request that changes UI, gateway, ACP, or MCP behavior shows the
+  scripted run.** `pnpm test:e2e:scripted` writes one evidence directory and
+  prints one verdict line (stdout), with the summary on stderr and in that
+  directory's `pr-summary.md`. `--mode prod` is the same command against a
+  production build. The pull request body includes that summary — the verdict,
+  the checks per engine, and the relevant log lines — and links the evidence
+  directory. The page's console and request lines in the summary are the ones
+  the checks already record (`recordFailedRequest` in
+  `verification/desktop/scripts/lib/browser.mjs`). Live provider checks that
+  need an owner credential stay separate (`pnpm agent:e2e`).
 
 ## Adding a check to CI
 

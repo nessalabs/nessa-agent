@@ -113,6 +113,8 @@ export const css = {
   // Approval card (arranged by its own width)
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
+  agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
+  approvalReason: ".workspace-approval-reason", // class: why the review is asking
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
   approvalHead: ".workspace-approval-head", // class: who asks, and what

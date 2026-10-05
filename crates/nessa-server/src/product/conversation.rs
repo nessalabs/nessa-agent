@@ -5,9 +5,8 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    ConversationCaller, ConversationError, DeletionFailures, McpAppCode, McpAppError,
-    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile,
-    SubmittedImage, SubmittedMessage,
+    ConversationCaller, ConversationError, DeletionFailures, QuestionChoiceInput, RequestedAgent,
+    RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::view::{
@@ -17,13 +16,13 @@ use nessa_protocol::product::generated::{
     ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
     ConversationCreateParams, ConversationCreateResult, ConversationDeleteParams,
-    ConversationErrorCode, ConversationListParams, ConversationListResult,
-    ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
-    ConversationPermissionSelectionState, ConversationReadParams, ConversationRemoveParams,
-    ConversationReorderParams, ConversationSendParams, ConversationSetApprovalModeParams,
-    ConversationSetApprovalModeResult, ConversationSummary,
-    ConversationView as WireConversationView,
+    ConversationListParams, ConversationListResult, ConversationMutationResult,
+    ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
+    ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
+    ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
+    ConversationSummary, ConversationView as WireConversationView,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_protocol::{
     agents::AgentId,
@@ -468,32 +467,8 @@ pub(super) fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::PermissionAnswer { error, .. } => {
             error_code(&ConversationError::Agent(error.clone()))
         }
-        ConversationError::McpApp(error) => mcp_app_code(error),
-    }
-}
-
-/// The protocol code of an MCP App's refusal: the code audit names it with
-/// (`McpAppCode`), as the wire's own enum; `tests/conversation/agreement.rs`
-/// holds the two sets together.
-fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
-    wire_code(error.code())
-}
-
-pub(super) fn wire_code(code: McpAppCode) -> ConversationErrorCode {
-    match code {
-        McpAppCode::AppUnknown => ConversationErrorCode::McpAppUnknown,
-        McpAppCode::ServerMismatch => ConversationErrorCode::McpServerMismatch,
-        McpAppCode::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
-        McpAppCode::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
-        McpAppCode::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
-        McpAppCode::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
-        McpAppCode::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
-        McpAppCode::Cancelled => ConversationErrorCode::McpCancelled,
-        McpAppCode::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
-        McpAppCode::TimedOut => ConversationErrorCode::McpTimedOut,
-        McpAppCode::RemoteError => ConversationErrorCode::McpRemoteError,
-        McpAppCode::InvalidRequest => ConversationErrorCode::InvalidRequest,
-        McpAppCode::TemporarilyUnavailable => ConversationErrorCode::TemporarilyUnavailable,
+        // Audit already named this with the protocol's code.
+        ConversationError::McpApp(error) => error.code(),
     }
 }
 

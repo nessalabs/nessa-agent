@@ -40,6 +40,43 @@ export const MODELS = {
 }
 
 /**
+ * What a check asks the agent to do: call each of `tools` (`{ name, args }`,
+ * `args` an object or undefined) once, in order, then reply DONE. Codex
+ * defers MCP tools behind its tool search (#500), so the prompt does not
+ * forbid the agent's own tools, only other tools of the server. The prompt
+ * enforces nothing; what each check enforces is its own, and a harness may
+ * run a tool without asking (Codex ran `review_rows`, which declares
+ * `readOnlyHint`, unasked). The single-tool wording is the
+ * prompt of the recorded turn in the SDK's Codex fixture
+ * (`toolSearchTurn`), held to it by `local-gateway.test.mjs`.
+ */
+export function toolPrompt(tools) {
+  if (tools.length === 0) throw new Error("toolPrompt needs at least one tool")
+  // Arguments as JSON, a space after each top-level colon: `{"id": 2}`.
+  const json = (args) =>
+    `{${Object.entries(args)
+      .map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
+      .join(", ")}}`
+  const call = ({ name, args }) =>
+    args === undefined || Object.keys(args).length === 0
+      ? `${name} (no arguments)`
+      : `${name} with ${json(args)}`
+  const find =
+    `Use the tools of the "${SERVER}" MCP server. ` +
+    "If they are not among the tools you were given, find them with your tool search."
+  if (tools.length === 1)
+    return (
+      `${find} Call ${call(tools[0])} exactly once, and wait for its result. ` +
+      "Call no other tool of that server. When it has returned, reply with DONE."
+    )
+  return (
+    `${find} Call each of these exactly once, in this order, waiting for each result ` +
+    `before the next: ${tools.map(call).join(", ")}. Call no other tool of that server. ` +
+    `When all ${tools.length} have returned, reply with DONE.`
+  )
+}
+
+/**
  * How to start `agent`'s harness: its argv, the model it runs, and a
  * directory to put first on its `PATH` (or `null`). `MCP_LIVE_HARNESSES`
  * names the directory holding `claude-acp/` and `codex-acp/`.

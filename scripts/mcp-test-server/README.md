@@ -56,8 +56,11 @@ configured as `mcptest` (also wrapped, so its own traffic is recorded). The
 harness is given a stand-in, `nessa mcp-relay`, in its place, and for each
 harness session that starts it the gateway starts the server and holds the
 connection to it (ADR 344). It
-sends one message asking for every tool once, allows each tool's permission
-request once, and writes what happened:
+sends one message asking for five of the server's tools, each once, and writes
+what happened. The message is `toolPrompt` in `local-gateway.mjs`, which the
+desktop's `mcp-apps-gateway.mjs` asks with too: it lets the agent use its own
+tool search, since Codex reaches MCP tools only through it (#500), and forbids
+only other tools of the server.
 
 ```sh
 cargo build -p nessa-server
@@ -79,8 +82,8 @@ It uses the sign-in each agent already has on this machine — Claude's
 credential from the keychain the gateway reads, Codex's own home, OpenCode's
 from Nessa's credential store — and creates none. A gateway that has no
 credential for an agent refuses the conversation, and the check stops there.
-It allows only calls to the test server's tools, each once, never a standing
-approval; anything else the agent asks for is left unanswered. It exits
+Which permission requests it answers, and what it checks, is stated once, in
+`live-check.mjs`'s header. It exits
 non-zero unless the turn completed and `show_chart` yielded a widget part,
 and removes the gateway's own data
 directory (its owner token among it) at the end. Recordings and
@@ -88,7 +91,14 @@ directory (its owner token among it) at the end. Recordings and
 `_auth/status_update` names the signed-in account (its email): review them,
 and check in only extracted frames, never a whole recording. The frames the SDK's
 parser tests replay (`crates/nessa-sdk/tests/infrastructure/{claude_acp,codex_acp}/tools/fixtures/mcp_live_frames.json`)
-were extracted from such a run.
+were extracted from such a run. The Codex fixture's `toolSearchTurn` is one
+turn asked with `toolPrompt`'s single-tool wording, which
+`local-gateway.test.mjs` holds to it: change the wording, and record it again.
+No checked-in command sends that wording under the recorder: it was recorded
+with this check's setup (`startLocalGateway`, the harness wrapped by
+`acp-recorder.mjs`) sending `toolPrompt([{ name: "review_rows" }])`, and
+extracted as the `session/prompt` text and every `tool_call` and
+`tool_call_update` frame, verbatim. Codex asked no permission for it.
 
 `MCP_LIVE_HARNESSES` names the directory holding `claude-acp/` and `codex-acp/`
 with their `node_modules` (default: `crates/nessa-sdk/harnesses` in this
@@ -132,3 +142,19 @@ a placeholder `ANTHROPIC_API_KEY` (which keeps the gateway from reading
 Claude's from the keychain). The desktop's real-gateway check runs it with
 `--scripted`. Its design table is on #418, and its tests are
 `scripted-frames.test.mjs` and `scripted-agent.test.mjs`.
+
+`scripted-agent.mjs codex|claude --scenario <file>` runs that file's steps
+instead of the recorded frames (`scripted-scenario.mjs`). A step emits text,
+asks a permission and follows the answer (allow once, deny once, or a
+withdrawn review), calls an MCP tool, fails the turn, waits for
+`session/cancel`, or ends it. The recorded frames stay the default, so a run
+without `--scenario` does not change. `scenarios/text-reply.json` is the
+plain reply `gateway-window.mjs --scripted` uses. `scenarios/window.json` is
+the permission, failure and cancel `scripted-scenarios.mjs` drives. The
+state table is in `scripted-scenario.mjs`, and its tests are
+`scripted-scenario.test.mjs`.
+
+`pnpm test:e2e:scripted` builds the gateway and runs the signed-out checks in
+Chromium and WebKit. It does not need harness `node_modules`. The summary it
+writes is what a pull request that changes UI, gateway, ACP, or MCP behavior
+shows ([Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)).

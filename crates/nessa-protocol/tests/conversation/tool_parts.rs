@@ -1,8 +1,10 @@
 //! One tool call is one part of its turn, however many updates it has (#418).
 //!
 //! A harness reports one call as an announcement and then updates under the
-//! same `toolCallId`: Codex as an announcement, a bare status, and a
-//! completion; Claude as three to five frames. The desktop draws a card, and
+//! same `toolCallId`: Codex, in the recordings, as an announcement, a bare
+//! status and a completion, or as an announcement and a completion (the
+//! recorded `review_rows` turn, which has no permission request); Claude as
+//! three to five frames. The desktop draws a card, and
 //! for an app a mount, per part, so a part per update was a card per update.
 //!
 //! The recorded frames are the SDK's parser fixtures. Turning a frame into an
@@ -114,6 +116,27 @@ fn each_recorded_codex_mcp_call_is_one_tool_part() {
 #[test]
 fn each_recorded_claude_call_is_one_tool_part() {
     one_part_per_recorded_call(CLAUDE);
+}
+
+/// A call Codex ran without asking (#500), recorded in two frames with no bare
+/// `in_progress` update between them: one part, at its announcement, its
+/// entry completed.
+#[test]
+fn a_recorded_codex_call_run_without_asking_is_one_tool_part() {
+    let recorded: Value = serde_json::from_str(CODEX).unwrap();
+    let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2);
+    let id = frames[0]["toolCallId"].as_str().unwrap();
+    let mut events = Vec::new();
+    for frame in frames {
+        assert_eq!(frame["toolCallId"], id);
+        events.push(update(id, status(frame)));
+    }
+    events.push(text("DONE"));
+    let view = committed_tool_view(&events);
+    assert_eq!(tool_parts(&view, 0), vec![(id.to_owned(), 0)]);
+    assert_eq!(view.tools.len(), 1);
+    assert_eq!(view.tools[0].status, "completed");
 }
 
 /// Row: a later update with only a status changes the call's entry, not the
