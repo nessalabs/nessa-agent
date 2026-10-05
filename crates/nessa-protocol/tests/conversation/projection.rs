@@ -751,6 +751,182 @@ fn a_committed_result_is_the_turn_status_while_nothing_is_active() {
     }
 }
 
+fn scheduled(id: &str, stage: InvocationStage, target: Option<&str>) -> InvocationRecord {
+    let mut record = review_snapshot(Vec::new()).invocations.remove(0);
+    record.request.execution_id = ExecutionId::new(id).unwrap();
+    let target_id = target.map(|value| ExecutionId::new(value).unwrap());
+    let kind = if target_id.is_some() {
+        record.submission = InvocationSubmissionMode::Steering;
+        record.target_event_offset = Some(0);
+        InvocationKind::Steering
+    } else {
+        record.submission = InvocationSubmissionMode::Queued;
+        InvocationKind::Queued
+    };
+    let actor = record.actor.clone();
+    record.scheduling = vec![
+        InvocationSchedulingEvent {
+            kind,
+            target: target_id.clone(),
+            before: None,
+            stage: InvocationStage::Queued,
+            cause: SchedulingCause::Submitted,
+            actor: Some(actor.clone()),
+        },
+        InvocationSchedulingEvent {
+            kind,
+            target: target_id,
+            before: Some(InvocationStage::Queued),
+            stage,
+            cause: if stage == InvocationStage::Injected {
+                SchedulingCause::SteeringInjected
+            } else {
+                SchedulingCause::Withdrawn
+            },
+            actor: (stage != InvocationStage::Injected).then_some(actor),
+        },
+    ];
+    record
+}
+
+/// Injected and cancelled are the last stage, on a restart and on a later
+/// admission. Neither gap around active turns them into unresolved or running.
+#[test]
+fn an_injected_or_cancelled_turn_keeps_that_status() {
+    let stages = [
+        (
+            InvocationStage::Injected,
+            ConversationMessageStatus::Injected,
+        ),
+        (
+            InvocationStage::Cancelled,
+            ConversationMessageStatus::Cancelled,
+        ),
+    ];
+    for (stage, status) in stages {
+        let target = (stage == InvocationStage::Injected).then_some("active-turn");
+        let record = scheduled("execution", stage, target);
+        let mut opened = empty_history();
+        if target.is_some() {
+            let mut preceding = review_snapshot(Vec::new()).invocations.remove(0);
+            preceding.request.execution_id = ExecutionId::new("active-turn").unwrap();
+            opened.invocations.push(preceding);
+        }
+        opened.invocations.push(record.clone());
+        let restored = opened_on(&opened);
+        let view = restored.read();
+        assert_eq!(status_of(&view, "execution"), status);
+        assert!(view.questions.is_empty());
+        let message = view
+            .messages
+            .iter()
+            .find(|message| message.execution_id == "execution")
+            .expect("message");
+        if stage == InvocationStage::Injected {
+            assert_eq!(message.steering_target.as_deref(), target);
+            assert_eq!(message.steering_offset, Some(0));
+        }
+
+        let mut admitted = empty_history();
+        admitted.invocations.clone_from(&opened.invocations);
+        let mut projection = opened_on(&empty_history());
+        assert!(projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&admitted)),
+            &[],
+            None,
+        ));
+        let later = projection.read();
+        assert_eq!(status_of(&later, "execution"), status);
+        assert!(later.questions.is_empty());
+    }
+}
+
+/// The restart set drops only the id this process is running. The other
+/// restored turn stays unresolved, including after the active one is omitted.
+#[test]
+fn running_one_restored_turn_leaves_the_other_unresolved() {
+    let mut snapshot = empty_history();
+    snapshot.invocations.push(
+        review_snapshot(vec![asked("kept", "1")])
+            .invocations
+            .remove(0),
+    );
+    snapshot.invocations[0].request.execution_id = ExecutionId::new("kept").unwrap();
+    snapshot.invocations.push(
+        review_snapshot(vec![asked("other", "2")])
+            .invocations
+            .remove(0),
+    );
+    snapshot.invocations[1].request.execution_id = ExecutionId::new("other").unwrap();
+    let mut projection = opened_on(&snapshot);
+    let kept = ExecutionId::new("kept").unwrap();
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&kept),
+    ));
+    let live = projection.read();
+    assert_eq!(status_of(&live, "kept"), ConversationMessageStatus::Running);
+    assert_eq!(
+        status_of(&live, "other"),
+        ConversationMessageStatus::Unresolved
+    );
+    assert_eq!(live.questions.len(), 1);
+    assert_eq!(live.questions[0].execution_id, "kept");
+
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    let gap = projection.read();
+    assert_eq!(status_of(&gap, "kept"), ConversationMessageStatus::Running);
+    assert_eq!(
+        status_of(&gap, "other"),
+        ConversationMessageStatus::Unresolved
+    );
+    assert!(gap.questions.is_empty());
+}
+
+/// A restored turn can finish between reads, so its result arrives while it
+/// is still in the restart set and nothing is active. The result is the status.
+#[test]
+fn a_restored_turn_takes_its_result_without_being_passed_as_active() {
+    let cases = [
+        (
+            Some(Ok(ExecutionOutcome::Completed)),
+            ConversationMessageStatus::Completed,
+        ),
+        (
+            Some(Ok(ExecutionOutcome::Cancelled)),
+            ConversationMessageStatus::Cancelled,
+        ),
+        (
+            Some(Err(AgentError::AuditFailure)),
+            ConversationMessageStatus::Failed,
+        ),
+    ];
+    for (result, status) in cases {
+        let open = review_snapshot(vec![asked("execution", "1"), review("{}".into())]);
+        let mut projection = opened_on(&open);
+        assert_eq!(
+            projection.read().messages[0].status,
+            ConversationMessageStatus::Unresolved
+        );
+        let mut finished = open.clone();
+        finished.invocations[0].result = result;
+        assert!(projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&finished)),
+            &[],
+            None,
+        ));
+        let view = projection.read();
+        assert_eq!(view.messages[0].status, status);
+        assert!(view.questions.is_empty());
+        assert!(view.permissions.is_empty());
+    }
+}
+
 #[test]
 fn a_restarted_turn_stays_unresolved_beside_one_admitted_later() {
     let restarted = review_snapshot(vec![asked("execution", "1")]);

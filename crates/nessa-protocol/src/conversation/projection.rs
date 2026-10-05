@@ -42,6 +42,10 @@ const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
 /// `restarted` is an execution that was already unfinished when this
 /// projection first accepted history, and that this process has not run.
+/// A result is that result even then.
+/// `a_restored_turn_takes_its_result_without_being_passed_as_active`.
+/// Injected and cancelled are the last stage, before that flag.
+/// `an_injected_or_cancelled_turn_keeps_that_status`.
 /// A missing result is otherwise still running: the turn was admitted here
 /// and is between being saved and being active, or between leaving active
 /// and its result being committed.
@@ -427,8 +431,10 @@ impl Projection {
     /// The restart set for a later replacement. `None` until history has been
     /// accepted, so the first snapshot's unfinished records are restarts.
     /// Once accepted, an execution this process runs leaves the set: the gap
-    /// after it stops being active is not a new restart.
-    /// `a_turn_this_process_runs_stays_running_after_it_stops_being_active`.
+    /// after it stops being active is not a new restart. The other restored
+    /// turns stay in the set.
+    /// `a_turn_this_process_runs_stays_running_after_it_stops_being_active`,
+    /// `running_one_restored_turn_leaves_the_other_unresolved`.
     fn continued_unfinished(&self, active: Option<&ExecutionId>) -> Option<HashSet<String>> {
         if !self.history_accepted {
             return None;
