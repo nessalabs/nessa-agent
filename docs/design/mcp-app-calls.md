@@ -853,7 +853,10 @@ App calls have 4 slots on each socket, and one mount holds at most 3 of them
 `mcp.updateModelContext` — is refused `temporarily_unavailable` before it
 takes a slot, so another mount can still use the lane. A refusal because the
 lane itself is full does not leave the mount at that cap
-(`a_lane_refusal_does_not_stick_to_the_mount`). A destructive call holds its
+(`a_lane_refusal_does_not_stick_to_the_mount`). The mount that is counted is
+the one dispatch accepts: a canonical conversation id and the app reference
+(`counted_mount`). A frame that does not name that is not charged to a mount.
+A destructive call holds its
 slot while it waits, so held calls can fill a socket's lane, but never the
 lanes `conversation.read` and `conversation.answer` use, and their responses
 have room of their own in the socket's response queue. `mcp.releaseApp` is a
