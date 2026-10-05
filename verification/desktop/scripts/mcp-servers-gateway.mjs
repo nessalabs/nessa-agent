@@ -487,28 +487,36 @@ const switchOf = (page, name) =>
  * row it is in, the form's first field, or the inspection's heading.
  */
 const focused = (page) =>
-  page.evaluate(() => {
-    const active = document.activeElement
-    if (!active || active === document.body) return { on: "body" }
-    const form = active.closest("[data-mcp-form]")
-    const firstField = form?.querySelector("input")
-    return {
-      on: active.getAttribute("data-mcp-action")
-        ? `${active.getAttribute("data-mcp-action")}`
-        : active === firstField
-          ? "first-field"
-          : active.matches("[data-mcp-inspection] h2")
-            ? "inspection-heading"
-            : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
-      row: active.closest("[data-mcp-server]")?.getAttribute("data-mcp-server") ?? null,
-      // The group of a name stored more than once.
-      group: active.closest("[data-mcp-group]")?.getAttribute("data-mcp-group") ?? null,
-      describedBy: active.getAttribute("aria-describedby")
-        ? (document.getElementById(active.getAttribute("aria-describedby"))
-            ?.textContent ?? null)
-        : null,
-    }
-  })
+  page.evaluate(
+    (sel) => {
+      const active = document.activeElement
+      if (!active || active === document.body) return { on: "body" }
+      const form = active.closest(sel.form)
+      const firstField = form?.querySelector("input")
+      return {
+        on: active.getAttribute("data-mcp-action")
+          ? `${active.getAttribute("data-mcp-action")}`
+          : active === firstField
+            ? "first-field"
+            : active.matches(sel.inspectionHeading)
+              ? "inspection-heading"
+              : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
+        row: active.closest(sel.row)?.getAttribute("data-mcp-server") ?? null,
+        // The group of a name stored more than once.
+        group: active.closest(sel.group)?.getAttribute("data-mcp-group") ?? null,
+        describedBy: active.getAttribute("aria-describedby")
+          ? (document.getElementById(active.getAttribute("aria-describedby"))
+              ?.textContent ?? null)
+          : null,
+      }
+    },
+    {
+      form: css.mcpForm,
+      inspectionHeading: css.mcpInspectionHeading,
+      row: css.mcpRow,
+      group: css.mcpAnyGroup,
+    },
+  )
 
 /**
  * `original` (config.json's bytes) with its stored servers replaced by
@@ -692,8 +700,12 @@ const checks = {
         .locator(`${css.mcpTool(DESTRUCTIVE)} ${css.mcpBadge("destructive")}`)
         .count(),
       cut: await panel.locator(css.mcpCut).count(),
-      tools: await panel.locator("[data-mcp-tool]").count(),
+      tools: await panel.locator(css.mcpAnyTool).count(),
     }
+    if (done && seen.tools === 0)
+      throw new CannotRun(
+        `the inspection is done but no tool is found (${css.mcpAnyTool}); update lib/selectors.mjs if it moved`,
+      )
     if (!running)
       failures.push("the inspection was not seen running within 1 s of the click")
     else if (!whileRunning.stillRunning)
@@ -786,18 +798,25 @@ const checks = {
     const toggle = row(page, SERVER).locator(css.mcpSwitch)
     // Whether the switch rested at any moment while its save was in flight,
     // and Inspect with it (U21: every control, while one request runs).
-    await toggle.evaluate((element) => {
-      const inspect = element
-        .closest("[data-mcp-server]")
-        .querySelector('[data-mcp-action="inspect"]')
-      window.__mcpSwitchRested = false
-      window.__mcpInspectRested = false
-      new MutationObserver(() => {
-        if (!element.disabled) return
-        window.__mcpSwitchRested = true
-        if (inspect.disabled) window.__mcpInspectRested = true
-      }).observe(element, { attributes: true })
-    })
+    const found = await toggle.evaluate(
+      (element, sel) => {
+        const inspect = element.closest(sel.row)?.querySelector(sel.inspect)
+        if (!inspect) return false
+        window.__mcpSwitchRested = false
+        window.__mcpInspectRested = false
+        new MutationObserver(() => {
+          if (!element.disabled) return
+          window.__mcpSwitchRested = true
+          if (inspect.disabled) window.__mcpInspectRested = true
+        }).observe(element, { attributes: true })
+        return true
+      },
+      { row: css.mcpRow, inspect: css.mcpAction("inspect") },
+    )
+    if (!found)
+      throw new CannotRun(
+        `no Inspect in ${SERVER}'s row (${css.mcpRow} ${css.mcpAction("inspect")}); update lib/selectors.mjs if it moved`,
+      )
     await toggle.click()
     const off = await waitFor(
       async () => (await switchOf(page, SERVER)).checked === "false",
@@ -955,9 +974,14 @@ const checks = {
   secret: async (page, stack, context) => {
     const failures = []
     const seen = {}
-    const variableOf = (scope) => scope.locator(`[data-mcp-variable="${VARIABLE}"]`)
+    const variableOf = (scope) => scope.locator(css.mcpVariableNamed(VARIABLE))
     await button(row(page, RENAMED), names.mcp.edit).click()
     let edit = form(page)
+    await need(
+      page,
+      `${css.mcpForm} ${css.mcpVariableNamed(VARIABLE)}`,
+      `${VARIABLE}'s row`,
+    )
     let variable = variableOf(edit)
     const field = variable.locator(css.mcpSecret)
     seen.field = await field.evaluate((element) => ({
@@ -1077,7 +1101,8 @@ const checks = {
     })
     seen.keepBefore = await shown()
     await button(edit, names.mcp.addVariable).click()
-    const added = edit.locator("[data-mcp-variable-key]").last()
+    await need(page, `${css.mcpForm} ${css.mcpVariableAdded}`, "the added variable's row")
+    const added = edit.locator(css.mcpVariableAdded).last()
     await added.getByLabel(names.mcp.variableName, { exact: true }).fill("MCP_TEST_ADDED")
     await added.locator(css.mcpSecret).fill("added")
     seen.keepAdded = await shown()
@@ -1301,7 +1326,9 @@ const checks = {
       removed,
       empty,
       inspection: failed
-        ? await page.locator("[data-mcp-inspection-status]").textContent()
+        ? await need(page, css.mcpInspectionStatus, "the inspection's status").then(() =>
+            page.locator(css.mcpInspectionStatus).textContent(),
+          )
         : await page.locator(css.mcpInspection).getAttribute("data-mcp-inspection"),
       requests: context.opened.sent.slice(before),
     }
@@ -1487,7 +1514,7 @@ const checks = {
       await add.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
       await addArgument(add, argument)
       await button(add, names.mcp.save).click()
-      const problem = add.locator(`${css.mcpProblem}[data-mcp-problem="form"]`)
+      const problem = add.locator(css.mcpProblemFor("form"))
       seen.problem = await waitFor(async () => await problem.textContent(), 10_000)
       // Long enough for a list the window should not send to have gone.
       await sleep(1500)
@@ -1783,14 +1810,15 @@ async function chartDrawn(page, title) {
     return { seen: { lifecycle }, failures }
   }
   const { app } = await appFrame(page, "inline", 30_000)
-  await app.waitForSelector("#chart", { timeout: 20_000 }).catch(() => {})
+  await app.waitForSelector(css.chartApp, { timeout: 20_000 }).catch(() => {})
   await settled(page)
   const frames = (await page.$$(css.appFrameIn("inline"))).length
   const mounts = oneMount(frames)
   const seen = {
     frames,
     chart: await app.evaluate(
-      () => document.querySelector("#chart")?.textContent ?? null,
+      (chart) => document.querySelector(chart)?.textContent ?? null,
+      css.chartApp,
     ),
   }
   if (mounts) failures.push(mounts)

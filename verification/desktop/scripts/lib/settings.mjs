@@ -5,6 +5,7 @@
  * inspection open, over a real gateway) hold the same fit contract.
  */
 import { need } from "./browser.mjs"
+import { CannotRun } from "./cli.mjs"
 import { css, keys, names } from "./selectors.mjs"
 import { frames, settled } from "./workspace.mjs"
 
@@ -38,6 +39,24 @@ export async function integrationsFit(page, widths) {
     const measured = await page.evaluate(
       (sel) => {
         const settings = document.querySelector(sel.settings)
+        const panel = document.querySelector(sel.panel)
+        const cards = panel?.querySelectorAll(`${sel.card}, ${sel.groupHeading}`) ?? []
+        const scrollers = settings?.querySelectorAll(sel.scrollers) ?? []
+        // A selector that finds nothing measures nothing: say so, not "fits".
+        // Each part of a list on its own, so one renamed class is not hidden
+        // by the others still matching.
+        const none = (scope, list) =>
+          list
+            .split(",")
+            .map((each) => each.trim())
+            .filter((each) => !scope?.querySelector(each))
+        const missing = [
+          !settings && sel.settings,
+          !panel && sel.panel,
+          ...none(panel, `${sel.card}, ${sel.groupHeading}`),
+          ...none(settings, sel.scrollers),
+        ].filter(Boolean)
+        if (missing.length > 0) return { missing }
         const sidebar =
           parseFloat(
             getComputedStyle(settings).getPropertyValue("--settings-sidebar-w"),
@@ -51,15 +70,11 @@ export async function integrationsFit(page, widths) {
         const box = settings.getBoundingClientRect()
         const sideways = Math.max(
           Math.round(box.right - innerWidth),
-          ...[settings, ...settings.querySelectorAll(sel.scrollers)].map(
-            (each) => each.scrollWidth - each.clientWidth,
-          ),
+          ...[settings, ...scrollers].map((each) => each.scrollWidth - each.clientWidth),
         )
         const scroller = document.scrollingElement
         const outside = []
-        for (const card of document.querySelectorAll(
-          `${sel.panel} .settings-card, ${sel.panel} .settings-group > h2`,
-        )) {
+        for (const card of cards) {
           const box = card.getBoundingClientRect()
           for (const part of card.querySelectorAll("*")) {
             const r = part.getBoundingClientRect()
@@ -71,12 +86,11 @@ export async function integrationsFit(page, widths) {
               )
           }
         }
-        const panel = document.querySelector(sel.panel)
         // Clipped: what a box holds is wider than it shows — a scroller's
         // content, or a field's value (an input never wraps, so a value
         // wider than its field is cut off where it is read).
         const field = (each) => each.tagName === "TEXTAREA" || each.tagName === "INPUT"
-        const overflowing = [...(panel?.querySelectorAll("*") ?? [])]
+        const overflowing = [...panel.querySelectorAll("*")]
           .filter((each) => each.scrollWidth > each.clientWidth + 1)
           .filter((each) => field(each) || getComputedStyle(each).overflowX !== "visible")
           .map(
@@ -111,9 +125,15 @@ export async function integrationsFit(page, widths) {
         row: css.mcpRow,
         text: css.mcpRowText,
         actions: css.mcpRowActions,
-        scrollers: ".settings-content, .settings-scroll, .settings-panel",
+        card: css.settingsCard,
+        groupHeading: css.settingsGroupHeading,
+        scrollers: css.settingsScrollers,
       },
     )
+    if (measured.missing)
+      throw new CannotRun(
+        `${width}px: found nothing to measure (${measured.missing.join("; ")}). The UI may be mid-change; update lib/selectors.mjs if it moved.`,
+      )
     seen.push({ width, ...measured })
     if (measured.sideways > 0)
       failures.push(`${width}px: Settings scrolls ${measured.sideways}px sideways`)
