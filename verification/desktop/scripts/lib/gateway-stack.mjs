@@ -51,6 +51,25 @@ export function panelCredential(gateway) {
   return readFileSync(join(gateway.directory, String(found[0])), "utf8").trim()
 }
 
+/**
+ * The stack plus the panel credential. Anything thrown while that credential
+ * is read, including by `fields` when it is a function, closes the stack
+ * first: the caller has no target to close, and the gateway would stay up.
+ */
+export async function panelTarget(stack, fields = {}) {
+  try {
+    const extra = typeof fields === "function" ? fields() : fields
+    return {
+      ...stack,
+      ...extra,
+      credential: panelCredential(stack.gateway),
+    }
+  } catch (error) {
+    await stack.close()
+    throw error
+  }
+}
+
 const recorder = join(repoRoot, "scripts/mcp-test-server/acp-recorder.mjs")
 
 /** `argv` with `acp-recorder.mjs` writing `logPath` in front of it. */

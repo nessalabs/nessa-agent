@@ -30,7 +30,7 @@ import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import {
   agentTurn,
-  panelCredential,
+  panelTarget,
   startGatewayStack,
   waitFor,
 } from "./lib/gateway-stack.mjs"
@@ -137,12 +137,10 @@ async function startStack(options) {
     scenario: WINDOW_SCENARIO,
     evidence: options.evidence,
   })
-  return {
-    ...stack,
+  return panelTarget(stack, () => ({
     script,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
-    credential: panelCredential(stack.gateway),
-  }
+  }))
 }
 
 /**

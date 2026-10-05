@@ -4,13 +4,13 @@
  * both processes with the recorder. No gateway is started.
  */
 import { strict as assert } from "node:assert"
-import { mkdtempSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 
 import { TEXT_REPLY_SCENARIO } from "../../../../scripts/mcp-test-server/scenarios.mjs"
-import { scriptedLaunch } from "./gateway-stack.mjs"
+import { panelTarget, scriptedLaunch } from "./gateway-stack.mjs"
 
 test("a tool launch is the recorded agent, and a scenario launch is not", () => {
   const tool = scriptedLaunch("claude", { tool: "review_rows" })
@@ -39,4 +39,59 @@ test("evidence wraps the agent and the MCP server with the recorder", () => {
   assert.equal(launch.mcp.args.at(-1).endsWith("server.mjs"), true)
   assert.equal(readFileSync(join(directory, "acp.jsonl"), "utf8"), "")
   assert.equal(readFileSync(join(directory, "mcp.jsonl"), "utf8"), "")
+})
+
+/** A stack whose only live resource is `directory`, and whether `close` ran. */
+function credentialStack(directory) {
+  let closed = false
+  return {
+    stack: {
+      gateway: { directory },
+      close: async () => {
+        closed = true
+      },
+    },
+    closed: () => closed,
+  }
+}
+
+test("a missing panel credential closes the stack before it escapes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "panel-target-"))
+  const { stack, closed } = credentialStack(directory)
+  await assert.rejects(() => panelTarget(stack), /panel credentials/)
+  assert.equal(closed(), true)
+  rmSync(directory, { recursive: true, force: true })
+})
+
+test("a panel credential is returned and the stack stays open", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "panel-target-"))
+  mkdirSync(join(directory, "auth", "surfaces"), { recursive: true })
+  writeFileSync(join(directory, "auth", "surfaces", "nessa-panel.token"), "secret\n")
+  const { stack, closed } = credentialStack(directory)
+  const target = await panelTarget(stack, () => ({ endpoint: "ws://127.0.0.1:1" }))
+  assert.equal(target.credential, "secret")
+  assert.equal(target.endpoint, "ws://127.0.0.1:1")
+  assert.equal(target.gateway, stack.gateway)
+  assert.equal(closed(), false)
+  const plain = await panelTarget(stack, { marker: "kept" })
+  assert.equal(plain.credential, "secret")
+  assert.equal(plain.marker, "kept")
+  assert.equal(closed(), false)
+  rmSync(directory, { recursive: true, force: true })
+})
+
+test("a throw while building the target closes the stack", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "panel-target-"))
+  mkdirSync(join(directory, "auth", "surfaces"), { recursive: true })
+  writeFileSync(join(directory, "auth", "surfaces", "nessa-panel.token"), "secret\n")
+  const { stack, closed } = credentialStack(directory)
+  await assert.rejects(
+    () =>
+      panelTarget(stack, () => {
+        throw new Error("endpoint")
+      }),
+    /endpoint/,
+  )
+  assert.equal(closed(), true)
+  rmSync(directory, { recursive: true, force: true })
 })
