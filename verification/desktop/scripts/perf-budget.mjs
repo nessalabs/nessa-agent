@@ -16,8 +16,8 @@ import {
   budgetMs,
   calibrate,
   calibrationFrame,
+  interactionBudget,
   measure,
-  median,
   observers,
   throttle,
 } from "./lib/perf.mjs"
@@ -281,11 +281,12 @@ run unthrottled and throttled (the ratio must approach the rate), and one
 frame of known cost (120 ms) must be measured at least that long and
 attributed by a Long Animation Frame.
 
-The table on stderr: max and median of each run's longest frame, and how
-many frames over ${budgetMs} ms across runs. The JSON (stdout or --out) keeps,
-for every over-budget frame, the Long Animation Frame that covers it:
-blocking time, style-and-layout time, and its longest scripts with their
-forced layout.`,
+The table on stderr rounds max, median, and each run's longest frame for
+display. The row fails when the unrounded maximum exceeds ${budgetMs} ms, so
+a frame of 50.1 ms fails even when that table shows 50. The JSON maximum is
+the unrounded one. It also keeps, for every over-budget frame, the Long
+Animation Frame that covers it: blocking time, style-and-layout time, and
+its longest scripts with their forced layout.`,
 }
 
 await main(meta, async ({ options, rep, url, mode }) => {
@@ -363,21 +364,20 @@ await main(meta, async ({ options, rep, url, mode }) => {
               await opened.close()
             }
           }
-          const maxes = detail.map((d) => d.maxFrame)
-          const over = detail.reduce((n, d) => n + d.over, 0)
+          const budget = interactionBudget(detail)
           const row = {
             layout,
             name,
-            max: Math.max(...maxes),
-            median: median(maxes),
-            over50: over,
-            runs: maxes.join(" "),
+            max: budget.presentedMax,
+            median: budget.median,
+            over50: budget.over50,
+            runs: budget.presentedRuns,
           }
           rows.push(row)
           const failures = []
-          if (row.max > budgetMs)
+          if (budget.exceeded)
             failures.push(
-              `longest frame ${row.max} ms > ${budgetMs} ms (runs: ${row.runs})`,
+              `longest frame ${budget.maxFrame} ms > ${budgetMs} ms (runs: ${row.runs})`,
             )
           for (const d of detail)
             if (d.did) failures.push(`did not do what it is named for: ${d.did}`)
@@ -387,9 +387,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
               "note: no Long Animation Frame timing in this browser; attribution is empty",
             )
           return {
-            max: row.max,
+            max: budget.maxFrame,
             median: row.median,
-            over50: over,
+            over50: budget.over50,
             runs: detail,
             failures,
           }

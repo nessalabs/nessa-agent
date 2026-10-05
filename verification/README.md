@@ -61,6 +61,7 @@ verification/
         workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
+        perf.test.mjs       the frame budget's unrounded decision, and the LoAF sample clock (#369)
         run.mjs             the main every check shares
         apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
         apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
