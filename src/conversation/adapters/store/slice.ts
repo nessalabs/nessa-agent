@@ -502,7 +502,10 @@ export const controlConversation = createAsyncThunk<
 function capturedTurn(turns: readonly Turn[]): string | undefined {
   const running = [...turns]
     .reverse()
-    .find((turn) => turn.from === "assistant" && turn.status === "running" && turn.executionId)
+    .find(
+      (turn) =>
+        turn.from === "assistant" && turn.status === "running" && turn.executionId,
+    )
   if (running?.executionId) return running.executionId
   for (const turn of [...turns].reverse()) {
     if (turn.from !== "user" || !turn.executionId) continue

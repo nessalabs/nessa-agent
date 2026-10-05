@@ -116,7 +116,12 @@ export function conversationCommandReceipt(
     throw new Error("Conversation receipt belongs to another action")
   oneOf(text(item, "stage"), ["accepted", "attempted", "ready", "settled"])
   if (item.outcome !== undefined)
-    oneOf(text(item, "outcome"), ["dispatched", "withdrawn", "cancelled", "already_final"])
+    oneOf(text(item, "outcome"), [
+      "dispatched",
+      "withdrawn",
+      "cancelled",
+      "already_final",
+    ])
   return item as { requestId: string; stage: string; outcome?: string }
 }
 export function conversationMutation(

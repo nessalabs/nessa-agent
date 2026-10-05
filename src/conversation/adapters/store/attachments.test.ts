@@ -421,7 +421,9 @@ it("keeps a draft's stored images when Stop names the running turn", async () =>
   const stop = vi.fn(async () => {})
   const close = vi.fn(async () => {})
   const context = await readyToSend({ stop, close })
-  await context.store.dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
+  await context.store.dispatch(
+    sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }),
+  )
   const turn = context.current().turns.at(-1)
   await attachStored(context.store, image("later"))
   const file = context.draft()[0]!
@@ -429,7 +431,10 @@ it("keeps a draft's stored images when Stop names the running turn", async () =>
   await context.store.dispatch(stopGenerating({ conversationId: "c0" }))
   expect(close).not.toHaveBeenCalled()
   if (!turn || turn.from !== "user" || !turn.executionId) throw new Error("missing turn")
-  expect(stop).toHaveBeenCalledWith(context.current().serverConversationId, turn.executionId)
+  expect(stop).toHaveBeenCalledWith(
+    context.current().serverConversationId,
+    turn.executionId,
+  )
   expect(context.draft()).toEqual([file])
 })
 
@@ -437,7 +442,9 @@ it("keeps stored images when Stop goes unanswered", async () => {
   const context = await readyToSend({
     stop: vi.fn(() => Promise.reject(new Error("connection lost"))),
   })
-  await context.store.dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
+  await context.store.dispatch(
+    sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }),
+  )
   await attachStored(context.store, image("later"))
   await context.store
     .dispatch(stopGenerating({ conversationId: "c0" }))
