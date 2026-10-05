@@ -88,7 +88,6 @@ import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
-  type ApprovalScope,
   type WorkspaceSource,
   type WorkspaceUpdate,
 } from "../../application/ports"
