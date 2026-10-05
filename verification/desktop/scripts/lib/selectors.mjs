@@ -181,6 +181,18 @@ export const css = {
   // Settings › Connections › Integrations: the gateway's MCP servers
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
+  // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
+  linkedOn: '[data-linked="on"]',
+  linkedOff: '[data-linked="off"]',
+  linkedRefused: '[data-linked="refused"]',
+  linkedPending: '[data-linked="pending"]',
+  linkedAction: (action) => `[data-linked-action="${action}"]`,
+  linkedNotice: "[data-linked-notice]",
+  pairingCode: '[data-slot="pairing-code"]',
+  signalOrb: '[data-slot="signal-orb"]',
+  qrOrb: '[data-slot="qr-orb"]',
+  fingerprint: '[data-slot="key-fingerprint"]',
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
   mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
@@ -361,6 +373,7 @@ export const names = {
   /** Settings' category and tab holding the MCP servers. */
   connections: "Connections",
   integrations: "Integrations",
+  linkedDevices: "Linked devices",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
   mcp: {
     add: "Add server…",

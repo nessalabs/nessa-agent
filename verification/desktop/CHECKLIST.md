@@ -513,6 +513,22 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 
 _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds below a page's 420px).
 
+### Linked devices
+
+#462, over the owner pairing routes. The code, fingerprint and orbs are the
+UI kit's; this window wires them to `pairing.*` and owns the sentences. The
+phone's scanner is not this screen.
+
+- [ ] **With no gateway, Linked devices is pending.** _Check:_ unit test
+  `linked-devices-tab.test.tsx`; `linked-devices.mjs` (`pending`).
+- [ ] **Linking off, refused, pair, approve, revoke, and an expired code**
+  are said in plain words. The switch does not pretend to write config.
+  A wire code is not on the page. The code, both orbs and the actions sit
+  inside the settings panel, and Cancel takes focus once it can be used.
+  _Check:_ `linked-devices.mjs` (Chromium and WebKit). Rows L1–L21:
+  `linked-devices.test.ts`, `linked-devices-gateway.test.ts`,
+  `device-key.test.ts`.
+
 - [ ] **Settings opens and leaves**; the window under it is inert while open.
   _Check:_ `smoke.mjs` (`settings`); inertness by hand (click under it).
 - [ ] **Its sidebar folds for room below a 420px page.** _Check:_
