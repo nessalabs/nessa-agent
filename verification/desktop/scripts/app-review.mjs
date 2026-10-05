@@ -275,7 +275,9 @@ const checks = {
         return { failures: [notDrawn, ...opened.errors] }
       const failures = []
       const waiting = await snapshot(page)
-      await page.keyboard.press(keys.overview)
+      // Command is Meta on a Mac and Control elsewhere (`commandKey`).
+      const mac = await page.evaluate(() => /Mac/.test(navigator.userAgent))
+      await page.keyboard.press(mac ? keys.overview : "Control+Digit0")
       await need(page, css.overview, "the Agents overview")
       const name = await page
         .locator(`${css.overviewItem}[data-overview-item="${appReview.sessionId}"]`)
