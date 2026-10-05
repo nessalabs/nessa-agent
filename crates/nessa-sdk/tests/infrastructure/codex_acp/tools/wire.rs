@@ -686,7 +686,7 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
         for frame in frames.as_array().unwrap() {
             let update = tool_call(frame, &mut tools).unwrap();
             // One call's frames are updates to one call: the gateway draws
-            // them as one part (`nessa-server` `tool_parts.rs`).
+            // them as one part (`nessa-protocol` `tool_parts.rs`).
             assert_eq!(update.id().as_str(), frames[0]["toolCallId"], "{tool}");
             if let Some(identity) = update.mcp_tool() {
                 named.push((identity.server().to_owned(), identity.tool().to_owned()));
@@ -737,11 +737,11 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
     assert_eq!(content("show_chart")[0], text("Chart of two rows."));
 }
 
-/// A call Codex ran without asking (#500): `review_rows` declares
-/// `readOnlyHint`, so no permission was requested, and codex-acp 1.12.0 sends
-/// its bare `in_progress` update only after an accepted one
-/// (`publishAcceptedMcpToolApproval`). Two frames, as recorded live in the
-/// fixture's `toolSearchTurn`.
+/// A call Codex ran without asking (#500), as recorded live in the fixture's
+/// `toolSearchTurn`: `review_rows` declares `readOnlyHint`, the recording has
+/// no permission request for it, and its two frames have no bare
+/// `in_progress` update between them, which each permitted call in `calls`
+/// has.
 #[test]
 fn a_call_codex_ran_without_asking_is_two_frames_naming_that_servers_tool() {
     let recorded: Value =
@@ -756,7 +756,6 @@ fn a_call_codex_ran_without_asking_is_two_frames_naming_that_servers_tool() {
         assert_eq!(update.id().as_str(), frames[0]["toolCallId"]);
         updates.push(update);
     }
-    // Named from `rawInput`, not the dotted title.
     for update in &updates {
         let identity = update.mcp_tool().unwrap();
         assert_eq!(

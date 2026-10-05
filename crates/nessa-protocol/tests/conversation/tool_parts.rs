@@ -126,10 +126,11 @@ fn a_recorded_codex_call_run_without_asking_is_one_tool_part() {
     let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();
     assert_eq!(frames.len(), 2);
     let id = frames[0]["toolCallId"].as_str().unwrap();
-    let mut events: Vec<_> = frames
-        .iter()
-        .map(|frame| update(id, status(frame)))
-        .collect();
+    let mut events = Vec::new();
+    for frame in frames {
+        assert_eq!(frame["toolCallId"], id);
+        events.push(update(id, status(frame)));
+    }
     events.push(text("DONE"));
     let view = committed_tool_view(&events);
     assert_eq!(tool_parts(&view, 0), vec![(id.to_owned(), 0)]);
