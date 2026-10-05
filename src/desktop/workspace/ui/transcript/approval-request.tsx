@@ -1,8 +1,9 @@
 /**
  * An approval's command and its answers, drawn once for every card that asks
  * — the pane's (`approval-card.tsx`) and the Agents overview's peek — and
- * fitted to the card's width by container queries (`approval-card.css`), so
- * no button is ever left alone on a row.
+ * fitted to the card's width by container queries (`approval-card.css`).
+ * A label wraps inside its button, and options that do not fit the row
+ * continue on the next, so a long or numerous review stays inside the card.
  *
  * The buttons are the review's options (`Approval.options`), each in the
  * review's own words. Deny stays at the left; what allows sits at the right.
@@ -143,15 +144,15 @@ export function ApprovalActions({
   options: readonly ApprovalOption[]
   disabled: boolean
   /** `at`: when the answer was made (the event's `timeStamp`, on `performance.now()`'s clock). */
-  onAnswer: (choice: ApprovalChoice, at: number) => void
+  onAnswer: (option: ApprovalOption, at: number) => void
   /** Each answer's tooltip, where the card offers one (its shortcut, say). */
   tips?: Partial<Record<ApprovalChoice, TooltipAttributes>>
 }) {
   const denies = options.filter((option) => option.choice === "deny")
   const always = options.filter((option) => option.choice === "always")
   const once = options.filter((option) => option.choice === "once")
-  const answer = (choice: ApprovalChoice) => (event: { timeStamp: number }) =>
-    onAnswer(choice, event.timeStamp)
+  const answer = (option: ApprovalOption) => (event: { timeStamp: number }) =>
+    onAnswer(option, event.timeStamp)
   return (
     <div
       className="workspace-approval-answers"
@@ -171,7 +172,7 @@ export function ApprovalActions({
             data-answer={option.choice}
             disabled={disabled}
             {...tips.deny}
-            onClick={answer(option.choice)}
+            onClick={answer(option)}
           >
             {option.label}
           </button>
@@ -187,7 +188,7 @@ export function ApprovalActions({
                 data-answer={option.choice}
                 disabled={disabled}
                 {...tips.always}
-                onClick={answer(option.choice)}
+                onClick={answer(option)}
               >
                 <span className="workspace-approval-long" aria-hidden="true">
                   {option.label}
@@ -206,7 +207,7 @@ export function ApprovalActions({
                 data-primary
                 disabled={disabled}
                 {...tips.once}
-                onClick={answer(option.choice)}
+                onClick={answer(option)}
               >
                 {option.label}
               </button>
@@ -226,7 +227,7 @@ export function ApprovalActions({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   {always.map((option) => (
-                    <MenuItem key={option.id} onSelect={answer(option.choice)}>
+                    <MenuItem key={option.id} onSelect={answer(option)}>
                       {option.label}
                     </MenuItem>
                   ))}

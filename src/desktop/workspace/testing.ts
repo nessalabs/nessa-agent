@@ -196,12 +196,12 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           throw new WorkspaceSourceError("unknown-session")
       }),
     // Like any source: the conversation that no longer asks reaches subscribers first.
-    approve: (sessionId, approvalId, scope, initiator) =>
-      answer("approve", [sessionId, approvalId, scope, initiator], () =>
+    approve: (sessionId, approvalId, scope, initiator, optionId) =>
+      answer("approve", [sessionId, approvalId, scope, initiator, optionId], () =>
         answered(sessionId, approvalId),
       ),
-    deny: (sessionId, approvalId, initiator) =>
-      answer("deny", [sessionId, approvalId, initiator], () =>
+    deny: (sessionId, approvalId, initiator, optionId) =>
+      answer("deny", [sessionId, approvalId, initiator, optionId], () =>
         answered(sessionId, approvalId),
       ),
     // Like any source: the change reaches subscribers before the call resolves.

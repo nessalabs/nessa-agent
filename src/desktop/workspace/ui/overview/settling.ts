@@ -6,9 +6,8 @@
  * (`approve`, `deny`), and what the source does with it arrives as the
  * workspace's own updates.
  */
-import type { Approval } from "../../model/transcript"
+import type { Approval, ApprovalChoice, ApprovalOption } from "../../model/transcript"
 import type { SessionSummary } from "../../model/workspace-index"
-import type { ApprovalChoice } from "../../model/transcript"
 
 export interface Settling {
   readonly sessionId: string
@@ -35,6 +34,6 @@ export const answeredLabels: Readonly<Record<ApprovalChoice, string>> = {
 export type OnAnswer = (
   summary: SessionSummary,
   approval: Approval,
-  choice: ApprovalChoice,
+  option: ApprovalOption,
   at: number,
 ) => void

@@ -183,14 +183,14 @@ describe("the in-memory source", () => {
     })
     const source = inMemorySource(clock.schedule, seed)
     await expect(
-      source.approve("notarize", held.approval.id, "always", "person"),
+      source.approve("notarize", held.approval.id, "always", "person", "always"),
     ).rejects.toMatchObject({ reason: "not-supported" })
     expect(source.audit().at(-1)).toMatchObject({
       action: "allow-always",
       outcome: { refused: "not-supported" },
     })
     // What it does offer is still taken.
-    await source.approve("notarize", held.approval.id, "once", "person")
+    await source.approve("notarize", held.approval.id, "once", "person", "once")
     expect((await source.transcript("notarize")).approval).toBeNull()
   })
 
@@ -204,14 +204,14 @@ describe("the in-memory source", () => {
       index.sessions.filter((s) => s.status === "idle").map(() => undefined),
     )
     const asked = await source.transcript("retry-budget")
-    await source.approve("retry-budget", asked.approval!.id, "once", "person")
+    await source.approve("retry-budget", asked.approval!.id, "once", "person", "once")
     const running = (await source.index()).sessions.find((s) => s.id === "retry-budget")
     expect(running?.now).toBe("Running cargo test, as you allowed")
     advance(scriptTiming.commandMs)
     const rested = (await source.index()).sessions.find((s) => s.id === "retry-budget")
     expect(rested?.now).toBeUndefined()
     const waiting = await source.transcript("notarize")
-    await source.deny("notarize", waiting.approval!.id, "person")
+    await source.deny("notarize", waiting.approval!.id, "person", "deny")
     const denied = (await source.index()).sessions.find((s) => s.id === "notarize")
     expect(denied?.now).toBeUndefined()
   })
@@ -239,7 +239,7 @@ describe("the in-memory source", () => {
   it("runs an approved command, or lets it go when denied", async () => {
     const { source, updates, advance } = started()
     const before = await source.transcript("retry-budget")
-    await source.approve("retry-budget", before.approval!.id, "once", "person")
+    await source.approve("retry-budget", before.approval!.id, "once", "person", "once")
     expect(updates.at(-1)).toMatchObject({
       kind: "transcript",
       transcript: { approval: null },
@@ -248,7 +248,7 @@ describe("the in-memory source", () => {
     const after = await source.transcript("retry-budget")
     expect(after.messages.at(-1)?.parts[0]).toMatchObject({ kind: "step", label: "Ran" })
     const waiting = await source.transcript("notarize")
-    await source.deny("notarize", waiting.approval!.id, "agent")
+    await source.deny("notarize", waiting.approval!.id, "agent", "deny")
     expect(messageText((await source.transcript("notarize")).messages.at(-1)!)).toMatch(
       /won’t run it/,
     )
@@ -274,7 +274,7 @@ describe("the in-memory source", () => {
   it("refuses an answer to an approval that is not waiting, and records it all the same", async () => {
     const { source } = started()
     await expect(
-      source.approve("split-panes", "nothing", "once", "person"),
+      source.approve("split-panes", "nothing", "once", "person", "once"),
     ).rejects.toMatchObject({
       reason: "not-waiting",
     })
@@ -404,7 +404,7 @@ describe("the in-memory source", () => {
     advance(60_000)
     expect((await source.transcript("retry-budget")).approval).toBeNull()
     await expect(
-      source.approve("retry-budget", asked?.id ?? "", "once", "person"),
+      source.approve("retry-budget", asked?.id ?? "", "once", "person", "once"),
     ).rejects.toThrow(WorkspaceSourceError)
   })
 
@@ -494,7 +494,7 @@ describe("the in-memory source", () => {
     const { source } = started()
     const first = source.audit()
     source.dispose()
-    await expect(source.deny("notarize", "any", "agent")).rejects.toMatchObject({
+    await expect(source.deny("notarize", "any", "agent", "deny")).rejects.toMatchObject({
       reason: "unavailable",
     })
     expect(first).toEqual([])

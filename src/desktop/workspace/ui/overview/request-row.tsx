@@ -22,7 +22,7 @@ import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
-import { offersChoice } from "../../model/transcript"
+import { offersChoice, optionOf } from "../../model/transcript"
 import { approvalAsker } from "../transcript/approval-request"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
@@ -134,9 +134,9 @@ export const RequestRow = memo(function RequestRow({
     if (command !== "once" && command !== "always" && command !== "deny") return
     event.preventDefault()
     event.stopPropagation()
-    // A chord answers only an answer this review offers.
-    if (answerable && offersChoice(approval, command))
-      onAnswer(summary, approval, command, event.timeStamp)
+    // A chord names a choice, so it answers the first option of that choice.
+    const chosen = optionOf(approval, command)
+    if (answerable && chosen) onAnswer(summary, approval, chosen, event.timeStamp)
   }
 
   // A click peeks at the session, a double-click opens it; the buttons answer.
@@ -215,8 +215,7 @@ export const RequestRow = memo(function RequestRow({
                     shortcut: labelOf(overviewKeys, "deny"),
                   })}
                   onClick={(event) => {
-                    if (answerable)
-                      onAnswer(summary, approval, option.choice, event.timeStamp)
+                    if (answerable) onAnswer(summary, approval, option, event.timeStamp)
                   }}
                 >
                   {option.label}
@@ -239,11 +238,11 @@ export const RequestRow = memo(function RequestRow({
                   )}
                   onClick={(event) => {
                     if (!answerable) return
-                    const choice =
+                    const chosen =
                       foldedAlways && option === onceOptions[0] && event.altKey
-                        ? "always"
-                        : option.choice
-                    onAnswer(summary, approval, choice, event.timeStamp)
+                        ? foldedAlways
+                        : option
+                    onAnswer(summary, approval, chosen, event.timeStamp)
                   }}
                 >
                   <span className="agents-request-once">{option.label}</span>
@@ -267,8 +266,7 @@ export const RequestRow = memo(function RequestRow({
                     shortcut: labelOf(overviewKeys, "always"),
                   })}
                   onClick={(event) => {
-                    if (answerable)
-                      onAnswer(summary, approval, option.choice, event.timeStamp)
+                    if (answerable) onAnswer(summary, approval, option, event.timeStamp)
                   }}
                 >
                   {option.label}

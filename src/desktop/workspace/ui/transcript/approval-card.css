@@ -3,6 +3,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
   padding: 16px;
   border-radius: var(--desktop-radius-lg);
   background:
@@ -109,8 +111,9 @@
 }
 
 /*
- * The answers (`approval-request.tsx`), arranged by the width they have, so
- * no button is ever left alone on a row. When the review also offers always:
+ * The answers (`approval-request.tsx`), arranged by the width they have.
+ * A label wraps inside its button, and options that do not fit continue on
+ * the next line. When the review also offers always:
  * wide, Deny at the left and the two ways to allow at the right; narrower,
  * one row at the right with "Always"; narrowest, the once answer across the
  * width with Always in its menu, and Deny, quiet, across the width beneath.
@@ -118,20 +121,28 @@
  */
 .workspace-approval-answers {
   container: approval-answers / inline-size;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-approval-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   -webkit-user-select: none;
   user-select: none;
 }
 
 .workspace-approval-allow {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-approval-short,
@@ -143,6 +154,33 @@
   width: 14px;
   height: 14px;
   stroke-width: 2;
+}
+
+/*
+ * A provider label may be 2,048 characters, and a review may offer 64 of
+ * them. The pill's own rule is nowrap and flex none, which would run past
+ * the card; these wrap inside the button, and options that do not fit the
+ * row continue on the next. The menu chevron stays a fixed control.
+ */
+.workspace-approval-actions .workspace-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  padding: 4px 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.workspace-approval-actions .workspace-approval-more {
+  flex: none;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 @container approval-answers (width < 380px) {

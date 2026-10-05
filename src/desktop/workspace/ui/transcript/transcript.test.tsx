@@ -333,7 +333,30 @@ describe("a transcript", () => {
     })
     expect(buttons().every(([, disabled]) => disabled)).toBe(true)
     expect(source.calls.filter((call) => call[0] === "approve")).toEqual([
-      ["approve", "b", "ap", "once", "person"],
+      ["approve", "b", "ap", "once", "person", "once"],
+    ])
+  })
+
+  it("answers the clicked option when two allow the same way", async () => {
+    const source = fakeSource()
+    await shown(source, {
+      ...conversation,
+      approval: {
+        ...conversation.approval,
+        options: [
+          { id: "ship", label: "Ship it", choice: "once" },
+          { id: "run", label: "Run it", choice: "once" },
+        ],
+      },
+    })
+    const run = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Run it",
+    )
+    await act(async () => {
+      run?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "approve")).toEqual([
+      ["approve", "b", "ap", "once", "person", "run"],
     ])
   })
 
@@ -388,7 +411,7 @@ describe("a transcript", () => {
     })
     expect(
       source.calls.filter((call) => call[0] === "approve" || call[0] === "deny"),
-    ).toEqual([["approve", "b", "app-ap", "once", "person"]])
+    ).toEqual([["approve", "b", "app-ap", "once", "person", "allow"]])
   })
 
   it("asks again, saying why, when an answer does not reach the agent", async () => {

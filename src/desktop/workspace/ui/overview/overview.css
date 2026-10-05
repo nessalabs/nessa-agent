@@ -388,7 +388,7 @@ html:not(.dark) .agents-row {
 
 .agents-request {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, auto);
   align-items: center;
   gap: 12px;
   padding: 11px 14px;
@@ -456,6 +456,8 @@ html:not(.dark) .agents-request {
   align-self: stretch;
   align-items: center;
   justify-items: end;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .agents-request-end > * {
@@ -472,7 +474,11 @@ html:not(.dark) .agents-request {
 
 .agents-request-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
   opacity: 0;
   transform: translateX(4px);
   pointer-events: none;
@@ -491,8 +497,15 @@ html:not(.dark) .agents-request {
 }
 
 .agents-request-button {
-  height: 26px;
-  padding: 0 11px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 26px;
+  padding: 4px 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .agents-request-button:not([data-primary]) {

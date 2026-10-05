@@ -221,7 +221,8 @@ export function AgentsOverview({
   )
 
   const answer = useCallback<OnAnswer>(
-    (summary, approval, choice, at) => {
+    (summary, approval, option, at) => {
+      const choice = option.choice
       const { glance, settling } = latest.current
       if (settling.some((entry) => entry.sessionId === summary.id)) return
       const next = afterAnswer(
@@ -256,12 +257,18 @@ export function AgentsOverview({
       }
       const asked =
         choice === "deny"
-          ? deny({ sessionId: summary.id, approvalId: approval.id, initiator: "person" })
+          ? deny({
+              sessionId: summary.id,
+              approvalId: approval.id,
+              initiator: "person",
+              optionId: option.id,
+            })
           : approve({
               sessionId: summary.id,
               approvalId: approval.id,
               scope: choice,
               initiator: "person",
+              optionId: option.id,
             })
       void dispatch(asked).then((outcome: AnswerOutcome) => {
         // Refused, not confirmed, already on its way from a pane, or no longer

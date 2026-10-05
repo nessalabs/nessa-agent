@@ -259,6 +259,32 @@ const checks = {
               })
           }
         }
+        // A provider label may be 2,048 characters. It wraps inside the button
+        // and stays inside the card; a 64-option harness is more than this check.
+        if (!long) {
+          const bounded = await page.evaluate((sel) => {
+            const element = document.querySelector(sel.card)
+            const button = element?.querySelector("button[data-answer]")
+            if (!element || !button) return null
+            button.textContent = "x".repeat(2048)
+            const style = getComputedStyle(button)
+            const buttonBox = button.getBoundingClientRect()
+            const cardBox = element.getBoundingClientRect()
+            return {
+              wraps: style.whiteSpace !== "nowrap",
+              inside:
+                buttonBox.right <= cardBox.right + 1 &&
+                element.scrollWidth <= element.clientWidth + 1,
+            }
+          }, card)
+          if (!bounded) failures.push("the card has no answer button to bound")
+          else {
+            if (!bounded.wraps)
+              failures.push("an answer button does not wrap a long label")
+            if (!bounded.inside)
+              failures.push("a 2048-character label overflows the card")
+          }
+        }
       } finally {
         failures.push(...opened.errors)
         await opened.close()

@@ -91,6 +91,18 @@ export function offersChoice(approval: Approval, choice: ApprovalChoice): boolea
   return approval.options.some((option) => option.choice === choice)
 }
 
+/**
+ * The first option of `choice`. A chord names a choice, not a button, so it
+ * answers this one. A click answers the option on the button, which may be
+ * a later one of the same choice.
+ */
+export function optionOf(
+  approval: Approval,
+  choice: ApprovalChoice,
+): ApprovalOption | undefined {
+  return approval.options.find((option) => option.choice === choice)
+}
+
 /** What a running agent is doing, and since when; absent while its reply streams in. */
 export interface Activity {
   readonly label: string

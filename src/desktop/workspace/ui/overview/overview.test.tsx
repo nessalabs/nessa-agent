@@ -310,6 +310,7 @@ describe("the agents overview", () => {
       "first-ask",
       "once",
       "person",
+      "once",
     ])
     expect(document.activeElement).toBe(card("second"))
     // Held in place while it settles, saying what became of it.
@@ -317,7 +318,13 @@ describe("the agents overview", () => {
     // A new press, once the person can see where the keyboard went.
     await act(async () => new Promise((done) => setTimeout(done, answerPause)))
     await press(card("second") as HTMLElement, "Backspace", { command: true })
-    expect(source.calls).toContainEqual(["deny", "second", "second-ask", "person"])
+    expect(source.calls).toContainEqual([
+      "deny",
+      "second",
+      "second-ask",
+      "person",
+      "deny",
+    ])
   })
 
   it("answers one request per press: a held key's repeats, or a press straight after, answer nothing more", async () => {
@@ -339,7 +346,7 @@ describe("the agents overview", () => {
     const answers = source.calls.filter(
       (call) => call[0] === "approve" || call[0] === "deny",
     )
-    expect(answers).toEqual([["approve", "first", "first-ask", "once", "person"]])
+    expect(answers).toEqual([["approve", "first", "first-ask", "once", "person", "once"]])
     expect(document.activeElement).toBe(card("second"))
     expect(host.querySelector('[data-content="panes"]')).toBeNull()
   })
@@ -365,7 +372,7 @@ describe("the agents overview", () => {
     const answers = source.calls.filter(
       (call) => call[0] === "approve" || call[0] === "deny",
     )
-    expect(answers).toEqual([["approve", "first", "first-ask", "once", "person"]])
+    expect(answers).toEqual([["approve", "first", "first-ask", "once", "person", "once"]])
   })
 
   it("times the pause from when the answering key was pressed, not from when the page got to it", async () => {
@@ -394,8 +401,8 @@ describe("the agents overview", () => {
       (call) => call[0] === "approve" || call[0] === "deny",
     )
     expect(answers).toEqual([
-      ["approve", "first", "first-ask", "once", "person"],
-      ["approve", "second", "second-ask", "once", "person"],
+      ["approve", "first", "first-ask", "once", "person", "once"],
+      ["approve", "second", "second-ask", "once", "person", "once"],
     ])
   })
 
@@ -409,6 +416,7 @@ describe("the agents overview", () => {
       "first-ask",
       "always",
       "person",
+      "always",
     ])
   })
 
@@ -420,7 +428,12 @@ describe("the agents overview", () => {
     let fromPane: Promise<unknown> = Promise.resolve()
     await act(async () => {
       fromPane = store.dispatch(
-        approve({ sessionId: "first", approvalId: "first-ask", initiator: "agent" }),
+        approve({
+          sessionId: "first",
+          approvalId: "first-ask",
+          initiator: "agent",
+          optionId: "once",
+        }),
       )
       await settle(10)
     })
@@ -535,6 +548,7 @@ describe("the agents overview", () => {
       "first-ask",
       "once",
       "person",
+      "once",
     ])
     expect(document.activeElement).toBe(card("second"))
   })
@@ -589,7 +603,7 @@ describe("the agents overview", () => {
       await settle(10)
     })
     expect(source.calls.filter((call) => call[2] === "first-ask")).toEqual([
-      ["approve", "first", "first-ask", "once", "person"],
+      ["approve", "first", "first-ask", "once", "person", "allow"],
     ])
   })
 
@@ -608,6 +622,7 @@ describe("the agents overview", () => {
       "first-ask",
       "always",
       "person",
+      "always",
     ])
   })
 

@@ -686,15 +686,26 @@ describe("approvals", () => {
     const { store, source } = await withApproval()
     source.hold("approve")
     const first = store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", scope: "always", initiator: "person" }),
+      approve({
+        sessionId: "b",
+        approvalId: "ap",
+        scope: "always",
+        initiator: "person",
+        optionId: "always",
+      }),
     )
     await store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      approve({
+        sessionId: "b",
+        approvalId: "ap",
+        initiator: "person",
+        optionId: "once",
+      }),
     )
     await source.release("approve")
     await first
     expect(source.calls.filter((call) => call[0] === "approve")).toEqual([
-      ["approve", "b", "ap", "always", "person"],
+      ["approve", "b", "ap", "always", "person", "always"],
     ])
   })
 
@@ -703,7 +714,7 @@ describe("approvals", () => {
     source.refuse("deny", "not-waiting")
     expect(
       await store.dispatch(
-        deny({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
       ),
     ).toBe("refused")
     expect(store.getState().workspace.answers.b).toMatchObject({
@@ -711,7 +722,9 @@ describe("approvals", () => {
       failure: "not-waiting",
     })
     source.refuse("deny", undefined)
-    await store.dispatch(deny({ sessionId: "b", approvalId: "ap", initiator: "person" }))
+    await store.dispatch(
+      deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
+    )
     expect(source.calls.filter((call) => call[0] === "deny")).toHaveLength(2)
     expect(store.getState().workspace.answers.b).toMatchObject({ approvalId: "ap" })
   })
@@ -721,7 +734,12 @@ describe("approvals", () => {
     store.dispatch(followWorkspace())
     source.hold("approve")
     const answering = store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      approve({
+        sessionId: "b",
+        approvalId: "ap",
+        initiator: "person",
+        optionId: "once",
+      }),
     )
     expect(store.getState().workspace.answers.b).toMatchObject({ approvalId: "ap" })
     await source.release("approve")
@@ -731,7 +749,12 @@ describe("approvals", () => {
     expect(store.getState().workspace.answers.b).toBeUndefined()
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("not-asked")
   })
@@ -741,7 +764,7 @@ describe("approvals", () => {
     source.hold("approve")
     source.refuse("approve", "unavailable")
     const agents = store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      approve({ sessionId: "b", approvalId: "ap", initiator: "agent", optionId: "once" }),
     )
     store.dispatch(openSession({ sessionId: "c" }))
     store.dispatch(openSession({ sessionId: "b" }))
@@ -749,7 +772,7 @@ describe("approvals", () => {
     // The agent's answer is still on its way: the person's waits.
     expect(
       await store.dispatch(
-        deny({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
       ),
     ).toBe("answering")
     await source.release("approve")
@@ -757,7 +780,7 @@ describe("approvals", () => {
     source.refuse("approve", undefined)
     expect(
       await store.dispatch(
-        deny({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
       ),
     ).toBe("sent")
     expect(
@@ -771,7 +794,7 @@ describe("approvals", () => {
     source.hold("approve")
     source.refuse("approve", "unavailable")
     const first = store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      approve({ sessionId: "b", approvalId: "ap", initiator: "agent", optionId: "once" }),
     )
     // Removed and listed again: what the window held of it is forgotten, then read afresh.
     source.emit({ kind: "session-removed", sessionId: "b", revision: 2 })
@@ -783,7 +806,7 @@ describe("approvals", () => {
     await settle()
     source.hold("deny")
     const second = store.dispatch(
-      deny({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
     )
     await source.release("approve")
     expect(await first).toBe("unknown")
@@ -796,16 +819,16 @@ describe("approvals", () => {
     const { store, source } = await withApproval()
     source.hold("deny")
     const first = store.dispatch(
-      deny({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      deny({ sessionId: "b", approvalId: "ap", initiator: "agent", optionId: "deny" }),
     )
     expect(
       await store.dispatch(
-        deny({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        deny({ sessionId: "b", approvalId: "ap", initiator: "agent", optionId: "deny" }),
       ),
     ).toBe("answering")
     await source.release("deny")
     expect(await first).toBe("sent")
-    expect(source.calls).toContainEqual(["deny", "b", "ap", "agent"])
+    expect(source.calls).toContainEqual(["deny", "b", "ap", "agent", "deny"])
   })
 
   it("says an approval was not asked once its session's pane shows another, sending nothing", async () => {
@@ -829,7 +852,12 @@ describe("approvals", () => {
     })
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("not-asked")
     expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
@@ -851,7 +879,12 @@ describe("approvals", () => {
     const { store } = await ready(source)
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("not-asked")
     expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
@@ -875,7 +908,13 @@ describe("approvals", () => {
       },
     })
     await store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", scope: "always", initiator: "person" }),
+      approve({
+        sessionId: "b",
+        approvalId: "ap",
+        scope: "always",
+        initiator: "person",
+        optionId: "always",
+      }),
     )
     expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
   })
@@ -883,7 +922,12 @@ describe("approvals", () => {
   it("answers nothing when nothing is waiting", async () => {
     const { store, source } = await ready()
     await store.dispatch(
-      approve({ sessionId: "a", approvalId: "ap", initiator: "person" }),
+      approve({
+        sessionId: "a",
+        approvalId: "ap",
+        initiator: "person",
+        optionId: "once",
+      }),
     )
     expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
   })
@@ -1550,17 +1594,22 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     await settle()
     source.hold("approve")
     const answer = store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      approve({
+        sessionId: "b",
+        approvalId: "ap",
+        initiator: "person",
+        optionId: "once",
+      }),
     )
     // A second answer, from a pane or the overview, waits on the first.
     expect(
       await store.dispatch(
-        deny({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
       ),
     ).toBe("answering")
     await source.release("approve")
     expect(await answer).toBe("sent")
-    expect(source.calls).toContainEqual(["approve", "b", "ap", "once", "person"])
+    expect(source.calls).toContainEqual(["approve", "b", "ap", "once", "person", "once"])
     expect(source.calls.filter((call) => call[0] === "deny")).toEqual([])
     expect(store.getState().workspace.content).toBe("agents")
   })
@@ -1576,13 +1625,23 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     await settle()
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("not-asked")
     store.dispatch(showContent({ content: "panes" }))
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("not-asked")
     expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
@@ -1595,20 +1654,35 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     source.refuse("approve", "not-waiting")
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "person",
+          optionId: "once",
+        }),
       ),
     ).toBe("refused")
     source.refuse("approve", "unavailable")
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "person",
+          optionId: "once",
+        }),
       ),
     ).toBe("unknown")
     expect(store.getState().workspace.answers.b?.failure).toBe("unavailable")
     source.refuse("approve", undefined)
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "person",
+          optionId: "once",
+        }),
       ),
     ).toBe("sent")
   })
@@ -1620,7 +1694,12 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     await settle()
     source.hold("approve")
     const answer = store.dispatch(
-      approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      approve({
+        sessionId: "b",
+        approvalId: "ap",
+        initiator: "person",
+        optionId: "once",
+      }),
     )
     store.dispatch(showContent({ content: "panes" }))
     expect(store.getState().workspace.answers.b?.approvalId).toBe("ap")
@@ -1873,7 +1952,12 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
     expect(source.calls).not.toContainEqual(["transcript", "b"])
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("not-asked")
     expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
@@ -1882,7 +1966,12 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
     expect(source.calls).toContainEqual(["transcript", "b"])
     expect(
       await store.dispatch(
-        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+        approve({
+          sessionId: "b",
+          approvalId: "ap",
+          initiator: "agent",
+          optionId: "once",
+        }),
       ),
     ).toBe("sent")
   })

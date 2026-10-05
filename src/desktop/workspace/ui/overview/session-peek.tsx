@@ -210,8 +210,8 @@ export const SessionPeek = memo(function SessionPeek({
                   shortcut: labelOf(overviewKeys, "once"),
                 }),
               }}
-              onAnswer={(choice, at) => {
-                if (answerable) onAnswer(summary, approval, choice, at)
+              onAnswer={(option, at) => {
+                if (answerable) onAnswer(summary, approval, option, at)
               }}
             />
           )}

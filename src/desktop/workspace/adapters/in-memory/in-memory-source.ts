@@ -15,7 +15,6 @@
 import type { SessionSummary } from "../../model/workspace-index"
 import {
   emptyTranscript,
-  offersChoice,
   type ApprovalChoice,
   type Message,
   type Part,
@@ -386,10 +385,10 @@ export function inMemorySource(
     return transcript
   }
 
-  /** An answer the review does not offer is not supported. */
-  const offered = (transcript: Transcript, choice: ApprovalChoice) => {
-    const approval = transcript.approval
-    if (!approval || !offersChoice(approval, choice))
+  /** An option the review does not offer, or of another choice, is not supported. */
+  const offered = (transcript: Transcript, choice: ApprovalChoice, optionId: string) => {
+    const option = transcript.approval?.options.find((each) => each.id === optionId)
+    if (!option || option.choice !== choice)
       throw new WorkspaceSourceError("not-supported")
   }
 
@@ -415,6 +414,7 @@ export function inMemorySource(
       approvalId: string,
       scope: ApprovalScope,
       initiator: Initiator,
+      optionId: string,
     ) =>
       audited(
         {
@@ -425,7 +425,7 @@ export function inMemorySource(
         },
         () => {
           const transcript = waiting(sessionId, approvalId)
-          offered(transcript, scope === "always" ? "always" : "once")
+          offered(transcript, scope === "always" ? "always" : "once", optionId)
           const command = transcript.approval?.command ?? ""
           putSession({
             ...known(sessionId),
@@ -454,10 +454,10 @@ export function inMemorySource(
           return known(sessionId).revision
         },
       ),
-    deny: (sessionId, approvalId, initiator) =>
+    deny: (sessionId, approvalId, initiator, optionId) =>
       audited({ sessionId, approvalId, action: "deny", initiator }, () => {
         const transcript = waiting(sessionId, approvalId)
-        offered(transcript, "deny")
+        offered(transcript, "deny", optionId)
         const reply = deniedReply(transcript.approval?.command ?? "")
         putTranscript({
           ...transcript,
