@@ -1005,11 +1005,12 @@ where
             match reserve_app_mount(&app_mounts, &frame) {
                 Ok(guard) => guard,
                 Err(MountCap) => {
+                    // The refusal lane holds one frame. Parking this refusal,
+                    // as a full lane does, keeps a second capped call from
+                    // closing the socket while the writer is inside a control
+                    // frame (`a_mount_cap_refusal_waits_and_keeps_the_socket`).
                     note_limit("socket.app_mount");
-                    let response = failure(&frame.id, "temporarily_unavailable");
-                    if rejected_lane("socket.refusal_lane", refusal_send.try_send(response)) {
-                        break;
-                    }
+                    app_refusal = Some(failure(&frame.id, "temporarily_unavailable"));
                     continue;
                 }
             }

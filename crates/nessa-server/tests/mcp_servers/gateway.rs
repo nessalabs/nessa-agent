@@ -1042,6 +1042,78 @@ mod mcp_app_lane {
         .unwrap()
     }
 
+    /// The writer is inside a release frame, so the refusal lane holds the first
+    /// call past one mount's cap. A second call from that mount must still be
+    /// refused, and the socket must stay up.
+    #[tokio::test]
+    async fn a_mount_cap_refusal_waits_and_keeps_the_socket() {
+        let (release_stall, gate) = tokio::sync::oneshot::channel();
+        let fixture = owners_fixture().await;
+        fixture.apps.hold.store(true, Ordering::SeqCst);
+        *fixture.apps.resource.lock().unwrap() = Some(Ok(page()));
+        let state = chat_state().with_conversations(Arc::new(fixture.service.clone()));
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        let instance = held_mount(1);
+        for n in 0..3 {
+            send_command(
+                &peer,
+                &format!("held-{n}"),
+                "mcp.readResource",
+                read_of(&fixture, &format!("held-{n}"), &instance),
+            );
+        }
+        until(async || fixture.apps.reads.load(Ordering::SeqCst) == 3).await;
+        send_command(
+            &peer,
+            "release",
+            "mcp.releaseApp",
+            release_of(&fixture, "release", &held_mount(2)),
+        );
+        timeout(Duration::from_secs(5), peer.writing.recv())
+            .await
+            .expect("the release answer reached the writer");
+        tokio::task::yield_now().await;
+        for request in ["over-1", "over-2"] {
+            send_command(
+                &peer,
+                request,
+                "mcp.readResource",
+                read_of(&fixture, request, &instance),
+            );
+        }
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        release_stall.send(()).unwrap();
+
+        let ids = ["release", "over-1", "over-2"];
+        let answered = answers_for(&mut peer, &ids).await;
+        assert_eq!(
+            answered.len(),
+            ids.len(),
+            "socket dropped or withheld an answer: {answered:?}"
+        );
+        assert_eq!(answered["release"]["payload"]["applied"], true);
+        for request in ["over-1", "over-2"] {
+            assert_eq!(
+                answered[request]["error"]["code"],
+                "temporarily_unavailable",
+                "{request}"
+            );
+        }
+        assert_eq!(
+            fixture.apps.reads.load(Ordering::SeqCst),
+            3,
+            "a capped read ran"
+        );
+        send_command(&peer, "still-up", "server.health", json!({}));
+        assert_eq!(response(&mut peer).await["ok"], true);
+        drop(peer.input);
+        timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket() {
         // The writer is inside a release frame, the way control answers are

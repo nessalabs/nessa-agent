@@ -872,10 +872,12 @@ cannot start calls past them. They are not shared out by person: a gateway
 serves its one owner, whose apps they all are.
 
 The refusal lane holds one frame, and the writer sends a control frame before
-a refusal. A call past the app lane waits for a place on that lane. While it
-waits, the socket still reads: a control frame is admitted, and a further app
-call is held until that place is free. A stalled refusal does not leave a
-release unread.
+a refusal. A call past the app lane, and a call past one mount's cap, each
+wait for a place on that lane. While one waits, the socket still reads: a
+control frame is admitted, and a further app call is held until that place is
+free. A second capped call does not close the socket
+(`a_mount_cap_refusal_waits_and_keeps_the_socket`). A stalled refusal does not
+leave a release unread.
 
 | # | In flight | What arrives | Effect |
 | --- | --- | --- | --- |
@@ -899,6 +901,8 @@ Each row above has a test, named after it:
   L1 `a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket`.
   L2 `releases_behind_a_burst_of_refused_reads_are_still_answered`.
   L3 `a_release_is_admitted_while_an_app_refusal_waits`.
+  A second call past one mount's cap, while the writer is inside a release:
+  `a_mount_cap_refusal_waits_and_keeps_the_socket`.
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `error_code.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`;
