@@ -11,6 +11,9 @@ const sentences: Readonly<Record<string, string>> = copies
 
 export type StartupRefusalReason = "not-provisioned" | "not-ready" | "wrong-stage"
 
+/** Sentences read by name. A stage mismatch is filled, not looked up. */
+export type NamedStartupSentence = "not-provisioned" | "not-ready" | "not-listening"
+
 export type StageMismatch = {
   readonly bundle: string
   readonly requested: string
@@ -31,9 +34,7 @@ function fill(key: string, values: Readonly<Record<string, string>>): string {
   )
 }
 
-export function startupRefusalSentence(
-  reason: Exclude<StartupRefusalReason, "wrong-stage">,
-): string {
+export function startupRefusalSentence(reason: NamedStartupSentence): string {
   return sentence(reason)
 }
 
@@ -75,7 +76,7 @@ export class HostRefusalError extends Error {
 
 function textField(value: object, key: string): string | undefined {
   if (!Object.hasOwn(value, key)) return undefined
-  const field = value[key as keyof typeof value]
+  const field = (value as Record<string, unknown>)[key]
   return typeof field === "string" && field.length > 0 ? field : undefined
 }
 
@@ -87,8 +88,7 @@ function textField(value: object, key: string): string | undefined {
  */
 export function hostRefusalFromInvoke(value: unknown): HostRefusalError | undefined {
   if (typeof value !== "object" || value === null) return undefined
-  if (!Object.hasOwn(value, "reason")) return undefined
-  const reason = value.reason
+  const reason = textField(value, "reason")
   if (reason === "not-provisioned" || reason === "not-ready")
     return new HostRefusalError(reason)
   if (reason !== "wrong-stage") return undefined

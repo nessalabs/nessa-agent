@@ -19,7 +19,7 @@ const reasons = Object.keys(every) as WorkspaceFailureReason[]
 
 it("says each reason in words of its own", () => {
   for (const copy of [failureCopy, readFailureCopy]) {
-    const said = reasons.map(copy)
+    const said = reasons.map((reason) => copy(reason))
     expect(said.every((sentence) => sentence.length > 0)).toBe(true)
     expect(new Set(said).size).toBe(reasons.length)
   }
