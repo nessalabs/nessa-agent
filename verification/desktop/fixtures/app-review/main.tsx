@@ -31,6 +31,7 @@ import type {
   ConversationPermission,
   ConversationView,
   McpAppsApi,
+  McpServersApi,
 } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
@@ -189,8 +190,14 @@ const mcpApps = {
   releaseApp: () => Promise.resolve(),
 } as unknown as McpAppsApi
 
+// Settings' servers: this fixture never opens Settings, so nothing asks them.
+const settingsParts = {
+  mcpServers: {} as McpServersApi,
+}
+
 const dependencies = createDesktopDependencies({
-  gateway: () => Promise.resolve(Object.assign(gateway.client, { mcpApps })),
+  gateway: () =>
+    Promise.resolve(Object.assign(gateway.client, { mcpApps }, settingsParts)),
   // No sandbox: the app itself is not drawn, and its card says so.
   apps: { sandbox: undefined, platform: "web" },
 })

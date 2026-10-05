@@ -143,16 +143,22 @@ export function ItemRow({
 export function SettingGroup({
   id,
   footnote,
+  pending,
   children,
 }: {
   id: SettingId
   footnote?: string
+  /**
+   * Not available in this window, though the catalogue has it: what it
+   * changes is not attached here (Integrations without a gateway).
+   */
+  pending?: boolean
   children: ReactNode
 }) {
   const found = useContext(FoundSetting) === id
   const nameId = useId()
   const entry = setting(id)
-  const available = entry.pending !== true
+  const available = entry.pending !== true && pending !== true
   return (
     <section
       className="settings-group"
@@ -251,11 +257,14 @@ export function Toggle({
   checked,
   onChange,
   label,
+  disabled,
 }: {
   checked: boolean
   onChange: (next: boolean) => void
   /** Only outside a row; in one, the row's name is the switch's. */
   label?: string
+  /** Resting for now, such as while a request it sent is in flight. */
+  disabled?: boolean
 }) {
   const name = useControlName(label)
   const available = useContext(RowAvailable)
@@ -264,7 +273,7 @@ export function Toggle({
       type="button"
       role="switch"
       aria-checked={checked}
-      disabled={!available}
+      disabled={!available || disabled === true}
       {...name}
       className="settings-switch"
       onClick={() => onChange(!checked)}

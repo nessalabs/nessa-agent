@@ -99,6 +99,7 @@ export const css = {
   reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
   reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
+  chartApp: "#chart", // the test server's chart app: what it draws, "chart for <server>"
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -172,7 +173,53 @@ export const css = {
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',
   settingsPanel: "#settings-panel", // the open tab's page
+  settingsCard: ".settings-card", // class: a card on a Settings page, which what it holds must lie inside
+  settingsGroupHeading: ".settings-group > h2", // class: a group's heading on a Settings page
+  settingsScrollers: ".settings-content, .settings-scroll, .settings-panel", // class: what scrolls in Settings, which must not scroll sideways
   control: 'button, input, select, textarea, [role="switch"]',
+
+  // Settings › Connections › Integrations: the gateway's MCP servers
+  // (src/desktop/settings/ui/integrations-tab.tsx)
+  mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
+  mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
+  mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
+  mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
+  mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
+  mcpStoredRow: "[data-mcp-server]:not([data-managed])",
+  mcpAnyGroup: "[data-mcp-group]", // any name stored more than once
+  mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
+  mcpShared: "[data-mcp-shared]", // a group's "N servers share this name…"
+  mcpSharedRow: "[data-mcp-shared-row]", // one read-only server of a group
+  mcpManagedRow: "[data-mcp-server][data-managed]",
+  mcpRowText: ".settings-row-text", // class: a row's name, command and variables
+  mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
+  mcpEmpty: "[data-mcp-empty]",
+  mcpTooLarge: "[data-mcp-too-large]", // a list too large to show: its sentence and the remove-by-name field (U44)
+  mcpNotices: "[data-mcp-notices]", // the notices' live region, drawn from the tab's first draw
+  mcpNotice: "[data-mcp-notice]", // what an answer said, in the notices' region
+  mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
+  mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
+  mcpVariable: "[data-mcp-variable]", // a variable's row in the form
+  mcpVariableNamed: (name) => `[data-mcp-variable="${name}"]`, // a stored variable's row, by its name
+  mcpVariableAdded: "[data-mcp-variable-key]", // a variable's row whose name is typed in the form
+  mcpSecret: "[data-mcp-secret]", // a variable's value: a password field, uncontrolled
+  mcpSecretHeld: "[data-mcp-secret-held]", // a value pasted with line breaks, held and not drawn (S4)
+  mcpPasted: "[data-mcp-pasted]", // its "Pasted value: N lines"
+  mcpArgument: "[data-mcp-argument]", // an argument's row in the form; its value is its place
+  mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
+  mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
+  mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
+  mcpProblemFor: (field) => `[data-mcp-problem="${field}"]`, // a field's problem region by field: form for the form's own
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
+  mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
+  mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
+  mcpInspectionHeading: "[data-mcp-inspection] h2", // the inspection's heading, where focus lands
+  mcpInspectionStatus: "[data-mcp-inspection-status]", // what the inspection says of how it ended
+  mcpAnyTool: "[data-mcp-tool]", // any inspected tool
+  mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
+  mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
+  mcpCut: "[data-mcp-cut]",
+  mcpSwitch: '[role="switch"]',
 
   // Elements by kind, inside a part found by one of the above
   field: "textarea",
@@ -311,6 +358,54 @@ export const names = {
   useNightScene: "Use Night Scene",
   allowOnce: "Allow Once",
   leaveSettings: "Back to nessa Agent",
+  /** Settings' category and tab holding the MCP servers. */
+  connections: "Connections",
+  integrations: "Integrations",
+  /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
+  mcp: {
+    add: "Add server…",
+    addVariable: "Add variable",
+    save: "Save",
+    cancel: "Cancel",
+    edit: "Edit",
+    inspect: "Inspect",
+    remove: "Remove",
+    close: "Close",
+    name: "Name",
+    command: "Command",
+    addArgument: "Add argument",
+    argument: (place) => `Argument ${place}`,
+    variableName: "Variable name",
+    storedValue: "Stored value kept",
+    storedValueAgain: "Enter the value again",
+    valuesAgain:
+      "Changing the command, arguments or variables needs every stored value entered again.",
+    empty: "No servers yet",
+    notAdmin: "Only an administrator can manage MCP servers.",
+    conflict: "Changed elsewhere, the list was reloaded. Check and try again.",
+    gone: (name) => `“${name}” is no longer stored.`,
+    listUnreadable:
+      "The servers couldn't be listed: the configuration file can't be read as it is.",
+    listTooLarge:
+      "The server list is too large to show. Removing a server fixes it: enter its name.",
+    saveTooLarge:
+      "This would make the server list too large; remove a server or shorten its arguments.",
+    removeAsk: (name) =>
+      `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    removeByNameAsk: (name) =>
+      `Remove “${name}”? This removes the first server stored under that name. New conversations stop getting it. Open ones keep it until they close.`,
+    removeFirst: (name) => `Remove the first server named “${name}”`,
+    removeFirstAsk: (name, command) =>
+      `Remove the first server named “${name}”, which runs ${command}? New conversations stop getting it. Open ones keep it until they close.`,
+    nameShared: (count) =>
+      `${count} servers share this name. Only the first can be removed here, and none edited.`,
+    storedValueCleared: "Empty: the stored value will be cleared",
+    keepStored: "Keep stored value",
+    pasted: (lines, endsWithBreak) =>
+      `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}${endsWithBreak ? ", ends with a line break" : ""}`,
+    trimBreak: "Remove line break",
+    clearPasted: "Clear",
+  },
   /** A sample session (in-memory source) that waits on an approval. */
   approvalSession: "Release build signing",
   /** Sample sessions (in-memory source) that each wait on one approval. */

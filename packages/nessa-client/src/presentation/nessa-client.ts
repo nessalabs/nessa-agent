@@ -9,6 +9,7 @@ import type { RequestTimer } from "../application/gateway-http.js"
 import type { McpResourceTransport } from "../application/mcp-resource-fetch.js"
 import { createAttachmentApi, type AttachmentApi } from "./attachment-api.js"
 import { createMcpAppsApi, type McpAppsApi } from "./mcp-apps-api.js"
+import { createMcpServersApi, type McpServersApi } from "./mcp-servers-api.js"
 import { createConversationApi, type ConversationApi } from "./conversation-api.js"
 import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
@@ -70,6 +71,8 @@ export class NessaClient {
   readonly attachments: AttachmentApi
   /** An MCP App's calls to its own server, its resources, and its release. */
   readonly mcpApps: McpAppsApi
+  /** The gateway's stored MCP servers: list, save, remove, and inspect one. */
+  readonly mcpServers: McpServersApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
@@ -92,6 +95,7 @@ export class NessaClient {
     this.agents = createAgentsApi(wire)
     this.attachments = createAttachmentApi(wire, upload, newRequestId, httpTimer)
     this.mcpApps = createMcpAppsApi(wire, resources, newRequestId, httpTimer)
+    this.mcpServers = createMcpServersApi(wire)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.auth = createAuthApi(wire)
   }

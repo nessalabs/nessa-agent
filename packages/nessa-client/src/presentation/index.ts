@@ -25,6 +25,7 @@ export type {
 export type { NessaClientConnectOptions } from "../application/options.js"
 export type { AttachmentApi } from "./attachment-api.js"
 export type { McpAppsApi } from "./mcp-apps-api.js"
+export type { McpServersApi } from "./mcp-servers-api.js"
 export type { ConversationApi } from "./conversation-api.js"
 export type { RecordReadApi } from "./record-read-api.js"
 export type { AgentsApi } from "./agents-api.js"
