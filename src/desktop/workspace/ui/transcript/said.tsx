@@ -4,7 +4,7 @@
  * is isolated from the words around it wherever it is shown: a name written
  * right to left, or one carrying direction marks, cannot reorder the
  * sentence it sits in, nor run into the name beside it (Unicode bidi
- * isolation). Drawn, a name is a `<bdi>` (`Said`); in an attribute, such as
+ * isolation). Drawn, a name is a `<bdi>` (`Saying`); in an attribute, such as
  * an accessible name, it is set between FSI and PDI (`spoken`), the same
  * isolation in plain text.
  */
