@@ -433,15 +433,15 @@ first-frame and complete-exchange durations in
 
 | Ordering | Write result | First frame | Phase result | Regression case |
 | --- | --- | --- | --- | --- |
-| Preparation refused before write | Absent | Absent | Error | `preparation_error` |
+| Preparation refused before write | Absent | Absent | Error | `StartupScenario::PreparationError` |
 | Write-result logging advances the clock before decoding | Success, excludes logging time | Includes time since write completion | Success | `startup_first_frame_duration_includes_write_result_logging_delay` |
-| Initial write refused | Error | Absent | Error | `write_error` |
+| Initial write refused | Error | Absent | Error | `StartupScenario::WriteError` |
 | Initial write blocked until deadline | Error | Absent | Error | `startup_write_duration_reports_blocked_pipe_until_deadline` |
-| Write succeeds, close observed | Success | Absent | Error | `close` |
-| Write succeeds, response deadline expires | Success | Absent | Error | `deadline` |
-| Provider response refuses exchange | Success | Once | Error | `error` |
-| Notifications precede accepted response | Success | Once, for notification | Success | `notifications` |
-| Accepted response is first frame | Success | Once | Success | `success` |
+| Write succeeds, close observed | Success | Absent | Error | `StartupScenario::Close` |
+| Write succeeds, response deadline expires | Success | Absent | Error | `StartupScenario::Deadline` |
+| Provider response refuses exchange | Success | Once | Error | `StartupScenario::ProviderError` |
+| Notifications precede accepted response | Success | Once, for notification | Success | `StartupScenario::Notifications` |
+| Accepted response is first frame | Success | Once | Success | `StartupScenario::Success` |
 
 These metrics use the injected monotonic clock. They log durations and protocol
 correlation, without request parameters, response bodies, provider error text or

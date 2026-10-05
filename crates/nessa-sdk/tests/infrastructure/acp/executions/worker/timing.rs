@@ -126,31 +126,46 @@ async fn first_response_timing_ignores_thoughts_empty_and_rejected_text_and_logs
         .unwrap();
 }
 
+/// Selects the fixture; assertions below use the production AgentError variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupScenario {
+    Success,
+    ProviderError,
+    Deadline,
+    WriteError,
+    Notifications,
+    PreparationError,
+    Close,
+}
+
 #[tokio::test]
 async fn startup_timing_logs_success_error_and_deadline_without_request_payloads() {
-    for outcome in [
-        "success",
-        "error",
-        "deadline",
-        "write_error",
-        "notifications",
-        "preparation_error",
-        "close",
+    for scenario in [
+        StartupScenario::Success,
+        StartupScenario::ProviderError,
+        StartupScenario::Deadline,
+        StartupScenario::WriteError,
+        StartupScenario::Notifications,
+        StartupScenario::PreparationError,
+        StartupScenario::Close,
     ] {
-        let frames = match outcome {
-            "success" => vec![json!({"jsonrpc":"2.0","id":1,"result":{}})],
-            "notifications" => vec![
+        let frames = match scenario {
+            StartupScenario::Success => vec![json!({"jsonrpc":"2.0","id":1,"result":{}})],
+            StartupScenario::Notifications => vec![
                 json!({"jsonrpc":"2.0","method":"private notification","params":{"secret":"private provider payload"}}),
                 json!({"jsonrpc":"2.0","method":"private notification"}),
                 json!({"jsonrpc":"2.0","id":1,"result":{}}),
             ],
-            "error" => vec![
+            StartupScenario::ProviderError => vec![
                 json!({"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"fixture refusal"}}),
             ],
-            _ => vec![],
+            StartupScenario::Deadline
+            | StartupScenario::WriteError
+            | StartupScenario::PreparationError
+            | StartupScenario::Close => vec![],
         };
         let (mut worker, _commands, close, _events) = worker_with_ready_frames(&frames, "").await;
-        if outcome == "deadline" {
+        if scenario == StartupScenario::Deadline {
             worker
                 .scope
                 .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -165,13 +180,13 @@ async fn startup_timing_logs_success_error_and_deadline_without_request_payloads
             );
             worker.scope = scope;
         }
-        if outcome == "write_error" {
+        if scenario == StartupScenario::WriteError {
             worker.scope.stdin.take();
         }
-        if outcome == "preparation_error" {
+        if scenario == StartupScenario::PreparationError {
             worker.config.max_frame_bytes = 1;
         }
-        if outcome == "close" {
+        if scenario == StartupScenario::Close {
             close
                 .send(Some(SessionCloseRequest::SessionHandlesDropped))
                 .unwrap();
@@ -193,7 +208,7 @@ async fn startup_timing_logs_success_error_and_deadline_without_request_payloads
                 None,
             )
             .with_subscriber(subscriber);
-        let result = if outcome == "deadline" {
+        let result = if scenario == StartupScenario::Deadline {
             let (result, _) = promptly(async {
                 tokio::join!(operation, async {
                     captured
@@ -207,47 +222,64 @@ async fn startup_timing_logs_success_error_and_deadline_without_request_payloads
         } else {
             promptly(operation).await
         };
-        let success = matches!(outcome, "success" | "notifications");
-        assert_eq!(result.is_ok(), success);
+        match scenario {
+            StartupScenario::Success | StartupScenario::Notifications => {
+                assert!(result.is_ok(), "{scenario:?}: {result:?}")
+            }
+            StartupScenario::ProviderError => assert!(
+                matches!(&result, Err(AgentError::Provider { code: -1, .. })),
+                "{result:?}"
+            ),
+            StartupScenario::Deadline => {
+                assert!(matches!(&result, Err(AgentError::Deadline)), "{result:?}")
+            }
+            StartupScenario::WriteError | StartupScenario::Close => {
+                assert!(matches!(&result, Err(AgentError::Closed)), "{result:?}")
+            }
+            StartupScenario::PreparationError => assert!(
+                matches!(&result, Err(AgentError::InvalidInput(_))),
+                "{result:?}"
+            ),
+        }
+        let success = result.is_ok();
         let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         assert!(log.contains("agent startup phase started"), "{log}");
         assert!(log.contains("agent startup phase finished"), "{log}");
         assert!(log.contains("phase=\"initialize\""), "{log}");
         let expected = if success { "success" } else { "error" };
         assert!(log.contains(&format!("outcome=\"{expected}\"")), "{log}");
-        if outcome == "deadline" {
-            assert!(matches!(result, Err(AgentError::Deadline)));
+        if scenario == StartupScenario::Deadline {
             assert!(log.contains("elapsed_ms=100"), "{log}");
         }
         assert_eq!(
             log.matches("agent startup request write finished").count(),
-            usize::from(outcome != "preparation_error"),
+            usize::from(scenario != StartupScenario::PreparationError),
             "{log}"
         );
         assert_eq!(
             log.matches("agent startup first frame received").count(),
-            usize::from(matches!(outcome, "success" | "error" | "notifications")),
+            usize::from(matches!(
+                scenario,
+                StartupScenario::Success
+                    | StartupScenario::ProviderError
+                    | StartupScenario::Notifications
+            )),
             "{log}"
         );
-        if outcome == "preparation_error" {
-            assert!(matches!(result, Err(AgentError::InvalidInput(_))));
-        } else {
+        if scenario != StartupScenario::PreparationError {
             assert!(log.contains("request_id=1"), "{log}");
             let write = log
                 .lines()
                 .find(|line| line.contains("agent startup request write finished"))
                 .unwrap();
             assert!(
-                write.contains(if outcome == "write_error" {
+                write.contains(if scenario == StartupScenario::WriteError {
                     "outcome=\"error\""
                 } else {
                     "outcome=\"success\""
                 }),
                 "{log}"
             );
-        }
-        if matches!(outcome, "write_error" | "close") {
-            assert!(matches!(result, Err(AgentError::Closed)));
         }
         // Provider refusal warnings are a separate existing target.
         let timing = log
