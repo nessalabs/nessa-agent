@@ -254,6 +254,69 @@ describe("a transcript", () => {
     )
   })
 
+  it("E2-1 (#390): shows the bidi controls an app's names carry as U+FFFD, so none ends its isolation or turns its letters round", async () => {
+    // The reviewer's strings: a stray PDI then an embedding; an override.
+    const server = "a\u2069\u202Eb"
+    const tool = "c\u2069\u2069\u202Bd"
+    await shown(fakeSource(), {
+      ...conversation,
+      messages: [
+        ...conversation.messages,
+        {
+          id: "m3",
+          role: "user",
+          at: 3,
+          parts: [{ kind: "text", text: "Plot May" }],
+          app: { server, tool },
+        },
+        {
+          id: "m4",
+          role: "user",
+          at: 4,
+          parts: [{ kind: "text", text: "Open it" }],
+          app: { server: "evil\u202Egnp.exe", tool: "show" },
+        },
+      ],
+      approval: {
+        id: "app-ap",
+        command: `${tool} {}`,
+        reason: "An app asks to run a tool",
+        origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+        ask: "tool",
+      },
+    })
+    const authors = [...host.querySelectorAll<HTMLElement>(".workspace-message-author")]
+    expect(authors.map((author) => author.textContent)).toEqual([
+      "Sent by c\uFFFD\uFFFD\uFFFDd, from a\uFFFD\uFFFDb",
+      "Sent by show, from evil\uFFFDgnp.exe",
+    ])
+    expect(
+      authors.map((author) =>
+        [...author.querySelectorAll("bdi")].map((name) => name.textContent),
+      ),
+    ).toEqual([
+      ["c\uFFFD\uFFFD\uFFFDd", "a\uFFFD\uFFFDb"],
+      ["show", "evil\uFFFDgnp.exe"],
+    ])
+    // What the names are is kept as they came, for anything that reads it.
+    expect(authors[0]?.dataset.messageApp).toBe(`${server}/${tool}`)
+    const head = host.querySelector(".workspace-approval-head")
+    expect(head?.textContent).toBe(
+      "The evil\uFFFDgnp.exe app wants to run c\uFFFD\uFFFD\uFFFDd",
+    )
+    expect(
+      [...(head?.querySelectorAll("bdi") ?? [])].map((name) => name.textContent),
+    ).toEqual(["evil\uFFFDgnp.exe", "c\uFFFD\uFFFD\uFFFDd"])
+    // In plain text, each name stays between its own FSI and PDI.
+    expect(
+      spoken(
+        approvalHead({ origin: { kind: "app", server, tool }, ask: "tool" }, "Claude"),
+      ),
+    ).toBe(
+      "The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd\u2069",
+    )
+  })
+
   it("keeps messages sent while the conversation was read in place when it loads", async () => {
     const source = fakeSource()
     source.transcripts.set("b", conversation)

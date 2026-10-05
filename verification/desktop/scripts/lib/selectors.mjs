@@ -586,10 +586,11 @@ export const appReview = {
   head: (tool) => names.appAsks("mcptest", tool),
   /**
    * The overview row's accessible name: the title, then the app asking, its
-   * server isolated between FSI and PDI (`spoken` in `said.tsx`, #390).
+   * server and its command each isolated between FSI and PDI (`spoken` in
+   * `said.tsx`, #390).
    */
   row: (tool) =>
-    `Clean up the stale rows. ${names.appAsks("\u2068mcptest\u2069", tool)} {}.`,
+    `Clean up the stale rows. ${names.appAsks("\u2068mcptest\u2069", `\u2068${tool} {}\u2069`)}.`,
   tool: "app_delete_row",
   /** The app's own tool and server, as its message's review and label name them (#390). */
   appTool: "show_rows",
@@ -600,6 +601,25 @@ export const appReview = {
   messageHead: names.appAsksToMessage("mcptest"),
   /** A message's overview row's accessible name. */
   messageRow: `Clean up the stale rows. ${names.appAsksToMessage("\u2068mcptest\u2069")}.`,
+  /**
+   * Names carrying bidi controls (E2-1 on #390) — a stray PDI then an
+   * embedding, and an override — and each as the window shows it, every
+   * control as U+FFFD (`shownName` in `said.tsx`).
+   */
+  bidiNames: [
+    {
+      server: "a\u2069\u202Eb",
+      tool: "c\u2069\u2069\u202Bd",
+      shownServer: "a\uFFFD\uFFFDb",
+      shownTool: "c\uFFFD\uFFFD\uFFFDd",
+    },
+    {
+      server: "evil\u202Egnp.exe",
+      tool: "show_rows",
+      shownServer: "evil\uFFFDgnp.exe",
+      shownTool: "show_rows",
+    },
+  ],
   /** The fixture page's title, by which the script knows it is served. */
   title: "Nessa: an app's review",
 }

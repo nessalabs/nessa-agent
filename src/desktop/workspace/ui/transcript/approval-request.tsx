@@ -82,15 +82,19 @@ export function approvalHead(
 /**
  * What the Agents overview's row says is asked: a command or tool written out
  * whole, as the row has no card to show it in; a message as the card's head
- * says it (`overview.test.tsx` O3 and D19).
+ * says it (`overview.test.tsx` O3 and D19). An app's tool command is the
+ * app's own words, its tool's name among them, and is isolated as a name is
+ * (`said.tsx`, E2-1 on #390).
  */
 export function approvalRequest(
   approval: Pick<Approval, "origin" | "ask" | "command">,
   agent: string,
 ): Said {
-  return approval.ask === "message"
-    ? approvalHead(approval, agent)
-    : [...approvalAsker(approval.origin, agent), ` wants to run ${approval.command}`]
+  const asker = approvalAsker(approval.origin, agent)
+  if (approval.ask === "message") return approvalHead(approval, agent)
+  return approval.origin.kind === "app"
+    ? [...asker, " wants to run ", named(approval.command)]
+    : [...asker, ` wants to run ${approval.command}`]
 }
 
 /**

@@ -478,7 +478,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   stop. At the same widths as the card above, with the tool's name short and
   as one word as long as the gateway allows (`maxMcpNameBytes`), the head
   stays inside the card; its row in the Agents overview is named "<title>. The
-  <server> app wants to run <tool> <arguments>.". _#436_ (`appCall` in
+  <server> app wants to run <tool> <arguments>.", the server and the command
+  each between FSI and PDI. _#436_ (`appCall` in
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
   _Check:_ `app-review.mjs --shots <dir>`.
@@ -501,11 +502,16 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   the app's names short and each as long as the gateway allows, is whole in
   a message column of 280–900 px and in an 800×480 window: no ellipsis, no
   title, no glyph outside it nor past its column, wrapped onto more lines at
-  280 px, each name in its own `<bdi>`. (`ask` from the gateway's `ReviewAsk`;
-  `approvalHead` and `approvalRequest` in `approval-request.tsx`; the
-  `sendMessage` routing in `dependencies.ts`.) The real gateway's message
-  path in a browser is #550.
-  _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label --shots <dir>`.
+  280 px, each name in its own `<bdi>`. With names carrying bidi controls —
+  a stray PDI then an embedding (`a`, PDI, RLO, `b` and `c`, PDI, PDI, RLE,
+  `d`), and an override (`evil`, RLO, `gnp.exe`) — the card's head, the
+  overview row's accessible name and its command, and the landed label show
+  each control as U+FFFD, each name isolated, and every character drawn in
+  reading order (`shownName` in `said.tsx`, E2-1). (`ask` from the gateway's
+  `ReviewAsk`; `approvalHead` and `approvalRequest` in
+  `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
+  The real gateway's message path in a browser is #550.
+  _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.

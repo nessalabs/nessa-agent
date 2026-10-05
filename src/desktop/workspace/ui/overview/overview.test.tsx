@@ -317,9 +317,36 @@ describe("the agents overview", () => {
     expect(agent).toBeTruthy()
     // The app's server isolated from the words around it, as on the card.
     expect(label("second")).toMatch(
-      /\. The \u2068mcptest\u2069 app wants to run app_delete_row \{\}\.$/,
+      /\. The \u2068mcptest\u2069 app wants to run \u2068app_delete_row \{\}\u2069\.$/,
     )
     expect(label("second")).not.toContain(`${agent} wants`)
+  })
+
+  it("E2-1 (#390): a row shows the bidi controls an app's names carry as U+FFFD, in its words and its accessible name, each name and the app's command isolated", async () => {
+    // The reviewer's strings: a stray PDI then an embedding; an override.
+    const server = "a\u2069\u202Eb"
+    const tool = "c\u2069\u2069\u202Bd"
+    await mount({ secondAsker: { kind: "app", server, tool } })
+    await open()
+    expect(card("second")?.getAttribute("aria-label")).toMatch(
+      /\. The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd \{\}\u2069\.$/,
+    )
+    const command = card("second")?.querySelector<HTMLElement>(".agents-request-command")
+    expect(command?.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFD\uFFFDd {}")
+    expect(command?.title).toBe("c\uFFFD\uFFFD\uFFFDd {}")
+  })
+
+  it("E2-1 (#390): a row for an app's message shows an override in its server's name as U+FFFD", async () => {
+    await mount({
+      secondAsker: { kind: "app", server: "evil\u202Egnp.exe", tool: "show_rows" },
+      secondAsks: "message",
+    })
+    await open()
+    expect(card("second")?.getAttribute("aria-label")).toMatch(
+      /\. The \u2068evil\uFFFDgnp\.exe\u2069 app wants to send a message as you\.$/,
+    )
+    // Nothing in the row carries a control the name brought with it.
+    expect(card("second")?.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/)
   })
 
   it("D19 (#390): a row says an app asks to send a message as the person, not to run its tool", async () => {

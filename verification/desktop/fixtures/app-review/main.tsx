@@ -112,6 +112,9 @@ const turns: ConversationMessage[] = [ended]
 // The names an allowed message's turn is labelled with: the app's own, or
 // what a check asks for (`labelAs`) — the longest a gateway allows, say.
 let labelled = { server, tool: appTool }
+// The names a message's review says ask it: the app's own, or what a check
+// asks for (`nameAs`) — names carrying bidi controls, say.
+let asking = { server, tool: appTool }
 
 /** The conversation's view at `revision`, with the app's review when one is open. */
 function viewWith(revision: number, review?: ConversationPermission): ConversationView {
@@ -167,10 +170,10 @@ function messageReviewOf(permissionId: string, text: string): ConversationPermis
     executionId: app.executionId,
     permissionId,
     toolId: app.toolId,
-    title: `The ${appTool} app on ${server} asks to send a message as you`,
-    toolName: appTool,
+    title: `The ${asking.tool} app on ${asking.server} asks to send a message as you`,
+    toolName: asking.tool,
     argumentsJson: JSON.stringify({ text }),
-    origin: { kind: "app", server, tool: appTool },
+    origin: { kind: "app", ...asking },
     ask: "message",
     options: [
       { id: "allow", label: "Allow", effect: "allow" },
@@ -376,6 +379,11 @@ Object.assign(window, {
     /** The server and tool the next allowed message's turn is labelled with. */
     labelAs(names: { server: string; tool: string }) {
       labelled = { ...names }
+    },
+    /** The server and tool the next message's review, and its turn, name. */
+    nameAs(names: { server: string; tool: string }) {
+      labelled = { ...names }
+      asking = { ...names }
     },
     /** A tool's name with no break in it, as long as the gateway allows. */
     longestTool: "x".repeat(bounds.maxMcpNameBytes),

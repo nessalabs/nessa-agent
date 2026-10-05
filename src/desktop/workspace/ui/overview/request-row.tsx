@@ -24,7 +24,7 @@ import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { offersChoice, optionOf } from "../../model/transcript"
 import { answerTips, approvalRequest } from "../transcript/approval-request"
-import { spoken } from "../transcript/said"
+import { named, Saying, shownName, spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
@@ -187,12 +187,22 @@ export const RequestRow = memo(function RequestRow({
             )}
           </span>
           {approval ? (
-            <code
-              className="agents-request-command agents-truncate"
-              title={approval.command}
-            >
-              {approval.command}
-            </code>
+            // An app's command is the app's own words: shown as a name is (E2-1).
+            approval.origin.kind === "app" ? (
+              <code
+                className="agents-request-command agents-truncate"
+                title={shownName(approval.command)}
+              >
+                <Saying said={[named(approval.command)]} />
+              </code>
+            ) : (
+              <code
+                className="agents-request-command agents-truncate"
+                title={approval.command}
+              >
+                {approval.command}
+              </code>
+            )
           ) : null}
         </span>
         <span className="agents-request-end">

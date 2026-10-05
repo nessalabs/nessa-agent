@@ -74,7 +74,14 @@ Checks, per engine and layout (--only <names> to pick):
              least), it is whole — no ellipsis, no title, nothing cut or past
              the column — wrapped onto more lines where it must, each name in
              its own <bdi>, data-message-app server/tool, above its bubble at
-             its right edge`,
+             its right edge
+  message-bidi
+             (#390, E2-1) with names carrying bidi controls — a stray PDI then
+             an embedding, and an override (evil, RLO, gnp.exe) — the card's
+             head, the overview row's command and accessible name, and the
+             landed label show each control as U+FFFD, each name in its own
+             <bdi> (FSI…PDI in the name), and every character drawn in
+             reading order, left to right, line by line`,
 }
 
 // What page.evaluate is handed: plain strings (`css` holds functions, #441).
@@ -198,6 +205,45 @@ const labelFits = (author) =>
       rightEdgeApart: Math.round(Math.abs(box.right - under.right)),
       title: e.getAttribute("title"),
       app: e.dataset.messageApp ?? null,
+    }
+  })
+
+/**
+ * Whether every character of an element is drawn in reading order: left to
+ * right along a line, and each line below the last. A name whose bidi
+ * controls escaped its isolation turns the words after it round, or its own
+ * letters (E2-1 on #390). What is out of order is given back, a few at most.
+ */
+const drawnInOrder = (locator) =>
+  locator.evaluate((e) => {
+    const boxes = []
+    const walker = document.createTreeWalker(e, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent ?? ""
+      for (let i = 0; i < text.length; i++) {
+        if (text[i].trim() === "") continue
+        const range = document.createRange()
+        range.setStart(node, i)
+        range.setEnd(node, i + 1)
+        const r = range.getBoundingClientRect()
+        if (!r.width) continue
+        boxes.push({ char: text[i], left: r.left, top: r.top, height: r.height })
+      }
+    }
+    const outOfOrder = []
+    for (let i = 1; i < boxes.length; i++) {
+      const before = boxes[i - 1]
+      const after = boxes[i]
+      const sameLine = Math.abs(after.top - before.top) < before.height / 2
+      const ok = sameLine ? after.left > before.left - 0.5 : after.top > before.top
+      if (!ok) outOfOrder.push(`${before.char}→${after.char}`)
+    }
+    return {
+      characters: boxes.length,
+      outOfOrder: outOfOrder.slice(0, 5),
+      controls: /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/.test(
+        e.textContent ?? "",
+      ),
     }
   })
 
@@ -703,6 +749,103 @@ Object.assign(checks, {
     } finally {
       await opened.close()
     }
+  },
+
+  async "message-bidi"({ browser, url, layout }) {
+    const failures = []
+    const seen = []
+    for (const pair of appReview.bidiNames) {
+      const tag = JSON.stringify(pair.server)
+      const ordered = (where, r) => {
+        seen.push({ names: tag, where, ...r })
+        if (r.controls) failures.push(`${tag}, ${where}: a bidi control is drawn`)
+        if (r.outOfOrder.length)
+          failures.push(
+            `${tag}, ${where}: drawn out of reading order at ${r.outOfOrder.join(", ")}`,
+          )
+      }
+      // The card's head and the overview row, while the review waits.
+      let opened = await onConversation(browser, url, layout)
+      try {
+        const { page } = opened
+        await page.evaluate((names) => window.__appReview.nameAs(names), {
+          server: pair.server,
+          tool: pair.tool,
+        })
+        if (!(await messaged(page, appReview.message))) {
+          failures.push(`${tag}: ${notDrawn}`)
+          continue
+        }
+        const head = page.locator(css.approvalHead).first()
+        const headText = ((await head.textContent()) ?? "").trim()
+        const expectedHead = names.appAsksToMessage(pair.shownServer)
+        if (headText !== expectedHead)
+          failures.push(`${tag}: the head says ${JSON.stringify(headText)}`)
+        const headNames = await labelNames(head)
+        if (JSON.stringify(headNames) !== JSON.stringify([pair.shownServer]))
+          failures.push(`${tag}: the head isolates ${JSON.stringify(headNames)}`)
+        ordered("head", await drawnInOrder(head))
+        await page.keyboard.press(keys.overview)
+        await need(page, css.overview, "the Agents overview")
+        const row = page
+          .locator(`${css.overviewItem}[data-overview-item="${appReview.sessionId}"]`)
+          .first()
+        const rowName = await row
+          .getAttribute("aria-label", { timeout: 5000 })
+          .catch(() => null)
+        const expectedRow = `${appReview.session}. ${names.appAsksToMessage(`\u2068${pair.shownServer}\u2069`)}.`
+        if (rowName !== expectedRow)
+          failures.push(`${tag}: the row is named ${JSON.stringify(rowName)}`)
+        const command = row.locator(".agents-request-command")
+        const commandNames = await labelNames(command)
+        const expectedCommand = `${pair.shownTool} ${JSON.stringify({ text: appReview.message })}`
+        if (JSON.stringify(commandNames) !== JSON.stringify([expectedCommand]))
+          failures.push(
+            `${tag}: the row's command isolates ${JSON.stringify(commandNames)}`,
+          )
+        ordered("row's command", await drawnInOrder(command))
+      } finally {
+        failures.push(...opened.errors)
+        await opened.close()
+      }
+      // The label, once the message is allowed.
+      opened = await onConversation(browser, url, layout)
+      try {
+        const { page } = opened
+        await page.evaluate((names) => window.__appReview.nameAs(names), {
+          server: pair.server,
+          tool: pair.tool,
+        })
+        if (!(await messaged(page, appReview.message))) {
+          failures.push(`${tag}: ${notDrawn}`)
+          continue
+        }
+        await page
+          .getByRole("button", { name: names.allowOnce, exact: true })
+          .first()
+          .click()
+        const author = page.locator(css.messageAuthor).first()
+        await author.waitFor({ timeout: 5000 }).catch(() => {})
+        if (!(await page.locator(css.messageAuthor).count())) {
+          failures.push(`${tag}: no label once the message was allowed`)
+          continue
+        }
+        const text = (await author.textContent().catch(() => null)) ?? ""
+        const expected = names.sentBy(pair.shownTool, pair.shownServer)
+        if (text !== expected)
+          failures.push(`${tag}: the label says ${JSON.stringify(text)}`)
+        const isolated = await labelNames(author)
+        if (
+          JSON.stringify(isolated) !== JSON.stringify([pair.shownTool, pair.shownServer])
+        )
+          failures.push(`${tag}: the label isolates ${JSON.stringify(isolated)}`)
+        ordered("label", await drawnInOrder(author))
+      } finally {
+        failures.push(...opened.errors)
+        await opened.close()
+      }
+    }
+    return { measured: seen, failures }
   },
 
   async "message-label"({ browser, url, layout, engine, options }) {
