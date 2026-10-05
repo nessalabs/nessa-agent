@@ -5,7 +5,7 @@ use super::{wire, McpError};
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
-use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
+use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri, UiVisibility};
 use crate::infrastructure::acp::sessions::{ForwardedResults, StandInGrant, StdioMcpServer};
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
@@ -421,7 +421,9 @@ impl McpServers {
 
     /// The tool `name` exactly as `session`'s own newest open session of
     /// `server` last listed it, or `None` when that list does not have it —
-    /// or there is no list yet, which an app cannot be acting on.
+    /// or there is no list yet, which an app cannot be acting on. A name
+    /// listed more than once is one tool: a side may see it only when every
+    /// entry says so, and the `resourceUri` and hints are the first entry's.
     ///
     /// # Errors
     ///
@@ -436,11 +438,19 @@ impl McpServers {
         let own = self.newest(session, server).ok_or(McpError::NoSession)?;
         let listed = own.tools.read().expect("tool list").clone();
         Ok(listed.and_then(|listed| {
-            listed
+            let combined = wire::one_visibility_per_name(
+                listed
+                    .tools
+                    .iter()
+                    .filter(|each| each.tool().tool() == name)
+                    .map(|each| (name.to_owned(), each.ui().visibility())),
+            );
+            let visibility = combined.first()?.1;
+            let first = listed
                 .tools
                 .iter()
-                .find(|each| each.tool().tool() == name)
-                .cloned()
+                .find(|each| each.tool().tool() == name)?;
+            Some(listed_as(first, visibility))
         }))
     }
 
@@ -806,7 +816,9 @@ async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
         match page.next {
             Some(next) => cursor = Some(next),
             None => {
-                session.visibility.listed(order, hidden);
+                session
+                    .visibility
+                    .listed(order, wire::hidden_for_model(&tools, &hidden));
                 let mut kept = session.tools.write().expect("tool list");
                 if kept.as_ref().is_none_or(|kept| kept.order < order) {
                     *kept = Some(Arc::new(Listed {
@@ -819,4 +831,14 @@ async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
         }
     }
     Err(McpError::TooLarge("tools/list"))
+}
+
+/// `first` with `visibility` in place of its own. The URI and hints stay
+/// `first`'s; who may see the name does not.
+fn listed_as(first: &ListedTool, visibility: UiVisibility) -> ListedTool {
+    ListedTool::new(
+        first.tool().clone(),
+        ToolUi::new(first.ui().resource_uri().cloned(), visibility),
+    )
+    .with_hints(first.hints())
 }
