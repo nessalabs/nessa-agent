@@ -6,7 +6,7 @@ use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState}
 use nessa_sdk::application::agent_execution::{
     agents::{
         AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
-        AttachmentFailureCode, AttachmentPhase,
+        AttachmentFailureCode, AttachmentPhase, ProviderDiagnostic,
     },
     permissions::ActionContext,
 };
@@ -114,6 +114,10 @@ async fn every_failure_a_warm_up_can_reach_is_discriminated() {
             AgentError::AttachmentAuthorizationStale,
             "attachment_authorization_stale",
         ),
+        (
+            AgentError::AuthenticationRequired { diagnostic: None },
+            "authentication_required",
+        ),
         (AgentError::Deadline, "deadline"),
         (AgentError::Closed, "closed"),
         (AgentError::CleanupUncertain, "cleanup_uncertain"),
@@ -191,4 +195,72 @@ async fn a_directory_that_cannot_be_written_reports_an_audit_failure() {
         audit.record(record(None)).await,
         Err(crate::agent_warm_up::application::WarmUpError::Audit(_))
     ));
+}
+
+#[tokio::test]
+async fn authentication_refusal_retains_bounded_context_and_independent_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("authentication");
+    let diagnostic = ProviderDiagnostic::new("expired ".repeat(1000));
+    let audit = DurableWarmUpAudit::new(directory.clone()).unwrap();
+    audit
+        .record(record(Some(ProviderFailure {
+            error: AgentError::MultipleOperationFailures {
+                first_error: Box::new(AgentError::AuthenticationRequired {
+                    diagnostic: Some(diagnostic.clone()),
+                }),
+                subsequent_error: Box::new(AgentError::AuditFailure),
+            },
+            cleanup_unconfirmed: true,
+        })))
+        .await
+        .unwrap();
+    let value = written(&directory);
+    assert_eq!(
+        value["failure"]["error"]["kind"],
+        "multiple_operation_failures"
+    );
+    assert_eq!(
+        value["failure"]["error"]["firstError"],
+        serde_json::json!({"kind": "authentication_required", "diagnostic": diagnostic.as_str()})
+    );
+    assert_eq!(
+        value["failure"]["error"]["subsequentError"],
+        serde_json::json!({"kind": "audit_failure"})
+    );
+    assert_eq!(value["failure"]["cleanupUnconfirmed"], true);
+    assert_eq!(value["transition"]["before"], "cold");
+    assert_eq!(value["transition"]["after"], "cold");
+    assert_eq!(value["cause"], "automatic_runtime_warm_up");
+    assert_eq!(value["correlationId"], "correlation");
+    assert_eq!(value["target"]["provider"], "claude-acp");
+    assert_eq!(value["requestedAtMs"], 1000);
+    assert_eq!(value["observedAtMs"], 2000);
+}
+
+#[tokio::test]
+async fn authentication_and_cleanup_keep_their_separate_audit_causes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("authentication-cleanup");
+    let audit = DurableWarmUpAudit::new(directory.clone()).unwrap();
+    audit
+        .record(record(Some(ProviderFailure {
+            error: AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(AgentError::AuthenticationRequired { diagnostic: None }),
+                cleanup_error: Box::new(AgentError::CleanupUncertain),
+            },
+            cleanup_unconfirmed: true,
+        })))
+        .await
+        .unwrap();
+    let value = written(&directory);
+    assert_eq!(
+        value["failure"]["error"],
+        serde_json::json!({
+            "kind": "operation_and_cleanup_failure",
+            "operationError": {"kind": "authentication_required", "diagnostic": null},
+            "cleanupError": {"kind": "cleanup_uncertain"},
+        })
+    );
+    assert_eq!(value["failure"]["cleanupUnconfirmed"], true);
 }

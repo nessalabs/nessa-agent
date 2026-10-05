@@ -12,8 +12,8 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 
 /// Bounded provider-supplied context for a typed provider failure.
 ///
-/// This text is diagnostic only. Callers must use the provider error code and
-/// the surrounding typed lifecycle reports for decisions about retries,
+/// This text is diagnostic only. Callers must use the typed failure, any
+/// provider error code, and the surrounding typed lifecycle reports for decisions about retries,
 /// admission, settlement, and resource ownership.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderDiagnostic(Box<str>);
