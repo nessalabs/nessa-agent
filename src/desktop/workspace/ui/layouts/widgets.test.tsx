@@ -30,15 +30,25 @@ import {
   openWidget,
 } from "../../adapters/store/commands"
 import { emptyTranscript } from "../../model/transcript"
-import { fakeSource, settle, shownIn, testStore } from "../../testing"
+import {
+  controlledAnimationFrames,
+  fakeSource,
+  flushAnimationFrames,
+  settle,
+  shownIn,
+  testStore,
+  type AnimationFrames,
+} from "../../testing"
 import { workspaceShortcuts } from "./shortcuts"
 import { ThreeColumns } from "./three-columns"
 
 let host: HTMLDivElement
 let root: Root
+let animation: AnimationFrames
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  animation = controlledAnimationFrames()
   class Observer {
     observe() {}
     unobserve() {}
@@ -61,6 +71,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  animation.restore()
 })
 
 type Store = ReturnType<typeof testStore>
@@ -104,7 +115,8 @@ async function render(): Promise<Store> {
   return store
 }
 
-const frames = () => act(async () => new Promise((resolve) => setTimeout(resolve, 80)))
+/** The frames focus asked for, run because the test says so. */
+const frames = () => flushAnimationFrames(animation, act)
 const shown = (store: Store) => shownIn(store.getState().workspace.panes)
 const content = (store: Store) => store.getState().workspace.content
 /** `value`, or a failed test saying what was not there. */

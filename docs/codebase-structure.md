@@ -234,8 +234,8 @@ writing the full defaults on first launch is buying.
   that only arrange them; `ui/panes/` a session's pane, a widget's
   (`widget-pane.tsx`) and the window over them (`widget-window.tsx`);
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
-  with `testing.ts` the fake source and store its tests share. The
-  window has its own store (`src/desktop/store.ts`) and composition
+  with `testing.ts` the fake source, the store, and the animation frames its
+  tests share. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection

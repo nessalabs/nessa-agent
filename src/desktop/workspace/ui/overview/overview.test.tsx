@@ -25,11 +25,13 @@ import {
 } from "../../adapters/store/commands"
 import { selectFocusedSessionId } from "../../adapters/store/selectors"
 import {
+  controlledAnimationFrames,
   fakeSource,
   keptFilter,
   settle,
   summary,
   testStore,
+  type AnimationFrames,
   type FakeSource,
 } from "../../testing"
 import { selectOverviewOpen } from "../../adapters/store/selectors"
@@ -50,22 +52,36 @@ const sampleAnswers: readonly ApprovalOption[] = [
 
 let root: Root
 let host: HTMLDivElement
+let animation: AnimationFrames
+
+// jsdom stamps a key's `timeStamp` with `Date.now()` when the event is built.
+// The overview takes a later answer only once `answerPause` has passed on
+// that clock (`takesAnswerKey`). A wall-clock wait is at least that long, so
+// under a loaded suite the clock can pass the pause while the test meant to
+// stay inside it. This clock moves only when `elapse` says so. A browser
+// stamps the same instant on `performance.now()`; one clock for both.
+let now = 1_000_000
+const elapse = (ms: number) => {
+  now += ms
+}
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  now = 1_000_000
+  vi.spyOn(Date, "now").mockImplementation(() => now)
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now())
+  animation = controlledAnimationFrames()
   Element.prototype.scrollIntoView ??= () => {}
   Element.prototype.scrollTo ??= () => {}
   host = document.createElement("div")
   document.body.append(host)
   root = createRoot(host)
-  // A browser stamps an event (`timeStamp`) on `performance.now()`'s clock;
-  // jsdom stamps it with `Date.now()`. One clock for both, as a browser has.
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now())
 })
 
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  animation.restore()
   vi.restoreAllMocks()
 })
 
@@ -193,9 +209,12 @@ const button = (scope: Element | null, words: string) =>
 const row = (sessionId: string) =>
   host.querySelector<HTMLElement>(`.agents-row[data-overview-item="${sessionId}"]`)
 
-/** Waits out a frame. */
+/** Runs one frame, and the render it asked for. The next frame waits its own turn. */
 const nextFrame = () =>
-  act(async () => new Promise<void>((done) => requestAnimationFrame(() => done())))
+  act(async () => {
+    animation.runFrame()
+    await settle(10)
+  })
 
 /** Opens the overview, and waits out its first frames, after which the keyboard is on it. */
 async function open() {
@@ -240,7 +259,7 @@ const moveOn = async (
     })
     await settle(10)
   })
-  await act(async () => new Promise<void>((done) => requestAnimationFrame(() => done())))
+  await nextFrame()
 }
 
 describe("the agents overview", () => {
@@ -316,7 +335,7 @@ describe("the agents overview", () => {
     // Held in place while it settles, saying what became of it.
     expect(card("first")?.dataset.phase).toBe("settled")
     // A new press, once the person can see where the keyboard went.
-    await act(async () => new Promise((done) => setTimeout(done, answerPause)))
+    elapse(answerPause)
     await press(card("second") as HTMLElement, "Backspace", { command: true })
     expect(source.calls).toContainEqual([
       "deny",
@@ -339,7 +358,7 @@ describe("the agents overview", () => {
         repeat: true,
       })
     // A second press 80ms after the first: before the person could see where the keyboard went.
-    await act(async () => new Promise((done) => setTimeout(done, 80)))
+    elapse(80)
     await press(document.activeElement as HTMLElement, "Enter", { command: true })
     // Nor does Return open it.
     await press(document.activeElement as HTMLElement, "Enter")
@@ -364,7 +383,7 @@ describe("the agents overview", () => {
       bubbles: true,
       cancelable: true,
     })
-    await act(async () => new Promise((done) => setTimeout(done, answerPause + 20)))
+    elapse(answerPause + 20)
     await act(async () => {
       document.activeElement?.dispatchEvent(early)
       await settle(10)
@@ -389,7 +408,7 @@ describe("the agents overview", () => {
     // The answer is pressed; the page gets to it only after the pause, and a
     // second press was made that long after the first: a choice, and taken.
     const answer = key()
-    await act(async () => new Promise((done) => setTimeout(done, answerPause + 30)))
+    elapse(answerPause + 30)
     const next = key()
     await act(async () => {
       card("first")?.dispatchEvent(answer)
@@ -630,7 +649,7 @@ describe("the agents overview", () => {
     await mount()
     await open()
     await press(card("first") as HTMLElement, "Enter", { command: true })
-    await act(async () => new Promise((done) => setTimeout(done, answerPause)))
+    elapse(answerPause)
     await press(card("second") as HTMLElement, "Enter", { command: true })
     expect(document.activeElement?.classList.contains("agents-overview-column")).toBe(
       true,
@@ -664,9 +683,7 @@ describe("the agents overview", () => {
     const { source, store } = await mount()
     await open()
     await press(card("second") as HTMLElement, "KeyR", { command: true })
-    await act(
-      async () => new Promise<void>((done) => requestAnimationFrame(() => done())),
-    )
+    await nextFrame()
     const field = host.querySelector<HTMLTextAreaElement>(
       '[data-reply-for="second"] textarea',
     )
@@ -1529,28 +1546,7 @@ describe("Escape in the overview", () => {
 })
 
 describe("the frame the overview opens on", () => {
-  // Frames come when the test says, so "the opening frame" is one frame.
-  let queued: FrameRequestCallback[] = []
-  const request = window.requestAnimationFrame
-  const cancel = window.cancelAnimationFrame
-  beforeEach(() => {
-    queued = []
-    window.requestAnimationFrame = (callback) => queued.push(callback)
-    window.cancelAnimationFrame = (id) => {
-      queued[id - 1] = () => {}
-    }
-  })
-  afterEach(() => {
-    window.requestAnimationFrame = request
-    window.cancelAnimationFrame = cancel
-  })
-  const frame = () =>
-    act(async () => {
-      const due = queued
-      queued = []
-      due.forEach((run) => run(0))
-      await settle(10)
-    })
+  // Frames come when the test says (`nextFrame`), so the opening frame is one frame.
 
   it("leaves at once, before the keyboard has landed on its row", async () => {
     const { store } = await mount()
@@ -1582,8 +1578,8 @@ describe("the frame the overview opens on", () => {
     }
     // Focusing in the opening frame would make it lay the page out early.
     expect(early).toEqual([])
-    await frame()
-    await frame()
+    await nextFrame()
+    await nextFrame()
     expect(document.activeElement).toBe(card("first"))
   })
 
@@ -1615,7 +1611,7 @@ describe("the frame the overview opens on", () => {
       expect(host.querySelector(".agents-overview-peek")?.childElementCount).toBe(0)
       // A frame on, the peek is drawn.
       for (let wait = 0; wait < 5 && !host.querySelector(".agents-peek"); wait++)
-        await frame()
+        await nextFrame()
       expect(host.querySelector(".agents-overview-peek .agents-peek")).not.toBeNull()
     } finally {
       Object.assign(globalThis, { ResizeObserver: was })
