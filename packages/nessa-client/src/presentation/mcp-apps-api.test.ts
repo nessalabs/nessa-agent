@@ -12,8 +12,12 @@ import {
 import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
-import { mcpAppCallTiming } from "../generated/product.js"
-import { mcpAppRequestProblem } from "../protocol/mcp-app-validate.js"
+import { bounds, mcpAppCallTiming } from "../generated/product.js"
+import {
+  MAX_MCP_CONTEXT_BYTES,
+  MAX_MCP_MESSAGE_BYTES,
+  mcpAppRequestProblem,
+} from "../protocol/mcp-app-validate.js"
 import { createMcpAppsApi, mcpAppDeadlines } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
@@ -880,4 +884,366 @@ it("is certain nothing reached the gateway for a request too large to send", asy
   )
   expect(error).toBeInstanceOf(NessaMcpAppError)
   expect(error).toMatchObject({ code: undefined, uncertain: false, cause })
+})
+
+describe("an app speaking in its conversation (#390)", () => {
+  /** A gateway that answers each method as it would when it took the request. */
+  const taking = () =>
+    vi.fn<Request>(async (method, params) =>
+      method === "mcp.sendMessage"
+        ? { executionId: "app-0123456789abcdef0123456789abcdef" }
+        : { requestId: (params as { requestId: string }).requestId, applied: true },
+    )
+  /** Exactly `bytes` UTF-8 bytes, two to a character. */
+  const twoByte = (bytes: number) => "é".repeat(bytes / 2)
+
+  it("sends a message as the app, waits as long as a call that waits on a review, and returns its turn", async () => {
+    const request = taking()
+    expect(
+      await api(request).sendMessage(conversationId, app, "charts", "Plot May", {
+        requestId: "message",
+      }),
+    ).toEqual({ executionId: "app-0123456789abcdef0123456789abcdef" })
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "mcp.sendMessage",
+      { conversationId, requestId: "message", app, server: "charts", text: "Plot May" },
+      { atLeastMs: mcpAppDeadlines.callToolMs },
+    )
+  })
+
+  it("K1: sends a message of one character, and of exactly its bound in UTF-8 bytes", async () => {
+    const request = taking()
+    const mcpApps = api(request)
+    await mcpApps.sendMessage(conversationId, app, "charts", "x")
+    await mcpApps.sendMessage(
+      conversationId,
+      app,
+      "charts",
+      twoByte(MAX_MCP_MESSAGE_BYTES),
+    )
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(MAX_MCP_MESSAGE_BYTES).toBe(bounds.maxMcpMessageBytes)
+  })
+
+  it.each([
+    ["no string", 7],
+    ["undefined", undefined],
+    ["empty text", ""],
+    ["one UTF-8 byte past its bound", `${twoByte(MAX_MCP_MESSAGE_BYTES)}x`],
+    ["a lone surrogate", "a\ud800"],
+  ])(
+    "K1: refuses a message that is %s before asking the gateway",
+    async (_name, text) => {
+      const request = taking()
+      await expect(
+        api(request).sendMessage(conversationId, app, "charts", text as string),
+      ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it("K1: says why a message is outside its bounds before a host sends it", () => {
+    expect(mcpAppRequestProblem.message("x")).toBeUndefined()
+    expect(mcpAppRequestProblem.message("")).toMatch(/1 character/)
+    expect(mcpAppRequestProblem.message(`${twoByte(MAX_MCP_MESSAGE_BYTES)}x`)).toMatch(
+      String(MAX_MCP_MESSAGE_BYTES),
+    )
+    expect(mcpAppRequestProblem.message("\udc00")).toMatch(/Unicode/)
+  })
+
+  it.each([
+    ["null", null],
+    ["a number", 5],
+    ["a string", "Showing April"],
+    ["an array", []],
+    ["an array carrying a part", Object.assign([], { text: "Showing April" })],
+    ["a class instance", new Date(0)],
+  ])(
+    "K2: refuses a context that is %s before asking the gateway",
+    async (_name, context) => {
+      const request = taking()
+      await expect(
+        api(request).updateModelContext(conversationId, app, "charts", context as object),
+      ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    ["a field it has no such part for", { content: "Showing April" }],
+    ["a part beside another field", { text: "Showing April", sequence: 1 }],
+    ["a symbol key", { text: "Showing April", [Symbol("part")]: "x" }],
+    [
+      "a part it hides from enumeration",
+      Object.defineProperty({}, "extra", { value: "x", enumerable: false }),
+    ],
+  ])(
+    "K3: refuses a context with %s before asking the gateway",
+    async (_name, context) => {
+      const request = taking()
+      await expect(
+        api(request).updateModelContext(conversationId, app, "charts", context as object),
+      ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it("K3: reads a context's own parts only, never one every object inherits", async () => {
+    const request = taking()
+    Object.defineProperty(Object.prototype, "text", {
+      value: "inherited",
+      configurable: true,
+    })
+    try {
+      await api(request).updateModelContext(conversationId, app, "charts", {
+        structuredContentJson: "{}",
+      })
+    } finally {
+      delete (Object.prototype as { text?: unknown }).text
+    }
+    expect(request.mock.calls[0]![1]).toEqual({
+      conversationId,
+      requestId: "generated",
+      app,
+      server: "charts",
+      structuredContentJson: "{}",
+    })
+  })
+
+  it("K4: sends each part at exactly its own bound, and both together for the gateway to judge", async () => {
+    const request = taking()
+    const structured = `{"a":"${"x".repeat(MAX_MCP_CONTEXT_BYTES - 8)}"}`
+    expect(new TextEncoder().encode(structured).byteLength).toBe(MAX_MCP_CONTEXT_BYTES)
+    await api(request).updateModelContext(conversationId, app, "charts", {
+      text: twoByte(MAX_MCP_CONTEXT_BYTES),
+      structuredContentJson: structured,
+    })
+    expect(request.mock.calls[0]![1]).toMatchObject({
+      text: twoByte(MAX_MCP_CONTEXT_BYTES),
+      structuredContentJson: structured,
+    })
+    expect(MAX_MCP_CONTEXT_BYTES).toBe(bounds.maxMcpContextBytes)
+  })
+
+  it.each([
+    ["text that is no string", { text: 5 }],
+    ["structured content that is null", { structuredContentJson: null }],
+    [
+      "text one UTF-8 byte past its bound",
+      { text: `${twoByte(MAX_MCP_CONTEXT_BYTES)}x` },
+    ],
+    [
+      "structured content one UTF-8 byte past its bound",
+      { structuredContentJson: `${twoByte(MAX_MCP_CONTEXT_BYTES)}x` },
+    ],
+    ["text holding a lone surrogate", { text: "\udc00" }],
+    [
+      "structured content holding a lone surrogate",
+      { structuredContentJson: '{"a":"\ud800"}' },
+    ],
+  ])(
+    "K4: refuses a context with %s before asking the gateway",
+    async (_name, context) => {
+      const request = taking()
+      await expect(
+        api(request).updateModelContext(conversationId, app, "charts", context as object),
+      ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it("K4: checks and sends one read of each part, so a part that changes as it is read sends what was checked", async () => {
+    const request = taking()
+    let reads = 0
+    const context = {
+      get text() {
+        reads++
+        return reads === 1 ? "Showing April" : 5
+      },
+    }
+    await api(request).updateModelContext(
+      conversationId,
+      app,
+      "charts",
+      context as object,
+    )
+    expect(reads).toBe(1)
+    expect(request.mock.calls[0]![1]).toMatchObject({ text: "Showing April" })
+  })
+
+  it("K5: sends {} as an update with neither part, a clear, and an empty text as given", async () => {
+    const request = taking()
+    const mcpApps = api(request)
+    const command = { conversationId, requestId: "context", app, server: "charts" }
+    expect(
+      await mcpApps.updateModelContext(
+        conversationId,
+        app,
+        "charts",
+        {},
+        { requestId: "context" },
+      ),
+    ).toEqual({ requestId: "context", applied: true })
+    await mcpApps.updateModelContext(
+      conversationId,
+      app,
+      "charts",
+      { text: undefined },
+      { requestId: "context" },
+    )
+    await mcpApps.updateModelContext(
+      conversationId,
+      app,
+      "charts",
+      { text: "" },
+      { requestId: "context" },
+    )
+    expect(request.mock.calls).toEqual([
+      ["mcp.updateModelContext", command, { atLeastMs: mcpAppDeadlines.callToolMs }],
+      ["mcp.updateModelContext", command, { atLeastMs: mcpAppDeadlines.callToolMs }],
+      [
+        "mcp.updateModelContext",
+        { ...command, text: "" },
+        { atLeastMs: mcpAppDeadlines.callToolMs },
+      ],
+    ])
+  })
+
+  it.each([
+    ["empty", ""],
+    ["one UTF-8 byte past its bound", "é".repeat(bounds.maxMcpNameBytes / 2) + "x"],
+    ["no string", 7],
+  ])(
+    "K6: refuses a server name that is %s before asking the gateway",
+    async (_name, server) => {
+      const request = taking()
+      const mcpApps = api(request)
+      await expect(
+        mcpApps.sendMessage(conversationId, app, server as string, "hi"),
+      ).rejects.toBeInstanceOf(TypeError)
+      await expect(
+        mcpApps.updateModelContext(conversationId, app, server as string, {}),
+      ).rejects.toBeInstanceOf(TypeError)
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it("K6: takes a server name of exactly its bound", async () => {
+    const request = taking()
+    const server = "é".repeat(bounds.maxMcpNameBytes / 2)
+    await api(request).sendMessage(conversationId, app, server, "hi")
+    await api(request).updateModelContext(conversationId, app, server, {})
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ["no turn", {}],
+    ["an empty turn", { executionId: "" }],
+    [
+      "a turn one byte past its bound",
+      { executionId: over(bounds.maxExecutionIdBytes + 1) },
+    ],
+    ["a turn that is no string", { executionId: 7 }],
+    ["an unknown field", { executionId: "app-turn", sent: true }],
+    ["no object", "app-turn"],
+    ["null", null],
+  ])("K7: refuses a message answer with %s as uncertain", async (_name, reply) => {
+    const error = await failure(
+      api(async () => reply).sendMessage(conversationId, app, "charts", "hi"),
+    )
+    expect(error).toBeInstanceOf(NessaMcpAppError)
+    expect(error).toMatchObject({ code: undefined, uncertain: true })
+  })
+
+  it("K7: takes a message answer whose turn is exactly its bound", async () => {
+    const executionId = over(bounds.maxExecutionIdBytes)
+    expect(
+      await api(async () => ({ executionId })).sendMessage(
+        conversationId,
+        app,
+        "charts",
+        "hi",
+      ),
+    ).toEqual({ executionId })
+  })
+
+  it.each([
+    ["another action", { requestId: "other", applied: true }],
+    ["no action", { applied: true }],
+    ["no applied flag", { requestId: "context" }],
+    ["an unknown field", { requestId: "context", applied: true, held: true }],
+  ])(
+    "K8: refuses a context answer acknowledging %s as uncertain",
+    async (_name, reply) => {
+      const error = await failure(
+        api(async () => reply).updateModelContext(
+          conversationId,
+          app,
+          "charts",
+          { text: "x" },
+          { requestId: "context" },
+        ),
+      )
+      expect(error).toBeInstanceOf(NessaMcpAppError)
+      expect(error).toMatchObject({ code: undefined, uncertain: true })
+    },
+  )
+
+  it("K9: is certain a message refused while a turn runs became no turn", async () => {
+    const cause = new NessaRpcError("turn_running", "busy")
+    const error = await failure(
+      api(() => Promise.reject(cause)).sendMessage(conversationId, app, "charts", "hi"),
+    )
+    expect(error).toBeInstanceOf(NessaMcpAppError)
+    expect(error).toMatchObject({ code: "turn_running", uncertain: false, cause })
+  })
+
+  // What the gateway means by each code for these two methods: refused before
+  // the message became a turn, or before the context was held, is certain.
+  // mcp_cancelled sends nothing: a withdrawn review, or a mount released or an
+  // opening ended first.
+  it.each([
+    "mcp_cancelled",
+    "mcp_approval_denied",
+    "mcp_approval_expired",
+    "mcp_app_unknown",
+    "mcp_server_mismatch",
+    "mcp_request_too_large",
+    "invalid_request",
+  ] as const)("K9: reports %s as certain for a message and a context", async (code) => {
+    for (const ask of [
+      (mcpApps: ReturnType<typeof api>) =>
+        mcpApps.sendMessage(conversationId, app, "charts", "hi"),
+      (mcpApps: ReturnType<typeof api>) =>
+        mcpApps.updateModelContext(conversationId, app, "charts", { text: "x" }),
+    ]) {
+      const error = await failure(
+        ask(api(() => Promise.reject(new NessaRpcError(code, "refused")))),
+      )
+      expect(error).toBeInstanceOf(NessaMcpAppError)
+      expect(error).toMatchObject({ code, uncertain: false })
+    }
+  })
+
+  // The agent may have the turn (submission_unresolved; audit_unavailable
+  // once it was sent, its turn withheld; a taken message whose evidence
+  // failed), or the code is one no command can be sure of.
+  it.each([
+    "submission_unresolved",
+    "audit_unavailable",
+    "conversation_storage_unavailable",
+    "agent_operation_failed",
+    "temporarily_unavailable",
+    "submission_conflict",
+  ] as const)("K9: reports %s as uncertain", async (code) => {
+    const error = await failure(
+      api(() => Promise.reject(new NessaRpcError(code, "failed"))).sendMessage(
+        conversationId,
+        app,
+        "charts",
+        "hi",
+      ),
+    )
+    expect(error).toMatchObject({ code, uncertain: true })
+  })
 })

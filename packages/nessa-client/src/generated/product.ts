@@ -1762,7 +1762,7 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
-/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first. */
+/** How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, since the gateway may open the conversation first. */
 export const mcpAppCallTiming = {
   reviewDeadlineMs: 300000,
   callTimeoutMs: 60000,

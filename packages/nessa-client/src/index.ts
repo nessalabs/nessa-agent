@@ -204,15 +204,19 @@ export {
 } from "./application/mcp-resource-fetch.js"
 export {
   MAX_MCP_ARGUMENTS_BYTES,
+  MAX_MCP_CONTEXT_BYTES,
+  MAX_MCP_MESSAGE_BYTES,
   MAX_MCP_RESOURCE_BYTES,
   MAX_MCP_RESULT_BYTES,
   mcpAppRequestProblem,
+  type McpAppModelContext,
 } from "./protocol/mcp-app-validate.js"
 export type {
   McpAppReference,
   McpCallToolResult,
   McpReadResourceResult,
   McpRemoteErrorDetails,
+  McpSendMessageResult,
   McpUiCsp,
   McpUiPermissions,
 } from "./generated/product.js"
@@ -252,6 +256,7 @@ export type {
   ImageAttachment,
   LinkedFile,
   ConversationMessage,
+  ConversationMessageApp,
   ConversationPart,
   ConversationRuntime,
   ConversationPending,

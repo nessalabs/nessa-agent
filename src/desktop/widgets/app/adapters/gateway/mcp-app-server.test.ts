@@ -147,6 +147,12 @@ function fakeApps(overrides: Partial<McpAppsApi> = {}) {
       async () => new Uint8Array(pageBytes) as Uint8Array<ArrayBuffer>,
     ),
     releaseApp: vi.fn<McpAppsApi["releaseApp"]>(acknowledged),
+    sendMessage: vi.fn<McpAppsApi["sendMessage"]>(async () => {
+      throw new Error("no message expected")
+    }),
+    updateModelContext: vi.fn<McpAppsApi["updateModelContext"]>(async () => {
+      throw new Error("no context expected")
+    }),
   }
   return Object.assign(apps, overrides)
 }

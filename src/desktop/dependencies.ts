@@ -151,6 +151,15 @@ function gatewayWorkspace(
         callTool: (...args) =>
           source.appCall(args[0], () => mcpApps().then((api) => api.callTool(...args))),
         readResource: (...args) => mcpApps().then((api) => api.readResource(...args)),
+        // A message waits on its review as a destructive call does, so it
+        // goes through the source too. Nothing in the window sends either
+        // yet; #390's desktop part does.
+        sendMessage: (...args) =>
+          source.appCall(args[0], () =>
+            mcpApps().then((api) => api.sendMessage(...args)),
+          ),
+        updateModelContext: (...args) =>
+          mcpApps().then((api) => api.updateModelContext(...args)),
         fetchResource: (...args) => mcpApps().then((api) => api.fetchResource(...args)),
         releaseApp: (...args) => mcpApps().then((api) => api.releaseApp(...args)),
       },
