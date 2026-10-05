@@ -946,9 +946,9 @@ smaller applicable ceiling. The one-per-socket and four-global permit owners are
 
 Tests: [fresh receiver authorization](../../../crates/nessa-server/tests/conversation/passive_read.rs),
 [physical scope and worker cleanup](../../../crates/nessa-server/tests/conversation/record_read/source.rs),
-[gateway session protocol](../../../crates/nessa-server/tests/read_only_sync/gateway/session.rs),
-[deadline streams](../../../crates/nessa-server/tests/read_only_sync/gateway/deadline_stream.rs),
-[durable cache](../../../crates/nessa-server/tests/read_only_sync/infrastructure/cache.rs),
+[gateway session protocol](../../../crates/nessa-client-core/tests/read_only_sync/gateway/session.rs),
+[deadline streams](../../../crates/nessa-client-core/tests/read_only_sync/gateway/deadline_stream.rs),
+[durable cache](../../../crates/nessa-client-core/tests/read_only_sync/infrastructure/cache.rs),
 [protected native sessions](../../../crates/nessa-server/tests/device_pairing/infrastructure/protected.rs)
 and [end-to-end receiver processes](../../../crates/nessa-server/tests/composition/read_only_online.rs).
 Socket capacity/wire-boundary regressions also live in the owning socket/codec files.
@@ -956,7 +956,7 @@ Socket capacity/wire-boundary regressions also live in the owning socket/codec f
 The [authorized reads design](../../design/authorized-record-reads.md) is marked
 implemented; its historical baseline/proposal wording must be read against current
 code. The [read-only receiver design](../../design/read-only-sync-example.md)
-and [receiver implementation](../../../crates/nessa-server/src/read_only_sync/mod.rs)
+and [receiver implementation](../../../crates/nessa-client-core/src/read_only_sync/mod.rs)
 cover retained checkpoints. Downloaded physical position and applied semantic
 position are different facts. The receiver pairs through native device
 pairing and reads over the protected native channel

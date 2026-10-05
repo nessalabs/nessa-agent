@@ -171,6 +171,12 @@ async fn tools_the_model_may_not_see_are_left_out_of_its_lists_and_refused_if_ca
         pages: vec![vec![
             json!({ "name": "show_chart", "_meta": { "ui": { "resourceUri": "ui://f/c", "visibility": ["model", "app"] } } }),
             json!({ "name": "refresh", "_meta": { "ui": { "resourceUri": "ui://f/c", "visibility": ["app"] } } }),
+            // A `_meta.ui` that is not an object is hidden from the model (#424).
+            json!({ "name": "ui_string", "_meta": { "ui": "app" } }),
+            json!({ "name": "ui_array", "_meta": { "ui": ["model", "app"] } }),
+            json!({ "name": "ui_number", "_meta": { "ui": 1 } }),
+            json!({ "name": "ui_boolean", "_meta": { "ui": false } }),
+            json!({ "name": "ui_null", "_meta": { "ui": null } }),
             json!({ "name": "echo" }),
         ]],
         ..Behaviour::default()
@@ -189,14 +195,24 @@ async fn tools_the_model_may_not_see_are_left_out_of_its_lists_and_refused_if_ca
         .map(|tool| tool["name"].clone())
         .collect();
     assert_eq!(names, [json!("show_chart"), json!("echo")]);
-    harness
-        .send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "refresh" } }))
-        .await;
-    let refused = harness.next().await.unwrap();
-    assert_eq!(
-        (refused["id"].clone(), refused["error"]["code"].clone()),
-        (json!(2), json!(-32602))
-    );
+    for (id, name) in [
+        (2, "refresh"),
+        (5, "ui_string"),
+        (6, "ui_array"),
+        (7, "ui_number"),
+        (8, "ui_boolean"),
+        (9, "ui_null"),
+    ] {
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name } }))
+            .await;
+        let refused = harness.next().await.unwrap();
+        assert_eq!(
+            (refused["id"].clone(), refused["error"]["code"].clone()),
+            (json!(id), json!(-32602)),
+            "{name}"
+        );
+    }
     assert_eq!(server.with_method("tools/call").len(), 0);
     // Listed again as the model's, it may be called again.
     server.set_pages(vec![vec![json!({ "name": "refresh" })]]);

@@ -2553,10 +2553,19 @@ impl ConversationService {
                     )))
                 }
             };
+            // The same person the deletion record names, for the records
+            // this delete still causes after the agent's stop — or instead
+            // of it, when this run holds no slot to stop.
+            let by = record
+                .deletion()
+                .and_then(|deletion| deletion_actor(deletion).ok())
+                .map(|actor| initiator_of(&actor))
+                .unwrap_or(McpAppInitiator::System);
             let finished = service.finish_deletion(record).await;
             // Its agent stopped — its apps ended by the deleter — or not:
-            // either way nothing names it again, and its apps take no more.
-            service.close_apps_for_good(&id);
+            // either way nothing names it again, and its apps take no more,
+            // ended as that same person.
+            service.close_apps_for_good(&id, &by);
             match finished {
                 Ok(()) => {
                     // Nothing is left for the worker to carry
@@ -2871,12 +2880,7 @@ impl ConversationService {
         if deletion.erased() {
             return Ok(());
         }
-        let actor = ActionContext::new(
-            deletion.initiator().as_str(),
-            deletion.surface(),
-            deletion.request(),
-        )
-        .map_err(|_| ConversationError::Metadata)?;
+        let actor = deletion_actor(&deletion)?;
         let slot = self.inner.conversations.lock().await.get(&id).cloned();
         if let Some(slot) = slot {
             // Retirement stops this agent itself, and must not wait here for
@@ -3502,6 +3506,16 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
     }
     let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
     (still_stopping || failures.history_leased_elsewhere).then_some(Waiting::ForRelease)
+}
+
+/// The caller recorded on a deletion, as the command that decided it.
+fn deletion_actor(deletion: &ConversationDeletion) -> Result<ActionContext, ConversationError> {
+    ActionContext::new(
+        deletion.initiator().as_str(),
+        deletion.surface(),
+        deletion.request(),
+    )
+    .map_err(|_| ConversationError::Metadata)
 }
 
 /// Who ended a conversation's apps, by the command `actor` took: the
