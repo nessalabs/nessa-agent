@@ -18,8 +18,11 @@
  * off, rename it, give it another command (every value entered again),
  * measure it narrow, meet a conflict a Node client makes
  * first, remove it, see a failed list's notice go once a reconnect lists;
- * then a credential that may only converse sees the administrator notice and
- * sends no mcpServers request. Last, the issue's Done-when: the server added
+ * meet a list too large to show, and a save refused for size; meet two
+ * servers stored by hand under one name, neither editable, the one asked
+ * from confirmed and the gateway removing the first stored; then a
+ * credential that may only converse sends one list, is refused it, and sees
+ * the administrator notice and no control. Last, the issue's Done-when: the server added
  * again from the window, a conversation in which the agent calls
  * `show_chart`, and the chart's app drawn once in the window.
  *
@@ -83,6 +86,7 @@ const steps = [
   "reconnect",
   "too-large",
   "save-too-large",
+  "duplicate-names",
   "non-admin",
   "done-when",
 ]
@@ -108,7 +112,7 @@ const BIG_ADDED = "big-extra"
 const meta = {
   name: "mcp-servers-gateway",
   summary:
-    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, a list too large to show, a save refused for size, non-admin, and an app drawn from a server added there",
+    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, a list too large to show, a save refused for size, two servers under one name, non-admin, and an app drawn from a server added there",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
   help: `
@@ -164,9 +168,16 @@ Steps, per engine, in order on one page (--only <names> to pick):
   reconnect  config.json made unreadable, the socket dropped: the list's
              failure is said; config.json restored, the socket dropped again:
              the list shown and the failure's notice gone
+  duplicate-names
+             config.json edited to store two servers under one name: each row
+             says so, Edit and the switch disabled, Inspect and Remove kept;
+             Remove asked from the second row asks there only, saying the
+             first stored goes, Cancel puts focus back on that row's Remove;
+             confirmed: one remove, one list, the gateway keeps the second,
+             focus on the row left (D2–D7); then config.json restored
   non-admin  a credential that may only converse (server.read and
-             conversation.*) sees the administrator notice,
-             no control, and sends no mcpServers request
+             conversation.*) sends one list, is refused it, and sees the
+             administrator notice and no control (U2)
   done-when  (once, after both engines) ${SERVER} added again from the window;
              the agent calls show_chart in a new conversation; in each engine
              its app frame renders the chart, once`,
@@ -477,6 +488,8 @@ const focused = (page) =>
             ? "inspection-heading"
             : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
       row: active.closest("[data-mcp-server]")?.getAttribute("data-mcp-server") ?? null,
+      // The stored row's place: two rows may share a name.
+      at: active.closest("[data-mcp-row]")?.getAttribute("data-mcp-row") ?? null,
       describedBy: active.getAttribute("aria-describedby")
         ? (document.getElementById(active.getAttribute("aria-describedby"))
             ?.textContent ?? null)
@@ -503,6 +516,24 @@ function bigConfig(original) {
   const bare = write(0).length
   const padding = Math.floor((FILE_LIMIT - FILE_SLACK - bare) / BIG_SERVERS)
   return { bytes: write(padding), padding, document }
+}
+
+/** The name the duplicate-names step stores twice, by hand. */
+const DUPLICATE = "twice"
+
+/** config.json with `DUPLICATE` stored twice: the first on, the second off. */
+function duplicateConfig(original) {
+  const document = JSON.parse(original.toString("utf8"))
+  document.agents.mcpServers = [
+    { name: DUPLICATE, command: process.execPath, args: [serverScript, "first"] },
+    {
+      name: DUPLICATE,
+      command: process.execPath,
+      args: [serverScript, "second"],
+      enabled: false,
+    },
+  ]
+  return Buffer.from(`${JSON.stringify(document, null, 2)}\n`)
 }
 
 /** The refusal a Node client's list gets, or `null` when it lists. */
@@ -1194,6 +1225,123 @@ const checks = {
     return { seen, failures }
   },
 
+  "duplicate-names": async (page, stack, context) => {
+    const failures = []
+    const tab = page.locator(css.mcpServers)
+    const original = readFileSync(stack.config)
+    const seen = {}
+    try {
+      writeFileSync(stack.config, duplicateConfig(original))
+      // The premise, from the gateway itself: it lists both under one name.
+      const premise = await stack.client.mcpServers.list()
+      seen.nodeList = premise.servers.map((each) => [each.name, each.args.at(-1)])
+      if (premise.servers.filter((each) => each.name === DUPLICATE).length !== 2)
+        throw new CannotRun(
+          `the gateway lists the hand-edited file as ${JSON.stringify(seen.nodeList)}`,
+        )
+      seen.dropped = await context.opened.drop()
+      seen.listed = await waitFor(
+        async () =>
+          (await page.locator(css.mcpRowNamed(DUPLICATE)).count()) === 2 &&
+          (await tab.getAttribute("data-mcp-servers")) === "listed",
+        20_000,
+      )
+      if (!seen.listed) {
+        failures.push(
+          `the tab is ${await tab.getAttribute("data-mcp-servers")} with ${await stored(page).count()} rows, not two named ${DUPLICATE}`,
+        )
+        return { seen, failures }
+      }
+      await settled(page)
+      // D2: each row says why; neither edits nor switches; Inspect and Remove stay.
+      seen.rows = []
+      for (const at of [0, 1]) {
+        const each = page.locator(css.mcpRowAt(at))
+        const shown = {
+          name: await each.getAttribute("data-mcp-server"),
+          shared: await each
+            .locator(css.mcpShared)
+            .textContent()
+            .catch(() => null),
+          edit: await button(each, names.mcp.edit).isEnabled(),
+          toggle: await each.locator(css.mcpSwitch).isEnabled(),
+          inspect: await button(each, names.mcp.inspect).isEnabled(),
+          remove: await button(each, names.mcp.remove).isEnabled(),
+        }
+        seen.rows.push(shown)
+        if (shown.name !== DUPLICATE) failures.push(`row ${at} is ${shown.name}`)
+        if (shown.shared !== names.mcp.nameShared)
+          failures.push(`row ${at} says "${shown.shared}"`)
+        if (shown.edit) failures.push(`row ${at}'s Edit is enabled`)
+        if (shown.toggle) failures.push(`row ${at}'s switch is enabled`)
+        if (!shown.inspect) failures.push(`row ${at}'s Inspect is disabled`)
+        if (!shown.remove) failures.push(`row ${at}'s Remove is disabled`)
+      }
+      // D4, D5: asked from the second row only; Cancel puts focus back there.
+      const second = page.locator(css.mcpRowAt(1))
+      const before = context.opened.sent.length
+      await button(second, names.mcp.remove).click()
+      seen.asked = await second.locator(css.mcpConfirm).textContent()
+      seen.firstAsked = await page
+        .locator(css.mcpRowAt(0))
+        .locator(css.mcpConfirm)
+        .count()
+      seen.onAsk = await focused(page)
+      await button(second, names.mcp.cancel).click()
+      seen.onCancel = await focused(page)
+      if (seen.asked !== names.mcp.removeFirstAsk(DUPLICATE))
+        failures.push(`row 1 asked "${seen.asked}"`)
+      if (seen.firstAsked !== 0) failures.push("row 0 shows the confirm too")
+      if (seen.onAsk.on !== "cancel" || seen.onAsk.at !== "1")
+        failures.push(`asked, focus is on ${JSON.stringify(seen.onAsk)}`)
+      if (seen.onCancel.on !== "remove" || seen.onCancel.at !== "1")
+        failures.push(`cancelled, focus is on ${JSON.stringify(seen.onCancel)}`)
+      // D6, D7: confirmed from the second row; the gateway removes the first stored.
+      await button(second, names.mcp.remove).click()
+      await second.locator(css.mcpAction("confirm")).click()
+      seen.relisted = await waitFor(
+        async () =>
+          (await stored(page).count()) === 1 &&
+          (await page.locator(css.mcpShared).count()) === 0 &&
+          (await focused(page)).on === "remove",
+        20_000,
+      )
+      await settled(page)
+      seen.requests = context.opened.sent.slice(before)
+      seen.onRemoved = await focused(page)
+      const after = await stack.client.mcpServers.list()
+      seen.left = after.servers
+        .filter((each) => !each.managed)
+        .map((each) => [each.name, each.args.at(-1), each.enabled])
+      const only = page.locator(css.mcpRowAt(0))
+      seen.editAfter = await button(only, names.mcp.edit).isEnabled()
+      seen.toggleAfter = await only.locator(css.mcpSwitch).isEnabled()
+      if (!seen.relisted) failures.push("the list did not come back with one row")
+      if (
+        JSON.stringify(seen.requests) !==
+        JSON.stringify(["mcpServers.remove", "mcpServers.list"])
+      )
+        failures.push(
+          `requests ${JSON.stringify(seen.requests)}, expected one remove then one list`,
+        )
+      if (JSON.stringify(seen.left) !== JSON.stringify([[DUPLICATE, "second", false]]))
+        failures.push(`the gateway kept ${JSON.stringify(seen.left)}`)
+      if (seen.onRemoved.on !== "remove" || seen.onRemoved.at !== "0")
+        failures.push(`removed, focus is on ${JSON.stringify(seen.onRemoved)}`)
+      if (!seen.editAfter) failures.push("the server left is not editable")
+      if (!seen.toggleAfter) failures.push("the server left cannot be switched")
+    } finally {
+      writeFileSync(stack.config, original)
+    }
+    seen.dropped = await context.opened.drop()
+    seen.restored =
+      (await visible(page.locator(css.mcpServersIn("listed")), 20_000)) &&
+      (await visible(page.locator(css.mcpEmpty), 5000))
+    await settled(page)
+    if (!seen.restored) failures.push("the restored list is not shown empty")
+    return { seen, failures }
+  },
+
   "non-admin": async (page, stack, context) => {
     const failures = []
     const reader = await signedIn(
@@ -1218,12 +1366,16 @@ const checks = {
         connection: await tab.getAttribute("data-connection").catch(() => null),
         text: (await group.textContent())?.includes(names.mcp.notAdmin),
         controls: await group.locator(css.control).count(),
-        requests: reader.sent.length,
+        requests: reader.sent,
       }
       if (!shown) failures.push("the tab does not show the administrator notice")
       if (!seen.text) failures.push(`no "${names.mcp.notAdmin}"`)
       if (seen.controls !== 0) failures.push(`${seen.controls} controls in the card`)
-      if (seen.requests !== 0) failures.push(`${seen.requests} mcpServers requests sent`)
+      // The gateway decides: one list asked, refused, and nothing after it.
+      if (JSON.stringify(seen.requests) !== JSON.stringify(["mcpServers.list"]))
+        failures.push(
+          `requests ${JSON.stringify(seen.requests)}, expected one list alone`,
+        )
       return { seen, failures: [...failures, ...reader.errors] }
     } finally {
       await reader.close()

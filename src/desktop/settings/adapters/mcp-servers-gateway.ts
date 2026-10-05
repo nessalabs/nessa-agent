@@ -1,13 +1,13 @@
 /**
  * The gateway's stored MCP servers, for Settings › Integrations: the window's
- * client (`client.mcpServers`, `client.productSession`) read into the
- * model's words (`model/mcp-servers.ts`). Each refusal code and problem is
+ * client (`client.mcpServers`) read into the model's words
+ * (`model/mcp-servers.ts`). Who may manage servers is the gateway's to say,
+ * by its answers; nothing here reads the credential's grants. Each refusal code and problem is
  * mapped by a total table, so a code the protocol adds is a type error here
  * rather than a sentence nobody wrote; a code this build does not know never
  * reaches the table (`NessaMcpServersError` narrows by membership).
  */
 import {
-  mayManageMcpServers,
   mcpServerInspect,
   McpServerKind,
   NessaMcpServersError,
@@ -22,7 +22,6 @@ import {
   type McpServersRefusal,
   type McpUiCsp,
   type McpUiPermissions,
-  type ProductSessionReady,
 } from "@nessa/client"
 import type {
   Failure,
@@ -40,15 +39,13 @@ import type {
 /** What Settings asks of the window's gateway client. */
 export interface McpServersClient {
   readonly mcpServers: McpServersApi
-  readonly productSession: ProductSessionReady
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
 }
 
 /** How the connection stands, as the tab follows it. */
 export type McpServersConnection =
-  | { readonly type: "connected"; readonly mayManage: boolean }
-  | { readonly type: "unreachable" }
+  { readonly type: "connected" } | { readonly type: "unreachable" }
 
 /** The stored servers, as Settings › Integrations manages them. */
 export interface McpServersGateway {
@@ -275,10 +272,7 @@ export function mcpServersGateway(options: {
             const tell = (state: ConnectionState) => {
               if (stopped) return
               if (state.status === "connected") {
-                handler({
-                  type: "connected",
-                  mayManage: mayManageMcpServers(client.productSession),
-                })
+                handler({ type: "connected" })
                 return
               }
               handler({ type: "unreachable" })

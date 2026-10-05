@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 /**
  * Settings › Integrations as drawn: the rows of the design's table the
- * reducer cannot see (#391 PR 3) — the pending row with no gateway (U1), no
- * request without the grant (U2), skeletons (U3), the rows (U5, U6, U27),
+ * reducer cannot see (#391 PR 3) — the pending row with no gateway (U1), nothing
+ * offered when the list is refused forbidden (U2), skeletons (U3), the rows (U5, U6, U27),
  * stored values (U10), and no variable value left in the DOM (U31) — the
  * argument rows, a value's line breaks, a changed launch (U33), a list too
- * large to show (U44–U46) and a save too large (U48) — and one
+ * large to show (U44–U46), a save too large (U48), and rows sharing a name
+ * (D2–D7) — and one
  * request for each the reducer names, under StrictMode too.
  */
 import { act, StrictMode } from "react"
@@ -51,7 +52,7 @@ const nessa = {
 }
 
 /** A gateway the test answers by hand: each request waits until it says. */
-function fakeGateway(mayManage = true) {
+function fakeGateway() {
   const requests: {
     method: string
     argument?: unknown
@@ -70,7 +71,7 @@ function fakeGateway(mayManage = true) {
     limits: { inspectDeadlineMs: 30_000 },
     follow(handler) {
       tell = handler
-      handler({ type: "connected", mayManage })
+      handler({ type: "connected" })
       return () => {}
     },
     list: () => ask("list"),
@@ -155,12 +156,19 @@ describe("Integrations", () => {
     expect(button("Add server…")?.disabled).toBe(true)
   })
 
-  it("U2: without the grant, the notice and no request at all", async () => {
-    const fake = fakeGateway(false)
+  it("U2: a list refused forbidden is the notice, no controls, and nothing more asked", async () => {
+    const fake = fakeGateway()
     await mount(fake.gateway)
+    // The gateway decides who may manage: the window asks, and goes by the answer.
+    expect(fake.requests.map((each) => each.method)).toEqual(["list"])
+    await answer(fake, "list", { ok: false, failure: { kind: "forbidden" } })
+    expect(
+      host.querySelector("[data-mcp-servers]")?.getAttribute("data-mcp-servers"),
+    ).toBe("not-admin")
     expect(host.textContent).toContain("Only an administrator can manage MCP servers.")
-    expect(fake.requests).toEqual([])
     expect(host.querySelector("button")).toBeNull()
+    expect(host.querySelector("[data-mcp-server]")).toBeNull()
+    expect(fake.requests.map((each) => each.method)).toEqual(["list"])
   })
 
   it("U3: skeleton rows while listing, Add disabled, and one list under StrictMode", async () => {
@@ -504,6 +512,92 @@ describe("Integrations", () => {
     expect(button("Inspect", row("charts"))?.disabled).toBe(false)
     await click(row("charts").querySelector('[role="switch"]') ?? undefined)
     expect(button("Inspect", row("charts"))?.disabled).toBe(true)
+  })
+
+  describe("rows sharing a name (D2–D7)", () => {
+    const first = { ...charts, args: ["first.mjs"] }
+    const second = { ...charts, args: ["second.mjs"] }
+    const docs = { ...charts, name: "docs" }
+    const rowAt = (at: number) => {
+      const found = host.querySelector(`[data-mcp-row="${at}"]`)
+      if (!found) throw new Error(`no row at ${at}`)
+      return found
+    }
+    async function twice() {
+      const fake = fakeGateway()
+      await mount(fake.gateway)
+      await answer(fake, "list", list(docs, first, second, nessa))
+      return fake
+    }
+    const toggle = (within: Element) =>
+      within.querySelector<HTMLButtonElement>('[role="switch"]')
+
+    it("D2: each shared row says why, and offers neither Edit nor the switch; Inspect and Remove stay", async () => {
+      await twice()
+      for (const at of [1, 2]) {
+        const shared = rowAt(at).querySelector("[data-mcp-shared]")
+        expect(shared?.textContent).toBe(
+          "Two servers share this name: remove one to edit the other.",
+        )
+        expect(button("Edit", rowAt(at))?.disabled).toBe(true)
+        expect(button("Edit", rowAt(at))?.getAttribute("aria-describedby")).toContain(
+          shared?.id,
+        )
+        expect(toggle(rowAt(at))?.disabled).toBe(true)
+        expect(button("Inspect", rowAt(at))?.disabled).toBe(false)
+        expect(button("Remove", rowAt(at))?.disabled).toBe(false)
+      }
+      // The name stored once is untouched.
+      expect(rowAt(0).querySelector("[data-mcp-shared]")).toBeNull()
+      expect(button("Edit", rowAt(0))?.disabled).toBe(false)
+      expect(toggle(rowAt(0))?.disabled).toBe(false)
+    })
+
+    it("D4: Remove asks on the row it was pressed on only, saying the first stored goes", async () => {
+      await twice()
+      await click(button("Remove", rowAt(2)))
+      expect(rowAt(1).querySelector("[data-mcp-confirm]")).toBeNull()
+      expect(button("Edit", rowAt(1))).toBeDefined()
+      expect(rowAt(2).querySelector("[data-mcp-confirm]")?.textContent).toBe(
+        "Remove the first server stored under “charts”? New conversations stop getting it. Open ones keep it until they close.",
+      )
+      expect(document.activeElement).toBe(button("Cancel", rowAt(2)))
+    })
+
+    it("D5: Cancel and Escape put focus back on the Remove of the row asked from", async () => {
+      await twice()
+      await click(button("Remove", rowAt(2)))
+      await click(button("Cancel", rowAt(2)))
+      expect(document.activeElement).toBe(button("Remove", rowAt(2)))
+      await click(button("Remove", rowAt(2)))
+      await press(document.activeElement, "Escape")
+      expect(rowAt(2).querySelector("[data-mcp-confirm]")).toBeNull()
+      expect(document.activeElement).toBe(button("Remove", rowAt(2)))
+    })
+
+    it("D6 and D7: confirmed, the name is sent, and focus goes to the row now at that place", async () => {
+      const fake = await twice()
+      await click(button("Remove", rowAt(1)))
+      await click(rowAt(1).querySelector('[data-mcp-action="confirm"]') ?? undefined)
+      expect(fake.requests.at(-1)).toMatchObject({
+        method: "remove",
+        argument: { revision: "r1", name: "charts" },
+      })
+      await answer(fake, "remove", { ok: true, value: undefined })
+      await answer(fake, "list", list(docs, second, nessa))
+      expect(rowAt(1).querySelector("[data-mcp-shared]")).toBeNull()
+      expect(button("Edit", rowAt(1))?.disabled).toBe(false)
+      expect(document.activeElement).toBe(button("Remove", rowAt(1)))
+    })
+
+    it("D7: past the last row, focus goes to the other row of that name", async () => {
+      const fake = await twice()
+      await click(button("Remove", rowAt(2)))
+      await click(rowAt(2).querySelector('[data-mcp-action="confirm"]') ?? undefined)
+      await answer(fake, "remove", { ok: true, value: undefined })
+      await answer(fake, "list", list(docs, second, nessa))
+      expect(document.activeElement).toBe(button("Remove", rowAt(1)))
+    })
   })
 
   describe("focus", () => {

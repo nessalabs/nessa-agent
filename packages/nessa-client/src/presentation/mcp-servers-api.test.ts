@@ -4,7 +4,7 @@ import { NessaMcpServersError } from "../application/mcp-servers-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import type { RequestDeadline } from "../application/session-port.js"
 import { McpServersErrorCode, mcpServerInspect } from "../generated/product.js"
-import { createMcpServersApi, mayManageMcpServers } from "./mcp-servers-api.js"
+import { createMcpServersApi } from "./mcp-servers-api.js"
 
 const entry = {
   kind: "stdio",
@@ -344,21 +344,5 @@ describe("NessaMcpServersError narrows the refusal", () => {
     const error = await failure(api.save({} as never))
     expect(error.cause).toBe(lost)
     expect(error.refusal).toBeUndefined()
-  })
-})
-
-describe("mayManageMcpServers", () => {
-  const grant = (action: string) => ({
-    action,
-    resource: { organizationId: "o", id: "r" },
-  })
-  it("is true only with the grant the gateway asks for", () => {
-    expect(mayManageMcpServers({ grants: [grant("credential.manage")] })).toBe(true)
-    expect(
-      mayManageMcpServers({
-        grants: [grant("conversation.read"), grant("conversation.write")],
-      }),
-    ).toBe(false)
-    expect(mayManageMcpServers({ grants: [] })).toBe(false)
   })
 })

@@ -167,10 +167,7 @@ export {
   type McpResourceDescription,
 } from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
-export {
-  mayManageMcpServers,
-  type McpServersApi,
-} from "./presentation/mcp-servers-api.js"
+export { type McpServersApi } from "./presentation/mcp-servers-api.js"
 export {
   NessaMcpServersError,
   type McpServersMethod,

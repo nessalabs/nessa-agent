@@ -182,6 +182,8 @@ export const css = {
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
   mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
   mcpStoredRow: "[data-mcp-server]:not([data-managed])",
+  mcpRowAt: (at) => `[data-mcp-row="${at}"]`, // a stored row by its place in stored order
+  mcpShared: "[data-mcp-shared]", // a row's "Two servers share this name…"
   mcpManagedRow: "[data-mcp-server][data-managed]",
   mcpRowText: ".settings-row-text", // class: a row's name, command and variables
   mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
@@ -375,6 +377,9 @@ export const names = {
       "This would make the server list too large; remove a server or shorten its arguments.",
     removeAsk: (name) =>
       `Remove “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    removeFirstAsk: (name) =>
+      `Remove the first server stored under “${name}”? New conversations stop getting it. Open ones keep it until they close.`,
+    nameShared: "Two servers share this name: remove one to edit the other.",
   },
   /** A sample session (in-memory source) that waits on an approval. */
   approvalSession: "Release build signing",

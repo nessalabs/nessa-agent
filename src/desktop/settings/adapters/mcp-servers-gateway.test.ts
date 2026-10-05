@@ -10,7 +10,6 @@ import {
   NessaRpcError,
   type ConnectionState,
   type McpServersApi,
-  type ProductSessionReady,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import {
@@ -125,17 +124,11 @@ describe("failureOf", () => {
   })
 })
 
-function client(grants: string[], api: Partial<McpServersApi> = {}) {
+function client(api: Partial<McpServersApi> = {}) {
   let state: ConnectionState = { status: "connected" }
   const handlers = new Set<(state: ConnectionState) => void>()
   const value: McpServersClient = {
     mcpServers: api as McpServersApi,
-    productSession: {
-      grants: grants.map((action) => ({
-        action,
-        resource: { organizationId: "o", id: "r" },
-      })),
-    } as unknown as ProductSessionReady,
     get connectionState() {
       return state
     },
@@ -157,8 +150,8 @@ function client(grants: string[], api: Partial<McpServersApi> = {}) {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe("mcpServersGateway", () => {
-  it("follows the connection and whether this credential may manage", async () => {
-    const admin = client(["credential.manage"])
+  it("follows the connection, and leaves who may manage to the gateway's answers", async () => {
+    const admin = client()
     const timers: (() => void)[] = []
     const gateway = mcpServersGateway({
       connected: () => Promise.resolve(admin.value),
@@ -173,16 +166,16 @@ describe("mcpServersGateway", () => {
     admin.set({ status: "reconnecting", attempt: 1, error: new Error() as never })
     admin.set({ status: "connected" })
     expect(seen).toEqual([
-      { type: "connected", mayManage: true },
+      { type: "connected" },
       { type: "unreachable" },
-      { type: "connected", mayManage: true },
+      { type: "connected" },
     ])
     stop()
     expect(admin.handlers.size).toBe(0)
   })
 
   it("is unreachable while no client connects, and tries again", async () => {
-    const reader = client(["conversation.read"])
+    const reader = client()
     let attempts = 0
     const timers: (() => void)[] = []
     const gateway = mcpServersGateway({
@@ -201,16 +194,13 @@ describe("mcpServersGateway", () => {
     expect(seen).toEqual([{ type: "unreachable" }])
     timers.shift()!()
     await flush()
-    expect(seen).toEqual([
-      { type: "unreachable" },
-      { type: "connected", mayManage: false },
-    ])
+    expect(seen).toEqual([{ type: "unreachable" }, { type: "connected" }])
   })
 
   it("sends a save as the wire takes it, a stdio server", async () => {
     const save = vi.fn(() => Promise.resolve({ revision: "r2" }))
     const gateway = mcpServersGateway({
-      connected: () => Promise.resolve(client([], { save }).value),
+      connected: () => Promise.resolve(client({ save }).value),
       after: () => () => {},
     })
     await expect(
@@ -268,7 +258,7 @@ describe("mcpServersGateway", () => {
       }),
     )
     const gateway = mcpServersGateway({
-      connected: () => Promise.resolve(client([], { inspect }).value),
+      connected: () => Promise.resolve(client({ inspect }).value),
       after: () => () => {},
     })
     expect(await gateway.inspect("charts")).toEqual({
@@ -317,7 +307,7 @@ describe("mcpServersGateway", () => {
       }),
     )
     const gateway = mcpServersGateway({
-      connected: () => Promise.resolve(client([], { inspect }).value),
+      connected: () => Promise.resolve(client({ inspect }).value),
       after: () => () => {},
     })
     const answered = await gateway.inspect("all")

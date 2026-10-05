@@ -20,6 +20,7 @@ import {
   initialMcpServersState,
   mcpServersReducer,
   sentences,
+  sharesName,
   storedServers,
   type FormField,
   type InspectedTool,
@@ -112,18 +113,24 @@ function useRequests(
   }, [gateway, running, dispatch])
 }
 
-/** A button focus may go back to: a row's, by its server's name, or Add. */
+/**
+ * A button focus may go back to: a stored row's by its place (`at`), a row's
+ * by its server's name, or Add.
+ */
 export interface FocusTarget {
   readonly action: "edit" | "inspect" | "remove" | "add" | "removeByName"
   readonly server?: string
+  readonly at?: number
 }
 
 /**
  * Where focus goes back to when the form, the confirm or the inspection
  * closes between `previous` and `next`: the first of these drawn, once it is
  * enabled. `null` when nothing closed. A saved form goes back to the row
- * under the name saved, a cancelled one to the row it edited; a removed row
- * is gone, so Add.
+ * under the name saved, a cancelled one to the row it edited. A confirm goes
+ * back to the row it was asked from by place — rows may share a name — so a
+ * removed row's place is taken by the row below it; past the last row, to a
+ * row of that name (the other of two that shared it), else Add.
  */
 export function focusAfter(
   previous: McpServersState,
@@ -140,7 +147,10 @@ export function focusAfter(
         ]
   if (previous.confirming !== null && next.confirming === null)
     return [
-      { action: "remove", server: previous.confirming },
+      ...(previous.confirming.at === null
+        ? []
+        : [{ action: "remove" as const, at: previous.confirming.at }]),
+      { action: "remove", server: previous.confirming.name },
       // A list too large to show has no rows: back to the name field (U44).
       { action: "removeByName" },
       add,
@@ -152,11 +162,13 @@ export function focusAfter(
 
 function buttonFor(container: HTMLElement, target: FocusTarget) {
   const scope =
-    target.server === undefined
-      ? container
-      : [...container.querySelectorAll("[data-mcp-server]")].find(
-          (row) => row.getAttribute("data-mcp-server") === target.server,
-        )
+    target.at !== undefined
+      ? container.querySelector(`[data-mcp-row="${target.at}"]`)
+      : target.server === undefined
+        ? container
+        : [...container.querySelectorAll("[data-mcp-server]")].find(
+            (row) => row.getAttribute("data-mcp-server") === target.server,
+          )
   return scope?.querySelector<HTMLButtonElement | HTMLInputElement>(
     `[data-mcp-action="${target.action}"]`,
   )
@@ -365,6 +377,7 @@ function ServersBody({
           {stored.map((server, at) => (
             <ServerRow
               key={`${at}:${server.name}`}
+              at={at}
               server={server}
               state={state}
               dispatch={dispatch}
@@ -438,7 +451,7 @@ function TooLargeBody({
         />
         {state.confirming !== null ? (
           <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeAsk(state.confirming)}
+            {sentences.removeAsk(state.confirming.name)}
           </p>
         ) : null}
       </div>
@@ -487,19 +500,25 @@ function TooLargeBody({
 }
 
 function ServerRow({
+  at,
   server,
   state,
   dispatch,
 }: {
+  /** Its place among the stored servers; none for the managed one. */
+  at?: number
   server: ListedServer
   state: McpServersState
   dispatch: Dispatch
 }) {
   const nameId = useId()
   const askId = useId()
+  const sharedId = useId()
   const cancel = useRef<HTMLButtonElement>(null)
   const writable = canWrite(state) && state.form === null
-  const confirming = state.confirming === server.name
+  // By place: two rows may share a name, and only one was asked from.
+  const confirming = at !== undefined && state.confirming?.at === at
+  const shared = !server.managed && sharesName(state, server.name)
   const command = [server.command, ...server.args].join(" ")
   useEffect(() => {
     if (confirming) cancel.current?.focus()
@@ -515,6 +534,7 @@ function ServerRow({
     <div
       className="settings-row settings-server"
       data-mcp-server={server.name}
+      data-mcp-row={at}
       data-managed={server.managed || undefined}
       onKeyDown={onKeyDown}
     >
@@ -526,9 +546,16 @@ function ServerRow({
             ? sentences.managed
             : sentences.variables(server.envNames.length)}
         </small>
+        {shared ? (
+          <small id={sharedId} data-mcp-shared>
+            {sentences.nameShared}
+          </small>
+        ) : null}
         {confirming ? (
           <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeAsk(server.name)}
+            {shared
+              ? sentences.removeFirstAsk(server.name)
+              : sentences.removeAsk(server.name)}
           </p>
         ) : null}
       </div>
@@ -568,8 +595,8 @@ function ServerRow({
                   type="button"
                   className="settings-button"
                   data-mcp-action="edit"
-                  aria-describedby={nameId}
-                  disabled={!writable}
+                  aria-describedby={shared ? `${nameId} ${sharedId}` : nameId}
+                  disabled={!writable || shared}
                   onClick={() => dispatch({ type: "edit", name: server.name })}
                 >
                   Edit
@@ -592,7 +619,10 @@ function ServerRow({
                   data-mcp-action="remove"
                   aria-describedby={nameId}
                   disabled={!writable}
-                  onClick={() => dispatch({ type: "askRemove", name: server.name })}
+                  onClick={() =>
+                    at !== undefined &&
+                    dispatch({ type: "askRemove", name: server.name, at })
+                  }
                 >
                   Remove
                 </button>,
@@ -600,7 +630,7 @@ function ServerRow({
         <Toggle
           checked={server.enabled}
           label={server.name}
-          disabled={server.managed || !writable || confirming}
+          disabled={server.managed || !writable || confirming || shared}
           onChange={() => dispatch({ type: "toggle", name: server.name })}
         />
       </div>

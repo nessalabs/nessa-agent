@@ -11,35 +11,12 @@ import {
   type McpServersRemoveParams,
   type McpServersSaveParams,
   type McpServersWriteResult,
-  type ProductSessionReady,
 } from "../generated/product.js"
 import {
   mcpServersInspectResult,
   mcpServersListResult,
   mcpServersWriteResult,
 } from "../protocol/mcp-servers-validate.js"
-
-/**
- * The grant the gateway asks for before it dispatches any mcpServers method:
- * a configured server runs with the gateway's authority and is given its
- * variables, credentials among them. The gateway's `action_for_method`
- * (`crates/nessa-server/src/product/socket.rs`) owns the mapping and the
- * schema does not publish it yet; this is read only to choose what to offer,
- * and the gateway's `forbidden` stays the answer.
- */
-const manageAction = "credential.manage"
-
-/**
- * Whether this session's credential carries the grant mcpServers methods are
- * asked for. A session without it is refused `forbidden` by every one of them,
- * so a surface need not ask; one with it may still be refused, and should go
- * by the refusal.
- */
-export function mayManageMcpServers(
-  session: Pick<ProductSessionReady, "grants">,
-): boolean {
-  return session.grants.some((grant) => grant.action === manageAction)
-}
 
 /**
  * The gateway's stored MCP servers: list them, save one, remove one, and

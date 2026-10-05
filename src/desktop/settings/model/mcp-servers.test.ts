@@ -19,6 +19,7 @@ import {
   initialMcpServersState,
   mcpServersReducer,
   sentences,
+  sharesName,
   type Failure,
   type Inspection,
   type ListedServer,
@@ -78,26 +79,55 @@ function typedArgs(state: McpServersState, ...values: string[]) {
 
 /** Connected as an administrator, the list answered. */
 function listed(list: ServerList = listOf(charts, nessa)) {
-  return answer(
-    run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
-    ok(list),
-  )
+  return answer(run(initialMcpServersState(limits), { type: "connected" }), ok(list))
 }
 
 describe("access", () => {
-  it("U2: without the grant, the admin notice and no request", () => {
-    const state = run(initialMcpServersState(limits), {
-      type: "connected",
-      mayManage: false,
-    })
+  it("U2 (A1): access is unknown until the gateway answers, and a list is asked for", () => {
+    const state = run(initialMcpServersState(limits), { type: "connected" })
+    expect(state.access).toBe("unknown")
+    expect(state.pending).toEqual({ kind: "list", seq: 1 })
+    expect(canWrite(state)).toBe(false)
+  })
+
+  it("U2 (A2): a list given is the gateway's yes", () => {
+    expect(listed().access).toBe("admin")
+  })
+
+  it("U2 (A3): a list refused forbidden is the admin notice, nothing offered", () => {
+    const state = answer(
+      run(initialMcpServersState(limits), { type: "connected" }),
+      no({ kind: "forbidden" }),
+    )
     expect(state.access).toBe("notAdmin")
     expect(state.pending).toBeNull()
     expect(canWrite(state)).toBe(false)
+    expect(canInspect(state)).toBe(false)
     expect(run(state, { type: "retry" }).pending).toBeNull()
     expect(run(state, { type: "add" }).form).toBeNull()
   })
 
-  it("U20: forbidden mid-session is U2, whatever was open", () => {
+  it("U2 (A4): a connection again asks again, and the answer stands", () => {
+    let state = answer(
+      run(initialMcpServersState(limits), { type: "connected" }),
+      no({ kind: "forbidden" }),
+    )
+    state = run(state, { type: "unreachable" }, { type: "connected" })
+    expect(state.pending?.kind).toBe("list")
+    expect(answer(state, no({ kind: "forbidden" })).access).toBe("notAdmin")
+    expect(answer(state, ok(listOf(charts))).access).toBe("admin")
+  })
+
+  it("U2 (A5): a list that failed otherwise may be tried again", () => {
+    const state = answer(
+      run(initialMcpServersState(limits), { type: "connected" }),
+      no({ kind: "unanswered" }),
+    )
+    expect(state.access).toBe("unknown")
+    expect(run(state, { type: "retry" }).pending?.kind).toBe("list")
+  })
+
+  it("U20 (A6): forbidden mid-session is U2, whatever was open", () => {
     let state = run(listed(), { type: "edit", name: "charts" })
     state = run(state, { type: "save" })
     state = answer(state, no({ kind: "forbidden" }))
@@ -119,10 +149,7 @@ describe("access", () => {
 
 describe("listing", () => {
   it("U3: listing on connection, Add not offered until listed", () => {
-    const state = run(initialMcpServersState(limits), {
-      type: "connected",
-      mayManage: true,
-    })
+    const state = run(initialMcpServersState(limits), { type: "connected" })
     expect(state.pending).toEqual({ kind: "list", seq: 1 })
     expect(state.list.phase).toBe("loading")
     expect(canWrite(state)).toBe(false)
@@ -131,7 +158,7 @@ describe("listing", () => {
 
   it("U4: not configured says so and offers no Add", () => {
     const state = answer(
-      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      run(initialMcpServersState(limits), { type: "connected" }),
       no({ kind: "notConfigured" }),
     )
     expect(state.list.phase).toBe("notConfigured")
@@ -156,10 +183,7 @@ describe("listing", () => {
   })
 
   it("an answer for a request since replaced changes nothing", () => {
-    const state = run(initialMcpServersState(limits), {
-      type: "connected",
-      mayManage: true,
-    })
+    const state = run(initialMcpServersState(limits), { type: "connected" })
     expect(run(state, { type: "answered", seq: 99, outcome: ok(listOf(charts)) })).toBe(
       state,
     )
@@ -169,11 +193,11 @@ describe("listing", () => {
     // The list fails, the connection drops and returns, the list succeeds:
     // the failure is answered, and its notice goes.
     let state = answer(
-      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      run(initialMcpServersState(limits), { type: "connected" }),
       no({ kind: "configInvalid" }),
     )
     expect(state.notice).toEqual({ text: sentences.configInvalid, from: "list" })
-    state = run(state, { type: "unreachable" }, { type: "connected", mayManage: true })
+    state = run(state, { type: "unreachable" }, { type: "connected" })
     expect(state.notice?.text).toBe(sentences.configInvalid)
     state = answer(state, ok(listOf(charts, nessa)))
     expect(state.list.phase).toBe("listed")
@@ -186,7 +210,7 @@ describe("listing", () => {
     expect(state.notice).toEqual({ text: sentences.unanswered, from: "write" })
     state = answer(state, ok(listOf(charts, nessa)))
     expect(state.notice?.text).toBe(sentences.unanswered)
-    state = run(state, { type: "unreachable" }, { type: "connected", mayManage: true })
+    state = run(state, { type: "unreachable" }, { type: "connected" })
     state = answer(state, ok(listOf(charts, nessa)))
     expect(state.notice?.text).toBe(sentences.unanswered)
     expect(run(state, { type: "add" }).notice).toBeNull()
@@ -194,7 +218,7 @@ describe("listing", () => {
 
   it("a list that fails says so and lists again only when asked", () => {
     let state = answer(
-      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      run(initialMcpServersState(limits), { type: "connected" }),
       no({ kind: "unanswered" }),
     )
     expect(state.list.phase).toBe("failed")
@@ -522,15 +546,15 @@ describe("the switch", () => {
   it("U27: the managed server's switch sends nothing", () => {
     const state = listed()
     expect(run(state, { type: "toggle", name: "nessa" })).toBe(state)
-    expect(run(state, { type: "askRemove", name: "nessa" }).confirming).toBeNull()
+    expect(run(state, { type: "askRemove", name: "nessa", at: 1 }).confirming).toBeNull()
     expect(run(state, { type: "inspect", name: "nessa" }).inspection).toBeNull()
   })
 })
 
 describe("removing", () => {
   it("U13: confirmed, the removal is sent and the list read again", () => {
-    let state = run(listed(), { type: "askRemove", name: "charts" })
-    expect(state.confirming).toBe("charts")
+    let state = run(listed(), { type: "askRemove", name: "charts", at: 0 })
+    expect(state.confirming).toEqual({ name: "charts", at: 0 })
     expect(state.pending).toBeNull()
     state = run(state, { type: "confirmRemove" })
     expect(state.pending).toMatchObject({
@@ -547,7 +571,7 @@ describe("removing", () => {
   it("U14: cancelled, nothing is sent", () => {
     const state = run(
       listed(),
-      { type: "askRemove", name: "charts" },
+      { type: "askRemove", name: "charts", at: 0 },
       { type: "cancelRemove" },
     )
     expect(state.confirming).toBeNull()
@@ -689,7 +713,11 @@ describe("refusals", () => {
 
   it("U16: not found says so and reloads", () => {
     const state = answer(
-      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      run(
+        listed(),
+        { type: "askRemove", name: "charts", at: 0 },
+        { type: "confirmRemove" },
+      ),
       no({ kind: "notFound" }),
     )
     expect(state.notice?.text).toBe(sentences.notFound)
@@ -711,7 +739,11 @@ describe("refusals", () => {
     expect(state.pending).toBeNull()
     expect(state.form?.command).toBe("/bin/new")
     const removing = answer(
-      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      run(
+        listed(),
+        { type: "askRemove", name: "charts", at: 0 },
+        { type: "confirmRemove" },
+      ),
       no({ kind: "stopping" }),
     )
     expect(removing.notice?.text).toBe(sentences.stopping)
@@ -737,7 +769,11 @@ describe("refusals", () => {
     expect(state.form).toBeNull()
     expect(state.pending?.kind).toBe("list")
     const removed = answer(
-      run(listed(), { type: "askRemove", name: "charts" }, { type: "confirmRemove" }),
+      run(
+        listed(),
+        { type: "askRemove", name: "charts", at: 0 },
+        { type: "confirmRemove" },
+      ),
       no({ kind: "storageUnavailable", applied: true }),
     )
     expect(removed.notice?.text).toBe("Removed, but it may not survive a crash.")
@@ -824,7 +860,7 @@ describe("in flight", () => {
       { type: "toggle", name: "charts" },
       { type: "add" },
       { type: "edit", name: "charts" },
-      { type: "askRemove", name: "charts" },
+      { type: "askRemove", name: "charts", at: 0 },
       { type: "retry" },
     ] as const)
       expect(run(state, event).pending).toBe(state.pending)
@@ -958,7 +994,11 @@ describe("inspecting", () => {
   it("a server removed while it was inspected: the panel says it is gone", () => {
     // Inspected, removed while it ran; the inspection answers, then the list.
     let state = started()
-    state = run(state, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
+    state = run(
+      state,
+      { type: "askRemove", name: "charts", at: 0 },
+      { type: "confirmRemove" },
+    )
     state = answer(state, ok(undefined))
     state = run(state, { type: "inspected", seq: seqOf(state), outcome: ok(result) })
     state = answer(state, ok(listOf(nessa)))
@@ -969,7 +1009,11 @@ describe("inspecting", () => {
     })
     // The list first, then the inspection's answer: the same.
     let later = started()
-    later = run(later, { type: "askRemove", name: "charts" }, { type: "confirmRemove" })
+    later = run(
+      later,
+      { type: "askRemove", name: "charts", at: 0 },
+      { type: "confirmRemove" },
+    )
     later = answer(answer(later, ok(undefined)), ok(listOf(nessa)))
     expect(later.inspection?.phase).toBe("running")
     later = run(later, { type: "inspected", seq: seqOf(later), outcome: ok(result) })
@@ -1001,7 +1045,7 @@ describe("the connection", () => {
     expect(canWrite(state)).toBe(false)
     expect(canInspect(state)).toBe(false)
     expect(run(state, { type: "add" }).form).toBeNull()
-    state = run(state, { type: "connected", mayManage: true })
+    state = run(state, { type: "connected" })
     expect(state.connection).toBe("connected")
     expect(state.pending?.kind).toBe("list")
   })
@@ -1011,7 +1055,7 @@ describe("the connection", () => {
       listed(),
       { type: "toggle", name: "charts" },
       { type: "unreachable" },
-      { type: "connected", mayManage: true },
+      { type: "connected" },
     )
     expect(state.pending?.kind).toBe("save")
   })
@@ -1026,7 +1070,7 @@ describe("a list too large to show (U44–U49)", () => {
   /** Connected, the list refused as too large at `revision`. */
   function refused(revision = "r7") {
     return answer(
-      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      run(initialMcpServersState(limits), { type: "connected" }),
       no(tooLarge(revision)),
     )
   }
@@ -1064,7 +1108,7 @@ describe("a list too large to show (U44–U49)", () => {
       { type: "changeRemoveName", name: "big" },
       { type: "askRemoveByName" },
     )
-    expect(state.confirming).toBe("big")
+    expect(state.confirming).toEqual({ name: "big", at: null })
     expect(state.pending).toBeNull()
     state = run(state, { type: "confirmRemove" })
     expect(state.pending).toMatchObject({
@@ -1117,7 +1161,7 @@ describe("a list too large to show (U44–U49)", () => {
   it("U46: a row's removal of a server gone keeps its own sentence", () => {
     let state = run(
       listed(),
-      { type: "askRemove", name: "charts" },
+      { type: "askRemove", name: "charts", at: 0 },
       { type: "confirmRemove" },
     )
     state = answer(state, no({ kind: "notFound" }))
@@ -1127,7 +1171,7 @@ describe("a list too large to show (U44–U49)", () => {
 
   it("U47: a list refused without a revision fails, says the file is too large, and offers no removal", () => {
     const failed = answer(
-      run(initialMcpServersState(limits), { type: "connected", mayManage: true }),
+      run(initialMcpServersState(limits), { type: "connected" }),
       no(tooLarge()),
     )
     expect(failed.list).toEqual({ phase: "failed" })
@@ -1164,5 +1208,98 @@ describe("a list too large to show (U44–U49)", () => {
     expect(state.pending).toBeNull()
     expect(state.notice?.text).toBe(sentences.saveTooLarge)
     expect(canWrite(state)).toBe(true)
+  })
+})
+
+describe("two stored servers sharing a name (D1–D9)", () => {
+  const first: ListedServer = { ...charts, args: ["first.mjs"] }
+  const second: ListedServer = { ...charts, args: ["second.mjs"], enabled: false }
+  const other: ListedServer = { ...charts, name: "docs" }
+  const twice = () => listed(listOf(other, first, second, nessa))
+
+  it("D1: a name stored once is not shared; the managed one never is", () => {
+    const state = twice()
+    expect(sharesName(state, "docs")).toBe(false)
+    expect(sharesName(state, "nessa")).toBe(false)
+    expect(sharesName(listed(listOf(charts, nessa)), "charts")).toBe(false)
+  })
+
+  it("D2: a name stored twice is shared", () => {
+    expect(sharesName(twice(), "charts")).toBe(true)
+  })
+
+  it("D3: neither row of a shared name is edited or switched", () => {
+    const state = twice()
+    expect(run(state, { type: "edit", name: "charts" })).toBe(state)
+    expect(run(state, { type: "toggle", name: "charts" })).toBe(state)
+    // The name stored once still is.
+    expect(run(state, { type: "edit", name: "docs" }).form?.editing).toBe("docs")
+    expect(run(state, { type: "toggle", name: "docs" }).pending?.kind).toBe("save")
+  })
+
+  it("D4: Remove is asked from the one row it was pressed on", () => {
+    const state = run(twice(), { type: "askRemove", name: "charts", at: 2 })
+    expect(state.confirming).toEqual({ name: "charts", at: 2 })
+    expect(sentences.removeFirstAsk("charts")).toBe(
+      "Remove the first server stored under “charts”? New conversations stop getting it. Open ones keep it until they close.",
+    )
+  })
+
+  it("D5: cancelled, nothing is sent", () => {
+    const state = run(
+      twice(),
+      { type: "askRemove", name: "charts", at: 2 },
+      { type: "cancelRemove" },
+    )
+    expect(state.confirming).toBeNull()
+    expect(state.pending).toBeNull()
+  })
+
+  it("D6: confirmed, the removal names the server; the gateway takes the first", () => {
+    const state = run(
+      twice(),
+      { type: "askRemove", name: "charts", at: 2 },
+      { type: "confirmRemove" },
+    )
+    expect(state.pending).toMatchObject({
+      kind: "remove",
+      request: { revision: "r1", name: "charts" },
+    })
+  })
+
+  it("D7: answered, the confirm closes and the list is read", () => {
+    let state = run(
+      twice(),
+      { type: "askRemove", name: "charts", at: 2 },
+      { type: "confirmRemove" },
+    )
+    state = answer(state, ok(undefined))
+    expect(state.confirming).toBeNull()
+    state = answer(state, ok(listOf(other, second, nessa)))
+    expect(sharesName(state, "charts")).toBe(false)
+    expect(run(state, { type: "edit", name: "charts" }).form?.base).toEqual(second)
+  })
+
+  it("D8: a list read meanwhile keeps the confirm only while its row still lists the name", () => {
+    const asked = run(twice(), { type: "askRemove", name: "charts", at: 1 })
+    const relisted = run(asked, { type: "unreachable" }, { type: "connected" })
+    expect(answer(relisted, ok(listOf(other, first, second, nessa))).confirming).toEqual({
+      name: "charts",
+      at: 1,
+    })
+    // The row above went: another server is at that place now.
+    expect(answer(relisted, ok(listOf(first, second, nessa))).confirming).toEqual({
+      name: "charts",
+      at: 1,
+    })
+    expect(answer(relisted, ok(listOf(first, other, nessa))).confirming).toBeNull()
+    expect(answer(relisted, ok(listOf(other, nessa))).confirming).toBeNull()
+  })
+
+  it("D9: a Remove for a place that does not list that name is refused", () => {
+    const state = twice()
+    expect(run(state, { type: "askRemove", name: "charts", at: 0 })).toBe(state)
+    expect(run(state, { type: "askRemove", name: "charts", at: 3 })).toBe(state)
+    expect(run(state, { type: "askRemove", name: "nessa", at: 3 })).toBe(state)
   })
 })

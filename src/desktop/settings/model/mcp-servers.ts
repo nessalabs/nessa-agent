@@ -259,16 +259,32 @@ export interface Notice {
   readonly from: "list" | "write"
 }
 
+/**
+ * The removal being asked about: the name the request will carry, and the
+ * listed row it was asked from, by its place among the stored servers — two
+ * rows may share a name stored by hand. `at` is `null` for a name typed
+ * against a list too large to show (U44).
+ */
+export interface Confirming {
+  readonly name: string
+  readonly at: number | null
+}
+
 export interface McpServersState {
   readonly limits: McpServersLimits
-  /** Whether this credential may manage servers; unknown until the gateway is reached. */
+  /**
+   * Whether this credential may manage servers, as the gateway last answered:
+   * a list it gave, or refused as too large to show, says yes; a `forbidden`
+   * refusal says no. Which grant that takes is the gateway's; the window
+   * never reads grants.
+   */
   readonly access: "unknown" | "admin" | "notAdmin"
   readonly connection: "connecting" | "connected" | "unreachable"
   readonly list: ListState
   readonly pending: PendingRequest | null
   readonly form: ServerForm | null
-  /** The server whose removal is being asked about. */
-  readonly confirming: string | null
+  /** The removal being asked about. */
+  readonly confirming: Confirming | null
   readonly inspection: InspectionState | null
   /** What the last answer said, when it said something. */
   readonly notice: Notice | null
@@ -279,7 +295,7 @@ export interface McpServersState {
 }
 
 export type McpServersEvent =
-  | { readonly type: "connected"; readonly mayManage: boolean }
+  | { readonly type: "connected" }
   | { readonly type: "unreachable" }
   | {
       readonly type: "answered"
@@ -306,7 +322,8 @@ export type McpServersEvent =
   | { readonly type: "cancelForm" }
   | { readonly type: "save" }
   | { readonly type: "toggle"; readonly name: string }
-  | { readonly type: "askRemove"; readonly name: string }
+  /** Remove asked from the stored row at `at`, which lists `name`. */
+  | { readonly type: "askRemove"; readonly name: string; readonly at: number }
   | { readonly type: "cancelRemove" }
   /** The name typed to remove a server from a list too large to show (U44). */
   | { readonly type: "changeRemoveName"; readonly name: string }
@@ -397,6 +414,10 @@ export const sentences = {
         : `It offers ${count} tools.`,
   removeAsk: (name: string) =>
     `Remove ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
+  /** The gateway removes by name, the first stored under it. */
+  removeFirstAsk: (name: string) =>
+    `Remove the first server stored under ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
+  nameShared: "Two servers share this name: remove one to edit the other.",
   inspecting: (name: string, ms: number) =>
     `Starting ${quoted(name)}… It has up to ${seconds(ms)}.`,
   variables: (count: number) => (count === 1 ? "1 variable" : `${count} variables`),
@@ -662,6 +683,17 @@ export function storedServers(list: ServerList) {
   }
 }
 
+/**
+ * Whether more than one stored server is listed under `name` — a config
+ * edited by hand. The gateway addresses a server by name, so neither can be
+ * edited or switched; a remove takes the first stored.
+ */
+export function sharesName(state: McpServersState, name: string): boolean {
+  const list = listed(state)
+  if (!list) return false
+  return storedServers(list).stored.filter((each) => each.name === name).length > 1
+}
+
 /* ——— The requests ——— */
 
 /**
@@ -842,6 +874,17 @@ function refilled(state: McpServersState): McpServersState {
   }
 }
 
+/**
+ * A confirm kept across a list read only while its row still lists the name
+ * asked about: the rows below a removed one move up.
+ */
+function stillAsked(confirming: Confirming | null, list: ServerList): Confirming | null {
+  if (confirming === null || confirming.at === null) return confirming
+  return storedServers(list).stored[confirming.at]?.name === confirming.name
+    ? confirming
+    : null
+}
+
 /** A forbidden answer: this credential may not manage servers, whatever was shown. */
 function forbidden(state: McpServersState): McpServersState {
   return {
@@ -860,24 +903,31 @@ function answeredList(
   outcome: Outcome<unknown>,
 ): McpServersState {
   const done = { ...state, pending: null }
-  if (outcome.ok)
+  if (outcome.ok) {
+    const list = outcome.value as ServerList
     return refilled(
       inspectionOfStored({
         ...done,
-        list: { phase: "listed", list: outcome.value as ServerList },
+        // A list given is the gateway's yes.
+        access: "admin",
+        list: { phase: "listed", list },
+        confirming: stillAsked(state.confirming, list),
         // This list answers a list that failed; a write's notice stands.
         notice: state.notice?.from === "list" ? null : state.notice,
       }),
     )
+  }
   const { failure } = outcome
   if (failure.kind === "forbidden") return forbidden(state)
   if (failure.kind === "notConfigured")
     return { ...done, list: { phase: "notConfigured" }, form: null, notice: null }
   if (failure.kind === "configTooLarge" && failure.revision !== undefined)
     // No server can be shown, so nothing is edited or confirmed against one;
-    // a name typed before this list stays typed (U44, U46).
+    // a name typed before this list stays typed (U44, U46). Refused only
+    // after the gateway let this credential ask, so it is a yes too.
     return {
       ...done,
+      access: "admin",
       list: {
         phase: "tooLarge",
         revision: failure.revision,
@@ -1019,13 +1069,9 @@ export function mcpServersReducer(
 ): McpServersState {
   switch (event.type) {
     case "connected": {
-      const next: McpServersState = {
-        ...state,
-        connection: "connected",
-        access: event.mayManage ? "admin" : "notAdmin",
-      }
-      if (!event.mayManage) return forbidden(next)
-      // Listed again on every connection: what changed while away is read.
+      const next: McpServersState = { ...state, connection: "connected" }
+      // Listed again on every connection: what changed while away is read,
+      // and the gateway's answer says whether this credential may manage.
       return next.pending === null ? listAgain(next) : next
     }
     case "unreachable":
@@ -1038,7 +1084,11 @@ export function mcpServersReducer(
         : answeredWrite(state, pending, event.outcome)
     }
     case "retry":
-      if (state.access !== "admin" || state.connection !== "connected" || state.pending)
+      if (
+        state.access === "notAdmin" ||
+        state.connection !== "connected" ||
+        state.pending
+      )
         return state
       return listAgain({ ...state, notice: null })
     case "add":
@@ -1050,7 +1100,9 @@ export function mcpServersReducer(
         form: { name: "", command: "", args: [], env: [], enabled: true },
       }
     case "edit":
-      return canWrite(state) ? editForm(state, event.name) : state
+      return canWrite(state) && !sharesName(state, event.name)
+        ? editForm(state, event.name)
+        : state
     case "change":
       if (!state.form || state.pending) return state
       return { ...state, form: { ...state.form, ...event.patch } }
@@ -1145,7 +1197,14 @@ export function mcpServersReducer(
     case "toggle": {
       const list = listed(state)
       const found = server(state, event.name)
-      if (!list || !found || found.managed || !canWrite(state)) return state
+      if (
+        !list ||
+        !found ||
+        found.managed ||
+        sharesName(state, found.name) ||
+        !canWrite(state)
+      )
+        return state
       const seq = state.seq + 1
       return {
         ...state,
@@ -1160,9 +1219,10 @@ export function mcpServersReducer(
       }
     }
     case "askRemove": {
-      const found = server(state, event.name)
-      if (!found || found.managed || !canWrite(state)) return state
-      return { ...state, confirming: found.name, notice: null }
+      const list = listed(state)
+      const found = list && storedServers(list).stored[event.at]
+      if (!found || found.name !== event.name || !canWrite(state)) return state
+      return { ...state, confirming: { name: found.name, at: event.at }, notice: null }
     }
     case "cancelRemove":
       if (state.pending) return state
@@ -1176,7 +1236,7 @@ export function mcpServersReducer(
       }
     case "askRemoveByName":
       if (state.list.phase !== "tooLarge" || !canRemoveByName(state)) return state
-      return { ...state, confirming: state.list.name, notice: null }
+      return { ...state, confirming: { name: state.list.name, at: null }, notice: null }
     case "confirmRemove": {
       // At the list's revision, or the one the too-large refusal named (U45).
       const revision =
@@ -1191,7 +1251,7 @@ export function mcpServersReducer(
         pending: {
           kind: "remove",
           seq,
-          request: { revision, name: state.confirming },
+          request: { revision, name: state.confirming.name },
         },
       }
     }

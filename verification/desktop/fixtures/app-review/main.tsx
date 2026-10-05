@@ -32,7 +32,6 @@ import type {
   ConversationView,
   McpAppsApi,
   McpServersApi,
-  ProductSessionReady,
 } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
@@ -194,7 +193,6 @@ const mcpApps = {
 // Settings' servers: this fixture never opens Settings, so nothing asks them.
 const settingsParts = {
   mcpServers: {} as McpServersApi,
-  productSession: { grants: [] } as unknown as ProductSessionReady,
 }
 
 const dependencies = createDesktopDependencies({
