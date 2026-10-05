@@ -641,6 +641,38 @@ fn a_turn_admitted_after_open_stays_running_until_its_result() {
     assert!(done.permissions.is_empty());
 }
 
+/// A restart that is still pending reads as queued, because a pending id
+/// whose message is not queued is refused by the client. Leaving the queue
+/// without becoming active is unresolved again.
+#[test]
+fn a_restarted_turn_still_in_the_queue_is_queued_then_unresolved() {
+    let snapshot = review_snapshot(vec![asked("execution", "1")]);
+    let mut projection = opened_on(&snapshot);
+    let id = ExecutionId::new("execution").unwrap();
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        std::slice::from_ref(&id),
+        None,
+    ));
+    let queued = projection.read();
+    assert_eq!(queued.messages[0].status, ConversationMessageStatus::Queued);
+    assert!(queued.questions.is_empty());
+    assert_eq!(queued.pending.len(), 1);
+
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        None,
+    ));
+    let left = projection.read();
+    assert_eq!(
+        left.messages[0].status,
+        ConversationMessageStatus::Unresolved
+    );
+    assert!(left.questions.is_empty());
+    assert!(left.pending.is_empty());
+}
+
 #[test]
 fn a_queued_turn_admitted_after_open_is_queued_then_running() {
     let snapshot = review_snapshot(Vec::new());
