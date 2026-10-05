@@ -12,8 +12,11 @@
  * - a dev server whose `/browser` proxy is that gateway.
  *
  * It asks the agent, through `NessaClient`, to call the server's app tool
- * (`review_rows`) once, and allows that call alone; an agent that calls it
- * more than once leaves the run "could not run". Then, in each engine, it
+ * (`review_rows`) once (`toolPrompt`, as `live-check.mjs` asks). It answers
+ * the permission requests of one call of that tool (`admitOnce`) and requires
+ * exactly one completed call of it (`setupOutcome`): an agent that calls it
+ * more than once leaves the run "could not run". Calls of other tools are
+ * not checked. Then, in each engine, it
  * signs the page in with the gateway's owner token through `/browser/login`
  * from the page, loads the window, which opens the conversation by itself
  * (the newest of its first channel), and checks the review app the
@@ -41,7 +44,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
-import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { SERVER, toolPrompt } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneCard, oneMount } from "./lib/apps.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
@@ -56,6 +59,7 @@ import {
 } from "./lib/gateway-view.mjs"
 import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
+import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, names } from "./lib/selectors.mjs"
 import { paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
@@ -76,6 +80,7 @@ const meta = {
     only: { type: "string" },
     agent: { type: "string", default: "claude" },
     scripted: { type: "boolean", default: false },
+    evidence: { type: "string" },
   },
   help: `
 Usage: node verification/desktop/scripts/mcp-apps-gateway.mjs [options]
@@ -83,8 +88,8 @@ Usage: node verification/desktop/scripts/mcp-apps-gateway.mjs [options]
 Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA),
 the agent's harness installed (crates/nessa-sdk/harnesses/<agent>-acp, or
 MCP_LIVE_HARNESSES), and the agent signed in on this machine — or, with
---scripted, neither. It starts its own gateway and dev server; --url and
---mode are not used.
+--scripted, neither. It starts its own gateway and dev server. --url is
+not used. --mode prod cannot run: MCP Apps need the dev server's sandbox.
 
 Options:
   --agent claude|codex  the agent the gateway runs, and asks to call the app
@@ -92,6 +97,9 @@ Options:
   --scripted            run scripts/mcp-test-server/scripted-agent.mjs as that
                         agent: no model, no sign-in; it calls the app tool once
                         and reports the call in the harness's recorded frames
+  --evidence <dir>      with --scripted, write acp.jsonl, mcp.jsonl, gateway.log
+                        and the setup view.json there. MCP Apps need the dev
+                        server's sandbox meta, so --mode prod is not this check.
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
   renders   the window opens the conversation on load (#485); the call is
@@ -121,13 +129,16 @@ the gateway shows its review first.`,
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
 async function startStack(options) {
-  const stack = await startGatewayStack(options, "mcp-apps-gateway", {
+  if (options.mode === "prod") throw new CannotRun("not run: dev server only")
+  const stack = await startGatewayStack({ ...options, mode: "dev" }, "mcp-apps-gateway", {
     scripted: options.scripted ? APP_TOOL : undefined,
+    evidence: options.scripted ? options.evidence : undefined,
   })
   try {
     const started = Date.now()
     const conversationId = randomUUID()
     const turn = await appToolTurn(stack.client, conversationId, options.agent)
+    if (options.evidence) writeView(options.evidence, "view.json", turn.view)
     stack.timings.agentTurnMs = Date.now() - started
     const { conversations } = await stack.client.conversation.list({})
     const title = conversations.find(
@@ -144,7 +155,8 @@ async function startStack(options) {
 }
 
 /**
- * Asks `agent` to call the app tool once, allows that call alone, and waits
+ * Asks `agent` to call the app tool once, answers the permission requests
+ * of one call of it (`admitOnce`), and waits
  * for the turn to end (`agentTurn`). A gateway with no sign-in for the agent
  * refuses the conversation, and an agent that calls the app tool more than
  * once leaves the steps nothing unambiguous to read: both are "could not run".
@@ -160,16 +172,13 @@ async function appToolTurn(client, conversationId, agent) {
   const { view, turn: last } = await agentTurn(
     client,
     conversationId,
-    // Worded as live-check.mjs's prompt, which each agent follows.
-    `Use the tools of the "${SERVER}" MCP server. Call ${APP_TOOL} (no arguments) ` +
-      "exactly once, and wait for its result. Do not use any other tool. " +
-      "When it has returned, reply with DONE.",
+    toolPrompt([{ name: APP_TOOL }]),
     {
       agent,
       create: true,
       seconds: 300,
-      // Only the app tool is allowed, and only one call of it; anything else
-      // stays unanswered.
+      // Only the permission requests of one call of the app tool are
+      // answered; any other request stays unanswered.
       onView: async (view) => {
         for (;;) {
           const { allow, extra } = admitOnce(view, admitted, answered, SERVER, APP_TOOL)

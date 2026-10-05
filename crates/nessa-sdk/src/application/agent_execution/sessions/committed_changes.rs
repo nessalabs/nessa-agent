@@ -4,11 +4,10 @@
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    panic::{catch_unwind, AssertUnwindSafe},
-    sync::{Arc, Mutex, PoisonError},
-};
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::Notify;
+
+use crate::application::agent_execution::caller_wake::contain_caller_wake;
 
 /// Result of consuming a source change notice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,8 +16,6 @@ pub enum ChangeWatchState {
     Dirty,
     /// The publisher closed; use a newly composed source or fallback reads.
     Closed,
-    /// A notification callback unwound; use fallback reads or a new watch.
-    NotificationFailed,
 }
 
 /// A bounded source registration was refused before allocating a watch.
@@ -57,54 +54,50 @@ impl CommittedChangeWatch {
         }
     }
 
-    /// Wait for a coalesced notice, source closure, or notification failure.
+    /// Wait for a coalesced notice or source closure.
     ///
     /// A cancelled pending wait preserves its registration and dirty bit.
     /// Multiple commits while dirty occupy one bit; a later commit after a
-    /// consumed notice leaves a new notice. This wait does not authorize a read.
+    /// consumed notice leaves a new notice. A caller waker that panics loses
+    /// that wake; the notice stays, and polling again returns it. This wait
+    /// does not authorize a read.
     pub async fn changed(&mut self) -> ChangeWatchState {
-        loop {
-            // Notify::notified captures notify_waiters calls at creation, before
-            // its first poll. Create it before the predicate check so closure
-            // between check and await is retained; notify_one stores a permit
-            // for this non-cloneable handle's single waiter.
-            let notified = self.signal.ready.notified();
-            {
-                let mut state = self
-                    .signal
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                if let Some(terminal) = state.terminal {
-                    return match terminal {
-                        Terminal::Closed => ChangeWatchState::Closed,
-                        Terminal::NotificationFailed => ChangeWatchState::NotificationFailed,
-                    };
+        contain_caller_wake("committed change watch", async {
+            loop {
+                // Notify::notified captures notify_waiters calls at creation, before
+                // its first poll. Create it before the predicate check so closure
+                // between check and await is retained; notify_one stores a permit
+                // for this non-cloneable handle's single waiter.
+                let notified = self.signal.ready.notified();
+                {
+                    let mut state = self
+                        .signal
+                        .state
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if state.closed {
+                        return ChangeWatchState::Closed;
+                    }
+                    if state.dirty {
+                        state.dirty = false;
+                        return ChangeWatchState::Dirty;
+                    }
                 }
-                if state.dirty {
-                    state.dirty = false;
-                    return ChangeWatchState::Dirty;
+                #[cfg(test)]
+                if self.signal.close_before_wait.swap(false, Ordering::SeqCst) {
+                    self.signal.close();
                 }
+                notified.await;
             }
-            #[cfg(test)]
-            if self.signal.close_before_wait.swap(false, Ordering::SeqCst) {
-                self.signal.close();
-            }
-            notified.await;
-        }
+        })
+        .await
     }
-}
-
-#[derive(Clone, Copy)]
-enum Terminal {
-    Closed,
-    NotificationFailed,
 }
 
 #[derive(Default)]
 struct SignalState {
     dirty: bool,
-    terminal: Option<Terminal>,
+    closed: bool,
 }
 
 #[derive(Default)]
@@ -117,29 +110,24 @@ pub(crate) struct CommittedChangeSignal {
 impl CommittedChangeSignal {
     pub(crate) fn publish(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.terminal.is_some() {
+        if state.closed {
             return;
         }
         state.dirty = true;
         drop(state);
         // Notify may invoke a waker synchronously; hold no predicate lock.
-        if catch_unwind(AssertUnwindSafe(|| self.ready.notify_one())).is_err() {
-            self.state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .terminal
-                .get_or_insert(Terminal::NotificationFailed);
-        }
+        // A caller-waker panic is contained by `changed`, not here.
+        self.ready.notify_one();
     }
     pub(crate) fn close(&self) {
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .terminal
-            .get_or_insert(Terminal::Closed);
-        // Closure is installed before the callback, so a callback unwind does
-        // not replace it. Catch only notification, never persistence work.
-        let _ = catch_unwind(AssertUnwindSafe(|| self.ready.notify_waiters()));
+            .closed = true;
+        // Closure is installed before the callback. A caller-waker panic is
+        // contained by `changed`, so it cannot replace Closed or unwind this
+        // publisher.
+        self.ready.notify_waiters();
     }
 }
 

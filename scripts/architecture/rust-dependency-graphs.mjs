@@ -8,6 +8,7 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
   "nessa-agent-credentials",
   "nessa-server",
   "nessa-protocol",
+  "nessa-client-core",
   "nessa-sdk",
   "nessa-auth",
   "nessa-local-storage",
@@ -29,6 +30,7 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
  * `rusqlite` for its own session storage.
  */
 export const PACKAGE_DENYLISTS = Object.freeze({
+  "nessa-client-core": Object.freeze(["nessa-server"]),
   "nessa-protocol": Object.freeze([
     "axum",
     "hyper",
@@ -38,6 +40,11 @@ export const PACKAGE_DENYLISTS = Object.freeze({
     "tokio-tungstenite",
     "tower",
   ]),
+})
+
+/** These packages must not occur on any root-to-package normal/build path. */
+export const PACKAGE_DEV_ONLY_DEPENDENCIES = Object.freeze({
+  "nessa-server": Object.freeze(["nessa-client-core"]),
 })
 
 function isTauriDesktopFramework(packageName) {
@@ -82,13 +89,14 @@ function pathTo(parents, packageId) {
 }
 
 /**
- * Return dependency paths from selected workspace packages to Tauri desktop
- * framework packages in a Cargo metadata resolve graph.
+ * Return desktop-framework, package-ownership and dependency-kind violations
+ * for selected workspace packages in a Cargo metadata resolve graph.
  */
 export function rustDependencyGraphViolations(
   metadata,
   selectedPackageNames = PORTABLE_RUST_PACKAGES,
   denylists = PACKAGE_DENYLISTS,
+  devOnlyDependencies = PACKAGE_DEV_ONLY_DEPENDENCIES,
 ) {
   const packagesById = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]))
   const nodesById = new Map(metadata.resolve.nodes.map((node) => [node.id, node]))
@@ -109,10 +117,18 @@ export function rustDependencyGraphViolations(
     const denied = new Set(
       Object.hasOwn(denylists, selectedName) ? denylists[selectedName] : [],
     )
+    const devOnly = new Set(
+      Object.hasOwn(devOnlyDependencies, selectedName)
+        ? devOnlyDependencies[selectedName]
+        : [],
+    )
     const parents = new Map([[root.id, undefined]])
-    const queue = [root.id]
+    const productionParents = new Map([[root.id, undefined]])
+    // A dev path cannot hide a later production path through the same package.
+    const visitedPaths = new Map([[root.id, new Set([true])]])
+    const queue = [{ pkg: root.id, production: true }]
     for (let index = 0; index < queue.length; index += 1) {
-      const packageId = queue[index]
+      const { pkg: packageId, production: currentProduction } = queue[index]
       const node = nodesById.get(packageId)
       if (!node) {
         violations.push(`Cargo metadata has no resolve node for ${packageLabel(root)}`)
@@ -126,21 +142,43 @@ export function rustDependencyGraphViolations(
           )
           continue
         }
-        if (parents.has(dependency.id)) continue
-        parents.set(dependency.id, { pkg: packageId, name: dependencyEdge.name })
+        const production =
+          devOnly.size === 0 ||
+          (currentProduction &&
+            dependencyEdge.dep_kinds.some(({ kind }) => kind !== "dev"))
+        if (production && !productionParents.has(dependency.id)) {
+          productionParents.set(dependency.id, {
+            pkg: packageId,
+            name: dependencyEdge.name,
+          })
+          if (devOnly.has(dependency.name)) {
+            violations.push(
+              `"${selectedName}" reaches dev-only package "${dependency.name}" through a non-dev dependency path ${pathLabel(packagesById, pathTo(productionParents, dependency.id))}`,
+            )
+          }
+        }
+        const firstVisit = !parents.has(dependency.id)
+        if (firstVisit)
+          parents.set(dependency.id, { pkg: packageId, name: dependencyEdge.name })
         if (isTauriDesktopFramework(dependency.name)) {
-          violations.push(
-            `"${selectedName}" reaches desktop framework package "${dependency.name}" through ${pathLabel(packagesById, pathTo(parents, dependency.id))}`,
-          )
+          if (firstVisit)
+            violations.push(
+              `"${selectedName}" reaches desktop framework package "${dependency.name}" through ${pathLabel(packagesById, pathTo(parents, dependency.id))}`,
+            )
           continue
         }
         if (denied.has(dependency.name)) {
-          violations.push(
-            `"${selectedName}" reaches denied package "${dependency.name}" through ${pathLabel(packagesById, pathTo(parents, dependency.id))}`,
-          )
+          if (firstVisit)
+            violations.push(
+              `"${selectedName}" reaches denied package "${dependency.name}" through ${pathLabel(packagesById, pathTo(parents, dependency.id))}`,
+            )
           continue
         }
-        queue.push(dependency.id)
+        const seenPaths = visitedPaths.get(dependency.id) ?? new Set()
+        if (seenPaths.has(production)) continue
+        seenPaths.add(production)
+        visitedPaths.set(dependency.id, seenPaths)
+        queue.push({ pkg: dependency.id, production })
       }
     }
   }

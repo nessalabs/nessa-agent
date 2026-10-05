@@ -14,7 +14,7 @@ use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, NessaRecordWatches,
 };
-use crate::device_pairing::infrastructure::{NativeEnrollmentClient, PairingOwnerCommands};
+use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -27,6 +27,7 @@ use nessa_auth::application::dto::{
 use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
+use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,

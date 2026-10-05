@@ -686,7 +686,7 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
         for frame in frames.as_array().unwrap() {
             let update = tool_call(frame, &mut tools).unwrap();
             // One call's frames are updates to one call: the gateway draws
-            // them as one part (`nessa-server` `tool_parts.rs`).
+            // them as one part (`nessa-protocol` `tool_parts.rs`).
             assert_eq!(update.id().as_str(), frames[0]["toolCallId"], "{tool}");
             if let Some(identity) = update.mcp_tool() {
                 named.push((identity.server().to_owned(), identity.tool().to_owned()));
@@ -735,4 +735,41 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
         vec![text("This tool always fails, on purpose.")]
     );
     assert_eq!(content("show_chart")[0], text("Chart of two rows."));
+}
+
+/// The call recorded in the fixture's `toolSearchTurn` (#500): `review_rows`,
+/// which declares `readOnlyHint`, in a turn whose recording has no permission
+/// request. Its two frames have no bare `in_progress` update between them;
+/// each call in `calls`, recorded on another day for tools that declare no
+/// annotations, has one.
+#[test]
+fn a_call_codex_ran_without_asking_is_two_frames_naming_that_servers_tool() {
+    let recorded: Value =
+        serde_json::from_str(include_str!("fixtures/mcp_live_frames.json")).unwrap();
+    let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2);
+    let mut tools = ObservedTools::default();
+    let mut updates = Vec::new();
+    for frame in frames {
+        let update = tool_call(frame, &mut tools).unwrap();
+        // Every frame is an update to the one call.
+        assert_eq!(update.id().as_str(), frames[0]["toolCallId"]);
+        updates.push(update);
+    }
+    for update in &updates {
+        let identity = update.mcp_tool().unwrap();
+        assert_eq!(
+            (identity.server(), identity.tool()),
+            ("mcptest", "review_rows")
+        );
+    }
+    let last = updates.last().unwrap();
+    assert_eq!(last.status(), &Some(ToolStatus::Completed));
+    assert_eq!(
+        last.content(),
+        &Some(vec![
+            text("Two rows to review."),
+            ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap(),
+        ])
+    );
 }

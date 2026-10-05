@@ -372,7 +372,12 @@ impl QueueAdmissionRecord {
         self.effort_level = effort_level;
         self
     }
-    /// Provider approval preset at admission, when the binding publishes one.
+    /// Approval preset of the attachment that accepted this input. A live
+    /// change on that attachment is recorded here, including when close
+    /// detaches it before this record is written. Work accepted while nothing
+    /// is attached records the binding's preset, which the next attachment
+    /// opens at. A turn still queued when its attachment is replaced runs at
+    /// the new attachment's preset, which this record does not name.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
         self.approval_mode
     }
