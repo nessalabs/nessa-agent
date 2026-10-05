@@ -697,9 +697,9 @@ refused `mcp_servers_config_invalid` before and after the edit. So is one
 holding a stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (LS20): every
 other rule for a stored server is the SDK's, asked of the whole list and
 named in `mcp_servers_invalid`, but a request naming a longer one would not
-fit a frame, so it could not be removed through the gateway. And a first
-write to a file with no `agents` block is refused the same way when the
-running catalog or workspace path is not UTF-8 (LS21).
+fit a frame, so it could not be removed through the gateway. The refusal
+carries no details, so the gateway logs which entry it was, by its index and
+its name's length, never the name or a value.
 
 Errors are `McpServersErrorCode`: `mcp_servers_not_configured`,
 `mcp_servers_invalid` (details `{problem, server?, name?}`: `server` names the
@@ -716,7 +716,9 @@ failed),
 the inspection codes below. `mcp_servers_not_configured` means
 this gateway holds no live set to manage: not Unix, no agents configured, or
 MCP off this run because the relay socket could not be bound, a path is not
-UTF-8, or no key for the configuration digests could be drawn. A gateway that holds one always manages it, with or without
+UTF-8 — the running catalog or workspace, which a first write to a file with
+no `agents` block would store, among them (LS21) — or no key for the
+configuration digests could be drawn. A gateway that holds one always manages it, with or without
 servers configured.
 
 An `env` entry must carry `value`: `null` is the explicit keep, and an entry
@@ -744,7 +746,7 @@ meet the stand-in and forwarded-result rows above.
 | LS3d | A save, remove or inspection once shutdown has begun | `mcp_servers_stopping`; nothing locked, read, started or recorded | `a_request_after_shutdown_began_is_stopping_and_starts_nothing`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
 | LS4 | Lock held past its bound | `busy`; nothing written | `s4_a_lock_held_past_its_bound_is_busy_and_nothing_is_written`, `composed_settings_publish_privately_under_the_lock_and_audit_without_values` |
 | LS5 | Publish fails | `storage_unavailable {applied: false}`; the old file and live set kept; outcome `failed` | `s5_a_failed_publish_keeps_the_old_file_and_live_set`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
-| S-sync | Rename ok, directory sync fails | Live set replaced. Outcome `applied`, `durable: false`. Wire `storage_unavailable {applied: true}`; that outcome unwritable: `audit_unavailable {applied: true, code: mcp_servers_storage_unavailable}` | `s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
+| S-sync | Rename ok, directory sync fails | The live set follows as far as it can (replaced, withdrawn, or kept), as after any publish; a client lists again to see it. Outcome `applied`, `durable: false`. Wire `storage_unavailable {applied: true}`; that outcome unwritable: `audit_unavailable {applied: true, code: mcp_servers_storage_unavailable}` | `s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
 | LS6 | `requested` can't be written | `audit_unavailable`; no lock, no write, no apply | `s6_an_unwritable_requested_record_stops_everything` |
 | LS7 | Published, then the outcome fails | `audit_unavailable` with `applied: true`; the file and live set are new. Refused or failed, then the outcome fails: `applied: false` with the refusal's `code` | `s7_an_unwritable_outcome_after_a_publish_says_it_applied`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals` |
 | LS8 | `config.json` doesn't parse, before or after the edit | `config_invalid`; nothing written, nothing repaired | `s8_a_configuration_that_does_not_parse_is_refused_and_never_repaired` |
@@ -761,11 +763,12 @@ meet the stand-in and forwarded-result rows above.
 | LS16 | Remove an unknown name | `not_found`; nothing written | `s16_removing_an_unknown_name_is_not_found` |
 | LS17 | `save` keeps a variable with `value: null` | The stored value is kept only when the save launches the server as stored apart from the kept values: the same command and arguments, the same variable names, each other one `null` or its stored value. A changed command or argument, a variable added (`LD_PRELOAD`), swapped, left out, or given another value → `invalid` (`environment_value_missing`), so a secret never reaches code it was not given to; a null for a name with no stored value → the same; an entry with no `value` at all → `invalid_request`; a name given twice → `environment_name_repeated`, said before a missing value | `s17_a_null_value_keeps_the_stored_one_and_needs_one_to_keep`, `a_kept_value_is_refused_when_anything_else_in_the_launch_changes`, `mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`, `a_repeated_name_is_said_before_a_missing_value` |
 | LS19 | `remove` of a live server from a hand-edited list still past a bound after it | Written; the server leaves the live set and the rest stay; outcome `liveSet: withdrawn`; wire `live: false`. The remove that brings the list within its bounds answers `live: true`, outcome `replaced` | `a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_bound`, `a_remove_from_a_list_past_its_bounds_is_written_and_recovers`, `a_remove_answers_whether_the_list_went_live` |
-| LS20 | A stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (64), by one byte or by most of the file | The configuration does not parse (`stored_servers`, the one reader for startup and the store): list, save, remove and inspect answer `config_invalid`, nothing written, so every request naming a stored server fits a frame. 64 bytes is read | `a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid` |
-| LS21 | A first write with no `agents` block, the running catalog or workspace path not UTF-8 | `config_invalid`, nothing written: never a lossy path the next start would use. With an `agents` block of its own the file is written | `a_fallback_path_that_is_not_utf8_refuses_the_write` |
+| LS19a | `remove` of a server not live — turned off, or added by hand and never live — from a list still past a bound after it | Written; the live set as it was; outcome `liveSet: kept`, never `withdrawn` | `a_remove_of_a_server_not_live_from_a_list_past_a_bound_keeps_the_set` |
+| LS20 | A stored name longer than `MAX_MCP_SERVER_NAME_BYTES` (64), by one byte or by most of the file | The configuration does not parse (`stored_servers`, the one reader for startup and the store): list, save, remove and inspect answer `config_invalid`, nothing written, so every request naming a stored server fits a frame. The `auth` CLI commands, which read the file through the same `RuntimeConfig::load`, refuse it too. The entry is logged by its index and its name's length, never the name or a value. 64 bytes is read | `a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`, `a_name_past_the_bound_is_logged_by_its_index_and_length_alone` |
+| LS21 | The running catalog or workspace path not UTF-8, which a first write to a file with no `agents` block would store | No settings composed, logged: every method answers `mcp_servers_not_configured`, with or without an `agents` block in the file; nothing written, never a lossy path the next start would use | `a_fallback_path_that_is_not_utf8_composes_no_settings` |
 | LS18 | No servers at startup, then one added | The relay exists; a new open gets the server and its stand-in is let through | `s18_with_no_server_configured_the_relay_exists_and_a_server_added_reaches_the_next_open` |
 | — | A replacement that breaks a rule | Refused `InvalidConfiguration` with the problem; the set is kept | `an_invalid_replacement_is_refused_and_keeps_the_set`, `the_sets_count_and_each_servers_environment_are_checked_by_one_owner` |
-| — | `replace` lands between a hello's admission and its open | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |
+| — | `replace` lands between a hello's admission and its open, before the open reads the set (after it, LS12) | The open is refused as the admission would refuse it now: `configuration-changed` for an edit, `unknown-server` for a removal; nothing launched | `a_replacement_between_admission_and_opening_refuses_the_opening`, `an_opening_admitted_on_a_replaced_configuration_is_refused` |
 | — | A variable's value | Never in the wire, `list`, the audit, or a `Debug`; nor in a stand-in's arguments or the revision, raw or as an unkeyed hash | `a_launch_prints_its_environment_names_never_its_values`, `a_configured_server_prints_its_variable_names_never_their_values`, `launch_settings_print_names_never_values`, `the_list_names_each_variable_and_marks_the_managed_server`, `a_stand_ins_arguments_reveal_nothing_about_a_variables_value`, `the_revision_is_keyed_and_changes_with_a_variables_value` |
 | — | A stored `nessa` on a gateway without the desktop, on or off | The managed server: listed once with its `enabled` and variable names, counted, launched only when on | `a_stored_nessa_on_a_headless_gateway_is_the_managed_server_on_or_off` |
 | — | A stored `nessa` on a gateway without the desktop, then a save or remove of another server | Kept in the file with its variables; the outcome names it before and after | `a_headless_change_keeps_the_stored_nessa` |

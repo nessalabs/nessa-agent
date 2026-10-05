@@ -498,7 +498,7 @@ impl super::LiveServerSet for HeldLive {
         }
         self.live.replace(stored)
     }
-    fn withdraw(&self, name: &str) -> Result<(), super::LiveSetKept> {
+    fn withdraw(&self, name: &str) -> Result<bool, super::LiveSetKept> {
         self.live.withdraw(name)
     }
 }
@@ -1378,7 +1378,7 @@ impl super::LiveServerSet for PanickingLive {
     fn replace(&self, _: &[ConfiguredMcpServer]) -> Result<(), super::LiveSetKept> {
         panic!("a fault after the publish")
     }
-    fn withdraw(&self, _: &str) -> Result<(), super::LiveSetKept> {
+    fn withdraw(&self, _: &str) -> Result<bool, super::LiveSetKept> {
         panic!("a fault after the publish")
     }
 }
@@ -2010,7 +2010,8 @@ async fn an_inspection_is_not_started_unaudited_and_keeps_both_causes() {
 /// A remove from a hand-edited list past a bound (here, more servers than
 /// allowed) is written, not refused: removing adds no problem, and it is the
 /// way back. While the list is still past the bound only the removed server
-/// leaves the live set, the outcome says `withdrawn`, and the remove that
+/// could leave the live set — here it was never live, so the outcome says
+/// `kept` — and the remove that
 /// brings it within takes it live (found by #482's browser check).
 #[tokio::test]
 async fn a_remove_from_a_list_past_its_bounds_is_written_and_recovers() {
@@ -2041,11 +2042,12 @@ async fn a_remove_from_a_list_past_its_bounds_is_written_and_recovers() {
         kept,
         "the live set followed a list past its bound"
     );
-    // `s17` was never live: taking it out leaves the set as it was.
+    // `s17` was never live: taking it out leaves the set as it was, and the
+    // outcome says so.
     assert!(matches!(
         outcome(&audit),
         McpServerOutcome::Applied {
-            live_set: LiveSetOutcome::Withdrawn,
+            live_set: LiveSetOutcome::Kept,
             ..
         }
     ));
@@ -2110,6 +2112,100 @@ async fn a_remove_takes_its_server_out_of_the_live_set_while_the_list_is_past_a_
             ..
         }
     ));
+}
+
+/// A remove from a list past a bound whose server is not live — turned off,
+/// or added by hand and never live — has nothing to withdraw: the live set
+/// is as it was, and the outcome says `kept`, not `withdrawn`.
+#[tokio::test]
+async fn a_remove_of_a_server_not_live_from_a_list_past_a_bound_keeps_the_set() {
+    let mut off = entry("off");
+    off["enabled"] = json!(false);
+    let files = MemoryFiles::holding(config(vec![entry("a"), off.clone()]));
+    let audit = Arc::new(RecordingAudit::default());
+    let (settings, servers) = settings_for(files.clone(), audit.clone());
+    let revision = settings.list().await.unwrap().revision;
+    settings
+        .edit(initiator(), revision, save("a"))
+        .await
+        .unwrap();
+    assert_eq!(live(&servers), ["a", "nessa"]);
+    let mut entries = vec![entry("a"), off];
+    entries.extend((0..16).map(|index| entry(&format!("s{index:02}"))));
+    *files.bytes.lock().unwrap() = Some(serde_json::to_vec(&config(entries)).unwrap());
+    for name in ["off", "s00"] {
+        let revision = settings.list().await.unwrap().revision;
+        audit.records.lock().unwrap().clear();
+        let edited = settings
+            .edit(initiator(), revision, remove(name))
+            .await
+            .unwrap();
+        assert_eq!(edited.live_set, LiveSetOutcome::Kept, "{name}");
+        assert!(
+            !stored(&files).iter().any(|stored| stored == name),
+            "{name}"
+        );
+        assert_eq!(live(&servers), ["a", "nessa"], "{name}");
+        assert!(
+            matches!(
+                outcome(&audit),
+                McpServerOutcome::Applied {
+                    live_set: LiveSetOutcome::Kept,
+                    ..
+                }
+            ),
+            "{name}"
+        );
+    }
+}
+
+/// `config_invalid` carries no details, so a name past the bound is logged
+/// by its entry's index and its length: never the name, nor any value.
+#[test]
+fn a_name_past_the_bound_is_logged_by_its_index_and_length_alone() {
+    use nessa_sdk::infrastructure::acp::sessions::MAX_MCP_SERVER_NAME_BYTES;
+    #[derive(Clone, Default)]
+    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+    let name = "q".repeat(MAX_MCP_SERVER_NAME_BYTES + 1);
+    let mut long = entry(&name);
+    long["env"] = json!({"TOKEN": "zzsecretzz"});
+    let block = json!([entry("b"), long]);
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .finish();
+    let parsed = tracing::subscriber::with_default(subscriber, || {
+        crate::mcp_servers::infrastructure::stored_servers(&block)
+    });
+    assert!(parsed.is_err());
+    let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(logged.contains("index=1"), "{logged}");
+    assert!(
+        logged.contains(&format!("bytes={}", MAX_MCP_SERVER_NAME_BYTES + 1)),
+        "{logged}"
+    );
+    assert!(
+        !logged.contains(&name[..MAX_MCP_SERVER_NAME_BYTES]),
+        "{logged}"
+    );
+    assert!(!logged.contains("zzsecretzz"), "{logged}");
 }
 
 /// A stored name longer than the SDK allows makes the configuration

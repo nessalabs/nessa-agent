@@ -173,15 +173,20 @@ impl LiveServerSet for LiveMcpServers {
 
     /// The live set now, less `name`: a subset of a set the SDK took, so
     /// only a stop refuses it. The store's lock is held, so nothing
-    /// replaces the set between the read and the replacement.
-    fn withdraw(&self, name: &str) -> Result<(), LiveSetKept> {
-        let launches = self
-            .servers
-            .configured()
-            .into_iter()
+    /// replaces the set between the read and the replacement. A name not
+    /// in it replaces nothing.
+    fn withdraw(&self, name: &str) -> Result<bool, LiveSetKept> {
+        let live = self.servers.configured();
+        let launches: Vec<_> = live
+            .iter()
             .filter(|launch| launch.server.name != name)
+            .cloned()
             .collect();
-        self.servers.replace(launches).map_err(|_| LiveSetKept)
+        if launches.len() == live.len() {
+            return Ok(false);
+        }
+        self.servers.replace(launches).map_err(|_| LiveSetKept)?;
+        Ok(true)
     }
 }
 

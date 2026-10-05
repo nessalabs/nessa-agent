@@ -280,7 +280,11 @@ pub(super) async fn compose(
 /// way. A
 /// file with no `agents` block gains one from `agents`' catalog and
 /// workspace on its first write. Every write re-serialises the whole file
-/// (`ConfigJsonStore`).
+/// (`ConfigJsonStore`). `None`, logged, when the catalog or workspace path
+/// is not UTF-8: that block could not be written as it is, so the gateway
+/// manages no stored servers this run and the methods answer
+/// `mcp_servers_not_configured`
+/// (`a_fallback_path_that_is_not_utf8_composes_no_settings`).
 ///
 /// # Errors
 ///
@@ -290,7 +294,7 @@ pub(super) fn settings(
     agents: &AgentsConfig,
     config: PathBuf,
     audit: PathBuf,
-) -> Result<McpServerSettings, RunError> {
+) -> Result<Option<McpServerSettings>, RunError> {
     settings_over(mcp, agents, Arc::new(OsConfigFiles::new(config)), audit)
 }
 
@@ -301,20 +305,27 @@ pub(super) fn settings_over(
     agents: &AgentsConfig,
     files: Arc<dyn ConfigFiles>,
     audit: PathBuf,
-) -> Result<McpServerSettings, RunError> {
+) -> Result<Option<McpServerSettings>, RunError> {
+    let Some(fallback) = fallback_agents(agents) else {
+        tracing::error!(
+            "MCP server settings are off this run: the catalog or workspace path is not UTF-8, \
+             so a first write could not store it as it is"
+        );
+        return Ok(None);
+    };
     let store = ConfigJsonStore::new(
         files,
         ConfigCheck {
             limit: MAX_CONFIG_BYTES,
             parses: Box::new(|bytes| RuntimeConfig::parse(bytes).is_ok()),
         },
-        fallback_agents(agents),
+        fallback,
         Arc::new(RuntimeClock::new()),
         mcp.key.clone(),
     );
     let audit = DurableMcpServerAudit::new(audit, Arc::new(super::local_auth::SystemClock))
         .map_err(|_| RunError::Agent("the MCP server audit could not be opened".into()))?;
-    Ok(McpServerSettings::new(
+    Ok(Some(McpServerSettings::new(
         Arc::new(store),
         Arc::new(audit),
         Arc::new(LiveMcpServers::new(
@@ -327,13 +338,13 @@ pub(super) fn settings_over(
             Arc::new(RuntimeClock::new()),
         )),
         list_fits,
-    ))
+    )))
 }
 
 /// The `agents` block a first write starts from: the running catalog and
 /// workspace, or `None` when either is not UTF-8 — written lossily, the file
 /// would name another path, which the next start would use
-/// (`a_fallback_path_that_is_not_utf8_refuses_the_write`).
+/// (`a_fallback_path_that_is_not_utf8_composes_no_settings`).
 fn fallback_agents(agents: &AgentsConfig) -> Option<serde_json::Map<String, serde_json::Value>> {
     Some(serde_json::Map::from_iter([
         ("catalog".to_owned(), agents.catalog.to_str()?.into()),

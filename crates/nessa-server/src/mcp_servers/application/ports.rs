@@ -132,12 +132,13 @@ pub trait LiveServerSet: Send + Sync {
     /// Take the server called `name` out of the live set, leaving the rest
     /// as they are: what a remove does when the list it leaves cannot be
     /// made live as a whole. A set only shrinks by this, so the SDK's rules
-    /// never refuse it.
+    /// never refuse it. Answers whether `name` was live: `false` — a server
+    /// turned off, or never live — leaves the set as it was.
     ///
     /// # Errors
     ///
     /// [`LiveSetKept`] once the gateway is stopping; the set is kept.
-    fn withdraw(&self, name: &str) -> Result<(), LiveSetKept>;
+    fn withdraw(&self, name: &str) -> Result<bool, LiveSetKept>;
 }
 
 /// What a published change did to the live set.
@@ -153,7 +154,10 @@ pub enum LiveSetOutcome {
     Withdrawn,
     /// The live set is as it was: the gateway is stopping, and the next
     /// start reads the file
-    /// (`a_publish_during_stop_answers_success_and_leaves_the_live_set`).
+    /// (`a_publish_during_stop_answers_success_and_leaves_the_live_set`);
+    /// or a remove from a list past a bound named a server that was not
+    /// live — turned off, or never live — so there was nothing to withdraw
+    /// (`a_remove_of_a_server_not_live_from_a_list_past_a_bound_keeps_the_set`).
     Kept,
 }
 

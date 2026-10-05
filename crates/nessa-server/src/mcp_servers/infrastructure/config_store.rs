@@ -74,11 +74,10 @@ pub struct ConfigJsonStore {
     check: ConfigCheck,
     /// The `agents` block a write starts from when the file has none: the
     /// catalog and workspace this gateway runs with, which a desktop gateway
-    /// composed without one. `None` when either path is not UTF-8, so it
-    /// cannot be written as it is: a write that needs it is then refused
-    /// [`StoreError::ConfigInvalid`] rather than store another path
-    /// (`a_fallback_path_that_is_not_utf8_refuses_the_write`).
-    agents: Option<Map<String, Value>>,
+    /// composed without one. A gateway whose catalog or workspace path is
+    /// not UTF-8 composes no store at all
+    /// (`a_fallback_path_that_is_not_utf8_composes_no_settings`).
+    agents: Map<String, Value>,
     /// What the lock's bounded wait is measured on.
     clock: Arc<dyn Clock>,
     /// What each revision is keyed with: the process's one key, which the
@@ -90,7 +89,7 @@ impl ConfigJsonStore {
     pub fn new(
         files: Arc<dyn ConfigFiles>,
         check: ConfigCheck,
-        agents: Option<Map<String, Value>>,
+        agents: Map<String, Value>,
         clock: Arc<dyn Clock>,
         key: ConfigurationKey,
     ) -> Self {
@@ -204,8 +203,7 @@ impl McpServerStore for ConfigJsonStore {
         // (`c_null_agents_is_read_and_written_as_absent`).
         let agents = document.entry("agents").or_insert(Value::Null);
         if agents.is_null() {
-            let fallback = self.agents.clone().ok_or(StoreError::ConfigInvalid)?;
-            *agents = Value::Object(fallback);
+            *agents = Value::Object(self.agents.clone());
         }
         let Value::Object(agents) = agents else {
             return Err(StoreError::ConfigInvalid);
