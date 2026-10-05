@@ -415,42 +415,42 @@ it("knows a message the client would not put on the wire was never sent", async 
   expect(context.draft()).toEqual([{ type: "text", text: "look" }, ...before])
 })
 
-it("forgets a draft's stored images when Stop closes the conversation that held them", async () => {
-  // The trigger: attach while the agent runs, the upload finishes, press Stop.
-  // The gateway releases every hold on close, so `stored` would now be a lie
-  // that the next send could only have refused as attachment_not_found.
+it("keeps a draft's stored images when Stop names the running turn", async () => {
+  // Stop cancels that turn. It does not close the attachment, so an upload
+  // finished while the turn ran stays stored.
+  const stop = vi.fn(async () => {})
   const close = vi.fn(async () => {})
-  const context = await readyToSend({ close })
+  const context = await readyToSend({ stop, close })
+  await context.store.dispatch(
+    sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }),
+  )
+  const turn = context.current().turns.at(-1)
+  await attachStored(context.store, image("later"))
   const file = context.draft()[0]!
   expect(file).toMatchObject({ upload: { status: "stored" } })
   await context.store.dispatch(stopGenerating({ conversationId: "c0" }))
-  expect(close).toHaveBeenCalledOnce()
-  expect(context.draft()).toEqual([{ ...file, upload: { status: "not-started" } }])
-  // Uploaded again, as the panel would, it sends.
-  context.store.dispatch(
-    uploadChanged({ fileId: file.type === "file" ? file.id : "", to: "uploading" }),
+  expect(close).not.toHaveBeenCalled()
+  if (!turn || turn.from !== "user" || !turn.executionId) throw new Error("missing turn")
+  expect(stop).toHaveBeenCalledWith(
+    context.current().serverConversationId,
+    turn.executionId,
   )
-  await context.store.dispatch(
-    stageAttachment({
-      id: "c0",
-      fileId: file.type === "file" ? file.id : "",
-      file: described(file as FileAttachment),
-      bytes,
-    }),
-  )
-  const sent = await context.store.dispatch(sendDraft({ content: [], id: "c0" }))
-  expect(sent.meta.requestStatus).toBe("fulfilled")
+  expect(context.draft()).toEqual([file])
 })
 
-it("forgets them too when the close went unanswered: it may have applied", async () => {
+it("keeps stored images when Stop goes unanswered", async () => {
   const context = await readyToSend({
-    close: vi.fn(() => Promise.reject(new Error("connection lost"))),
+    stop: vi.fn(() => Promise.reject(new Error("connection lost"))),
   })
+  await context.store.dispatch(
+    sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }),
+  )
+  await attachStored(context.store, image("later"))
   await context.store
     .dispatch(stopGenerating({ conversationId: "c0" }))
     .unwrap()
     .catch(() => undefined)
-  expect(context.draft()[0]).toMatchObject({ upload: { status: "not-started" } })
+  expect(context.draft()[0]).toMatchObject({ upload: { status: "stored" } })
 })
 
 it("declines a send with no session yet, with a reason and the draft kept", async () => {

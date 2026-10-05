@@ -1633,6 +1633,22 @@ bytes on the wire as JSON.
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
 
+### Durable creation command owners
+
+SDK `application/agent_execution/commands/creation.rs` owns immutable creation
+bindings, progress and effect order. `commands/mutation.rs` owns the same
+principal stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
+implements that principal lease with the existing SQLite runtime; it does not
+modify the conversation semantic record writer. The host consumers live under
+`conversation/application/service/creation.rs` and `service/mutation.rs`, sharing
+the existing creation helper, metadata/deletion authority and admission guard.
+The socket admits `conversation.create`, `conversation.send`, `conversation.steer`,
+`conversation.stop` and read-only `conversation.receipt` through that store.
+Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs`,
+`nessa-server/tests/conversation/creation_commands.rs` and
+`nessa-server/tests/conversation/mutation_commands.rs`. The state table is in
+[command creation](design/command-creation.md).
+
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
 `ProductRouteState` watch admission before polling the reader and watch drains,

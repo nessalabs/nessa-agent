@@ -162,6 +162,24 @@ pub trait ProviderSessionBackend: Send + Sync {
         &self,
         input: PermissionCancellationRequest,
     ) -> ProviderOperationFuture<'_, PermissionCancellation>;
+    /// Whether [`Self::cancel_turn`] can name one active turn without closing
+    /// the session. The default cannot. [`AgentError::Unsupported`] with
+    /// [`ProviderSessionState::Usable`] from [`Self::cancel_turn`] means nothing
+    /// was sent.
+    fn supports_turn_cancel(&self) -> bool {
+        false
+    }
+    /// Ask the provider to cancel `turn` when it is the active execution.
+    /// This does not close the session, reap the process, or cancel a different
+    /// turn. The default sends nothing.
+    fn cancel_turn(&self, _turn: ExecutionId) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn cancel".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     /// Stop admission and clean up owned resources with the supplied lifecycle
     /// `request`, retaining its actual reason and initiator. Settle outstanding controls/events; report audit and cleanup failures
     /// without fabricating successful cancellation or deleting saved history.

@@ -161,7 +161,7 @@ impl Fixture {
             .cloned()
             .expect("a live conversation");
         let live = self.service.wait_for_slot(&self.id, slot).await.unwrap();
-        live.join_attachment_owner().await;
+        let _ = live.join_attachment_owner().await;
         live
     }
 

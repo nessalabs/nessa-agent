@@ -70,11 +70,10 @@ passiveReadTiming.minRequestTimeoutMs =
 if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
   throw new Error("Passive request deadline exceeds the runtime timer range")
 
-// How long an MCP App's calls can take the gateway, with one owner: a review
-// waiting for the person, the server's budgets for a call and a read, and the
-// client's allowance. The client waits their sum for `mcp.callTool` and, since
-// the gateway may open the conversation first, for `mcp.readResource` too;
-// every layer reads these generated values and spells none of them.
+// How long an MCP App's calls can take the gateway, with one owner: every
+// layer reads these generated values and spells none of them. What they cover,
+// and what they do not, is stated once, in `mcpAppCallTiming`'s description
+// below.
 const appTiming = schema["x-mcpAppCallTiming"]
 const mcpAppCallTiming = {}
 for (const name of [
@@ -100,8 +99,8 @@ mcpAppCallTiming.callDeadlineMs =
   mcpAppCallTiming.clientAllowanceMs
 if (mcpAppCallTiming.callDeadlineMs > 2_147_483_647)
   throw new Error("MCP App call deadline exceeds the runtime timer range")
-// A client waits a call's deadline for a read too; a read longer than a call
-// would be abandoned while the gateway is still bound to answer it.
+// A read is waited on for a call's deadline (the description below); a read
+// longer than a call would be abandoned while the gateway still answers it.
 if (mcpAppCallTiming.readTimeoutMs > mcpAppCallTiming.callTimeoutMs)
   throw new Error("MCP App read timeout outlasts a call")
 
@@ -590,7 +589,7 @@ ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
 ts += `${doc(
-  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first.",
+  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. callDeadlineMs is reviewDeadlineMs + callTimeoutMs + clientAllowanceMs. A client waits at least callDeadlineMs for mcp.callTool and mcp.sendMessage, each of which can wait on a review, and for mcp.readResource and mcp.updateModelContext too, whose own steps fit within it; giving up sooner would drop an answer the gateway may still send. These bound a request to an open conversation. A closed one is opened first, the agent's launch and startup, and only then does the request's own budget, a review's among them, begin. No published deadline covers that opening, so a client that gives up after callDeadlineMs may still drop an answer the gateway sends later.",
 )}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
 ts += `${doc(
   "How mcpServers.inspect is bounded: one inspection runs at most deadlineMs, reads at most maxToolPages pages of tools and maxUiReads UI resources, and at most maxConcurrent run at once. The client waits requestDeadlineMs, the deadline plus clientAllowanceMs for stopping the server, the audit records and the response.",

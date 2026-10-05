@@ -33,6 +33,8 @@ or schema version bump is needed merely to change this repository's current cont
 | `conversation.list` | The caller's conversations, newest first, with title and last line said, at most 500, and `complete` saying whether that is all of them; archived ones only on request; opens no provider |
 | `conversation.archive`, `conversation.unarchive`, `conversation.delete` | Hide or restore a conversation in the list; delete permanently (history, uploads and summary erased, audit kept, identity never reused) |
 | `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
+| `conversation.stop` | Stop one captured turn: withdraw it if queued, cancel it if active, and do not close the attachment |
+| `conversation.receipt` | Read one creation, submit, steer, or stop receipt without admitting that command |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
 | `pairing.create`, `pairing.pending`, `pairing.status`, `pairing.approve`, `pairing.deny`, `pairing.cancel` | Owner side of native device pairing (`credential.manage`, then Auth's exact consent check): a one-time code, the unfinished enrollments, one enrollment, and approval of the exact claimed key, denial or cancellation. `pairing_not_configured` unless `config.json` names a native listen address. Refusals are a `PairingErrorCode` or the session's own codes. See [device pairing](../docs/design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a) |
 | `mcpServers.list`, `mcpServers.save`, `mcpServers.remove`, `mcpServers.inspect` | The gateway's configured MCP servers (`credential.manage`, refused `forbidden` before params are read): list them with variable names only, save one (`kind: "stdio"`, `env` values, `null` keeping a stored one, `value` required) or remove one, naming the listed `revision`; or inspect a saved one — started once outside any conversation, its tools listed with their hints and each MCP App's CSP and permissions, then stopped — within `x-mcpServerInspect` (`MCP_SERVER_INSPECT_*` in Rust, `mcpServerInspect` in TypeScript). Each change rewrites the whole of `config.json` under its lock, is audited, and reaches the next conversation; each inspection is audited. `mcp_servers_not_configured` where the gateway holds no live MCP server set. Refusals are an `McpServersErrorCode`. See [MCP connections](../docs/design/mcp-connections.md#managing-the-stored-servers) |
@@ -101,21 +103,19 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   does not fit beside those open is refused `temporarily_unavailable`.
   Allowed, the call is made only if the tool is still listed as it was.
 - **A waiting call stays pending** until the person answers, or the review
-  expires (`reviewDeadlineMs`, below; `mcp_approval_expired`), or it is
+  expires (`reviewDeadlineMs` in `x-mcpAppCallTiming`; `mcp_approval_expired`), or it is
   withdrawn (`mcp_cancelled`). It is withdrawn when the request is cancelled —
   its socket closes — the app is torn down (`mcp.releaseApp`), or the
   conversation ends. A client that stops waiting withdraws nothing: the
   review stays open, and the call is still made if the person allows it.
-- **How long a call can take is published once**, as `x-mcpAppCallTiming`:
-  `reviewDeadlineMs` for a review to be answered, then `callTimeoutMs` for
-  the server to answer a call (`mcp_timed_out`); `readTimeoutMs` for it to
-  answer a resource read; and `clientAllowanceMs` for opening the
-  conversation and recording each step. The schema holds their values;
-  nothing here repeats them. A client waits at least
-  `reviewDeadlineMs + callTimeoutMs + clientAllowanceMs` (`callDeadlineMs`)
-  before giving up on `mcp.callTool`, and as long on `mcp.readResource`,
-  which may open the conversation first and never outlasts a call. The
-  gateway, the SDK's caller and the client read the generated values
+- **How long a call can take is published once**, as `x-mcpAppCallTiming`.
+  The schema holds its values, and the generator's description of it
+  (`mcpAppCallTiming` in `scripts/generate-product-protocol.mjs`, emitted
+  into the generated TypeScript) is the one statement of what each covers,
+  what a client waits, and what no published deadline covers; nothing here
+  repeats either. A server that does not answer a call within
+  `callTimeoutMs` is `mcp_timed_out`. The gateway, the SDK's caller and the
+  client read the generated values
   (`MCP_APP_REVIEW_DEADLINE_MS`, `MCP_APP_CALL_TIMEOUT_MS` and
   `MCP_APP_READ_TIMEOUT_MS` in Rust, `mcpAppCallTiming` in TypeScript); no
   layer writes its own.
