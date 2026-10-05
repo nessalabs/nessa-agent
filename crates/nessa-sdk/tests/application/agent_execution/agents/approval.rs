@@ -4,6 +4,7 @@
 
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
+use std::time::Duration;
 
 /// Records each preset a new context is opened at, and each live change.
 struct Backend {
@@ -98,6 +99,50 @@ fn request(id: &str) -> ExecutionRequest {
     }
 }
 
+struct Prepared {
+    agent: Agent,
+    provider: Arc<Provider>,
+    backend: Arc<Backend>,
+    audit: Arc<AdmissionAudit>,
+    storage: MemoryStorage,
+}
+
+async fn prepared() -> Prepared {
+    let backend = Arc::new(Backend {
+        applied: Mutex::new(Vec::new()),
+        inner: RecordingSession {
+            prompts: AtomicUsize::new(0),
+        },
+    });
+    let provider = Arc::new(Provider {
+        initial: ApprovalMode::Ask,
+        opened: Mutex::new(Vec::new()),
+        backend: backend.clone(),
+    });
+    let audit = Arc::new(AdmissionAudit::default());
+    let storage = MemoryStorage::default();
+    let agent = Agent::prepare(provider.clone(), storage.manager().await, audit.clone())
+        .await
+        .map_err(|error| error.cause().clone())
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    Prepared {
+        agent,
+        provider,
+        backend,
+        audit,
+        storage,
+    }
+}
+
 async fn finish(agent: &Agent, id: &str) {
     assert_eq!(
         agent
@@ -121,32 +166,13 @@ async fn finish_steering(agent: &Agent, id: &str) {
 #[tokio::test]
 async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachment_admits_the_binding_mode(
 ) {
-    let backend = Arc::new(Backend {
-        applied: Mutex::new(Vec::new()),
-        inner: RecordingSession {
-            prompts: AtomicUsize::new(0),
-        },
-    });
-    let provider = Arc::new(Provider {
-        initial: ApprovalMode::Ask,
-        opened: Mutex::new(Vec::new()),
-        backend: backend.clone(),
-    });
-    let audit = Arc::new(AdmissionAudit::default());
-    let manager = MemoryStorage::default().manager().await;
-    let agent = Agent::prepare(provider.clone(), manager, audit.clone())
-        .await
-        .map_err(|error| error.cause().clone())
-        .unwrap();
-    let authorization = agent
-        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
-        .unwrap();
-    agent
-        .start_attachment(authorization)
-        .unwrap()
-        .wait()
-        .await
-        .unwrap();
+    let Prepared {
+        agent,
+        provider,
+        backend,
+        audit,
+        ..
+    } = prepared().await;
 
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
     agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
@@ -157,7 +183,13 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
 
     agent.close(close_action()).await.unwrap();
     // Detached: the next attachment will open at the binding's preset.
+    // Work accepted now records that preset, not the live change, whose
+    // provider generation is still the one close left behind.
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    let detached = agent
+        .enqueue(request("queued-detached"), close_action())
+        .await
+        .unwrap();
     let authorization = agent
         .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
         .unwrap();
@@ -169,6 +201,12 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
         .unwrap();
 
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), detached.wait())
+            .await
+            .expect("work admitted while detached runs on the next attachment"),
+        Ok(ExecutionOutcome::Completed)
+    );
     finish(&agent, "queued-next").await;
     finish_steering(&agent, "steered-next").await;
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
@@ -177,6 +215,7 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
         [
             Some(ApprovalMode::Auto),
             Some(ApprovalMode::Auto),
+            Some(ApprovalMode::Ask),
             Some(ApprovalMode::Ask),
             Some(ApprovalMode::Ask),
         ]
@@ -188,4 +227,67 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
     );
     assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
     agent.close(close_action()).await.unwrap();
+}
+
+/// Close detaches before it takes the scheduler lock, and admission holds that
+/// lock across the save. The record is written after the save, so it has to
+/// name the preset captured with the permit.
+async fn admit_across_close(steer: bool) -> (Result<(), AgentError>, Vec<Option<ApprovalMode>>) {
+    let Prepared {
+        agent,
+        audit,
+        storage,
+        ..
+    } = prepared().await;
+    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
+    let (saving, release) = storage.pause_invocation_save("across-close");
+    let runner = agent.clone();
+    let admitted = tokio::spawn(async move {
+        if steer {
+            runner
+                .steer(request("across-close"), close_action())
+                .await
+                .map(|_| ())
+        } else {
+            runner
+                .enqueue(request("across-close"), close_action())
+                .await
+                .map(|_| ())
+        }
+    });
+    saving.await.expect("admission reaches its save");
+    let closer = agent.clone();
+    let closing = tokio::spawn(async move { closer.close(close_action()).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while agent.approval_mode() != Some(ApprovalMode::Ask) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("close detaches while the admission save is still paused");
+    release.send(()).expect("admission save is still waiting");
+    let result = admitted.await.expect("admission task");
+    closing.await.expect("close task").expect("close");
+    let modes = audit.0.lock().unwrap().clone();
+    (result, modes)
+}
+
+#[tokio::test]
+async fn a_close_during_admission_save_keeps_the_live_mode_on_the_record() {
+    let (queued, modes) = admit_across_close(false).await;
+    assert_eq!(queued, Ok(()));
+    assert_eq!(modes, vec![Some(ApprovalMode::Auto)]);
+    // Idle steering reaches the same save, then refuses the queue because close
+    // has already detached, and writes no admission record. A record from that
+    // path would still have to name the captured preset.
+    let (steered, modes) = admit_across_close(true).await;
+    assert!(
+        matches!(steered, Err(AgentError::Closed)),
+        "steering across close was {steered:?}"
+    );
+    assert!(
+        modes.iter().all(|mode| *mode == Some(ApprovalMode::Auto)),
+        "steering across close recorded {modes:?}"
+    );
 }

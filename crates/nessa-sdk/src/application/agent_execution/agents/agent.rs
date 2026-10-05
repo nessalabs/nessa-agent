@@ -176,17 +176,24 @@ impl Agent {
     /// the mode the next attachment will run at. `None` means this provider
     /// makes no claim.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
+        self.approval_mode_at(self.inner.lifecycle.attached_generation())
+    }
+    /// The preset of `generation` when that attachment accepted the work.
+    /// `None` means nothing was attached, so the binding's preset is the one
+    /// a later attachment opens at. Close can detach the current attachment
+    /// before the admission record is written; the generation captured when
+    /// the work was accepted still names its own preset.
+    pub(super) fn approval_mode_at(&self, generation: Option<u64>) -> Option<ApprovalMode> {
+        let Some(generation) = generation else {
+            return self.inner.provider.approval_mode();
+        };
         let live = *self
             .inner
             .live_approval_mode
             .read()
             .expect("approval mode lock");
         match live {
-            Some((generation, mode))
-                if self.inner.lifecycle.attached_generation() == Some(generation) =>
-            {
-                Some(mode)
-            }
+            Some((live_generation, mode)) if live_generation == generation => Some(mode),
             _ => self.inner.provider.approval_mode(),
         }
     }

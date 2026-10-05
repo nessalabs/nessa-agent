@@ -171,7 +171,11 @@ is replaced runs at the new attachment's level, which that record does not name.
 a change on the current idle attachment. While that attachment is in use, the
 report and every queued admission (`QueueAdmissionRecord::approval_mode`,
 from a queued turn and from steering that waits for the next turn) name the
-verified preset. A new attachment, including one after an explicit close,
+verified preset. Close can detach the attachment while that admission is still
+being saved; the record keeps the preset of the attachment that accepted the
+work
+(`a_close_during_admission_save_keeps_the_live_mode_on_the_record`).
+A new attachment, including one after an explicit close,
 opens at the binding's preset (`AgentProvider::approval_mode`). While nothing is
 attached, the report is that preset, so work admitted then names the mode the
 next attachment opens at. After the new attachment is up, the report and the
