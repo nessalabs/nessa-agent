@@ -56,6 +56,7 @@ import {
 } from "./lib/gateway-view.mjs"
 import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
+import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, names } from "./lib/selectors.mjs"
 import { paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
@@ -76,6 +77,7 @@ const meta = {
     only: { type: "string" },
     agent: { type: "string", default: "claude" },
     scripted: { type: "boolean", default: false },
+    evidence: { type: "string" },
   },
   help: `
 Usage: node verification/desktop/scripts/mcp-apps-gateway.mjs [options]
@@ -92,6 +94,9 @@ Options:
   --scripted            run scripts/mcp-test-server/scripted-agent.mjs as that
                         agent: no model, no sign-in; it calls the app tool once
                         and reports the call in the harness's recorded frames
+  --evidence <dir>      with --scripted, write acp.jsonl, mcp.jsonl, gateway.log
+                        and the setup view.json there. MCP Apps need the dev
+                        server's sandbox meta, so --mode prod is not this check.
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
   renders   the window opens the conversation on load (#485); the call is
@@ -121,13 +126,19 @@ the gateway shows its review first.`,
 
 /** The gateway, the dev server in front of it, and a conversation in which the agent called the app tool. */
 async function startStack(options) {
-  const stack = await startGatewayStack(options, "mcp-apps-gateway", {
+  if (options.mode === "prod")
+    throw new CannotRun(
+      "not run: dev server only (MCP Apps need the dev server's sandbox)",
+    )
+  const stack = await startGatewayStack({ ...options, mode: "dev" }, "mcp-apps-gateway", {
     scripted: options.scripted ? APP_TOOL : undefined,
+    evidence: options.scripted ? options.evidence : undefined,
   })
   try {
     const started = Date.now()
     const conversationId = randomUUID()
     const turn = await appToolTurn(stack.client, conversationId, options.agent)
+    if (options.evidence) writeView(options.evidence, "view.json", turn.view)
     stack.timings.agentTurnMs = Date.now() - started
     const { conversations } = await stack.client.conversation.list({})
     const title = conversations.find(
