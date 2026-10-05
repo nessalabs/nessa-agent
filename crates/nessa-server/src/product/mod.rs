@@ -38,7 +38,7 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 
 mod conversation;
 mod mcp_apps;
-mod mcp_servers;
+pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 

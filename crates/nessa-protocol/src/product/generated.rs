@@ -979,6 +979,11 @@ pub struct McpServersAuditUnavailableDetails {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersConfigTooLargeDetails {
+    pub revision: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServersStorageUnavailableDetails {
     pub applied: bool,
 }

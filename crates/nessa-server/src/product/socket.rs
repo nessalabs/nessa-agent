@@ -2845,6 +2845,179 @@ mod tests {
         assert_eq!(payload["tools"][0]["name"], "first");
     }
 
+    /// One listed server whose single argument is `padding` bytes long.
+    fn padded_list(padding: usize) -> crate::mcp_servers::application::ServerList {
+        use crate::mcp_servers::application::{ListedServer, ServerList};
+        use crate::mcp_servers::domain::StdioServer;
+        ServerList {
+            revision: "r".repeat(64),
+            servers: vec![ListedServer {
+                server: StdioServer::new("s", "/usr/bin/python3", vec!["p".repeat(padding)]),
+                env_names: vec![],
+                enabled: true,
+                managed: false,
+            }],
+        }
+    }
+
+    /// L1 and L2 at the edge: a list answer of exactly the frame's 65536
+    /// bytes is sent whole; one byte more is refused
+    /// `mcp_servers_config_too_large` with the revision, in a frame that fits.
+    #[test]
+    fn l2_a_list_past_the_frame_bound_is_refused_with_its_revision() {
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let answered = |padding: usize| {
+            let message = super::super::mcp_servers::answered("id", padded_list(padding));
+            let length = message.to_wire_text().unwrap().len();
+            let OutgoingMessage::Response(response) = message else {
+                panic!("a response")
+            };
+            (length, response)
+        };
+        // The frame grows a byte for each byte of an ASCII argument.
+        let (small, _) = answered(1);
+        let edge = 1 + limit - small;
+        let (length, response) = answered(edge);
+        assert_eq!(length, limit);
+        assert!(response.ok);
+        assert_eq!(
+            response.payload.unwrap()["servers"][0]["args"][0]
+                .as_str()
+                .unwrap()
+                .len(),
+            edge
+        );
+        let (length, response) = answered(edge + 1);
+        assert!(length <= limit, "{length}");
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "mcp_servers_config_too_large");
+        assert_eq!(error.details, Some(json!({"revision": "r".repeat(64)})));
+    }
+
+    /// W1 at the edge: a save's list is measured for the longest request
+    /// id — 256 bytes, each written as six — so a list that passed answers
+    /// whole whatever id later asks for it.
+    #[test]
+    fn w1_a_list_fits_for_the_longest_request_id_at_exactly_its_edge() {
+        use super::super::mcp_servers::{answered, list_fits};
+        let limit = MAX_PAYLOAD_BYTES as usize;
+        let longest = "\u{1}".repeat(256);
+        let length = |padding: usize| {
+            answered(&longest, padded_list(padding))
+                .to_wire_text()
+                .unwrap()
+                .len()
+        };
+        let edge = 1 + limit - length(1);
+        assert_eq!(length(edge), limit);
+        assert!(list_fits(&padded_list(edge)));
+        assert!(!list_fits(&padded_list(edge + 1)));
+        // With a short id the same list has room to spare.
+        assert!(answered("id", padded_list(edge + 1)).is_success());
+    }
+
+    /// L2, W1 and W2 over a store bounded as the gateway's: a file edited by
+    /// hand whose list would not fit is listed as a refusal carrying its
+    /// revision, and a remove naming that revision is made — even one that
+    /// leaves the list too long still — so removes recover; a save whose
+    /// list would not fit is refused `mcp_servers_config_too_large`, nothing
+    /// written, its outcome recorded refused.
+    #[tokio::test]
+    async fn w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers() {
+        use crate::mcp_servers::application::{McpServerAuditPhase, McpServerOutcome};
+        use crate::mcp_servers::infrastructure::settings_test_support::{
+            absolute, config, settings_at_full_size, MemoryFiles, RecordingAudit,
+        };
+        // s0 small, s1 to s14 padded.
+        let stored = |padding: usize| {
+            (0..15)
+                .map(|index| {
+                    let arg = if index == 0 {
+                        "/s0.py".to_owned()
+                    } else {
+                        "p".repeat(padding)
+                    };
+                    json!({"name": format!("s{index}"),
+                        "command": absolute("/usr/bin/python3"), "args": [arg]})
+                })
+                .collect::<Vec<_>>()
+        };
+        // Just under the file's 64 KiB, which the listed fields outgrow.
+        let bare = serde_json::to_vec(&config(stored(0))).unwrap().len();
+        let padding = (65_000 - bare) / 14;
+        let document = config(stored(padding));
+        assert!(serde_json::to_vec(&document).unwrap().len() <= 65_536);
+        let files = MemoryFiles::holding(document);
+        let audit = Arc::new(RecordingAudit::default());
+        let (settings, _) = settings_at_full_size(files.clone(), audit.clone());
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_mcp_server_settings(Arc::new(settings));
+        let session = authenticate(&state).await;
+        let (ok, refused) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(!ok);
+        assert_eq!(refused["code"], "mcp_servers_config_too_large");
+        let revision = refused["details"]["revision"].clone();
+        assert!(revision.is_string(), "{refused}");
+        // Removing the small one leaves a list still too long: made all the
+        // same.
+        let (ok, removed) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.remove",
+            json!({"revision": revision, "name": "s0"}),
+        )
+        .await;
+        assert!(ok, "{removed}");
+        let (ok, refused) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(!ok);
+        assert_eq!(
+            refused,
+            json!({"code": "mcp_servers_config_too_large",
+                "details": {"revision": removed["revision"]}})
+        );
+        let (ok, removed) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.remove",
+            json!({"revision": removed["revision"], "name": "s1"}),
+        )
+        .await;
+        assert!(ok, "{removed}");
+        let (ok, listed) = mcp_servers_call(&state, &session, "mcpServers.list", json!({})).await;
+        assert!(ok, "{listed}");
+        assert_eq!(listed["revision"], removed["revision"]);
+        assert_eq!(listed["servers"].as_array().unwrap().len(), 14);
+        // Saving it back would leave a list past the frame, though the file
+        // would fit.
+        let old = files.current();
+        let (ok, answer) = mcp_servers_call(
+            &state,
+            &session,
+            "mcpServers.save",
+            json!({"revision": listed["revision"], "server": {"kind": "stdio",
+                "name": "s1", "command": absolute("/usr/bin/python3"),
+                "args": ["p".repeat(padding)], "env": [], "enabled": true}}),
+        )
+        .await;
+        assert_eq!(
+            (ok, answer),
+            (
+                false,
+                json!({"code": "mcp_servers_config_too_large", "details": null})
+            )
+        );
+        assert_eq!(files.current(), old);
+        let records = audit.records();
+        assert!(matches!(
+            &records.last().unwrap().phase,
+            McpServerAuditPhase::Outcome(McpServerOutcome::Refused {
+                reason: "config_too_large",
+                ..
+            })
+        ));
+    }
+
     struct UnavailablePolicy;
     impl PolicyEvaluator for UnavailablePolicy {
         fn evaluate(

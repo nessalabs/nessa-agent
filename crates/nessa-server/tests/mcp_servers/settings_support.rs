@@ -18,6 +18,7 @@ use crate::mcp_servers::domain::{
 use crate::mcp_servers::infrastructure::{
     ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers, Published,
 };
+use crate::product::mcp_servers::list_fits;
 use nessa_sdk::infrastructure::{
     clock::{Clock, ClockInstant, ClockSleep, RuntimeClock},
     mcp::McpServers,
@@ -353,9 +354,15 @@ fn started_with(
     inspector: Arc<dyn ServerInspector>,
     startup: &[ConfiguredMcpServer],
 ) -> (McpServerSettings, McpServers) {
-    live_through(files, audit, clock, inspector, startup, |live| {
-        Arc::new(live)
-    })
+    live_through(
+        files,
+        audit,
+        clock,
+        inspector,
+        startup,
+        CONFIG_LIMIT,
+        |live| Arc::new(live),
+    )
 }
 
 /// [`settings_over`] on `clock`, inspecting with `inspector`, and with the
@@ -369,7 +376,37 @@ pub(crate) fn settings_through(
     inspector: Arc<dyn ServerInspector>,
     live: impl FnOnce(LiveMcpServers) -> Arc<dyn LiveServerSet>,
 ) -> (McpServerSettings, McpServers) {
-    live_through(files, audit, clock, inspector, &[managed()], live)
+    live_through(
+        files,
+        audit,
+        clock,
+        inspector,
+        &[managed()],
+        CONFIG_LIMIT,
+        live,
+    )
+}
+
+/// The bound the test store holds `config.json` to: small, so a result
+/// past it is cheap to build.
+const CONFIG_LIMIT: usize = 4096;
+
+/// [`settings_for`] over a store bounded as the gateway's is (64 KiB), so
+/// a stored list can outgrow a frame
+/// (`w1_a_save_whose_list_would_not_fit_is_refused_and_a_remove_recovers`).
+pub(crate) fn settings_at_full_size(
+    files: Arc<MemoryFiles>,
+    audit: Arc<RecordingAudit>,
+) -> (McpServerSettings, McpServers) {
+    live_through(
+        files,
+        audit,
+        Arc::new(LeapingClock::default()),
+        Arc::new(ScriptedInspector::default()),
+        &[managed()],
+        65_536,
+        |live| Arc::new(live),
+    )
 }
 
 fn live_through(
@@ -378,12 +415,13 @@ fn live_through(
     clock: Arc<dyn Clock>,
     inspector: Arc<dyn ServerInspector>,
     startup: &[ConfiguredMcpServer],
+    limit: usize,
     live: impl FnOnce(LiveMcpServers) -> Arc<dyn LiveServerSet>,
 ) -> (McpServerSettings, McpServers) {
     let store = ConfigJsonStore::new(
         files.clone(),
         ConfigCheck {
-            limit: 4096,
+            limit,
             parses: Box::new(|bytes| {
                 serde_json::from_slice::<Value>(bytes).is_ok()
                     && !String::from_utf8_lossy(bytes).contains(UNPARSEABLE)
@@ -407,6 +445,7 @@ fn live_through(
         audit,
         live(LiveMcpServers::new(servers.clone(), launches)),
         inspector,
+        list_fits,
     );
     (settings, servers)
 }

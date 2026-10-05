@@ -31,6 +31,7 @@ use crate::mcp_servers::{
         TokenSource,
     },
 };
+use crate::product::mcp_servers::list_fits;
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
@@ -331,6 +332,7 @@ pub(super) fn settings_over(
             mcp.launches.clone(),
             Arc::new(RuntimeClock::new()),
         )),
+        list_fits,
     ))
 }
 

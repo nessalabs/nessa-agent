@@ -7,7 +7,12 @@
 //! (`mcp_servers_on_the_wire_carry_names_only_and_typed_refusals`). An
 //! inspection's answer is fitted to the frame's byte bound here, where the
 //! frame is written: tools are dropped from the end until it fits
-//! (`i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits`).
+//! (`i5_an_answer_past_the_frame_bound_drops_tools_until_it_fits`). A list
+//! is not cut: one past the bound — a file edited by hand — is refused
+//! `mcp_servers_config_too_large` with its revision, so a remove still
+//! works (`l2_a_list_past_the_frame_bound_is_refused_with_its_revision`),
+//! and a save whose list would pass it is refused before it is written
+//! ([`list_fits`]).
 use super::{
     mcp_apps::{remote_details, ui_csp, ui_permissions},
     socket::{failure, failure_with_details, success},
@@ -23,8 +28,8 @@ use crate::mcp_servers::{
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
     McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
-    McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersErrorCode,
-    McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
+    McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersConfigTooLargeDetails,
+    McpServersErrorCode, McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
     McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
     McpServersRevisionConflictDetails, McpServersSaveParams, McpServersStorageUnavailableDetails,
     McpServersWriteResult,
@@ -48,10 +53,7 @@ pub(super) async fn dispatch(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            settings
-                .list()
-                .await
-                .map(|list| success(&frame.id, &listed(list)))
+            settings.list().await.map(|list| answered(&frame.id, list))
         }
         "mcpServers.save" => {
             let Ok(params) = serde_json::from_value::<McpServersSaveParams>(frame.params) else {
@@ -132,6 +134,38 @@ fn listed(list: ServerList) -> McpServersListResult {
             })
             .collect(),
     }
+}
+
+/// `list`'s answer for `request_id`, when it is at most
+/// [`MAX_PAYLOAD_BYTES`]; past that, `mcp_servers_config_too_large` with
+/// the revision, which always fits, so a remove by name can still name it.
+pub(super) fn answered(request_id: &str, list: ServerList) -> OutgoingMessage {
+    let revision = list.revision.clone();
+    let message = success(request_id, &listed(list));
+    if within_frame(&message) {
+        return message;
+    }
+    let details = serde_json::to_value(McpServersConfigTooLargeDetails { revision })
+        .expect("generated error details serialize");
+    failure_with_details(
+        request_id,
+        McpServersErrorCode::McpServersConfigTooLarge.as_str(),
+        details,
+    )
+}
+
+/// Whether `list` is answered whole for any request id: what a save must
+/// leave ([`ListFits`](crate::mcp_servers::application::ListFits)).
+pub(crate) fn list_fits(list: &ServerList) -> bool {
+    // The longest request id a frame is taken with (`socket`): 256 bytes,
+    // each written as six (`\u0001`).
+    within_frame(&success(&"\u{1}".repeat(256), &listed(list.clone())))
+}
+
+fn within_frame(message: &OutgoingMessage) -> bool {
+    message
+        .to_wire_text()
+        .is_ok_and(|text| text.len() <= MAX_PAYLOAD_BYTES as usize)
 }
 
 /// `inspection` as the wire carries it, answered for `request_id` in one
