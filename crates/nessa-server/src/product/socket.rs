@@ -2798,6 +2798,21 @@ mod tests {
             assert!(!response.ok);
             assert_eq!(response.error.unwrap().code, "invalid_request");
         }
+        for (method, params) in [
+            ("mcp.callTool", r#"{"a":"\ud800\x"}"#),
+            ("server.health", r#"{"a":"\udfff\x"}"#),
+        ] {
+            let text = format!(
+                r#"{{"type":"req","method":"{method}","params":{params},"id":"request-9"}}"#
+            );
+            assert!(RequestFrame::decode(&text).is_err());
+            let Some(OutgoingMessage::Response(response)) = correlatable_invalid_request(&text)
+            else {
+                panic!("{method} with a byte after the surrogate got no answer")
+            };
+            assert_eq!(response.id, "request-9");
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
         assert!(correlatable_invalid_request(
             r#"{"type":"req","id":"\ud800","method":"server.health","params":{}}"#
         )
@@ -2805,6 +2820,19 @@ mod tests {
         assert!(correlatable_invalid_request(
             r#"{"type":"req","id":"a","id":"b","method":"mcp.callTool","params":{"nested":"\ud800"}}"#
         )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"request-9","method":"a","method":"b","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        assert!(correlatable_invalid_request(
+            r#"{"type":"req","id":"","method":"m","params":{"a":"\ud800"}}"#
+        )
+        .is_none());
+        let long_id = "x".repeat(257);
+        assert!(correlatable_invalid_request(&format!(
+            r#"{{"type":"req","id":"{long_id}","method":"m","params":{{"a":"\ud800"}}}}"#
+        ))
         .is_none());
     }
 

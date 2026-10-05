@@ -38,13 +38,16 @@ or schema version bump is needed merely to change this repository's current cont
 | `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
-its request. A request the gateway cannot decode is still answered when that
-`id` is one string:
+its request. On the authenticated socket, a request the gateway cannot decode
+is answered when that `id` can still be read:
 
 | What the frame holds | What the gateway does |
 | --- | --- |
-| One `id`, `type` is `req`, and the frame does not decode — a string that is not Unicode included | `invalid_request` on that `id` |
-| `id` named twice, `id` not a string, or `type` not `req` | no reply; the caller's own timeout settles it |
+| `type` is `req`, and `id` is one Unicode string of 1 to 256 bytes | `invalid_request` on that `id`. A string in the frame that is not Unicode, such as a lone surrogate, does not hide it |
+| An envelope name named twice, `id` missing or not a string, `id` empty or longer than 256 bytes, `type` not `req`, or the text not one JSON object | no reply; the caller's own timeout settles it |
+
+The handshake is not this table: a frame that does not decode before
+authentication closes as unauthorized.
 
 Mutations separately carry a stable `requestId` for explicit retries.
 Credential and session `expiresAt` may be null; issuance defaults to no expiry.

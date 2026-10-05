@@ -270,7 +270,11 @@ impl<'a> EnvelopeParser<'a> {
                         out.clear();
                     }
                 }
-                Some(0x00..=0x1F) => return Err(syntax("control character in string")),
+                // A raw control is malformed JSON. Once the string is already
+                // not Unicode, it is not a second reason to drop the envelope
+                // id: the closing quote is still the end of the string.
+                Some(0x00..=0x1F) if unicode => return Err(syntax("control character in string")),
+                Some(0x00..=0x1F) => self.index += 1,
                 Some(_) => {
                     let ch = self.pop_char()?;
                     if unicode {
@@ -306,6 +310,10 @@ impl<'a> EnvelopeParser<'a> {
             b'r' => '\r',
             b't' => '\t',
             b'u' => return self.unicode_escape(out),
+            // `\x` after a lone surrogate is the byte serde rejects as the
+            // end of the hex escape. The string is already not Unicode, so
+            // the byte is consumed and the walk continues to the real quote.
+            _ if out.is_none() => return Ok(false),
             _ => return Err(syntax("invalid escape")),
         };
         if let Some(out) = out.as_mut() {
@@ -329,7 +337,11 @@ impl<'a> EnvelopeParser<'a> {
             return Ok(false);
         }
         self.index += 2;
-        let low = self.hex4()?;
+        // A short `\u` here is the same failed pair, not a new syntax error
+        // that should hide an id already read or still to come.
+        let Ok(low) = self.hex4() else {
+            return Ok(false);
+        };
         if !(0xDC00..=0xDFFF).contains(&low) {
             return Ok(false);
         }
@@ -343,12 +355,16 @@ impl<'a> EnvelopeParser<'a> {
     fn hex4(&mut self) -> Result<u16, serde_json::Error> {
         let mut unit = 0u16;
         for _ in 0..4 {
-            let digit = match self.pop_byte()? {
-                byte @ b'0'..=b'9' => byte - b'0',
-                byte @ b'a'..=b'f' => byte - b'a' + 10,
-                byte @ b'A'..=b'F' => byte - b'A' + 10,
+            let Some(byte) = self.peek() else {
+                return Err(syntax("invalid hex escape"));
+            };
+            let digit = match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                b'A'..=b'F' => byte - b'A' + 10,
                 _ => return Err(syntax("invalid hex escape")),
             };
+            self.index += 1;
             unit = (unit << 4) | u16::from(digit);
         }
         Ok(unit)
@@ -539,6 +555,7 @@ mod tests {
             r#"{"a":+1}"#,
             r#"{"a":"unterminated}"#,
             "{\"a\":\"\n\"}",
+            r#"{"id":"request-9","a":"\x"}"#,
         ] {
             assert_eq!(
                 unique_envelope(text).is_err(),
@@ -559,10 +576,25 @@ mod tests {
             r#"{"type":"req","id":"request-9","method":"mcp.readResource","params":{"uri":"\uD800\uD800"}}"#,
             r#"{"type":"req","\ud800":1,"id":"request-9","method":"m","params":{}}"#,
             r#"{"type":"req","method":"\ud800","id":"request-9","params":{}}"#,
+            // The byte after the surrogate is what serde discards while
+            // reporting the hex escape. It must not hide the id.
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800\x"}}"#,
+            r#"{"type":"req","params":{"a":"\ud800\x"},"id":"request-9","method":"m"}"#,
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\udfff\x"}}"#,
+            r#"{"type":"req","id":"request-9","method":"m","params":{"a":"\ud800\u12"}}"#,
+            "{\"type\":\"req\",\"id\":\"request-9\",\"method\":\"m\",\"params\":{\"a\":\"\\ud800\n\"}}",
+            r#"{"type":"req","id":"right","method":"m","params":{"a":"\ud800\",\"id\":\"wrong"}}"#,
         ] {
             let value = unique_envelope(text).unwrap_or_else(|error| panic!("{text}: {error}"));
-            assert_eq!(value["id"], "request-9", "{text}");
+            let id = value["id"].as_str().unwrap_or_else(|| panic!("no id in {text}"));
+            assert!(
+                id == "request-9" || id == "right",
+                "{text} answered {id}"
+            );
             assert_eq!(value["type"], "req", "{text}");
+            if id == "right" {
+                assert_eq!(value["method"], "m", "{text}");
+            }
             assert!(unique_value(text).is_err(), "strict decode accepted {text}");
         }
         // The id itself is not Unicode: there is no request id to answer.
