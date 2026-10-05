@@ -273,5 +273,54 @@
     }
    }
   ]
+ },
+ "toolSearchTurn": {
+  "recorded": "Live Codex turn through the Nessa gateway, 2026-10-04 UTC: @agentclientprotocol/codex-acp 1.12.0 (codex 0.154.0) on gpt-5.6-terra, the test MCP server configured as \"mcptest\" (scripts/mcp-test-server/local-gateway.mjs, harness wrapped by acp-recorder.mjs). Codex defers MCP tools behind its tool search (tool_search_always_defer_mcp_tools): the model found review_rows through exec ALL_TOOLS and called it there (#500). Kept: the prompt sent, and every session/update tool frame exactly as the harness sent it.",
+  "prompt": "Use the tools of the \"mcptest\" MCP server. If they are not among the tools you were given, find them with your tool search. Call review_rows (no arguments) exactly once, and wait for its result. Call no other tool of that server. When it has returned, reply with DONE.",
+  "frames": [
+   {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "exec-44785f34-1ccb-443d-a0b8-9092746d5f2f",
+    "kind": "execute",
+    "title": "mcp.mcptest.review_rows",
+    "status": "in_progress",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "review_rows",
+     "arguments": {}
+    },
+    "_meta": {
+     "is_mcp_tool_call": true
+    }
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-44785f34-1ccb-443d-a0b8-9092746d5f2f",
+    "status": "completed",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "review_rows",
+     "arguments": {}
+    },
+    "rawOutput": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Two rows to review."
+       }
+      ],
+      "structuredContent": {
+       "rows": [
+        1,
+        2
+       ]
+      },
+      "_meta": null
+     },
+     "error": null
+    }
+   }
+  ]
  }
 }

@@ -53,7 +53,10 @@ harness is given a stand-in, `nessa mcp-relay`, in its place, and for each
 harness session that starts it the gateway starts the server and holds the
 connection to it (ADR 344). It
 sends one message asking for every tool once, allows each tool's permission
-request once, and writes what happened:
+request once, and writes what happened. The message is `toolPrompt` in
+`local-gateway.mjs`, which the desktop's `mcp-apps-gateway.mjs` asks with
+too: it lets the agent use its own tool search, since Codex reaches MCP tools
+only through it (#500), and leaves the scope to the permission guard below.
 
 ```sh
 cargo build -p nessa-server
@@ -84,7 +87,9 @@ directory (its owner token among it) at the end. Recordings and
 `_auth/status_update` names the signed-in account (its email): review them,
 and check in only extracted frames, never a whole recording. The frames the SDK's
 parser tests replay (`crates/nessa-sdk/tests/infrastructure/{claude_acp,codex_acp}/tools/fixtures/mcp_live_frames.json`)
-were extracted from such a run.
+were extracted from such a run. The Codex fixture's `toolSearchTurn` is one
+turn asked with `toolPrompt`'s single-tool wording, which
+`local-gateway.test.mjs` holds to it: change the wording, and record it again.
 
 `MCP_LIVE_HARNESSES` names the directory holding `claude-acp/` and `codex-acp/`
 with their `node_modules` (default: `crates/nessa-sdk/harnesses` in this

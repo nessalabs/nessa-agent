@@ -12,7 +12,8 @@
  * - a dev server whose `/browser` proxy is that gateway.
  *
  * It asks the agent, through `NessaClient`, to call the server's app tool
- * (`review_rows`) once, and allows that call alone; an agent that calls it
+ * (`review_rows`) once (`toolPrompt`, as `live-check.mjs` asks), and allows
+ * that call alone; an agent that calls it
  * more than once leaves the run "could not run". Then, in each engine, it
  * signs the page in with the gateway's owner token through `/browser/login`
  * from the page, loads the window, which opens the conversation by itself
@@ -41,7 +42,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
-import { SERVER } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { SERVER, toolPrompt } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneCard, oneMount } from "./lib/apps.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
@@ -160,10 +161,7 @@ async function appToolTurn(client, conversationId, agent) {
   const { view, turn: last } = await agentTurn(
     client,
     conversationId,
-    // Worded as live-check.mjs's prompt, which each agent follows.
-    `Use the tools of the "${SERVER}" MCP server. Call ${APP_TOOL} (no arguments) ` +
-      "exactly once, and wait for its result. Do not use any other tool. " +
-      "When it has returned, reply with DONE.",
+    toolPrompt([{ name: APP_TOOL }]),
     {
       agent,
       create: true,

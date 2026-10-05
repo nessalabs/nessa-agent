@@ -736,3 +736,39 @@ fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
     );
     assert_eq!(content("show_chart")[0], text("Chart of two rows."));
 }
+
+/// A call codex-acp 1.12.0 made through Codex's tool search, which defers MCP
+/// tools (#500): two frames, with no `in_progress` update between them, as
+/// recorded live in the fixture's `toolSearchTurn`.
+#[test]
+fn a_call_codex_made_through_its_tool_search_is_parsed_as_that_servers_tool() {
+    let recorded: Value =
+        serde_json::from_str(include_str!("fixtures/mcp_live_frames.json")).unwrap();
+    let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2);
+    let mut tools = ObservedTools::default();
+    let mut updates = Vec::new();
+    for frame in frames {
+        let update = tool_call(frame, &mut tools).unwrap();
+        // Every frame is an update to the one call.
+        assert_eq!(update.id().as_str(), frames[0]["toolCallId"]);
+        updates.push(update);
+    }
+    // Named from `rawInput`, not the dotted title.
+    for update in &updates {
+        let identity = update.mcp_tool().unwrap();
+        assert_eq!(
+            (identity.server(), identity.tool()),
+            ("mcptest", "review_rows")
+        );
+    }
+    let last = updates.last().unwrap();
+    assert_eq!(last.status(), &Some(ToolStatus::Completed));
+    assert_eq!(
+        last.content(),
+        &Some(vec![
+            text("Two rows to review."),
+            ToolContent::structured(r#"{"rows":[1,2]}"#).unwrap(),
+        ])
+    );
+}

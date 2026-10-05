@@ -116,6 +116,26 @@ fn each_recorded_claude_call_is_one_tool_part() {
     one_part_per_recorded_call(CLAUDE);
 }
 
+/// The call Codex made through its tool search (#500), recorded in two frames
+/// with no `in_progress` update between them: one part, at its announcement,
+/// its entry completed.
+#[test]
+fn a_recorded_codex_call_made_through_its_tool_search_is_one_tool_part() {
+    let recorded: Value = serde_json::from_str(CODEX).unwrap();
+    let frames = recorded["toolSearchTurn"]["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2);
+    let id = frames[0]["toolCallId"].as_str().unwrap();
+    let mut events: Vec<_> = frames
+        .iter()
+        .map(|frame| update(id, status(frame)))
+        .collect();
+    events.push(text("DONE"));
+    let view = committed_tool_view(&events);
+    assert_eq!(tool_parts(&view, 0), vec![(id.to_owned(), 0)]);
+    assert_eq!(view.tools.len(), 1);
+    assert_eq!(view.tools[0].status, "completed");
+}
+
 /// Row: a later update with only a status changes the call's entry, not the
 /// turn's parts. The other way: a status-only update for a call not seen yet
 /// is that call's first update, and gives it its part.

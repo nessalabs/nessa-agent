@@ -2,7 +2,9 @@
  * The gateway's log, against a stand-in for the `nessa` binary
  * (`MCP_LIVE_NESSA`): what the gateway says as it stops is in `log()` once
  * `stop()` returns, and a gateway that fails to start leaves its output on
- * the error. `live-check.mjs` writes either to its evidence.
+ * the error. `live-check.mjs` writes either to its evidence. And the prompt
+ * both live checks ask with (`toolPrompt`), held to the live Codex turn
+ * recorded with it (#500).
  */
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
@@ -20,7 +22,7 @@ import { dirname, join } from "node:path"
 import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { startLocalGateway } from "./local-gateway.mjs"
+import { SERVER, repoRoot, startLocalGateway, toolPrompt } from "./local-gateway.mjs"
 
 const scratch = mkdtempSync(join(tmpdir(), "nessa-local-gateway-test-"))
 after(() => rmSync(scratch, { recursive: true, force: true }))
@@ -185,4 +187,68 @@ test("a signed-out gateway is started with no credential and a home of its own",
   // Not signed out, it is this process's environment.
   const live = await seen({})
   for (const name of planted) assert.equal(live.env[name], "planted", name)
+})
+
+/** The live Codex turn asked with `toolPrompt`'s single-tool wording (#500). */
+const toolSearchTurn = JSON.parse(
+  readFileSync(
+    join(
+      repoRoot,
+      "crates/nessa-sdk/tests/infrastructure/codex_acp/tools/fixtures/mcp_live_frames.json",
+    ),
+    "utf8",
+  ),
+).toolSearchTurn
+
+const fiveTools = [
+  { name: "report_rows" },
+  { name: "link_resources" },
+  { name: "rows.get", args: { id: 2 } },
+  { name: "always_fails" },
+  { name: "show_chart" },
+]
+
+test("the one-tool prompt is the one the recorded Codex turn was asked with", () => {
+  assert.equal(
+    toolPrompt([{ name: "review_rows" }]),
+    toolSearchTurn.prompt,
+    "the wording changed: record the Codex turn again with the new wording " +
+      "(the fixture's toolSearchTurn, scripts/mcp-test-server/README.md)",
+  )
+})
+
+test("the several-tool prompt names the server and each tool with its arguments, in order", () => {
+  const prompt = toolPrompt(fiveTools)
+  assert.ok(prompt.startsWith(`Use the tools of the "${SERVER}" MCP server.`), prompt)
+  const calls = [
+    "report_rows (no arguments)",
+    "link_resources (no arguments)",
+    'rows.get with {"id": 2}',
+    "always_fails (no arguments)",
+    "show_chart (no arguments)",
+  ]
+  assert.ok(
+    prompt.includes(
+      `in this order, waiting for each result before the next: ${calls.join(", ")}.`,
+    ),
+    prompt,
+  )
+  assert.ok(prompt.endsWith("When all 5 have returned, reply with DONE."), prompt)
+  // Empty arguments read as none, as absent ones do.
+  assert.equal(
+    toolPrompt([{ name: "show_chart", args: {} }]),
+    toolPrompt([{ name: "show_chart" }]),
+  )
+})
+
+test("neither prompt forbids the agent's own tools, which Codex finds the server's tools with", () => {
+  for (const prompt of [toolPrompt([{ name: "review_rows" }]), toolPrompt(fiveTools)]) {
+    assert.ok(!prompt.includes("any other tool"), prompt)
+    assert.ok(prompt.includes("no other tool of that server"), prompt)
+    assert.ok(prompt.includes("tool search"), prompt)
+  }
+})
+
+test("a prompt for no tools is refused", () => {
+  assert.throws(() => toolPrompt([]))
 })
