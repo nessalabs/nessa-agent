@@ -66,6 +66,13 @@ pub(crate) fn discover<R, E>(
         let discovery = attempt()?;
         match discovery.outcome.failure {
             Some(cause) if preparing(cause) && attempts < PREPARING_ATTEMPTS => attempts += 1,
+            Some(cause) if preparing(cause) => {
+                tracing::warn!(
+                    limit = "client.preparing_attempts",
+                    "product session hit an operational limit"
+                );
+                return Ok(discovery);
+            }
             _ => return Ok(discovery),
         }
     }
@@ -176,6 +183,12 @@ pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
             {
                 trigger = Trigger::Preparing;
                 continue;
+            }
+            PassResult::Failed(Some(cause)) if preparing(cause) => {
+                tracing::warn!(
+                    limit = "client.preparing_attempts",
+                    "product session hit an operational limit"
+                );
             }
             _ => {}
         }

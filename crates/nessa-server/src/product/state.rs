@@ -27,6 +27,12 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+/// Name the operational limit a refusal or a silent close hit.
+/// The wire response and close code stay what they were.
+pub(crate) fn note_limit(limit: &'static str) {
+    tracing::warn!(limit, "product session hit an operational limit");
+}
+
 /// Dependencies and trusted gateway selectors for the product route.
 ///
 /// This state is constructed only in composition.
