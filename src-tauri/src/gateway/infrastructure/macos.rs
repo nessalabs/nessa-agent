@@ -303,6 +303,27 @@ impl GatewayHost for Launchd {
         }
     }
 
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        let mut configuration = self
+            .configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match configuration
+            .restoring_claude_config_directory(expected, previous)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?
+        {
+            Some(updated) => {
+                *configuration = updated;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     fn register(
         &self,
         runtime: &Path,

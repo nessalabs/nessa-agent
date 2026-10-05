@@ -346,6 +346,27 @@ impl SystemdGateway {
         }
     }
 
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        let mut configuration = self
+            .configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match configuration
+            .restoring_claude_config_directory(expected, previous)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?
+        {
+            Some(updated) => {
+                *configuration = updated;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     fn paths(&self, unit: &SystemdUnitName) -> Result<LinuxGatewayPaths, GatewayError> {
         let (config_home, data_home, state_home) = self.runtime_context.xdg_paths();
         LinuxGatewayPaths::new(&self.home, config_home, data_home, state_home, unit)
@@ -434,6 +455,14 @@ impl GatewayHost for SystemdGateway {
         directory: Option<PathBuf>,
     ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
         SystemdGateway::replace_claude_config_directory(self, directory)
+    }
+
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        SystemdGateway::restore_claude_config_directory(self, expected, previous)
     }
 
     fn register(

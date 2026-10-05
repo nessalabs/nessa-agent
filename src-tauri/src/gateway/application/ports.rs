@@ -1325,7 +1325,8 @@ pub trait GatewayHost: Send + Sync {
     /// [`ClaudeDirectoryReplacement::Unchanged`] must not start a reconciliation:
     /// repeating a settings save is not a retirement. A
     /// [`ClaudeDirectoryReplacement::Changed`] carries the directory to restore
-    /// when that reconciliation fails, so the same save can be repeated
+    /// when that reconciliation fails and this attempt still owns the value it
+    /// published, so the same save can be repeated
     /// (`a_failed_registration_restores_the_directory_and_can_be_repeated`).
     /// The default refuses, so a host that cannot publish the directory cannot
     /// report a change it will not perform.
@@ -1334,6 +1335,23 @@ pub trait GatewayHost: Send + Sync {
         directory: Option<PathBuf>,
     ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
         let _ = directory;
+        Err(GatewayError::Registration(
+            "this gateway host does not accept Claude configuration changes".into(),
+        ))
+    }
+
+    /// Write `previous` only when the live directory is still `expected`.
+    ///
+    /// `Ok(false)` means a newer change already replaced `expected`, so this
+    /// attempt must leave that directory in place
+    /// (`a_failed_registration_does_not_restore_a_newer_directory`). The
+    /// default refuses, matching [`Self::replace_claude_config_directory`].
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        let _ = (expected, previous);
         Err(GatewayError::Registration(
             "this gateway host does not accept Claude configuration changes".into(),
         ))

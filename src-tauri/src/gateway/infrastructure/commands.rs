@@ -353,6 +353,19 @@ mod configuration_directory {
             Ok(ClaudeDirectoryReplacement::Changed { previous })
         }
 
+        fn restore_claude_config_directory(
+            &self,
+            expected: &Option<PathBuf>,
+            previous: Option<PathBuf>,
+        ) -> Result<bool, GatewayError> {
+            let mut current = self.directory.lock().unwrap();
+            if *current != *expected || *current == previous {
+                return Ok(false);
+            }
+            *current = previous;
+            Ok(true)
+        }
+
         fn register(
             &self,
             _: &Path,

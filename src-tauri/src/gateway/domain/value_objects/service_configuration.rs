@@ -76,6 +76,25 @@ impl ServiceConfiguration {
             .map(Some)
     }
 
+    /// The value to store when a failed reconciliation still owns `expected`.
+    ///
+    /// `Ok(None)` means the live directory is no longer `expected`, or it is
+    /// already `previous`, so the caller must not write. A newer settings save
+    /// keeps the directory it published
+    /// (`a_failed_registration_does_not_restore_a_newer_directory`).
+    pub fn restoring_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<Option<Self>, ServiceConfigurationError> {
+        if &self.claude_config_directory != expected || self.claude_config_directory == previous {
+            return Ok(None);
+        }
+        self.clone()
+            .with_claude_config_directory(previous)
+            .map(Some)
+    }
+
     pub fn stage(&self) -> &str {
         self.namespace.stage()
     }
@@ -183,5 +202,36 @@ mod tests {
             Some("relative".into()),
         )
         .is_err());
+    }
+
+    #[test]
+    fn restoring_writes_the_previous_directory_only_while_the_attempt_still_owns_it() {
+        let original =
+            ServiceConfiguration::new("prod".into(), absolute("nessa"), None, 7420, None).unwrap();
+        let updated = original
+            .clone()
+            .with_claude_config_directory(Some(absolute("claude-a")))
+            .unwrap();
+        let newer = updated
+            .clone()
+            .with_claude_config_directory(Some(absolute("claude-b")))
+            .unwrap();
+
+        let restored = updated
+            .restoring_claude_config_directory(&Some(absolute("claude-a")), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.claude_config_directory, None);
+        assert!(newer
+            .restoring_claude_config_directory(&Some(absolute("claude-a")), None)
+            .unwrap()
+            .is_none());
+        assert!(updated
+            .restoring_claude_config_directory(
+                &Some(absolute("claude-a")),
+                Some(absolute("claude-a"))
+            )
+            .unwrap()
+            .is_none());
     }
 }

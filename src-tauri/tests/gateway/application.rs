@@ -2066,6 +2066,14 @@ fn settings_change_reregisters_once_and_records_the_reason() {
             Ok(ClaudeDirectoryReplacement::Changed { previous })
         }
 
+        fn restore_claude_config_directory(
+            &self,
+            expected: &Option<PathBuf>,
+            previous: Option<PathBuf>,
+        ) -> Result<bool, GatewayError> {
+            restore_owned_directory(&self.directory, expected, previous)
+        }
+
         fn register(
             &self,
             _: &Path,
@@ -2135,7 +2143,27 @@ fn settings_change_reregisters_once_and_records_the_reason() {
         intents[0].attempt().origin().evidence().initiator(),
         ReconciliationInitiator::BundledSurface(BundledSurface::Main)
     );
-    assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
+    let change = intents[0]
+        .attempt()
+        .origin()
+        .evidence()
+        .claude_directory()
+        .unwrap();
+    assert_eq!(change.previous(), None);
+    assert_eq!(change.directory(), Some(directory.as_path()));
+    let outcomes = audit.outcomes.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(
+        outcomes[0]
+            .intent()
+            .attempt()
+            .origin()
+            .evidence()
+            .claude_directory()
+            .unwrap()
+            .directory(),
+        Some(directory.as_path())
+    );
 }
 
 #[test]
@@ -2159,6 +2187,14 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
             Ok(ClaudeDirectoryReplacement::Changed { previous })
         }
 
+        fn restore_claude_config_directory(
+            &self,
+            expected: &Option<PathBuf>,
+            previous: Option<PathBuf>,
+        ) -> Result<bool, GatewayError> {
+            restore_owned_directory(&self.directory, expected, previous)
+        }
+
         fn register(
             &self,
             _: &Path,
@@ -2168,6 +2204,7 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
             progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
             if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                admit(attempt, progress, "claude-directory");
                 return Err(GatewayError::Registration("unit was not published".into()));
             }
             admit(attempt, progress, "claude-directory");
@@ -2188,12 +2225,13 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
         directory: Mutex::new(None),
         attempts: AtomicUsize::new(0),
     });
+    let audit = Arc::new(RecordingAudit::default());
     let gateway = Gateway::bootstrap(
         host.clone(),
         login_shell("/usr/bin"),
         testing::discard_startup_events(),
         testing::sequential_reconciliation_ids(),
-        testing::discard_reconciliation_audit(),
+        audit.clone(),
         "/runtime".into(),
         "ci".into(),
     );
@@ -2211,6 +2249,263 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
     assert_eq!(
         host.directory.lock().unwrap().as_deref(),
         Some(directory.as_path())
+    );
+    assert_eq!(host.attempts.load(Ordering::SeqCst), 2);
+    let intents = audit.intents.lock().unwrap();
+    assert_eq!(intents.len(), 2);
+    for intent in intents.iter() {
+        let change = intent
+            .attempt()
+            .origin()
+            .evidence()
+            .claude_directory()
+            .unwrap();
+        assert_eq!(change.previous(), None);
+        assert_eq!(change.directory(), Some(directory.as_path()));
+    }
+    let outcomes = audit.outcomes.lock().unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(
+        outcomes[0]
+            .intent()
+            .attempt()
+            .origin()
+            .evidence()
+            .claude_directory()
+            .unwrap()
+            .directory(),
+        Some(directory.as_path())
+    );
+}
+
+fn restore_owned_directory(
+    directory: &Mutex<Option<PathBuf>>,
+    expected: &Option<PathBuf>,
+    previous: Option<PathBuf>,
+) -> Result<bool, GatewayError> {
+    let mut current = directory.lock().unwrap();
+    if *current != *expected || *current == previous {
+        return Ok(false);
+    }
+    *current = previous;
+    Ok(true)
+}
+
+struct GatedDirectoryHost {
+    directory: Mutex<Option<PathBuf>>,
+    attempts: AtomicUsize,
+    entered: Mutex<bool>,
+    entered_changed: Condvar,
+    release: Mutex<bool>,
+    release_changed: Condvar,
+    fail_first: bool,
+}
+
+impl GatedDirectoryHost {
+    fn new(fail_first: bool) -> Arc<Self> {
+        Arc::new(Self {
+            directory: Mutex::new(None),
+            attempts: AtomicUsize::new(0),
+            entered: Mutex::new(false),
+            entered_changed: Condvar::new(),
+            release: Mutex::new(false),
+            release_changed: Condvar::new(),
+            fail_first,
+        })
+    }
+
+    fn wait_until_registered(&self) {
+        let mut entered = self.entered.lock().unwrap();
+        while !*entered {
+            let (guard, timeout) = self
+                .entered_changed
+                .wait_timeout(entered, Duration::from_secs(2))
+                .unwrap();
+            entered = guard;
+            assert!(!timeout.timed_out(), "registration did not start");
+        }
+    }
+
+    fn release(&self) {
+        *self.release.lock().unwrap() = true;
+        self.release_changed.notify_all();
+    }
+}
+
+impl GatewayHost for GatedDirectoryHost {
+    fn replace_claude_config_directory(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<ClaudeDirectoryReplacement, GatewayError> {
+        let mut current = self.directory.lock().unwrap();
+        if *current == directory {
+            return Ok(ClaudeDirectoryReplacement::Unchanged);
+        }
+        let previous = current.clone();
+        *current = directory;
+        Ok(ClaudeDirectoryReplacement::Changed { previous })
+    }
+
+    fn restore_claude_config_directory(
+        &self,
+        expected: &Option<PathBuf>,
+        previous: Option<PathBuf>,
+    ) -> Result<bool, GatewayError> {
+        restore_owned_directory(&self.directory, expected, previous)
+    }
+
+    fn register(
+        &self,
+        _: &Path,
+        _: &str,
+        _: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            {
+                let mut entered = self.entered.lock().unwrap();
+                *entered = true;
+                self.entered_changed.notify_all();
+            }
+            let mut release = self.release.lock().unwrap();
+            while !*release {
+                release = self.release_changed.wait(release).unwrap();
+            }
+            if self.fail_first {
+                return Err(GatewayError::Registration("unit was not published".into()));
+            }
+        }
+        admit(attempt, progress, "claude-directory");
+        Ok(reconciled("claude-directory"))
+    }
+
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        complete_stop(session, journal, plan, || Ok(()))
+    }
+}
+
+fn gated_gateway(host: Arc<GatedDirectoryHost>) -> Arc<Gateway> {
+    Arc::new(Gateway::bootstrap(
+        host,
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    ))
+}
+
+#[test]
+fn an_identical_in_flight_directory_change_waits_for_that_attempt() {
+    let host = GatedDirectoryHost::new(true);
+    let gateway = gated_gateway(host.clone());
+    let directory = PathBuf::from("/Users/me/.claude-work");
+    let first_gateway = Arc::clone(&gateway);
+    let first_directory = directory.clone();
+    let first = thread::spawn(move || {
+        tauri::async_runtime::block_on(
+            first_gateway.change_claude_configuration(BundledSurface::Main, Some(first_directory)),
+        )
+    });
+    host.wait_until_registered();
+    let second_gateway = Arc::clone(&gateway);
+    let second_directory = directory.clone();
+    let second = thread::spawn(move || {
+        tauri::async_runtime::block_on(
+            second_gateway
+                .change_claude_configuration(BundledSurface::Main, Some(second_directory)),
+        )
+    });
+    let started = Instant::now();
+    while gateway.claude_publication_waiters() == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "identical directory change did not join the in-flight attempt"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(host.attempts.load(Ordering::SeqCst), 1);
+    host.release();
+    assert!(first.join().unwrap().is_err());
+    assert!(second.join().unwrap().is_err());
+    assert_eq!(host.directory.lock().unwrap().as_deref(), None);
+    assert_eq!(host.attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_failed_registration_does_not_restore_a_newer_directory() {
+    let host = GatedDirectoryHost::new(true);
+    let gateway = gated_gateway(host.clone());
+    let first = PathBuf::from("/Users/me/.claude-a");
+    let newer = PathBuf::from("/Users/me/.claude-b");
+    let attempt_gateway = Arc::clone(&gateway);
+    let attempt_directory = first.clone();
+    let attempt = thread::spawn(move || {
+        tauri::async_runtime::block_on(
+            attempt_gateway
+                .change_claude_configuration(BundledSurface::Main, Some(attempt_directory)),
+        )
+    });
+    host.wait_until_registered();
+    assert!(matches!(
+        host.replace_claude_config_directory(Some(newer.clone())),
+        Ok(ClaudeDirectoryReplacement::Changed { .. })
+    ));
+    host.release();
+    assert!(attempt.join().unwrap().is_err());
+    assert_eq!(
+        host.directory.lock().unwrap().as_deref(),
+        Some(newer.as_path())
+    );
+}
+
+#[test]
+fn a_different_directory_waits_until_the_in_flight_attempt_finishes() {
+    let host = GatedDirectoryHost::new(true);
+    let gateway = gated_gateway(host.clone());
+    let first = PathBuf::from("/Users/me/.claude-a");
+    let second = PathBuf::from("/Users/me/.claude-b");
+    let first_gateway = Arc::clone(&gateway);
+    let first_directory = first.clone();
+    let attempt = thread::spawn(move || {
+        tauri::async_runtime::block_on(
+            first_gateway.change_claude_configuration(BundledSurface::Main, Some(first_directory)),
+        )
+    });
+    host.wait_until_registered();
+    let second_gateway = Arc::clone(&gateway);
+    let second_directory = second.clone();
+    let newer = thread::spawn(move || {
+        tauri::async_runtime::block_on(
+            second_gateway
+                .change_claude_configuration(BundledSurface::Setup, Some(second_directory)),
+        )
+    });
+    let started = Instant::now();
+    while gateway.claude_publication_waiters() == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "later directory change did not wait"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        host.directory.lock().unwrap().as_deref(),
+        Some(first.as_path())
+    );
+    host.release();
+    assert!(attempt.join().unwrap().is_err());
+    newer.join().unwrap().unwrap();
+    assert_eq!(
+        host.directory.lock().unwrap().as_deref(),
+        Some(second.as_path())
     );
     assert_eq!(host.attempts.load(Ordering::SeqCst), 2);
 }
