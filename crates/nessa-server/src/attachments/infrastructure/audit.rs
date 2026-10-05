@@ -1,8 +1,8 @@
 //! Durable attachment evidence: one private file per record, synced with its
 //! directory before the record is acknowledged. Separate files cannot tear
-//! each other. A bulk attempt's admission slot stays with the awaited write.
-//! A deadline that drops that wait frees the slot while a write already on
-//! the blocking pool can still finish.
+//! each other. Bulk admission is the service's permit. Dropping the wait at
+//! the deadline does not cancel a write already on the blocking pool, and
+//! that write does not hold the permit.
 //!
 //! The record's identity and the time it was observed are assigned here, from
 //! the injected clock. `requestedAtMs` is when the request that caused the
@@ -11,9 +11,8 @@
 //! a ticket outstanding when the process stops leaves no record.
 use crate::attachments::{
     application::{
-        AttachmentAudit, AttachmentAuditRecord, AuditUnavailable, BulkAuditSlot, PortFuture,
-        ReleaseCause, ReleaseEvidence, RetiredHold, RetirementEvidence, RevertCause,
-        UploadRejection,
+        AttachmentAudit, AttachmentAuditRecord, AuditUnavailable, PortFuture, ReleaseCause,
+        ReleaseEvidence, RetiredHold, RetirementEvidence, RevertCause, UploadRejection,
     },
     domain::{Attachment, Caller, Hold, HoldState, UploadTicket},
 };
@@ -37,20 +36,16 @@ impl DurableAttachmentAudit {
     }
 }
 impl AttachmentAudit for DurableAttachmentAudit {
-    fn record(
-        &self,
-        record: AttachmentAuditRecord,
-        slot: Option<BulkAuditSlot>,
-    ) -> PortFuture<'_, (), AuditUnavailable> {
+    fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
         let id = Uuid::new_v4().to_string();
         let mut value = record_value(&record);
         value["recordId"] = json!(id);
         value["observedAtMs"] = json!(self.clock.unix_milliseconds());
         let directory = self.directory.clone();
         Box::pin(async move {
-            // The slot stays with this wait. Dropping it — the bulk deadline —
-            // frees admission while a write already on the blocking pool finishes.
-            spawn_held(slot, move || {
+            // The service's deadline drops this wait. A write already running
+            // here keeps the blocking thread and does not keep admission.
+            tokio::task::spawn_blocking(move || {
                 let mut file = PrivateTempFile::new_in(&directory)?;
                 serde_json::to_writer(file.as_file_mut(), &value)?;
                 file.as_file_mut().write_all(b"\n")?;
@@ -66,20 +61,6 @@ impl AttachmentAudit for DurableAttachmentAudit {
             })
         })
     }
-}
-
-/// Run `work` on the blocking pool. `slot` stays with this future, not with
-/// the blocking task. Dropping the future — a deadline — releases the slot
-/// while a write already started keeps running.
-pub(crate) async fn spawn_held<T>(
-    slot: Option<BulkAuditSlot>,
-    work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, tokio::task::JoinError>
-where
-    T: Send + 'static,
-{
-    let _slot = slot;
-    tokio::task::spawn_blocking(work).await
 }
 
 fn hold_state(state: HoldState) -> &'static str {

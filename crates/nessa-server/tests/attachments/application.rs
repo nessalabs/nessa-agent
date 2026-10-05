@@ -8,7 +8,7 @@ use crate::attachments::domain::{
     Attachment, Caller, Hold, HoldState, MediaType, RetiredFrom, TicketLifetime, TicketLimits,
     UploadTicket, TICKET_LIFETIME_MS,
 };
-use crate::attachments::infrastructure::{spawn_held, DurableAttachmentAudit};
+use crate::attachments::infrastructure::DurableAttachmentAudit;
 use crate::attachments_test_support::{
     attachment, begin_request, caller, conversation, digest_of, organization, principal,
     ChannelBody, CountingSecrets, FixedOwnership, Fixture, ManualClock, MemoryStore,
@@ -1259,6 +1259,36 @@ async fn bulk_delivery_does_not_admit_more_than_its_limit() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_second_bulk_phase_waits_for_the_admission_permit() {
+    let fixture = Fixture::new(AttachmentLimits {
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(30),
+        audit_admission: 1,
+        ..AttachmentLimits::default()
+    });
+    fixture.upload(CONVERSATION, b"first", PDF).await;
+    fixture.upload(OTHER_CONVERSATION, b"second", PDF).await;
+    fixture.audit.taken_all();
+    fixture.audit.stalled.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let first = fixture.service.clone();
+    let second = fixture.service.clone();
+    let first = tokio::spawn(async move { first.release(release_request(CONVERSATION)).await });
+    let second =
+        tokio::spawn(async move { second.release(release_request(OTHER_CONVERSATION)).await });
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 1);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+
+    first.abort();
+    second.abort();
+    let _ = first.await;
+    let _ = second.await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_zero_admission_still_attempts_every_record() {
     let fixture = Fixture::new(AttachmentLimits {
         audit_deadline: Duration::from_secs(5),
@@ -1560,10 +1590,9 @@ async fn an_upload_proceeds_while_an_expiry_sweep_is_still_unacknowledged() {
         .any(|record| matches!(record, AttachmentAuditRecord::TicketExpired { .. })));
 }
 
-/// A bulk sink whose write keeps running after the deadline. The admission
-/// slot stays with [`spawn_held`], so the deadline releases it while the
-/// write is still on the blocking pool. Single-record calls pass no slot and
-/// return at once.
+/// A bulk sink whose write keeps running after the service's deadline. The
+/// service holds admission; this sink never sees that permit. Single-record
+/// calls return at once until measuring is turned on.
 struct DetachedAudit {
     in_flight: Arc<AtomicUsize>,
     max_in_flight: Arc<AtomicUsize>,
@@ -1572,24 +1601,20 @@ struct DetachedAudit {
     measure: Arc<AtomicBool>,
 }
 impl AttachmentAudit for DetachedAudit {
-    fn record(
-        &self,
-        _record: AttachmentAuditRecord,
-        slot: Option<BulkAuditSlot>,
-    ) -> PortFuture<'_, (), AuditUnavailable> {
+    fn record(&self, _record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
         let measure = self.measure.load(Ordering::SeqCst);
         let in_flight = Arc::clone(&self.in_flight);
         let max_in_flight = Arc::clone(&self.max_in_flight);
         let measured_attempts = Arc::clone(&self.measured_attempts);
         Box::pin(async move {
-            spawn_held(slot, move || {
+            tokio::task::spawn_blocking(move || {
                 if !measure {
                     return Ok(());
                 }
                 measured_attempts.fetch_add(1, Ordering::SeqCst);
                 let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_in_flight.fetch_max(now, Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(120));
+                std::thread::sleep(Duration::from_millis(400));
                 in_flight.fetch_sub(1, Ordering::SeqCst);
                 Ok(())
             })
@@ -1620,8 +1645,8 @@ async fn a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot() {
             clock: Arc::new(ManualClock::at(NOW_MS)),
         },
         AttachmentLimits {
-            audit_deadline: Duration::from_millis(40),
-            audit_budget: Duration::from_millis(20),
+            audit_deadline: Duration::from_millis(80),
+            audit_budget: Duration::from_millis(30),
             audit_admission: 1,
             ..AttachmentLimits::default()
         },
@@ -1657,7 +1682,12 @@ async fn a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot() {
             audit_failures: 4
         })
     );
-    for _ in 0..20 {
+    assert_eq!(
+        audit.measured_attempts.load(Ordering::SeqCst),
+        1,
+        "the service released admission before the deadline"
+    );
+    for _ in 0..40 {
         if audit.measured_attempts.load(Ordering::SeqCst) >= 2 {
             break;
         }
@@ -1668,7 +1698,7 @@ async fn a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot() {
         "a write that outlived its deadline still held the only slot"
     );
     assert!(
-        started.elapsed() < Duration::from_millis(100),
+        started.elapsed() < Duration::from_millis(200),
         "the next record waited {:?} for a write that should have released its slot",
         started.elapsed()
     );

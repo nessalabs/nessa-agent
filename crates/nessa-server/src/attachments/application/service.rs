@@ -1,9 +1,9 @@
 use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
-    BeginError, BulkAuditSlot, Confirmation, ConversationOwnership, Discard, HoldClaim,
-    ImageNormalizer, Kept, NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes,
-    ReleaseCause, ReleaseError, ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload,
-    StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError, UploadRejection,
+    BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
+    NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
+    ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
+    TicketSecrets, UploadBody, UploadError, UploadRejection,
 };
 use crate::attachments::domain::{
     Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
@@ -238,7 +238,7 @@ impl AttachmentService {
     async fn audit(&self, record: AttachmentAuditRecord) -> AuditDelivery {
         match timeout(
             self.inner.limits.audit_deadline,
-            self.inner.audit.record(record, None),
+            self.inner.audit.record(record),
         )
         .await
         {
@@ -248,8 +248,9 @@ impl AttachmentService {
     }
 
     /// Hand one phase's records to the sink. Each gets [`AttachmentLimits::audit_deadline`],
-    /// taken only once a delivery slot is free. The slot is released when that
-    /// deadline drops the wait, including when a durable write keeps running.
+    /// taken only once a delivery slot is free. The service holds that permit
+    /// until the deadline drops the wait and does not hand it to the sink, so a
+    /// durable write that keeps running cannot take the next record's attempt.
     /// The caller waits at most [`AttachmentLimits::audit_budget`] and then
     /// returns how many were not yet acknowledged. The attempts keep going: an
     /// earlier timeout does not spend a later record's deadline, and the caller
@@ -298,11 +299,11 @@ impl AttachmentService {
                                 );
                                 return;
                             };
-                            match timeout(
-                                deadline,
-                                audit.record(record, Some(BulkAuditSlot::new(permit))),
-                            )
-                            .await
+                            // Held here, not by the sink. Dropping this wait at
+                            // the deadline frees the permit while a write the
+                            // sink already started can still finish.
+                            let _admission = permit;
+                            match timeout(deadline, audit.record(record)).await
                             {
                                 Ok(Ok(())) => {
                                     tally_task

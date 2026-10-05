@@ -3,19 +3,6 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{future::Future, pin::Pin};
-use tokio::sync::OwnedSemaphorePermit;
-
-/// One bulk-delivery admission. The sink holds it for the awaited attempt.
-/// Dropping that future — the record's deadline — frees the slot. A write that
-/// has already moved to the blocking pool does not keep it.
-pub struct BulkAuditSlot {
-    _permit: OwnedSemaphorePermit,
-}
-impl BulkAuditSlot {
-    pub(crate) fn new(permit: OwnedSemaphorePermit) -> Self {
-        Self { _permit: permit }
-    }
-}
 
 /// A boxed port future with a typed failure.
 pub type PortFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
@@ -522,15 +509,11 @@ pub enum AttachmentAuditRecord {
 
 /// Durable evidence of attachment transitions, committed before success is reported.
 ///
-/// `slot` is present only for a bulk phase. The implementation holds it until
-/// this future is dropped, and not inside work that continues after that. A
-/// single-record write passes no slot and does not take a bulk admission.
+/// Bulk admission is a permit the service holds around this call. The sink does
+/// not receive that permit and cannot keep it after the service's deadline
+/// drops the call.
 pub trait AttachmentAudit: Send + Sync {
-    fn record(
-        &self,
-        record: AttachmentAuditRecord,
-        slot: Option<BulkAuditSlot>,
-    ) -> PortFuture<'_, (), AuditUnavailable>;
+    fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable>;
 }
 
 /// The transfer ended early.

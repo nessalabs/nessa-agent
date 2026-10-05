@@ -343,18 +343,19 @@ before either bulk phase starts, and it is not undone by audit.
 One phase moves its records into one delivery task. That task is not one task
 per record, and it is not a queue that accepts further work. It admits the
 next record only when a service-wide slot is free, then waits at most
-`audit_deadline`. The slot's wait is not part of the deadline. The slot stays
-with that awaited attempt, in the future the deadline can drop, not inside a
-blocking write. When the deadline drops the wait, the slot is released and the
-next record starts its own full deadline. A durable write already running on
-the blocking pool keeps running and does not keep the slot. The caller waits
+`audit_deadline`. The slot's wait is not part of the deadline. The service
+holds that permit for the awaited attempt and does not hand it to the sink, so
+a blocking write cannot keep it. When the deadline drops the wait, the permit
+is released and the next record starts its own full deadline. A durable write
+already running on the blocking pool keeps running without the permit. The
+caller waits
 until every record in the phase has been acknowledged or `audit_budget`
 elapses, whichever comes first, and then returns. The delivery task keeps
 going. Dropping the caller does not cancel it. A refusal or a deadline after
 the caller is gone is logged from that task; it does not change a count the
 caller already took. Dropping the service aborts the delivery task: a record
 not yet handed to the sink is not attempted. A durable write that has already
-started still finishes, and it does not keep the slot.
+started still finishes, and the sink never held its permit.
 
 The count returned to the caller is how many records were not yet acknowledged
 when the caller stopped waiting. That snapshot is taken under the same lock
@@ -388,7 +389,7 @@ sequenceDiagram
         Task-->>Caller: Unacknowledged count is zero
     else Caller stops waiting
         Caller-->>Caller: Count everything not yet acknowledged
-        Note over Task,Sink: The attempt continues for its own deadline, then releases its slot
+        Note over Task,Sink: The attempt continues for its own deadline, then the service releases its slot
         Sink-->>Task: Late accept or refusal
         Note over Caller,Sink: The caller's count is unchanged
     end
@@ -404,8 +405,9 @@ sequenceDiagram
 | Caller dropped after the first attempt has started | Cleanup stays done. The remaining records are still attempted for a full deadline. A record the sink then accepts keeps the original release cause and caller | `a_lost_release_caller_does_not_cancel_the_remaining_attempts` |
 | Sink accepts only after the caller has returned | The returned failure count stays. The stored record keeps the original cause and caller | `a_record_acknowledged_after_the_caller_gave_up_stays_a_failure` |
 | More records than `audit_admission` | Only that many sink calls are in flight. The next record starts when a slot frees | `bulk_delivery_does_not_admit_more_than_its_limit` |
+| Two bulk phases at once | The phases share one permit. A second phase does not enter the sink until a deadline releases it | `a_second_bulk_phase_waits_for_the_admission_permit` |
 | `audit_admission` configured as zero | The service still admits one call, and the records are acknowledged | `a_zero_admission_still_attempts_every_record` |
-| Durable write outlives its deadline | The deadline releases the admission slot while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only `audit_admission` attempts are in the sink | `a_write_that_outlives_its_deadline_releases_its_admission_slot`, `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
+| Durable write outlives its deadline | The service releases the admission permit at the deadline while that write is still running. The next record is handed to the sink and gets a full deadline of its own. Before the deadline, only one attempt has been handed over. The sink is not given the permit | `a_bulk_write_that_outlives_its_deadline_releases_the_admission_slot` |
 | Caller dropped, then the sink refuses | The delivery task logs the refusal. The caller is no longer there to return it | `a_lost_caller_still_logs_a_refusal` |
 | Caller dropped, then a record's deadline passes | The delivery task logs the deadline. The caller is no longer there to return it | `a_lost_caller_still_logs_a_deadline` |
 | One record in a phase panics | The rest of that phase is still handed to the sink. The panic is resumed after that | `a_panicked_record_does_not_skip_the_rest_of_its_phase` |

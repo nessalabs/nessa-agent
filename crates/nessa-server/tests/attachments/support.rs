@@ -4,11 +4,11 @@ use crate::attachments::{
     application::{
         AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
         AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
-        BeginUpload, BulkAuditSlot, Confirmation, ConversationOwnership, Discard, HoldClaim,
-        ImageNormalizer, Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
-        OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport,
-        RemovedBlob, RetiredHold, RetirementEvidence, RevertCause, SecretsUnavailable,
-        StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted,
+        BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
+        Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable,
+        PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold,
+        RetirementEvidence, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
+        TicketSecrets, UploadBody, UploadInterrupted,
     },
     domain::{Attachment, Hold, MediaType, RetiredFrom},
 };
@@ -172,15 +172,10 @@ impl Drop for AttemptSpan<'_> {
 }
 
 impl AttachmentAudit for RecordingAudit {
-    fn record(
-        &self,
-        record: AttachmentAuditRecord,
-        slot: Option<BulkAuditSlot>,
-    ) -> PortFuture<'_, (), AuditUnavailable> {
+    fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
         Box::pin(async move {
-            // Held until this future ends. A stall stops when the deadline
-            // drops the future, and the slot goes with it.
-            let _slot = slot;
+            // The service drops its admission permit when this future ends,
+            // including when a deadline drops a stall.
             let _span = AttemptSpan {
                 audit: self,
                 started: tokio::time::Instant::now(),
