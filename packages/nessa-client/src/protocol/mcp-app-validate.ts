@@ -27,8 +27,9 @@ const utf8 = new TextEncoder()
  * anything, and a host may ask first, so it can refuse the app's request
  * itself rather than read a `TypeError` whose cause it cannot tell. Each
  * must also be Unicode text (`wellFormedText`): this client refuses a lone
- * surrogate before send. If one still reaches the gateway and the request id
- * can be read, the gateway answers `invalid_request` (#403). What the
+ * surrogate before send. If one still reaches the gateway, `type` is `req`,
+ * and `id` is one Unicode string of 1 to 256 bytes, the gateway answers
+ * `invalid_request` (#403). What the
  * arguments decode to — an object, its strings — is the gateway's to judge,
  * and it answers `invalid_request`.
  *

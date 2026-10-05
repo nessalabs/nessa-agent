@@ -47,7 +47,8 @@ is answered when that `id` can still be read:
 | An envelope key that appears twice, `id` missing, not a string, or a string that is not Unicode, `id` empty or longer than 256 bytes, `type` not `req`, or the text not one JSON object | no reply; the caller's own timeout settles it |
 
 The handshake is not this table: a frame that does not decode before
-authentication closes as unauthorized.
+authentication is answered `unauthorized` on an empty id, and the socket
+closes `authentication_failed` (4001).
 
 Mutations separately carry a stable `requestId` for explicit retries.
 Credential and session `expiresAt` may be null; issuance defaults to no expiry.
