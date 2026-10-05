@@ -135,7 +135,7 @@ export const RequestRow = memo(function RequestRow({
     event.preventDefault()
     event.stopPropagation()
     // A chord names a choice, so it answers the first option of that choice.
-    const chosen = optionOf(approval, command)
+    const chosen = approval ? optionOf(approval, command) : undefined
     if (answerable && chosen) onAnswer(summary, approval, chosen, event.timeStamp)
   }
 

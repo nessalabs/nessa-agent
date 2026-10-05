@@ -339,10 +339,12 @@ describe("a transcript", () => {
 
   it("answers the clicked option when two allow the same way", async () => {
     const source = fakeSource()
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
     await shown(source, {
       ...conversation,
       approval: {
-        ...conversation.approval,
+        ...approval,
         options: [
           { id: "ship", label: "Ship it", choice: "once" },
           { id: "run", label: "Run it", choice: "once" },
