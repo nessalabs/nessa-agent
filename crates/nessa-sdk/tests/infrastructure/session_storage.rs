@@ -6,6 +6,7 @@
 //!                 -> save_group public leases / emitted records / checkpoints
 //!                 -> fixtures public immutable data / actual emitted donor output
 
+mod caller_wakes;
 mod discovery;
 mod fixtures;
 mod memory;

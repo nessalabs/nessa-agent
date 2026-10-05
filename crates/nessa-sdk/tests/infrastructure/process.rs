@@ -1,7 +1,10 @@
 use super::*;
 use std::{
     collections::VecDeque,
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Wake, Waker},
 };
 use tokio::sync::oneshot;
 
@@ -269,4 +272,49 @@ fn a_group_that_refuses_signals_is_never_confirmed_gone() {
     };
     assert_eq!(signal_group(group, false), Ok(SignalDelivery::NotDelivered));
     assert_eq!(group_exists(group), Err(AgentError::CleanupUncertain));
+}
+
+struct PanicWake {
+    seen: Mutex<Option<oneshot::Sender<()>>>,
+}
+impl Wake for PanicWake {
+    fn wake(self: Arc<Self>) {
+        if let Some(seen) = self.seen.lock().unwrap().take() {
+            let _ = seen.send(());
+        }
+        panic!("caller waker");
+    }
+}
+
+/// The timer that `wait_scope` sleeps on, then the process reaper, wake this
+/// wait. A panic there must leave a later process able to clean up.
+#[tokio::test]
+async fn panicking_cleanup_waiter_does_not_stop_later_cleanup() {
+    let mut first = ProcessScope::spawn(waiting_command()).unwrap();
+    let (seen, notified) = oneshot::channel();
+    let waker = Waker::from(Arc::new(PanicWake {
+        seen: Mutex::new(Some(seen)),
+    }));
+    let mut cleanup = Box::pin(first.cleanup(Duration::from_millis(50), Duration::from_secs(2)))
+        as Pin<Box<dyn Future<Output = Result<CloseOutcome, AgentError>> + Send>>;
+    assert!(
+        cleanup
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending(),
+        "cleanup must be parked on the timer before the process exits"
+    );
+    tokio::time::timeout(Duration::from_secs(3), notified)
+        .await
+        .expect("the timer woke the cleanup")
+        .unwrap();
+    let mut second = ProcessScope::spawn(waiting_command()).unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        second.cleanup(Duration::from_millis(50), Duration::from_secs(2)),
+    )
+    .await
+    .expect("a later cleanup still finishes")
+    .unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
 }

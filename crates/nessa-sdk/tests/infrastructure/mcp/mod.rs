@@ -10,6 +10,7 @@
 //! ```
 //! Arrows show what each file drives.
 mod apps;
+mod caller_wakes;
 mod fixture;
 mod forwarded;
 mod process;

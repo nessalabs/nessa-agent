@@ -284,9 +284,6 @@ impl WatchHandle {
             Self::Records(handle) => match handle.changed().await {
                 ChangeWatchState::Dirty => None,
                 ChangeWatchState::Closed => Some(ChangeWatchEndReason::Closed),
-                ChangeWatchState::NotificationFailed => {
-                    Some(ChangeWatchEndReason::NotificationFailed)
-                }
             },
             Self::Catalogue(handle) => match handle.changed().await {
                 CatalogueWatchState::Dirty => None,
