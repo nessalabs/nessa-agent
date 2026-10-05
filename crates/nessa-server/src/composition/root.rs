@@ -417,14 +417,29 @@ impl CompositionRoot {
             .await;
         })
         .await;
-        let cleanup = cleanup.map_err(|error| {
-            tracing::error!(%error, "gateway cleanup owner failed");
-            RunError::Shutdown(None)
-        });
         let native_failed = *native_failed.borrow();
-        serve_outcome(served, native_failed, &report)?;
-        cleanup
+        compose_run_result(served, native_failed, &report, cleanup)
     }
+}
+
+/// The process result from browser serving, the native listener, the shutdown
+/// report, and the cleanup task's join.
+///
+/// A join failure is [`RunError::Shutdown`]`(None)` only when [`serve_outcome`]
+/// succeeded. An unconfirmed report is returned instead, so the join does not
+/// replace it.
+fn compose_run_result(
+    served: std::io::Result<()>,
+    native_failed: Option<std::io::ErrorKind>,
+    report: &ReportSlot,
+    cleanup: Result<(), JoinError>,
+) -> Result<(), RunError> {
+    let cleanup = cleanup.map_err(|error| {
+        tracing::error!(%error, "gateway cleanup owner failed");
+        RunError::Shutdown(None)
+    });
+    serve_outcome(served, native_failed, report)?;
+    cleanup
 }
 
 /// Signal Axum before waiting for cleanup; retain and join the cleanup task.
@@ -1053,7 +1068,24 @@ mod tests {
         .unwrap();
         served.unwrap();
         assert!(shutdown_result(&report).is_ok());
-        assert!(cleanup.unwrap_err().is_panic());
+        let cleanup = cleanup.expect_err("the cleanup task panicked");
+        assert!(cleanup.is_panic());
+        // The report had confirmed, so the join is the process result, and
+        // the confirmed report stays in the slot.
+        let error = compose_run_result(Ok(()), None, &report, Err(cleanup)).unwrap_err();
+        assert!(matches!(error, RunError::Shutdown(None)));
+        assert!(shutdown_result(&report).is_ok());
+
+        // An unconfirmed report is the process result. The join does not
+        // replace it with "never reported".
+        let unconfirmed = Mutex::new(Some(report_with(Err(ConversationError::Audit))));
+        let join = tokio::spawn(async { panic!("cleanup fault") })
+            .await
+            .expect_err("panic");
+        assert!(matches!(
+            only_conversations_failed(compose_run_result(Ok(()), None, &unconfirmed, Err(join))),
+            ConversationError::Audit
+        ));
     }
 
     #[tokio::test]
