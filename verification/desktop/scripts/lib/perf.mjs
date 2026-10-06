@@ -180,15 +180,21 @@ export function measurementFrom(raw, t0) {
   if (gaps.length === 0)
     throw new CannotRun("no animation frames were recorded (is the page visible?)")
   const durations = gaps.map(([, d]) => d)
+  // The first sampled gap can begin before t0. Keep work overlapping that
+  // whole frame, including a calibration callback in a LoAF begun earlier.
+  // perf.test.mjs holds attribution across that sample boundary.
+  const sampleStart = t0 + gaps[0][0] - gaps[0][1]
   return {
     maxFrame: Math.max(...durations),
     over: durations.filter(exceedsFrameBudget).length,
     frames: durations.length,
     slow: attribute({
       gaps,
-      loaf: raw.loaf.filter((e) => e.start >= t0 - 5).map((e) => sampleLoaf(e, t0)),
+      loaf: raw.loaf
+        .filter((e) => e.start + e.duration > sampleStart)
+        .map((e) => sampleLoaf(e, t0)),
       longtasks: raw.longtasks
-        .filter((e) => e.start >= t0 - 5)
+        .filter((e) => e.start + e.duration > sampleStart)
         .map((e) => ({ ...e, start: e.start - t0 })),
     }),
     noLoaf: !!raw.noLoaf,
