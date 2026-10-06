@@ -98,16 +98,9 @@ export const css = {
 
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
-  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
   appView: "[data-app-view]", // an app's view; its value is the view's lifecycle
   appNotice: ".widget-app-notice", // class: a notice above a running app
-  fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
-  fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
-  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
   // The test MCP server's review app (scripts/mcp-test-server/server.mjs), as a real server serves it
-  reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
-  reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
-  reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   chartApp: "#chart", // the test server's chart app: what it draws, "chart for <server>"
 
   // Quick switcher (⌘K, ⌘\\)
@@ -196,19 +189,15 @@ export const css = {
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
-  linkedAction: (action) => `[data-linked-action="${action}"]`,
   linkedNotice: "[data-linked-notice]",
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
   qrOrb: '[data-slot="qr-orb"]',
   fingerprint: '[data-slot="key-fingerprint"]',
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
-  mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
-  mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
   mcpStoredRow: "[data-mcp-server]:not([data-managed])",
   mcpAnyGroup: "[data-mcp-group]", // any name stored more than once
-  mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
   mcpShared: "[data-mcp-shared]", // a group's "N servers share this name…"
   mcpSharedRow: "[data-mcp-shared-row]", // one read-only server of a group
   mcpManagedRow: "[data-mcp-server][data-managed]",
@@ -221,24 +210,17 @@ export const css = {
   mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
   mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
   mcpVariable: "[data-mcp-variable]", // a variable's row in the form
-  mcpVariableNamed: (name) => `[data-mcp-variable="${name}"]`, // a stored variable's row, by its name
   mcpVariableAdded: "[data-mcp-variable-key]", // a variable's row whose name is typed in the form
   mcpSecret: "[data-mcp-secret]", // a variable's value: a password field, uncontrolled
   mcpSecretHeld: "[data-mcp-secret-held]", // a value pasted with line breaks, held and not drawn (S4)
   mcpPasted: "[data-mcp-pasted]", // its "Pasted value: N lines"
   mcpArgument: "[data-mcp-argument]", // an argument's row in the form; its value is its place
-  mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
   mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
   mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
-  mcpProblemFor: (field) => `[data-mcp-problem="${field}"]`, // a field's problem region by field: form for the form's own
-  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
-  mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
   mcpInspectionHeading: "[data-mcp-inspection] h2", // the inspection's heading, where focus lands
   mcpInspectionStatus: "[data-mcp-inspection-status]", // what the inspection says of how it ended
   mcpAnyTool: "[data-mcp-tool]", // any inspected tool
-  mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
-  mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
   mcpCut: "[data-mcp-cut]",
   mcpSwitch: '[role="switch"]',
 
@@ -257,6 +239,28 @@ export const css = {
 
   // Picture band atop conversation panes (decorative, aria-hidden)
   pictureBand: "[data-sliver]",
+}
+
+/** Parameterized selectors, built before passing their strings to the page. */
+export const selectorFor = {
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
+  fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
+  fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
+  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
+  reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
+  reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
+  reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
+  linkedAction: (action) => `[data-linked-action="${action}"]`,
+  mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
+  mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
+  mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
+  mcpVariableNamed: (name) => `[data-mcp-variable="${name}"]`, // a stored variable's row, by its name
+  mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
+  mcpProblemFor: (field) => `[data-mcp-problem="${field}"]`, // a field's problem region by field: form for the form's own
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
+  mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
+  mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
+  mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
 }
 
 /**
