@@ -99,9 +99,7 @@ function commandFailures(where, text) {
       `${where} does not show the address after its override: ${JSON.stringify(text)}`,
     )
   if (!text.includes("\\u2028") || !text.includes("\\u2029"))
-    failures.push(
-      `${where} does not show the line separators: ${JSON.stringify(text)}`,
-    )
+    failures.push(`${where} does not show the line separators: ${JSON.stringify(text)}`)
   if (text.startsWith(tool)) {
     const shown = text.slice(tool.length)
     try {

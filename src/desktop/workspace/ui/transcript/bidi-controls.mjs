@@ -1,2 +1,1 @@
-export const bidiControls =
-  /[\u2028\u2029\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/
+export const bidiControls = /[\u2028\u2029\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/
