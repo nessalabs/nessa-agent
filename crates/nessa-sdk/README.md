@@ -193,7 +193,8 @@ automatic session storage, hooks, invocation, and UI integration.
   explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
   `subagents` the ownership coordinator that reserves, prepares, and closes
-  ordinary child agents, `providers` injected execution ports, `sessions`
+  ordinary child agents and keeps snapshot writes in copy order, `providers`
+  injected execution ports, `sessions`
   automatic snapshot management and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,

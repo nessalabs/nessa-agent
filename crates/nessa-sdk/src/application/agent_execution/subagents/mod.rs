@@ -3,11 +3,13 @@
 //! ```text
 //! caller -> OwnershipCoordinator -> OwnershipGraph
 //!                                -> OwnershipStore / OwnershipAudit / ChildFactory
+//! snapshot copy -> write fence -> OwnershipStore
 //! ```
 //!
 //! Arrows are calls. The graph decides the transition. Storage, audit, and the
 //! child factory run after that decision returns, and their results are applied
-//! as later correlated transitions. The coordinator does not run a model loop.
+//! as later correlated transitions. The write fence drops an older snapshot copy
+//! after a newer copy has been acknowledged. The coordinator does not run a model loop.
 #![deny(missing_docs)]
 
 mod coordinator;

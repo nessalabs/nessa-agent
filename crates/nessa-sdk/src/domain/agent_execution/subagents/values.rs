@@ -424,7 +424,8 @@ pub enum SpawnProgress {
         /// Last milestone known before the interruption.
         known: KnownMilestone,
     },
-    /// The parent is closing. This reservation must not be dispatched.
+    /// This reservation must not be dispatched. The parent is closing, or the
+    /// child lifetime is already closing or closed.
     Draining {
         /// Last milestone known when the drain took it.
         known: KnownMilestone,

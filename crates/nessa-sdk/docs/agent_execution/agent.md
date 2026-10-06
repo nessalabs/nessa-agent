@@ -94,7 +94,8 @@ stops this attachment, and joins the descendant drain. Dropping the last session
 handles selects the same owned ending. Explicit close, execution failure, session
 failure, deadline, and a dropped event consumer stay attachment-only. A second
 install is refused. The coordinator keeps the gate; the agent does not keep the
-coordinator.
+coordinator. A child whose lifetime closes during preparation does not receive
+its initial task, and that refusal is not reported as the parent closing.
 
 ## Model capabilities and provider operations
 
