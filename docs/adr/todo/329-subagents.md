@@ -108,11 +108,38 @@ Composition injects storage, clocks, factories and audit ports using the existin
 ### Coordinator integration with Agent
 
 The existing Agent lifecycle remains the authority for individual work admission.
-Its common close transition gains an ownership participant that seals spawning
-and supplies a descendant drain. Explicit close, terminal session failure and
-final owning-handle disposal reach that same transition. Register the participant
-once during construction so an automatic SDK close cannot bypass a gateway-only
-wrapper.
+Today `Agent::close` cleans up a provider attachment and allows later invocation;
+automatic stop can also recover queued work. Ownership lifetime closure therefore
+needs a typed disposition at that authority, not an unconditional hook on every
+attachment stop. The proposed dispositions are `AttachmentOnly` and
+`EndOwnedLifetime`, selected before effects and retained with the stop operation.
+
+`AttachmentOnly` covers ordinary recoverable provider cleanup: it fences that
+attachment through the existing controller, preserves the ownership lifetime and
+children, and permits the existing confirmed cleanup/recovery path. Explicit
+owned-parent close, actual terminal lifetime failure, final owning-handle disposal,
+delete and gateway retirement select `EndOwnedLifetime`. That selection seals
+spawning and descendant work and supplies the tree drain through the same
+lifecycle authority. A concurrent lifetime-ending close upgrades lifetime
+admission to sealed even if attachment cleanup began as recoverable; it does not
+replace the attachment's earlier physical cause or lose already-observed results.
+
+Gateway approval-mode recovery currently explicitly closes and replaces its Agent.
+For the first implementation it selects `EndOwnedLifetime` and drains that tree
+before replacement. The reopened root uses the last committed policy and a new
+ownership lifetime; preserving children across this explicit retirement is outside
+this first design. A successful idle mode change that needs no retirement does
+not end the lifetime and follows the snapshot-inheritance recommendation below.
+
+For an Agent carrying ownership, `maybe_reopen`, immediate invocation, queued
+admission and attachment authorization consult this typed lifetime disposition.
+After `EndOwnedLifetime`, an existing clone cannot admit work against the sealed
+identity just because physical cleanup finished. A root may acquire a new lifetime
+through an explicit host-authorized reopen at the ownership coordinator; a closed
+child cannot renew its sealed relationship. Bare Agents without owned relationships
+keep their current close/reopen behavior. Register this participation once during
+construction so SDK and gateway paths share the decision instead of relying on
+caller discipline.
 
 The tree domain owns attached relationships and creation reservations. It does
 not keep another independently writable copy of the parent's execution state.
@@ -526,14 +553,17 @@ The first runtime creates Nessa-owned child Agents through composition.
 ### What closure means
 
 The decision applies to the actual parent Agent lifetime. Explicit conversation
-close, terminal failure that ends that lifetime, final owning-handle disposal,
-deletion and gateway retirement enter the common ownership-close path.
+close, terminal failure that selects `EndOwnedLifetime`, final owning-handle
+disposal, deletion, approval-mode recovery retirement and gateway retirement
+enter the common ownership-close path. Their typed disposition is selected at
+the existing lifecycle authority as defined above.
 
 Turn completion, ordinary idle state and exact-turn Stop do not end the lifetime.
 Children may finish work across parent turns. Closing a pane/tab/socket currently
 detaches a view; it does not close the Agent. Archive changes catalogue visibility.
-A transient provider attachment replacement does not close the ownership lifetime
-when the normal Agent remains eligible for recovery.
+A recoverable stop classified `AttachmentOnly` does not close the ownership
+lifetime or its children when the normal Agent remains eligible for recovery.
+This differs from the explicit approval-mode recovery retirement defined above.
 
 ### Common close sequence
 
@@ -846,6 +876,10 @@ implemented.
 | C12 | Result ready before close or arriving after it | Result retained; no parent reopening/late new turn | Both orders and simultaneous readiness |
 | C13 | Delete/shutdown during spawn/close | Same retained drain; erasure/storage stop ordered after cleanup | Deletion/shutdown integration |
 | C14 | Close intent cannot be saved/audited | Required physical cleanup still attempted; failure/gap retained | Storage/audit failure during tree close |
+| C15 | Recoverable provider failure with a working child | AttachmentOnly cleanup/recovery preserves lifetime and child; no duplicate owner | Recoverable stop followed by queued restoration |
+| C16 | Explicit owned close followed by invoke/enqueue/attachment on an existing clone | Sealed identity refuses; only host-authorized root reopen mints a new lifetime | Clone admission after confirmed cleanup |
+| C17 | Gateway approval-mode recovery retires the root | EndOwnedLifetime drains descendants, then replacement starts a new root at last committed mode | Mode-recovery retirement and uncertain cleanup |
+| C18 | Lifetime-ending close joins recoverable attachment stop | Seal lifetime once, preserve earlier attachment cause/result, drain children | Stop disposition upgrade and simultaneous readiness |
 
 ### Recovery and presentation
 

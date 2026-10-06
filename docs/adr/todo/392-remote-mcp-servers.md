@@ -171,11 +171,20 @@ silently upgrade the local draft's protocol support.
 - A stream can carry notices/requests before its matching response. Deliver
   each to the existing connection owner; do not reorder or misroute responses
   between a POST stream and an unrelated GET stream.
-- An upstream session 404 expires the old session. Any later reconnection sends
-  a fresh initialize without the expired id. The old request reports its own
-  result/uncertainty and is not silently replayed into that new session. The
-  first slice ends the old relay; a subsequent owner-authorized opening performs
-  the new session initialization. This limits transparent session recovery.
+- An upstream session-bound 404 expires the old local session epoch and starts
+  bounded fresh initialization without the expired id while its relay-grant owner
+  still admits recovery, as the transport specification requires. Preserve each
+  old request's observed result or uncertainty; initialization is not permission
+  to replay a failed tool call. Retire old streams/handles and invalidate cached
+  app/session resources before publishing the replacement session identity. The
+  replacement is a new instance of this connection chart, coordinated by the
+  same server-opening owner, rather than an Open transition on an expired id.
+  If close/revoke/definition change wins, it fences startup; a late initialized
+  replacement joins cleanup and cannot publish readiness. One recovery attempt
+  uses the remaining operation/opening budget and retains failure if it cannot
+  establish the replacement. A harness need not initiate another relay to trigger
+  this recovery. Subsequent admitted calls resolve the current replacement;
+  already-admitted calls against the retired epoch retain their own outcome.
 - A disconnected stream does not itself cancel a remote request. Optional stream
   resumability is distinct from session reinitialization and command retry. The
   first slice reports an unconfirmed pending request and ends its local session;
@@ -221,8 +230,8 @@ stateDiagram-v2
     Discovering --> Revoking: revoke / abandon current attempt
     PendingConsent --> Revoking: revoke / invalidate callback state
     Exchanging --> Revoking: revoke / deny late token publication
-    Revoking --> ConsentNeeded: local sessions drained and token deletion settled
-    Revoking --> RevocationIncomplete: local cleanup, token deletion or audit unconfirmed
+    Revoking --> ConsentNeeded: settle [local drain and deletion settled and remote observation retained and required evidence acknowledged]
+    Revoking --> RevocationIncomplete: failed or deadline [required local or evidence obligation unresolved]
     RevocationIncomplete --> Revoking: authorized retry / join retained cleanup obligations
 ```
 
@@ -282,7 +291,7 @@ sequenceDiagram
     R-->>O: candidate replacement or typed failure
     alt same generation and definition still admit publication
         O->>S: store replacement and record required outcome
-        O-->>C: publish n+1; each eligible rejected call may retry once
+        O-->>C: publish n+1, each eligible rejected call may retry once
     else revoke or definition change won
         O->>O: retain rejected late outcome; do not publish or retry
     end
@@ -301,7 +310,13 @@ admission mutex across network I/O. A pending write that cannot be cancelled
 remains owned and must be joined/reconciled before deleting its record. Failure
 of deletion is RevocationIncomplete and does not re-enable the retained token.
 Stored generation/fence evidence governs restart; token presence alone is not
-proof of usable authorization.
+proof of usable authorization. While effects/observations remain pending, stay
+Revoking. Enter ConsentNeeded only after confirmed local drain, settled private
+deletion, retained remote revocation observation and required audit acknowledgement.
+The remote observation can be acknowledged, unsupported or unconfirmed; keep that
+qualified outcome visible. If bounded settlement fails with a local/evidence
+obligation unresolved, enter RevocationIncomplete. Successful deletion with failed
+outcome audit therefore has only the incomplete transition enabled.
 
 ## Configuration and app integration
 
@@ -339,7 +354,7 @@ OAuth storage or desktop controls already satisfy these rows.
 | C2 | Initial POST 400/404/405 versus 401/5xx/malformed | Only the first group enters legacy endpoint discovery; typed refusal otherwise |
 | C3 | Optional modern GET returns 405 | Continue supported POST operations without legacy fallback |
 | C4 | Notices/requests precede response, split chunks or keepalive events | Preserve bounded framing, order and request correlation |
-| C5 | Session 404 with calls in flight | Expire old session; preserve uncertainty; next admitted opening initializes fresh without replay |
+| C5 | Session 404 with calls in flight; recovery races owner close/revoke | Fence expired epoch, preserve old results/uncertainty and start bounded fresh initialize without old id; late recovery joins close; no tool replay |
 | C6 | Stream disconnect before or after reply; optional polling advertised | Do not infer cancellation; retain observed reply or explicit pending uncertainty; report unsupported resumption accurately |
 | C7 | Two conversations use same server; one closes | Separate ids/grants and cleanup; other session remains usable |
 | C8 | Close during initialize, caller loss or late HTTP result | Fence dispatch, drain owned startup and accepted requests; ignore late readiness for current admission |
@@ -359,7 +374,7 @@ OAuth storage or desktop controls already satisfy these rows.
 | A6 | Refresh network failure before/after expiry or invalid_grant | Retain valid old generation only while usable; otherwise block requests/require consent |
 | A7 | Refresh/revoke/definition change/callback simultaneously ready | Generation fence prevents late publication, store resurrection and new requests |
 | A8 | Remote revoke unsupported/fails; private deletion fails | Local token use remains fenced; actual remote/local outcomes are retained |
-| A9 | Audit unavailable, UI gone or response lost | Required cleanup continues; no success without evidence; caller loss does not abandon owner |
+| A9 | Audit unavailable, UI gone or response lost; deletion succeeds but outcome audit fails | Required cleanup continues; failed bounded settlement remains RevocationIncomplete; no success without required evidence; caller loss does not abandon owner |
 | A10 | Restart with usable, closing or incomplete token record | Revalidate binding; resume cleanup/fenced state; presence of a token does not grant dispatch |
 
 ### Apps and current configuration
