@@ -466,7 +466,21 @@ const checks = {
     const once = oneMount(frames)
     if (once) failures.push(once)
     if (!drawn) return { seen: { frames }, failures }
-    const { app } = await appFrame(page, "inline", 30_000)
+    // The frame is attached, so a missing document is the window failing to draw the app.
+    let framed
+    try {
+      framed = await appFrame(page, "inline", 30_000)
+    } catch (error) {
+      if (
+        error instanceof CannotRun &&
+        error.message === "no app document in the inline frame"
+      ) {
+        failures.push(error.message)
+        return { seen: { frames }, failures }
+      }
+      throw error
+    }
+    const { app } = framed
     await app
       .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
       .catch(() => {})

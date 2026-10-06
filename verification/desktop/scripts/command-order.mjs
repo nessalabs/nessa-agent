@@ -18,6 +18,7 @@ import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
 import { contentIs } from "./lib/workspace.mjs"
 
+const tool = "send "
 const argument = "\u202Emoc.live@bob\u202C"
 
 const meta = {
@@ -36,6 +37,10 @@ The sample session "${names.commandOrderSession}" (#553). Per engine and layout:
 /** Failures in a drawn command. Empty when it says what runs. */
 function commandFailures(where, text) {
   const failures = []
+  if (!text.startsWith(tool))
+    failures.push(
+      `${where} does not start with ${JSON.stringify(tool)}: ${JSON.stringify(text)}`,
+    )
   if (bidiControls.test(text)) failures.push(`${where} still draws a bidi control`)
   const escapeAt = text.indexOf("\\u202e")
   const addressAt = text.indexOf("moc.live@bob")
@@ -112,6 +117,8 @@ await main(meta, async ({ options, rep, url }) => {
           const rowText = (await command.innerText()) ?? ""
           const title = (await command.getAttribute("title")) ?? ""
           failures.push(...commandFailures("the row", rowText))
+          if (rowText !== cardText)
+            failures.push("the row draws a different command than the card")
           if (title !== rowText)
             failures.push(
               `the row's title is ${JSON.stringify(title)}, not the command it draws`,
@@ -139,9 +146,9 @@ await main(meta, async ({ options, rep, url }) => {
           } catch {
             const drawn = await peek.allInnerTexts()
             peekText = (drawn[0] ?? "").replace(/^\$\s*/, "")
-            if (drawn.length === 0) failures.push("the peek draws no command")
           }
-          if (peekText) {
+          if (!peekText) failures.push("the peek draws no command")
+          else {
             failures.push(...commandFailures("the peek", peekText))
             if (peekText !== cardText)
               failures.push("the peek draws a different command than the card")
