@@ -1,13 +1,16 @@
 {
   "source": {
     "kind": "live-provider-acp",
-    "capturedAt": "2026-10-06T05:59:12.086Z",
     "adapter": "@agentclientprotocol/codex-acp@1.12.0",
     "adapterSha256": "f45a64dc3a994556ebdb688dc8d59b86945a9b2f940a3e3e545739dd265a7cc5",
     "lockSha256": "e3bf37b4b3b373ec6d45cd23d564f0df271ebe8411d1cba75abefe073bb4f141",
-    "probeSha256": "b1dfad7fff004271b3c7ed801e96b67f30eab0a5c59506fea8c2da4794e3efe8",
+    "probeSha256": "8041d62c4849adca6c9df31b1eeb063043a31cbc0994a76a65787703bbb147d3",
+    "sessionSha256": "d6fcd8973442b3da5e9fa7d5068b1cecef47932a6e5e39c4983fca839dd3378f",
+    "processSha256": "2102b0dea3d53154490f0cc910bf81b3725a90f52cf5e0810cd9193914e52046",
+    "selectorSha256": "8d9c5b709c9dca62a2d6dc99ff702c9e5caca124663aa631df69a995d76a2d01",
     "model": "gpt-5.6-luna",
     "platform": "darwin/arm64",
+    "capturedAt": "2026-10-06T06:18:56.720Z",
     "declaredClientCapabilities": {
       "subagents": {},
       "fs": {
@@ -72,7 +75,17 @@
     },
     "permissionRequests": 0,
     "nativeSessionUpdates": 0,
-    "providerVersion": "codex-cli 0.154.0"
+    "providerVersion": "codex-cli 0.154.0",
+    "versionCleanup": {
+      "kind": "stopped",
+      "leaderReaped": true,
+      "liveGroupMembers": 0
+    },
+    "probeCleanup": {
+      "kind": "stopped",
+      "leaderReaped": true,
+      "liveGroupMembers": 0
+    }
   },
   "outcome": {
     "kind": "completed",

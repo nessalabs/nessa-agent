@@ -170,10 +170,26 @@ export function inspectFrames(records) {
     if (update.sessionUpdate === "tool_call") {
       if (active.has(update.toolCallId) || completed.has(update.toolCallId))
         throw new EvidenceError("duplicate_call")
-      active.set(update.toolCallId, meta.tool)
+      if (
+        meta.tool !== "spawnAgent" &&
+        (child === undefined || receivers.length !== 1 || receivers[0] !== child)
+      )
+        throw new EvidenceError("child_mismatch")
+      active.set(update.toolCallId, {
+        tool: meta.tool,
+        sender: raw.senderThreadId,
+        receivers: [...receivers],
+      })
     } else if (update.sessionUpdate === "tool_call_update") {
-      if (active.get(update.toolCallId) !== meta.tool)
+      const admitted = active.get(update.toolCallId)
+      if (!admitted || admitted.tool !== meta.tool)
         throw new EvidenceError("unstarted_call")
+      if (
+        admitted.sender !== raw.senderThreadId ||
+        ((meta.tool !== "spawnAgent" || admitted.receivers.length !== 0) &&
+          JSON.stringify(admitted.receivers) !== JSON.stringify(receivers))
+      )
+        throw new EvidenceError("call_target_mismatch")
       if (update.status !== "completed") throw new EvidenceError("incomplete_call")
       active.delete(update.toolCallId)
       completed.set(update.toolCallId, meta.tool)
@@ -186,11 +202,16 @@ export function inspectFrames(records) {
         if (child === undefined || receivers.length !== 1 || receivers[0] !== child)
           throw new EvidenceError("child_mismatch")
         if (!Object.hasOwn(reports, child)) throw new EvidenceError("missing_child_state")
+        if (reports[child].status !== "completed")
+          throw new EvidenceError("child_not_completed")
+        if (reports[child].message !== "CHILD_DONE")
+          throw new EvidenceError("child_result_mismatch")
       }
     } else throw new EvidenceError("unknown_update")
   }
   if (stopped === undefined) throw new EvidenceError("missing_terminal")
   if (active.size !== 0) throw new EvidenceError("unfinished_calls")
+  if (stopped !== "end_turn") throw new EvidenceError("unexpected_terminal")
   if (
     JSON.stringify([...completed.values()]) !==
     JSON.stringify(["spawnAgent", "wait", "closeAgent"])

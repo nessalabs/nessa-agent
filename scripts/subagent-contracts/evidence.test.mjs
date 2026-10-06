@@ -67,7 +67,7 @@ test("a structurally valid different child cannot replace the child created by s
   update.rawInput.agentsStates = {
     "other-child": { status: "completed", message: "CHILD_DONE" },
   }
-  rejects(records, "child_mismatch")
+  rejects(records, "call_target_mismatch")
 })
 
 test("missing, duplicate, unstarted and post-terminal outcomes cannot be called a complete capture", () => {
@@ -139,6 +139,9 @@ test("capture provenance names the checked-in probe and pinned harness lock", ()
       .update(readFileSync(new URL(relative, import.meta.url)))
       .digest("hex")
   assert.equal(fixture.source.probeSha256, hash("./capture.mjs"))
+  assert.equal(fixture.source.sessionSha256, hash("./acp-session.mjs"))
+  assert.equal(fixture.source.processSha256, hash("./processes.mjs"))
+  assert.equal(fixture.source.selectorSha256, hash("./evidence.mjs"))
   assert.equal(
     fixture.source.lockSha256,
     hash("../../crates/nessa-sdk/harnesses/codex-acp/package-lock.json"),
@@ -167,4 +170,47 @@ test("selection refuses unexpected retained wire syntax instead of leaking it", 
     () => selectFrames(terminal),
     (error) => error.code === "invalid_terminal",
   )
+})
+
+test("wait and close retain their admitted child before a matching completion can settle them", () => {
+  for (const index of [2, 4]) {
+    const records = copy()
+    records[index].frame.params.update.rawInput.receiverThreadIds = ["foreign-child"]
+    records[index].frame.params.update._meta.codex.collaboration.receiverThreadIds = [
+      "foreign-child",
+    ]
+    rejects(records, "child_mismatch")
+  }
+  // A coherent start can still be contradicted by a coherent completion.
+  const completion = copy()
+  const update = completion[3].frame.params.update
+  update.rawInput.receiverThreadIds = ["foreign-child"]
+  update._meta.codex.collaboration.receiverThreadIds = ["foreign-child"]
+  update.rawInput.agentsStates = {
+    "foreign-child": { status: "completed", message: "CHILD_DONE" },
+  }
+  rejects(completion, "call_target_mismatch")
+  // Spawn can name its child up front, provided completion names that child.
+  const upfront = copy()
+  upfront[0].frame.params.update.rawInput.receiverThreadIds = ["identity-3"]
+  upfront[0].frame.params.update._meta.codex.collaboration.receiverThreadIds = [
+    "identity-3",
+  ]
+  assert.deepEqual(inspectFrames(upfront), inspectFrames(fixture.frames))
+})
+
+test("cancelled parent and failed or wrong-result child reports are typed unsuccessful evidence", () => {
+  const cancelled = copy()
+  cancelled.at(-1).frame.result.stopReason = "cancelled"
+  rejects(cancelled, "unexpected_terminal")
+  for (const index of [3, 5]) {
+    const errored = copy()
+    errored[index].frame.params.update.rawInput.agentsStates["identity-3"].status =
+      "errored"
+    rejects(errored, "child_not_completed")
+    const wrong = copy()
+    wrong[index].frame.params.update.rawInput.agentsStates["identity-3"].message =
+      "<omitted>"
+    rejects(wrong, "child_result_mismatch")
+  }
 })
